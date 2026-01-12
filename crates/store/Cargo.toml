@@ -35,6 +35,7 @@ miden-remote-prover-client = { features = ["block-prover"], workspace = true }
 miden-standards            = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
+miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 pretty_assertions = { workspace = true }
 rand              = { workspace = true }
 rand_chacha       = { workspace = true }
@@ -66,7 +67,7 @@ termtree              = { version = "0.5" }
 
 [features]
 default = ["rocksdb"]
-rocksdb = ["miden-crypto/rocksdb"]
+rocksdb = ["dep:miden-large-smt-backend-rocksdb"]
 
 [[bench]]
 harness           = false

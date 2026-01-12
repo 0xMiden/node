@@ -12,6 +12,8 @@ use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+#[cfg(feature = "rocksdb")]
+use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbStorage};
 use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
@@ -22,11 +24,6 @@ use miden_protocol::{Felt, FieldElement, Word};
 #[cfg(feature = "rocksdb")]
 use tracing::info;
 use tracing::instrument;
-#[cfg(feature = "rocksdb")]
-use {
-    miden_crypto::merkle::smt::RocksDbStorage,
-    miden_protocol::crypto::merkle::smt::RocksDbConfig,
-};
 
 use crate::COMPONENT;
 use crate::db::Db;

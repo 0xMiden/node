@@ -6,6 +6,7 @@ members = [
   "bin/stress-test",
   "crates/block-producer",
   "crates/grpc-error-macro",
+  "crates/large-smt",
   "crates/ntx-builder",
   "crates/proto",
   "crates/remote-prover-client",
@@ -51,21 +52,31 @@ miden-node-test-macro       = { path = "crates/test-macro" }
 miden-node-utils            = { path = "crates/utils", version = "0.14" }
 miden-node-validator        = { path = "crates/validator", version = "0.14" }
 miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.14" }
+miden-large-smt-backend-rocksdb = { path = "crates/large-smt", version = "0.14"}
+
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
-miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
-miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
-miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+# miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+# miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
+# miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+# miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+# miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
+# miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
 miden-air    = { features = ["std", "testing"], version = "0.20" }
-miden-crypto = { default-features = false, version = "0.19" }
+# miden-crypto = { default-features = false,  version = "0.19.4" }
+miden-block-prover    = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/miden-base.git" }
+miden-protocol        = { branch = "bernhard-migrate-rocksdb-from-crypto", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
+miden-standards       = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/miden-base.git" }
+miden-testing         = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/miden-base.git" }
+miden-tx              = { branch = "bernhard-migrate-rocksdb-from-crypto", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
+miden-tx-batch-prover = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/miden-base.git" }
+
+miden-crypto = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/crypto.git" }
 
 # External dependencies
 anyhow            = { version = "1.0" }
@@ -130,3 +141,6 @@ must_use_candidate           = "allow" # This marks many fn's which isn't helpfu
 needless_for_each            = "allow" # Context dependent if that's useful.
 should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
+
+[patch.crates-io]
+miden-crypto = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/crypto.git" }
