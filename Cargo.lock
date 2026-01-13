@@ -3075,7 +3075,6 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
- "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -3183,7 +3182,6 @@ dependencies = [
  "miden-node-utils",
  "opentelemetry",
  "tracing",
- "tracing-opentelemetry",
 ]
 
 [[package]]

@@ -75,7 +75,7 @@ pub fn instrument_with_err_report(attr: TokenStream, item: TokenStream) -> Token
     };
 
     if has_err && returns_result {
-        generate_with_error_reporting(attr2, input).into()
+        generate_with_error_reporting(&attr2, input).into()
     } else {
         // Just delegate to standard tracing::instrument
         let ItemFn { attrs, vis, sig, block } = input;
@@ -89,12 +89,12 @@ pub fn instrument_with_err_report(attr: TokenStream, item: TokenStream) -> Token
     }
 }
 
-fn generate_with_error_reporting(attr: TokenStream2, input: ItemFn) -> TokenStream2 {
+fn generate_with_error_reporting(attr: &TokenStream2, input: ItemFn) -> TokenStream2 {
     let ItemFn { attrs, vis, sig, block } = input;
 
     // Remove 'err' from the attributes we pass to tracing::instrument
     // since we handle error reporting ourselves
-    let tracing_attr = remove_err_from_attr(&attr);
+    let tracing_attr = remove_err_from_attr(attr);
 
     // Get the return type for type annotation
     let result_type = match &sig.output {

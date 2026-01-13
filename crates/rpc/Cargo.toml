@@ -15,27 +15,26 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-anyhow                   = { workspace = true }
-futures                  = { version = "0.3" }
-http                     = { workspace = true }
-mediatype                = { version = "0.21" }
-miden-node-proto         = { workspace = true }
-miden-node-proto-build   = { workspace = true }
-miden-node-tracing       = { workspace = true }
-miden-node-utils         = { workspace = true }
-miden-protocol           = { default-features = true, workspace = true }
-miden-tx                 = { default-features = true, workspace = true }
-semver                   = { version = "1.0" }
-thiserror                = { workspace = true }
-tokio                    = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
-tokio-stream             = { features = ["net"], workspace = true }
-tonic                    = { default-features = true, features = ["tls-native-roots", "tls-ring"], workspace = true }
-tonic-reflection         = { workspace = true }
-tonic-web                = { version = "0.14" }
-tower                    = { workspace = true }
-tower-http               = { features = ["trace"], workspace = true }
-tracing                  = { workspace = true }
-url                      = { workspace = true }
+anyhow                 = { workspace = true }
+futures                = { version = "0.3" }
+http                   = { workspace = true }
+mediatype              = { version = "0.21" }
+miden-node-proto       = { workspace = true }
+miden-node-proto-build = { workspace = true }
+miden-node-utils       = { workspace = true }
+miden-protocol         = { default-features = true, workspace = true }
+miden-tx               = { default-features = true, workspace = true }
+semver                 = { version = "1.0" }
+thiserror              = { workspace = true }
+tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio-stream           = { features = ["net"], workspace = true }
+tonic                  = { default-features = true, features = ["tls-native-roots", "tls-ring"], workspace = true }
+tonic-reflection       = { workspace = true }
+tonic-web              = { version = "0.14" }
+tower                  = { workspace = true }
+tower-http             = { features = ["trace"], workspace = true }
+tracing                = { workspace = true }
+url                    = { workspace = true }
 
 [dev-dependencies]
 miden-air        = { features = ["testing"], workspace = true }

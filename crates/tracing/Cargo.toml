@@ -17,6 +17,5 @@ workspace = true
 [dependencies]
 miden-node-tracing-macro = { workspace = true }
 miden-node-utils         = { workspace = true }
-tracing                  = { workspace = true }
-tracing-opentelemetry    = { version = "0.32" }
 opentelemetry            = { version = "0.31" }
+tracing                  = { workspace = true }
