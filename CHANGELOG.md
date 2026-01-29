@@ -5,6 +5,7 @@
 ### Enhancements
 
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
+- Added sqlite database to Validator for transaction persistence ([#1614](https://github.com/0xMiden/miden-node/pull/1614)).
 
 ## v0.13.2 (2026-01-27)
 
@@ -119,7 +120,7 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
-  - This presented as a database locked error and in rare cases a desync between the mempool and store. 
+  - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)
 
