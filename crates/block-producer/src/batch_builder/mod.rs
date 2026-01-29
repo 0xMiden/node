@@ -9,7 +9,6 @@ use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
-use miden_remote_prover_client::remote_prover::batch_prover::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
 use tokio::task::JoinSet;
@@ -21,6 +20,7 @@ use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::BuildBatchError;
 use crate::mempool::SharedMempool;
+use crate::remote_prover::RemoteBatchProver;
 use crate::store::StoreClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
 
@@ -245,10 +245,9 @@ impl BatchJob {
         Span::current().set_attribute("prover.kind", self.batch_prover.kind());
 
         let proven_batch = match &self.batch_prover {
-            BatchProver::Remote(prover) => prover
-                .prove(proposed_batch)
-                .await
-                .map_err(BuildBatchError::RemoteProverClientError),
+            BatchProver::Remote(prover) => {
+                prover.prove(proposed_batch).await.map_err(BuildBatchError::RemoteProverError)
+            },
             BatchProver::Local(prover) => tokio::task::spawn_blocking({
                 let prover = prover.clone();
                 move || prover.prove(proposed_batch).map_err(BuildBatchError::ProveBatchError)

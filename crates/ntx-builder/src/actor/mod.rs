@@ -18,13 +18,13 @@ use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::TransactionId;
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::block_producer::BlockProducerClient;
 use crate::builder::ChainState;
+use crate::remote_prover::RemoteTransactionProver;
 use crate::store::StoreClient;
 
 // ACTOR SHUTDOWN REASON

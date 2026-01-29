@@ -4,6 +4,7 @@ mod actor;
 mod block_producer;
 mod builder;
 mod coordinator;
+mod remote_prover;
 mod store;
 
 pub use builder::NetworkTransactionBuilder;

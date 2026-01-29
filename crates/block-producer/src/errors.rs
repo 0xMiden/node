@@ -8,10 +8,10 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
-use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::task::JoinError;
 
+use crate::remote_prover::RemoteProverError;
 use crate::validator::ValidatorError;
 
 // Block-producer errors
@@ -195,7 +195,7 @@ pub enum BuildBatchError {
     ProveBatchError(#[source] ProvenBatchError),
 
     #[error("failed to prove batch with remote prover")]
-    RemoteProverClientError(#[source] RemoteProverClientError),
+    RemoteProverError(#[source] RemoteProverError),
 
     #[error("batch proof security level is too low: {0} < {1}")]
     SecurityLevelTooLow(u32, u32),
@@ -230,7 +230,7 @@ pub enum BuildBlockError {
     #[error("nothing actually went wrong, failure was injected on purpose")]
     InjectedFailure,
     #[error("failed to prove block with remote prover")]
-    RemoteProverClientError(#[source] RemoteProverClientError),
+    RemoteProverError(#[source] RemoteProverError),
     #[error("block proof security level is too low: {0} < {1}")]
     SecurityLevelTooLow(u32, u32),
     /// Custom error variant for errors not covered by the other variants.

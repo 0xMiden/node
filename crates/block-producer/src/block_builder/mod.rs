@@ -19,7 +19,6 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
-use miden_remote_prover_client::remote_prover::block_prover::RemoteBlockProver;
 use rand::Rng;
 use tokio::time::Duration;
 use tracing::{Span, info, instrument};
@@ -27,6 +26,7 @@ use url::Url;
 
 use crate::errors::BuildBlockError;
 use crate::mempool::SharedMempool;
+use crate::remote_prover::RemoteBlockProver;
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
@@ -488,7 +488,7 @@ impl BlockProver {
             Self::Remote(prover) => prover
                 .prove(tx_batches, block_header, block_inputs)
                 .await
-                .map_err(BuildBlockError::RemoteProverClientError),
+                .map_err(BuildBlockError::RemoteProverError),
         }
     }
 }

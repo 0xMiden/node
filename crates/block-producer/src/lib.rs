@@ -9,6 +9,7 @@ mod batch_builder;
 mod block_builder;
 mod domain;
 mod mempool;
+mod remote_prover;
 pub mod store;
 mod validator;
 

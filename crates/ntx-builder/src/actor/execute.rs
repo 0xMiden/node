@@ -31,7 +31,6 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::utils::Serializable;
 use miden_tx::{
@@ -55,6 +54,7 @@ use tracing::{Instrument, instrument};
 use crate::COMPONENT;
 use crate::actor::account_state::TransactionCandidate;
 use crate::block_producer::BlockProducerClient;
+use crate::remote_prover::RemoteTransactionProver;
 use crate::store::StoreClient;
 
 #[derive(Debug, thiserror::Error)]

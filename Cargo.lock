@@ -2781,7 +2781,6 @@ dependencies = [
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
- "miden-remote-prover-client",
  "miden-standards",
  "miden-tx",
  "miden-tx-batch-prover",
@@ -2821,7 +2820,6 @@ dependencies = [
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
- "miden-remote-prover-client",
  "miden-standards",
  "miden-tx",
  "rstest",
@@ -3140,26 +3138,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "uuid",
-]
-
-[[package]]
-name = "miden-remote-prover-client"
-version = "0.14.0"
-dependencies = [
- "fs-err",
- "getrandom 0.3.4",
- "miden-node-proto-build",
- "miden-protocol",
- "miden-tx",
- "miette",
- "prost",
- "thiserror 2.0.18",
- "tokio",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tonic-web",
- "tonic-web-wasm-client",
 ]
 
 [[package]]
@@ -5937,31 +5915,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tonic-web-wasm-client"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "898cd44be5e23e59d2956056538f1d6b3c5336629d384ffd2d92e76f87fb98ff"
-dependencies = [
- "base64",
- "byteorder",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "httparse",
- "js-sys",
- "pin-project",
- "thiserror 2.0.18",
- "tonic",
- "tower-service",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-streams",
- "web-sys",
-]
-
-[[package]]
 name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6393,19 +6346,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f01b580c9ac74c8d8f0c0e4afb04eeef2acf145458e52c03845ee9cd23e3d12"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
