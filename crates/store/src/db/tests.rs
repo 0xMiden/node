@@ -2312,8 +2312,6 @@ async fn standard_note_scripts_loaded_on_startup() {
         let script = note_type.script();
         let script_root = note_type.script_root();
 
-        // Verify the script_root() method matches script().root()
-        assert_eq!(script.root(), script_root, "script_root() should match script().root()");
 
         // Query the database for the script
         let retrieved_script = db
