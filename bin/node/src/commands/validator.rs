@@ -42,7 +42,7 @@ pub enum ValidatorCommand {
         )]
         grpc_timeout: Duration,
 
-        /// Directory in which to store the database and raw block data.
+        /// Directory in which to store the database.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
 
