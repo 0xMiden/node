@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
-use miden_node_ntx_builder::NetworkTransactionBuilder;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
 use miden_node_utils::grpc::UrlExt;
@@ -312,8 +311,8 @@ impl BundledCommand {
 
             let id = join_set
                 .spawn(async move {
-                    NetworkTransactionBuilder::new(builder_config)
-                        .initialize()
+                    builder_config
+                        .build()
                         .await
                         .context("failed to initialize ntx builder")?
                         .run()

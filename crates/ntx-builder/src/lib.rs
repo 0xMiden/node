@@ -1,5 +1,15 @@
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
+use actor::AccountActorContext;
+use anyhow::Context;
+use block_producer::BlockProducerClient;
+use builder::{ChainState, MempoolEventStream};
+use coordinator::Coordinator;
+use futures::TryStreamExt;
+use miden_node_utils::lru_cache::LruCache;
+use store::StoreClient;
+use tokio::sync::RwLock;
 use url::Url;
 
 mod actor;
@@ -8,7 +18,7 @@ mod builder;
 mod coordinator;
 mod store;
 
-pub use builder::{InitializedBuilder, NetworkTransactionBuilder};
+pub use builder::NetworkTransactionBuilder;
 
 // CONSTANTS
 // =================================================================================================
@@ -168,5 +178,70 @@ impl NtxBuilderConfig {
     pub fn with_actor_channel_size(mut self, size: usize) -> Self {
         self.actor_channel_size = size;
         self
+    }
+
+    /// Builds and initializes the network transaction builder.
+    ///
+    /// This method connects to the store and block producer services, fetches the current
+    /// chain tip, and subscribes to mempool events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The store connection fails
+    /// - The mempool subscription fails (after retries)
+    /// - The store contains no blocks (not bootstrapped)
+    pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
+        let script_cache = LruCache::new(self.script_cache_size);
+        let coordinator = Coordinator::new(self.max_concurrent_txs, self.actor_channel_size);
+
+        let store = StoreClient::new(self.store_url.clone());
+        let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
+
+        let (chain_tip_header, chain_mmr, mempool_events) = loop {
+            let (chain_tip_header, chain_mmr) = store
+                .get_latest_blockchain_data_with_retry()
+                .await?
+                .context("store should contain a latest block")?;
+
+            match block_producer
+                .subscribe_to_mempool_with_retry(chain_tip_header.block_num())
+                .await
+            {
+                Ok(subscription) => {
+                    let stream: MempoolEventStream = Box::pin(subscription.into_stream());
+                    break (chain_tip_header, chain_mmr, stream);
+                },
+                Err(status) if status.code() == tonic::Code::InvalidArgument => {
+                    tracing::warn!(
+                        err = %status,
+                        "mempool subscription failed due to chain tip desync, retrying"
+                    );
+                },
+                Err(err) => return Err(err).context("failed to subscribe to mempool events"),
+            }
+        };
+
+        let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
+
+        let actor_context = AccountActorContext {
+            block_producer_url: self.block_producer_url.clone(),
+            validator_url: self.validator_url.clone(),
+            tx_prover_url: self.tx_prover_url.clone(),
+            chain_state: chain_state.clone(),
+            store: store.clone(),
+            script_cache,
+            max_notes_per_tx: self.max_notes_per_tx,
+            max_note_attempts: self.max_note_attempts,
+        };
+
+        Ok(NetworkTransactionBuilder::new(
+            self,
+            coordinator,
+            store,
+            chain_state,
+            actor_context,
+            mempool_events,
+        ))
     }
 }
