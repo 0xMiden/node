@@ -33,3 +33,6 @@ rayon                     = { version = "1.10" }
 tokio                     = { workspace = true }
 tonic                     = { default-features = true, workspace = true }
 url                       = { workspace = true }
+
+[build-dependencies]
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
