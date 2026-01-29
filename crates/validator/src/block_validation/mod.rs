@@ -7,7 +7,7 @@ use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use tracing::info_span;
 
-use crate::db::select_transactions;
+use crate::db::select_validated_transactions;
 
 // BLOCK VALIDATION ERROR
 // ================================================================================================
@@ -43,32 +43,35 @@ pub async fn validate_block<S: BlockSigner>(
     signer: &S,
     db: &Db,
 ) -> Result<Signature, BlockValidationError> {
-    let verify_span = info_span!("verify_transactions");
-
     // Create a map of transactions from the proposed block.
     let proposed_transactions = proposed_block
         .transactions()
         .map(|header| (header.id(), header.clone()))
         .collect::<HashMap<TransactionId, TransactionHeader>>();
+
     // Retrieve all validated transactions pertaining to the proposed block.
-    let tx_ids = proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
-    let query_tx_ids = tx_ids.clone();
+    let proposed_tx_ids =
+        proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
+    let query_tx_ids = proposed_tx_ids.clone();
     let validated_transactions = db
-        .transact("select_transactions", move |conn| select_transactions(conn, &query_tx_ids))
+        .transact("select_transactions", move |conn| {
+            select_validated_transactions(conn, &query_tx_ids)
+        })
         .await?;
 
     // Check that every transaction from the proposed block has been validated.
-    for tx_id in tx_ids {
-        let Some(validated_tx) = validated_transactions.get(&tx_id) else {
+    for proposed_tx_id in proposed_tx_ids {
+        let Some(validated_tx) = validated_transactions.get(&proposed_tx_id) else {
             return Err(BlockValidationError::TransactionNotValidated(
-                tx_id,
+                proposed_tx_id,
                 proposed_block.block_num(),
             ));
         };
         // Check that the proposed and validated transactions are equal.
-        let proposed_tx = proposed_transactions.get(&tx_id).ok_or(BlockValidationError::Other(
-            "proposed transactions mapped incorrectly".into(),
-        ))?;
+        let proposed_tx =
+            proposed_transactions.get(&proposed_tx_id).ok_or(BlockValidationError::Other(
+                "proposed transactions mapped incorrectly from proposed block".into(),
+            ))?;
         if validated_tx != proposed_tx {
             return Err(BlockValidationError::TransactionMismatch {
                 proposed_tx: proposed_tx.id(),

@@ -1,7 +1,5 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -10,17 +8,11 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_store::Db;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::{BlockSigner, ProposedBlock};
-use miden_protocol::transaction::{
-    ProvenTransaction,
-    TransactionHeader,
-    TransactionId,
-    TransactionInputs,
-};
+use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::{Deserializable, Serializable};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -33,12 +25,6 @@ use crate::COMPONENT;
 use crate::block_validation::validate_block;
 use crate::db::{insert_transaction, load};
 use crate::tx_validation::validate_transaction;
-
-/// Number of transactions to keep in the validated transactions cache.
-const NUM_VALIDATED_TRANSACTIONS: NonZeroUsize = NonZeroUsize::new(10000).unwrap();
-
-/// A type alias for a LRU cache that stores validated transactions.
-pub type ValidatedTransactions = LruCache<TransactionId, TransactionHeader>;
 
 // VALIDATOR
 // ================================================================================
@@ -115,14 +101,11 @@ impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
 struct ValidatorServer<S> {
     signer: S,
     db: Db,
-    validated_transactions: Arc<ValidatedTransactions>,
 }
 
 impl<S> ValidatorServer<S> {
     fn new(signer: S, db: Db) -> Self {
-        let validated_transactions =
-            Arc::new(ValidatedTransactions::new(NUM_VALIDATED_TRANSACTIONS));
-        Self { signer, db, validated_transactions }
+        Self { signer, db }
     }
 }
 
@@ -170,7 +153,7 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
         let result = self
             .db
             .transact("insert_transaction", move |conn| {
-                insert_transaction(conn, validated_tx_header)
+                insert_transaction(conn, &validated_tx_header)
             })
             .await;
 
