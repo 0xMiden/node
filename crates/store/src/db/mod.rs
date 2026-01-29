@@ -226,7 +226,7 @@ impl From<NoteRecord> for NoteSyncRecord {
 ///
 /// NOTE: This list must be kept in sync with `miden_standards::note::WellKnownNote` variants.
 /// If `WellKnownNote` adds new variants in the future, they should be added here.
-/// TODO: refactor once (https://github.com/0xMiden/miden-base/pull/2367) lands
+/// TODO: refactor once (<https://github.com/0xMiden/miden-base/pull/2367>) lands
 pub(crate) fn all_well_known_note_types() -> [WellKnownNote; 5] {
     [
         WellKnownNote::P2ID,
@@ -243,7 +243,10 @@ pub(crate) fn all_well_known_note_types() -> [WellKnownNote; 5] {
 /// inserts them into the `note_scripts` table. This allows the node to immediately support
 /// network transactions that output these standard note types.
 fn insert_well_known_note_scripts(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
-    let scripts: Vec<_> = all_well_known_note_types().iter().map(|n| n.script()).collect();
+    let scripts: Vec<_> = all_well_known_note_types()
+        .iter()
+        .map(miden_standards::note::WellKnownNote::script)
+        .collect();
     let count = queries::insert_note_scripts(conn, &scripts)?;
 
     info!(
