@@ -370,14 +370,14 @@ impl Db {
             "Connected to the database"
         );
 
-        let me = Db { pool };
-        me.query("migrations", apply_migrations).await?;
+        let this = Db { pool };
+        this.query("migrations", apply_migrations).await?;
 
         // Insert any standard note scripts. This ensures that nodes upgrading to a new version of
         // `miden_standards` will automatically load any new standard note types.
-        me.query("standard note scripts", insert_standard_note_scripts).await?;
+        this.query("standard note scripts", insert_standard_note_scripts).await?;
 
-        Ok(me)
+        Ok(this)
     }
 
     /// Loads all the nullifiers from the DB.
