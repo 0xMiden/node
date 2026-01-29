@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.13.4 (TBD)
+
+### Fixes
+
+- Fixed network monitor displaying explorer URL as a "null" hyperlink when unset ([#1617](https://github.com/0xMiden/miden-node/pull/1617)).
+
 ## v0.13.3 (2026-01-29)
 
 ### Fixes
