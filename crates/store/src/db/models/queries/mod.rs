@@ -68,7 +68,11 @@ pub(crate) fn apply_block(
     // Note: ordering here is important as the relevant tables have FK dependencies.
     count += insert_block_header(conn, block_header)?;
     count += upsert_accounts(conn, accounts, block_header.block_num())?;
-    count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
+    let scripts: Vec<_> = notes
+        .iter()
+        .filter_map(|(note, _)| note.details.as_ref().map(|d| d.script().clone()))
+        .collect();
+    count += insert_note_scripts(conn, &scripts)?;
     count += insert_notes(conn, notes)?;
     count += insert_transactions(conn, block_header.block_num(), transactions)?;
     count += insert_nullifiers_for_block(conn, nullifiers, block_header.block_num())?;

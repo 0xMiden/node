@@ -811,8 +811,8 @@ pub(crate) fn insert_notes(
     Ok(count)
 }
 
-/// Insert scripts to the DB using the given [`SqliteConnection`]. It inserts the scripts held by
-/// the notes passed as parameter. If the script root already exists in the DB, it will be ignored.
+/// Insert note scripts to the DB using the given [`SqliteConnection`]. If the script root already
+/// exists in the DB, it will be ignored.
 ///
 /// # Returns
 ///
@@ -828,16 +828,15 @@ pub(crate) fn insert_notes(
     skip_all,
     err,
 )]
-pub(crate) fn insert_scripts<'a>(
+pub(crate) fn insert_note_scripts<'a>(
     conn: &mut SqliteConnection,
-    notes: impl IntoIterator<Item = &'a NoteRecord>,
+    scripts: impl IntoIterator<Item = &'a NoteScript>,
 ) -> Result<usize, DatabaseError> {
-    let values = Vec::from_iter(notes.into_iter().filter_map(|note| {
-        let note_details = note.details.as_ref()?;
-        Some((
-            schema::note_scripts::script_root.eq(note_details.script().root().to_bytes()),
-            schema::note_scripts::script.eq(note_details.script().to_bytes()),
-        ))
+    let values = Vec::from_iter(scripts.into_iter().map(|script| {
+        (
+            schema::note_scripts::script_root.eq(script.root().to_bytes()),
+            schema::note_scripts::script.eq(script.to_bytes()),
+        )
     }));
     let count = diesel::insert_or_ignore_into(schema::note_scripts::table)
         .values(values)

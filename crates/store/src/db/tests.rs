@@ -76,9 +76,8 @@ use super::{AccountInfo, NoteRecord, NullifierInfo};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
-use crate::db::{TransactionSummary, all_standard_note_types};
+use crate::db::{TransactionSummary, all_well_known_note_types};
 use crate::errors::DatabaseError;
-use crate::genesis::config::GenesisConfig;
 
 fn create_db() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").expect("In memory sqlite always works");
@@ -266,7 +265,8 @@ fn sql_select_notes() {
         state.push(note.clone());
 
         // insert scripts (after the first iteration the script is already in the db)
-        let res = queries::insert_scripts(conn, [&note]);
+        let script = note.details.as_ref().unwrap().script().clone();
+        let res = queries::insert_note_scripts(conn, [&script]);
         if i == 0 {
             assert_eq!(res.unwrap(), 1, "One element must have been inserted");
         } else {
@@ -309,7 +309,8 @@ fn sql_select_note_script_by_root() {
     };
     state.push(note.clone());
 
-    let res = queries::insert_scripts(conn, [&note]);
+    let script = note.details.as_ref().unwrap().script().clone();
+    let res = queries::insert_note_scripts(conn, [&script]);
     assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
     // test querying the script by the root
@@ -389,7 +390,11 @@ fn sql_unconsumed_network_notes() {
         };
         (note, Some(num_to_nullifier(i.into())))
     }));
-    queries::insert_scripts(&mut conn, notes.iter().map(|(note, _)| note)).unwrap();
+    let scripts: Vec<_> = notes
+        .iter()
+        .filter_map(|(note, _)| note.details.as_ref().map(|d| d.script().clone()))
+        .collect();
+    queries::insert_note_scripts(&mut conn, &scripts).unwrap();
     queries::insert_notes(&mut conn, &notes).unwrap();
 
     // Both notes are unconsumed, query should return both notes on both blocks.
@@ -935,7 +940,8 @@ fn notes() {
         inclusion_path: inclusion_path.clone(),
     };
 
-    queries::insert_scripts(conn, [&note]).unwrap();
+    let script = note.details.as_ref().unwrap().script().clone();
+    queries::insert_note_scripts(conn, [&script]).unwrap();
     queries::insert_notes(conn, &[(note.clone(), None)]).unwrap();
 
     // test empty tags
@@ -1972,7 +1978,8 @@ fn db_roundtrip_notes() {
     };
 
     // Insert
-    queries::insert_scripts(&mut conn, [&note]).unwrap();
+    let script = note.details.as_ref().unwrap().script().clone();
+    queries::insert_note_scripts(&mut conn, [&script]).unwrap();
     queries::insert_notes(&mut conn, &[(note.clone(), None)]).unwrap();
 
     // Retrieve
@@ -2258,7 +2265,7 @@ fn test_note_metadata_with_attachment_roundtrip() {
         inclusion_path: SparseMerklePath::default(),
     };
 
-    queries::insert_scripts(&mut conn, [&note]).unwrap();
+    // Note has no details, so no script to insert
     queries::insert_notes(&mut conn, &[(note.clone(), None)]).unwrap();
 
     // Fetch the note back and verify the attachment is preserved
@@ -2293,8 +2300,7 @@ fn test_note_metadata_with_attachment_roundtrip() {
 async fn standard_note_scripts_loaded_on_startup() {
     use tempfile::NamedTempFile;
 
-    use crate::errors::DatabaseError;
-    use crate::genesis::GenesisState;
+    use crate::genesis::config::GenesisConfig;
 
     let db_file = NamedTempFile::new().unwrap();
     let db_path = db_file.path().to_path_buf();
@@ -2308,10 +2314,9 @@ async fn standard_note_scripts_loaded_on_startup() {
     let db = crate::db::Db::load(db_path).await.unwrap();
 
     // Verify all standard note scripts are present
-    for note_type in all_standard_note_types() {
+    for note_type in all_well_known_note_types() {
         let script = note_type.script();
         let script_root = note_type.script_root();
-
 
         // Query the database for the script
         let retrieved_script = db

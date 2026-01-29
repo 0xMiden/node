@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use diesel::{Connection, ExpressionMethods, QueryableByName, RunQueryDsl, SqliteConnection};
+use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_proto::generated as proto;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -22,7 +22,7 @@ use miden_protocol::note::{
 };
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
-use miden_standards::note::StandardNote;
+use miden_standards::note::WellKnownNote;
 use tokio::sync::oneshot;
 use tracing::{Instrument, info, instrument};
 
@@ -219,50 +219,37 @@ impl From<NoteRecord> for NoteSyncRecord {
     }
 }
 
-/// Returns all standard note types whose scripts should be loaded at startup.
+/// Returns all well-known note types whose scripts should be loaded at startup.
 ///
 /// This ensures that the node can process transactions that output these standard note types
 /// without requiring them to be created publicly first.
 ///
-/// NOTE: This list must be kept in sync with `miden_standards::note::StandardNote` variants.
-/// If `StandardNote` adds new variants in the future, they should be added here.
+/// NOTE: This list must be kept in sync with `miden_standards::note::WellKnownNote` variants.
+/// If `WellKnownNote` adds new variants in the future, they should be added here.
 /// TODO: refactor once (https://github.com/0xMiden/miden-base/pull/2367) lands
-pub(crate) fn all_standard_note_types() -> [StandardNote; 5] {
+pub(crate) fn all_well_known_note_types() -> [WellKnownNote; 5] {
     [
-        StandardNote::P2ID,
-        StandardNote::P2IDE,
-        StandardNote::SWAP,
-        StandardNote::MINT,
-        StandardNote::BURN,
+        WellKnownNote::P2ID,
+        WellKnownNote::P2IDE,
+        WellKnownNote::SWAP,
+        WellKnownNote::MINT,
+        WellKnownNote::BURN,
     ]
 }
 
-/// Inserts all standard note scripts into the database.
+/// Inserts all well-known note scripts into the database.
 ///
-/// This function loads the standard note scripts (P2ID, BURN, etc.) from `miden_standards` and
+/// This function loads the well-known note scripts (P2ID, BURN, etc.) from `miden_standards` and
 /// inserts them into the `note_scripts` table. This allows the node to immediately support
 /// network transactions that output these standard note types.
-fn insert_standard_note_scripts(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
-    use diesel::dsl::insert_or_ignore_into;
-
-    use crate::db::schema::note_scripts;
-
-    let standard_notes = all_standard_note_types();
-
-    for note_type in &standard_notes {
-        let script = note_type.script();
-        insert_or_ignore_into(note_scripts::table)
-            .values((
-                note_scripts::script_root.eq(script.root().to_bytes()),
-                note_scripts::script.eq(script.to_bytes()),
-            ))
-            .execute(conn)?;
-    }
+fn insert_well_known_note_scripts(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
+    let scripts: Vec<_> = all_well_known_note_types().iter().map(|n| n.script()).collect();
+    let count = queries::insert_note_scripts(conn, &scripts)?;
 
     info!(
         target: COMPONENT,
-        num_scripts = standard_notes.len(),
-        "Loaded standard note scripts into database"
+        num_scripts = count,
+        "Loaded well-known note scripts into database"
     );
 
     Ok(())
@@ -375,7 +362,7 @@ impl Db {
 
         // Insert any standard note scripts. This ensures that nodes upgrading to a new version of
         // `miden_standards` will automatically load any new standard note types.
-        this.query("standard note scripts", insert_standard_note_scripts).await?;
+        this.query("well-known note scripts", insert_well_known_note_scripts).await?;
 
         Ok(this)
     }
