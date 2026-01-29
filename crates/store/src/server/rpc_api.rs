@@ -327,7 +327,7 @@ impl rpc_server::Rpc for StoreApi {
 
         let storage_maps_page = self
             .state
-            .get_storage_map_sync_values(account_id, block_range)
+            .sync_account_storage_maps(account_id, block_range)
             .await
             .map_err(SyncAccountStorageMapsError::from)?;
 

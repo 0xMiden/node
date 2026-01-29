@@ -9,9 +9,11 @@
 
 - Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
 
-## v0.13.2 (2026-01-27)
+## v0.13.3 (2026-01-29)
 
-### Fixes
+- Fixed network monitor faucet test failing to parse `/get_metadata` response due to field type mismatches ([#1612](https://github.com/0xMiden/miden-node/pull/1612)).
+
+## v0.13.2 (2026-01-27)
 
 - Network transaction builder no longer creates conflicting transactions by consuming the same notes twice ([#1597](https://github.com/0xMiden/miden-node/issues/1597)).
 

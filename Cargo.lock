@@ -2726,6 +2726,7 @@ dependencies = [
  "hex",
  "humantime",
  "miden-node-proto",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -2755,6 +2756,7 @@ dependencies = [
  "humantime",
  "miden-node-block-producer",
  "miden-node-ntx-builder",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-rpc",
  "miden-node-store",
  "miden-node-utils",
@@ -2867,6 +2869,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-rocksdb-cxx-linkage-fix"
+version = "0.14.0"
+
+[[package]]
 name = "miden-node-rpc"
 version = "0.14.0"
 dependencies = [
@@ -2916,6 +2922,7 @@ dependencies = [
  "miden-crypto",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
@@ -2947,6 +2954,7 @@ dependencies = [
  "miden-block-prover",
  "miden-node-block-producer",
  "miden-node-proto",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-store",
  "miden-node-utils",
  "miden-protocol",
@@ -3101,6 +3109,7 @@ dependencies = [
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",

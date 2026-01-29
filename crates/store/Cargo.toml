@@ -15,20 +15,21 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-anyhow                 = { workspace = true }
-deadpool               = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
-deadpool-diesel        = { features = ["sqlite"], version = "0.6" }
-deadpool-sync          = { default-features = false, features = ["tracing"], version = "0.1" }
-diesel                 = { features = ["numeric", "sqlite"], version = "2.3" }
-diesel_migrations      = { features = ["sqlite"], version = "2.3" }
-fs-err                 = { workspace = true }
-hex                    = { version = "0.4" }
-indexmap               = { workspace = true }
-miden-crypto           = { features = ["concurrent", "hashmaps"], workspace = true }
-miden-node-proto       = { workspace = true }
-miden-node-proto-build = { features = ["internal"], workspace = true }
-miden-node-utils       = { workspace = true }
-miden-standards        = { workspace = true }
+anyhow                             = { workspace = true }
+deadpool                           = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
+deadpool-diesel                    = { features = ["sqlite"], version = "0.6" }
+deadpool-sync                      = { default-features = false, features = ["tracing"], version = "0.1" }
+diesel                             = { features = ["numeric", "sqlite"], version = "2.3" }
+diesel_migrations                  = { features = ["sqlite"], version = "2.3" }
+fs-err                             = { workspace = true }
+hex                                = { version = "0.4" }
+indexmap                           = { workspace = true }
+miden-crypto                       = { features = ["concurrent", "hashmaps"], workspace = true }
+miden-node-proto                   = { workspace = true }
+miden-node-proto-build             = { features = ["internal"], workspace = true }
+miden-node-rocksdb-cxx-linkage-fix = { optional = true, workspace = true }
+miden-node-utils                   = { workspace = true }
+miden-standards                    = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -58,7 +59,7 @@ termtree              = { version = "0.5" }
 
 [features]
 default = ["rocksdb"]
-rocksdb = ["miden-crypto/rocksdb"]
+rocksdb = ["miden-crypto/rocksdb", "miden-node-rocksdb-cxx-linkage-fix"]
 
 [[bench]]
 harness           = false
@@ -69,4 +70,4 @@ required-features = ["rocksdb"]
 # This is an indirect dependency for which we need to enable optimisations
 # via feature flags. Because we don't use it directly in code, machete
 # identifies it as unused.
-ignored = ["miden-crypto"]
+ignored = ["miden-crypto", "miden-node-rocksdb-cxx-linkage-fix"]
