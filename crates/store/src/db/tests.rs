@@ -78,6 +78,7 @@ use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_val
 use crate::db::models::{Page, queries, utils};
 use crate::db::{TransactionSummary, all_standard_note_types};
 use crate::errors::DatabaseError;
+use crate::genesis::config::GenesisConfig;
 
 fn create_db() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").expect("In memory sqlite always works");
@@ -2319,7 +2320,7 @@ async fn standard_note_scripts_loaded_on_startup() {
             .select_note_script_by_root(script_root)
             .await
             .unwrap()
-            .expect(format!("Standard note {script_root} should be present after Db::load());
+            .expect(&format!("Standard note {script_root} should be present after Db::load()"));
 
         assert_eq!(retrieved_script, script, "Retrieved script should match original");
     }
