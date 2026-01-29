@@ -14,6 +14,14 @@ use crate::db::select_validated_transactions;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlockValidationError {
+    #[error(
+        "proposed transaction count {proposed_tx_count} in block {block_num} does not match validated transaction count {validated_tx_count}"
+    )]
+    TransactionCountMismatch {
+        proposed_tx_count: usize,
+        validated_tx_count: usize,
+        block_num: BlockNumber,
+    },
     #[error("transaction {0} in block {1} has not been validated")]
     TransactionNotValidated(TransactionId, BlockNumber),
     #[error(
@@ -58,6 +66,15 @@ pub async fn validate_block<S: BlockSigner>(
             select_validated_transactions(conn, &query_tx_ids)
         })
         .await?;
+
+    // Validated transaction count must match proposed count exactly.
+    if validated_transactions.len() != proposed_tx_ids.len() {
+        return Err(BlockValidationError::TransactionCountMismatch {
+            proposed_tx_count: proposed_tx_ids.len(),
+            validated_tx_count: validated_transactions.len(),
+            block_num: proposed_block.block_num(),
+        });
+    }
 
     // Check that every transaction from the proposed block has been validated.
     for proposed_tx_id in proposed_tx_ids {
