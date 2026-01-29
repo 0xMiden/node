@@ -73,10 +73,10 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 
 use super::{AccountInfo, NoteRecord, NullifierInfo};
-use crate::db::TransactionSummary;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
+use crate::db::{TransactionSummary, all_standard_note_types};
 use crate::errors::DatabaseError;
 
 fn create_db() -> SqliteConnection {
@@ -2280,4 +2280,50 @@ fn test_note_metadata_with_attachment_roundtrip() {
         account_id,
         "NetworkAccountTarget should have the correct target account ID"
     );
+}
+
+// STANDARD NOTE SCRIPTS TESTS
+// ================================================================================================
+
+/// Verifies that all standard note scripts are automatically loaded when the database is opened
+/// via `Db::load()`.
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn standard_note_scripts_loaded_on_startup() {
+    use tempfile::NamedTempFile;
+
+    use crate::errors::DatabaseError;
+    use crate::genesis::GenesisState;
+
+    let db_file = NamedTempFile::new().unwrap();
+    let db_path = db_file.path().to_path_buf();
+
+    // Bootstrap the database with a minimal genesis block
+    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, SecretKey::random());
+    let genesis_block = genesis_state.into_block().unwrap();
+    crate::db::Db::bootstrap(db_path.clone(), &genesis_block).unwrap();
+
+    // Load the database - this should insert standard note scripts
+    let db = crate::db::Db::load(db_path).await.unwrap();
+
+    // Verify all standard note scripts are present
+    for note_type in all_standard_note_types() {
+        let script = note_type.script();
+        let script_root = note_type.script_root();
+
+        // Verify the script_root() method matches script().root()
+        assert_eq!(script.root(), script_root, "script_root() should match script().root()");
+
+        // Query the database for the script
+        let retrieved_script: Result<_, DatabaseError> = db
+            .query("get script", move |conn| queries::select_note_script_by_root(conn, script_root))
+            .await;
+
+        let retrieved_script = retrieved_script.unwrap();
+        assert!(
+            retrieved_script.is_some(),
+            "Standard note script should be present after Db::load()"
+        );
+        assert_eq!(retrieved_script.unwrap(), script, "Retrieved script should match original");
+    }
 }
