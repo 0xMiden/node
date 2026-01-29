@@ -226,7 +226,7 @@ impl From<NoteRecord> for NoteSyncRecord {
 ///
 /// NOTE: This list must be kept in sync with `miden_standards::note::StandardNote` variants.
 /// If `StandardNote` adds new variants in the future, they should be added here.
-/// TODO: refactor once we have enum iter derived for `StandardNote`
+/// TODO: refactor once (https://github.com/0xMiden/miden-base/pull/2367) lands
 pub(crate) fn all_standard_note_types() -> [StandardNote; 5] {
     [
         StandardNote::P2ID,
