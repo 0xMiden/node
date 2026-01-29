@@ -4,7 +4,7 @@
 
 ### Enhancements
 
-- Adapted store to automatically load standard note scripts from `miden_standards` on startup ([#1616](https://github.com/0xMiden/miden-node/pull/1616)).
+- Well known note scripts from `miden_standards` are now automatically loaded ([#1616](https://github.com/0xMiden/miden-node/pull/1616)).
 
 ## v0.13.3 (2026-01-29)
 

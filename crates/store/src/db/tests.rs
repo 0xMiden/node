@@ -2299,7 +2299,7 @@ async fn standard_note_scripts_loaded_on_startup() {
     let db_path = db_file.path().to_path_buf();
 
     // Bootstrap the database with a minimal genesis block
-    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, SecretKey::random());
+    let (genesis_state, _) = GenesisConfig::default().into_state(SecretKey::random()).unwrap();
     let genesis_block = genesis_state.into_block().unwrap();
     crate::db::Db::bootstrap(db_path.clone(), &genesis_block).unwrap();
 
@@ -2315,15 +2315,12 @@ async fn standard_note_scripts_loaded_on_startup() {
         assert_eq!(script.root(), script_root, "script_root() should match script().root()");
 
         // Query the database for the script
-        let retrieved_script: Result<_, DatabaseError> = db
-            .query("get script", move |conn| queries::select_note_script_by_root(conn, script_root))
-            .await;
+        let retrieved_script = db
+            .select_note_script_by_root(script_root)
+            .await
+            .unwrap()
+            .expect(format!("Standard note {script_root} should be present after Db::load());
 
-        let retrieved_script = retrieved_script.unwrap();
-        assert!(
-            retrieved_script.is_some(),
-            "Standard note script should be present after Db::load()"
-        );
-        assert_eq!(retrieved_script.unwrap(), script, "Retrieved script should match original");
+        assert_eq!(retrieved_script, script, "Retrieved script should match original");
     }
 }
