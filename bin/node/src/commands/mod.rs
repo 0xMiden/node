@@ -68,7 +68,9 @@ pub struct NtxBuilderConfig {
     )]
     pub ticker_interval: Duration,
 
-    /// Size of the LRU cache for note scripts.
+    /// Number of note scripts to cache locally.
+    ///
+    /// Note scripts not in cache must first be retrieved from the store.
     #[arg(
         long = "ntx-builder.script-cache-size",
         env = ENV_NTX_SCRIPT_CACHE_SIZE,
