@@ -7,6 +7,16 @@ import "types/account.proto";
 // NOTES
 // ================================================================================================
 
+// The type of a note.
+enum NoteType {
+    // Unspecified note type (default value, should not be used).
+    NOTE_TYPE_UNSPECIFIED = 0;
+    // Public note - details are visible on-chain.
+    NOTE_TYPE_PUBLIC = 1;
+    // Private note - details are not visible on-chain.
+    NOTE_TYPE_PRIVATE = 2;
+}
+
 // Represents a note's ID.
 message NoteId {
     // A unique identifier of the note which is a 32-byte commitment to the underlying note data.
@@ -24,8 +34,8 @@ message NoteMetadata {
     // The account which sent the note.
     account.AccountId sender = 1;
 
-    // The type of the note (0b01 = public, 0b10 = private, 0b11 = encrypted).
-    uint32 note_type = 2;
+    // The type of the note.
+    NoteType note_type = 2;
 
     // A value which can be used by the recipient(s) to identify notes intended for them.
     //
