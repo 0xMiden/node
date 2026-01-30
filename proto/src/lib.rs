@@ -23,11 +23,11 @@ pub fn store_rpc_api_descriptor() -> FileDescriptorSet {
         .expect("bytes should be a valid file descriptor created by build.rs")
 }
 
-/// Returns the Protobuf file descriptor for the store NTX builder API.
+/// Returns the Protobuf file descriptor for the store NTX producer API.
 #[cfg(feature = "internal")]
-pub fn store_ntx_builder_api_descriptor() -> FileDescriptorSet {
+pub fn store_ntx_producer_api_descriptor() -> FileDescriptorSet {
     let bytes =
-        include_bytes!(concat!(env!("OUT_DIR"), "/", "store_ntx_builder_file_descriptor.bin"));
+        include_bytes!(concat!(env!("OUT_DIR"), "/", "store_ntx_producer_file_descriptor.bin"));
     FileDescriptorSet::decode(&bytes[..])
         .expect("bytes should be a valid file descriptor created by build.rs")
 }

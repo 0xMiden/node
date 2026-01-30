@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
-use miden_node_ntx_builder::NetworkTransactionBuilder;
+use miden_node_ntx_producer::NetworkTransactionProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
 use miden_node_utils::grpc::UrlExt;
@@ -24,7 +24,7 @@ use crate::commands::{
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_INSECURE_SECRET_KEY,
     INSECURE_VALIDATOR_KEY_HEX,
-    NtxBuilderConfig,
+    NtxProducerConfig,
     duration_to_human_readable_string,
 };
 
@@ -76,7 +76,7 @@ pub enum BundledCommand {
         block_producer: BlockProducerConfig,
 
         #[command(flatten)]
-        ntx_builder: NtxBuilderConfig,
+        ntx_producer: NtxProducerConfig,
 
         /// Enables the exporting of traces for OpenTelemetry.
         ///
@@ -131,7 +131,7 @@ impl BundledCommand {
                 rpc_url,
                 data_directory,
                 block_producer,
-                ntx_builder,
+                ntx_producer,
                 enable_otel: _,
                 grpc_timeout,
                 validator_insecure_secret_key,
@@ -141,7 +141,7 @@ impl BundledCommand {
                 Self::start(
                     rpc_url,
                     data_directory,
-                    ntx_builder,
+                    ntx_producer,
                     block_producer,
                     grpc_timeout,
                     signer,
@@ -155,7 +155,7 @@ impl BundledCommand {
     async fn start(
         rpc_url: Url,
         data_directory: PathBuf,
-        ntx_builder: NtxBuilderConfig,
+        ntx_producer: NtxProducerConfig,
         block_producer: BlockProducerConfig,
         grpc_timeout: Duration,
         signer: impl BlockSigner + Send + Sync + 'static,
@@ -186,9 +186,9 @@ impl BundledCommand {
         let store_rpc_listener = TcpListener::bind("127.0.0.1:0")
             .await
             .context("Failed to bind to store RPC gRPC endpoint")?;
-        let store_ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+        let store_ntx_producer_listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .context("Failed to bind to store ntx-builder gRPC endpoint")?;
+            .context("Failed to bind to store ntx-producer gRPC endpoint")?;
         let store_block_producer_listener = TcpListener::bind("127.0.0.1:0")
             .await
             .context("Failed to bind to store block-producer gRPC endpoint")?;
@@ -198,9 +198,9 @@ impl BundledCommand {
         let store_block_producer_address = store_block_producer_listener
             .local_addr()
             .context("Failed to retrieve the store's block-producer gRPC address")?;
-        let store_ntx_builder_address = store_ntx_builder_listener
+        let store_ntx_producer_address = store_ntx_producer_listener
             .local_addr()
-            .context("Failed to retrieve the store's ntx-builder gRPC address")?;
+            .context("Failed to retrieve the store's ntx-producer gRPC address")?;
 
         let mut join_set = JoinSet::new();
         // Start store. The store endpoint is available after loading completes.
@@ -210,7 +210,7 @@ impl BundledCommand {
                 Store {
                     rpc_listener: store_rpc_listener,
                     block_producer_listener: store_block_producer_listener,
-                    ntx_builder_listener: store_ntx_builder_listener,
+                    ntx_producer_listener: store_ntx_producer_listener,
                     data_directory: data_directory_clone,
                     grpc_timeout,
                 }
@@ -220,7 +220,7 @@ impl BundledCommand {
             })
             .id();
 
-        let should_start_ntx_builder = !ntx_builder.disabled;
+        let should_start_ntx_producer = !ntx_producer.disabled;
 
         // Start block-producer. The block-producer's endpoint is available after loading completes.
         let block_producer_id = join_set
@@ -295,11 +295,11 @@ impl BundledCommand {
             (rpc_id, "rpc"),
         ]);
 
-        // Start network transaction builder. The endpoint is available after loading completes.
-        let store_ntx_builder_url = Url::parse(&format!("http://{store_ntx_builder_address}"))
+        // Start network transaction producer. The endpoint is available after loading completes.
+        let store_ntx_producer_url = Url::parse(&format!("http://{store_ntx_producer_address}"))
             .context("Failed to parse URL")?;
 
-        if should_start_ntx_builder {
+        if should_start_ntx_producer {
             let validator_url = Url::parse(&format!("http://{validator_address}"))
                 .context("Failed to parse URL")?;
             let id = join_set
@@ -307,19 +307,19 @@ impl BundledCommand {
                     let block_producer_url =
                         Url::parse(&format!("http://{block_producer_address}"))
                             .context("Failed to parse URL")?;
-                    NetworkTransactionBuilder::new(
-                        store_ntx_builder_url,
+                    NetworkTransactionProducer::new(
+                        store_ntx_producer_url,
                         block_producer_url,
                         validator_url,
-                        ntx_builder.tx_prover_url,
-                        ntx_builder.script_cache_size,
+                        ntx_producer.tx_prover_url,
+                        ntx_producer.script_cache_size,
                     )
                     .run()
                     .await
-                    .context("failed while serving ntx builder component")
+                    .context("failed while serving ntx producer component")
                 })
                 .id();
-            component_ids.insert(id, "ntx-builder");
+            component_ids.insert(id, "ntx-producer");
         }
 
         // SAFETY: The joinset is definitely not empty.

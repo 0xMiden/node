@@ -12,7 +12,7 @@ use url::Url;
 use super::{
     ENV_DATA_DIRECTORY,
     ENV_STORE_BLOCK_PRODUCER_URL,
-    ENV_STORE_NTX_BUILDER_URL,
+    ENV_STORE_NTX_PRODUCER_URL,
     ENV_STORE_RPC_URL,
 };
 use crate::commands::{
@@ -64,9 +64,9 @@ pub enum StoreCommand {
         #[arg(long = "rpc.url", env = ENV_STORE_RPC_URL, value_name = "URL")]
         rpc_url: Url,
 
-        /// Url at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
-        ntx_builder_url: Url,
+        /// Url at which to serve the store's network transaction producer API.
+        #[arg(long = "ntx-producer.url", env = ENV_STORE_NTX_PRODUCER_URL, value_name = "URL")]
+        ntx_producer_url: Url,
 
         /// Url at which to serve the store's block producer API.
         #[arg(long = "block-producer.url", env = ENV_STORE_BLOCK_PRODUCER_URL, value_name = "URL")]
@@ -113,7 +113,7 @@ impl StoreCommand {
             ),
             StoreCommand::Start {
                 rpc_url,
-                ntx_builder_url,
+                ntx_producer_url,
                 block_producer_url,
                 data_directory,
                 enable_otel: _,
@@ -121,7 +121,7 @@ impl StoreCommand {
             } => {
                 Self::start(
                     rpc_url,
-                    ntx_builder_url,
+                    ntx_producer_url,
                     block_producer_url,
                     data_directory,
                     grpc_timeout,
@@ -141,7 +141,7 @@ impl StoreCommand {
 
     async fn start(
         rpc_url: Url,
-        ntx_builder_url: Url,
+        ntx_producer_url: Url,
         block_producer_url: Url,
         data_directory: PathBuf,
         grpc_timeout: Duration,
@@ -153,12 +153,12 @@ impl StoreCommand {
             .await
             .context("Failed to bind to store's RPC gRPC URL")?;
 
-        let ntx_builder_addr = ntx_builder_url
+        let ntx_producer_addr = ntx_producer_url
             .to_socket()
-            .context("Failed to extract socket address from store ntx-builder URL")?;
-        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_addr)
+            .context("Failed to extract socket address from store ntx-producer URL")?;
+        let ntx_producer_listener = tokio::net::TcpListener::bind(ntx_producer_addr)
             .await
-            .context("Failed to bind to store's ntx-builder gRPC URL")?;
+            .context("Failed to bind to store's ntx-producer gRPC URL")?;
 
         let block_producer_listener = block_producer_url
             .to_socket()
@@ -169,7 +169,7 @@ impl StoreCommand {
 
         Store {
             rpc_listener,
-            ntx_builder_listener,
+            ntx_producer_listener,
             block_producer_listener,
             data_directory,
             grpc_timeout,

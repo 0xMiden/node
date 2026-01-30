@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
+use miden_node_proto::clients::{Builder, StoreNtxProducerClient};
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
 use miden_node_proto::domain::note::NetworkNote;
 use miden_node_proto::errors::ConversionError;
@@ -36,12 +36,12 @@ use crate::COMPONENT;
 // STORE CLIENT
 // ================================================================================================
 
-/// Interface to the store's ntx-builder gRPC API.
+/// Interface to the store's ntx-producer gRPC API.
 ///
 /// Essentially just a thin wrapper around the generated gRPC client which improves type safety.
 #[derive(Clone, Debug)]
 pub struct StoreClient {
-    inner: StoreNtxBuilderClient,
+    inner: StoreNtxProducerClient,
 }
 
 impl StoreClient {
@@ -55,7 +55,7 @@ impl StoreClient {
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<StoreNtxBuilderClient>();
+            .connect_lazy::<StoreNtxProducerClient>();
 
         Self { inner: store }
     }
@@ -98,7 +98,7 @@ impl StoreClient {
         let response = self.inner.clone().get_current_blockchain_data(request).await?.into_inner();
 
         match response.current_block_header {
-            // There are new blocks compared to the builder's latest state
+            // There are new blocks compared to the producer's latest state
             Some(block) => {
                 let peaks = try_convert(response.current_peaks).collect::<Result<_, _>>()?;
                 let header =
@@ -153,7 +153,7 @@ impl StoreClient {
     ///
     /// Retrieves account details from the store. The retrieved details are limited to the account
     /// code, account header, and storage header. The vault and storage slots are not required for
-    /// the purposes of the NTX Builder.
+    /// the purposes of the NTX Producer.
     #[instrument(target = COMPONENT, name = "store.client.get_account_inputs", skip_all, err)]
     pub async fn get_account_inputs(
         &self,
@@ -230,7 +230,7 @@ impl StoreClient {
     /// Streams network account IDs to the provided sender.
     ///
     /// This method is designed to be run in a background task, sending accounts to the main event
-    /// loop as they are loaded. This allows the ntx-builder to start processing mempool events
+    /// loop as they are loaded. This allows the ntx-producer to start processing mempool events
     /// without waiting for all accounts to be preloaded.
     pub async fn stream_network_account_ids(
         &self,

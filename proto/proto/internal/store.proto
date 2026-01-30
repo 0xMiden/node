@@ -244,11 +244,11 @@ message TransactionInputs {
     optional bool new_account_id_prefix_is_unique = 5; // TODO: Replace this with an error. When a general error message exists.
 }
 
-// NTX BUILDER STORE API
+// NTX PRODUCER STORE API
 // ================================================================================================
 
-// Store API for the network transaction builder component
-service NtxBuilder {
+// Store API for the network transaction producer component
+service NtxProducer {
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
     rpc GetBlockHeaderByNumber(rpc.BlockHeaderByNumberRequest) returns (rpc.BlockHeaderByNumberResponse) {}

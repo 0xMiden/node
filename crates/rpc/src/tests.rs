@@ -426,9 +426,9 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     Store::bootstrap(genesis_state.clone(), data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let rpc_listener = TcpListener::bind(store_addr).await.expect("store should bind a port");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+    let ntx_producer_listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
+        .expect("Failed to bind store ntx-producer gRPC endpoint");
     let block_producer_listener =
         TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
     // In order to later kill the store, we need to spawn a new runtime and run the store on
@@ -439,7 +439,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
-            ntx_builder_listener,
+            ntx_producer_listener,
             block_producer_listener,
             data_directory: dir,
             grpc_timeout: Duration::from_secs(30),
@@ -468,9 +468,9 @@ async fn shutdown_store(store_runtime: Runtime) {
 /// Restarts a store using an existing data directory. Returns the runtime handle for shutdown.
 async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path) -> Runtime {
     let rpc_listener = TcpListener::bind(store_addr).await.expect("Failed to bind store");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+    let ntx_producer_listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
+        .expect("Failed to bind store ntx-producer gRPC endpoint");
     let block_producer_listener =
         TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
     let dir = data_directory.to_path_buf();
@@ -479,7 +479,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
-            ntx_builder_listener,
+            ntx_producer_listener,
             block_producer_listener,
             data_directory: dir,
             grpc_timeout: Duration::from_secs(10),

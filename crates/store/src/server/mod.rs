@@ -7,7 +7,7 @@ use anyhow::Context;
 use miden_node_proto::generated::store;
 use miden_node_proto_build::{
     store_block_producer_api_descriptor,
-    store_ntx_builder_api_descriptor,
+    store_ntx_producer_api_descriptor,
     store_rpc_api_descriptor,
 };
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -27,13 +27,13 @@ use crate::{COMPONENT, GenesisState};
 
 mod api;
 mod block_producer;
-mod ntx_builder;
+mod ntx_producer;
 mod rpc_api;
 
 /// The store server.
 pub struct Store {
     pub rpc_listener: TcpListener,
-    pub ntx_builder_listener: TcpListener,
+    pub ntx_producer_listener: TcpListener,
     pub block_producer_listener: TcpListener,
     pub data_directory: PathBuf,
     /// Server-side timeout for an individual gRPC request.
@@ -81,14 +81,15 @@ impl Store {
         Ok(())
     }
 
-    /// Serves the store APIs (rpc, ntx-builder, block-producer) and DB maintenance background task.
+    /// Serves the store APIs (rpc, ntx-producer, block-producer) and DB maintenance background
+    /// task.
     ///
     /// Note: this blocks until the server dies.
     pub async fn serve(self) -> anyhow::Result<()> {
         let rpc_address = self.rpc_listener.local_addr()?;
-        let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
+        let ntx_producer_address = self.ntx_producer_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
-        info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
+        info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_producer_endpoint=?ntx_producer_address,
             block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout,
             "Loading database");
 
@@ -102,16 +103,17 @@ impl Store {
 
         let rpc_service =
             store::rpc_server::RpcServer::new(api::StoreApi { state: Arc::clone(&state) });
-        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
-            state: Arc::clone(&state),
-        });
+        let ntx_producer_service =
+            store::ntx_producer_server::NtxProducerServer::new(api::StoreApi {
+                state: Arc::clone(&state),
+            });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())
-            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
+            .register_file_descriptor_set(store_ntx_producer_api_descriptor())
             .register_file_descriptor_set(store_block_producer_api_descriptor())
             .build_v1()
             .context("failed to build reflection service")?;
@@ -122,7 +124,7 @@ impl Store {
         // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
         let reflection_service_alpha = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())
-            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
+            .register_file_descriptor_set(store_ntx_producer_api_descriptor())
             .register_file_descriptor_set(store_block_producer_api_descriptor())
             .build_v1alpha()
             .context("failed to build reflection service")?;
@@ -161,10 +163,10 @@ impl Store {
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .timeout(self.grpc_timeout)
-                .add_service(ntx_builder_service)
+                .add_service(ntx_producer_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
-                .serve_with_incoming(TcpListenerStream::new(self.ntx_builder_listener)),
+                .serve_with_incoming(TcpListenerStream::new(self.ntx_producer_listener)),
         );
 
         join_set.spawn(

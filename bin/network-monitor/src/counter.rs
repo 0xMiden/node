@@ -853,7 +853,7 @@ fn create_network_note(
     rng: &mut ChaCha20Rng,
 ) -> Result<(Note, NoteRecipient)> {
     // Create the NetworkAccountTarget attachment - this is required for the note to be
-    // recognized as a network note by the ntx-builder
+    // recognized as a network note by the ntx-producer
     let target = NetworkAccountTarget::new(counter_account.id(), NoteExecutionHint::Always)
         .context("Failed to create NetworkAccountTarget for counter account")?;
     let attachment: NoteAttachment = target.into();

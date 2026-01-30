@@ -36,11 +36,11 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             .expect("Failed to get block-producer address")
     };
 
-    let ntx_builder_addr = {
-        let ntx_builder_address = TcpListener::bind("127.0.0.1:0")
+    let ntx_producer_addr = {
+        let ntx_producer_address = TcpListener::bind("127.0.0.1:0")
             .await
-            .expect("failed to bind the ntx builder address");
-        ntx_builder_address.local_addr().expect("failed to get ntx builder address")
+            .expect("failed to bind the ntx producer address");
+        ntx_producer_address.local_addr().expect("failed to get ntx producer address")
     };
 
     // start the block producer
@@ -48,7 +48,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         BlockProducer {
             block_producer_address: block_producer_addr,
             store_address: store_addr,
-            ntx_builder_address: Some(ntx_builder_addr),
+            ntx_producer_address: Some(ntx_producer_addr),
             batch_prover_url: None,
             block_prover_url: None,
             batch_interval: Duration::from_millis(500),
@@ -77,9 +77,9 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         let dir = data_directory.path().to_path_buf();
         let rpc_listener =
             TcpListener::bind("127.0.0.1:0").await.expect("store should bind the RPC port");
-        let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+        let ntx_producer_listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .expect("Failed to bind store ntx-builder gRPC endpoint");
+            .expect("Failed to bind store ntx-producer gRPC endpoint");
         let block_producer_listener = TcpListener::bind(store_addr)
             .await
             .expect("store should bind the block-producer port");
@@ -91,7 +91,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         store_runtime.spawn(async move {
             Store {
                 rpc_listener,
-                ntx_builder_listener,
+                ntx_producer_listener,
                 block_producer_listener,
                 data_directory: dir,
                 grpc_timeout: std::time::Duration::from_secs(30),
@@ -145,9 +145,9 @@ async fn restart_store(
 ) -> runtime::Runtime {
     let rpc_listener =
         TcpListener::bind("127.0.0.1:0").await.expect("store should bind the RPC port");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+    let ntx_producer_listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
+        .expect("Failed to bind store ntx-producer gRPC endpoint");
     let block_producer_listener = TcpListener::bind(store_addr)
         .await
         .expect("store should bind the block-producer port");
@@ -157,7 +157,7 @@ async fn restart_store(
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
-            ntx_builder_listener,
+            ntx_producer_listener,
             block_producer_listener,
             data_directory: dir,
             grpc_timeout: std::time::Duration::from_secs(30),

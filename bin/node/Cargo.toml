@@ -24,7 +24,7 @@ fs-err                    = { workspace = true }
 hex                       = { workspace = true }
 humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }
-miden-node-ntx-builder    = { workspace = true }
+miden-node-ntx-producer   = { workspace = true }
 miden-node-rpc            = { workspace = true }
 miden-node-store          = { workspace = true }
 miden-node-utils          = { workspace = true }

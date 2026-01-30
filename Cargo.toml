@@ -6,7 +6,7 @@ members = [
   "bin/stress-test",
   "crates/block-producer",
   "crates/grpc-error-macro",
-  "crates/ntx-builder",
+  "crates/ntx-producer",
   "crates/proto",
   "crates/remote-prover-client",
   "crates/rocksdb-cxx-linkage-fix",
@@ -39,7 +39,7 @@ opt-level = 2
 # Workspace crates.
 miden-node-block-producer   = { path = "crates/block-producer", version = "0.14" }
 miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.14" }
-miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.14" }
+miden-node-ntx-producer     = { path = "crates/ntx-producer", version = "0.14" }
 miden-node-proto            = { path = "crates/proto", version = "0.14" }
 miden-node-proto-build      = { path = "proto", version = "0.14" }
 miden-node-rpc              = { path = "crates/rpc", version = "0.14" }

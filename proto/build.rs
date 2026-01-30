@@ -6,10 +6,10 @@ use miette::{Context, IntoDiagnostic};
 use protox::prost::Message;
 
 const RPC_PROTO: &str = "rpc.proto";
-// Unified internal store API (store.Rpc, store.BlockProducer, store.NtxBuilder).
+// Unified internal store API (store.Rpc, store.BlockProducer, store.NtxProducer).
 // We compile the same file three times to preserve existing descriptor names.
 const STORE_RPC_PROTO: &str = "internal/store.proto";
-const STORE_NTX_BUILDER_PROTO: &str = "internal/store.proto";
+const STORE_NTX_PRODUCER_PROTO: &str = "internal/store.proto";
 const STORE_BLOCK_PRODUCER_PROTO: &str = "internal/store.proto";
 const BLOCK_PRODUCER_PROTO: &str = "internal/block_producer.proto";
 const REMOTE_PROVER_PROTO: &str = "remote_prover.proto";
@@ -17,7 +17,7 @@ const VALIDATOR_PROTO: &str = "internal/validator.proto";
 
 const RPC_DESCRIPTOR: &str = "rpc_file_descriptor.bin";
 const STORE_RPC_DESCRIPTOR: &str = "store_rpc_file_descriptor.bin";
-const STORE_NTX_BUILDER_DESCRIPTOR: &str = "store_ntx_builder_file_descriptor.bin";
+const STORE_NTX_PRODUCER_DESCRIPTOR: &str = "store_ntx_producer_file_descriptor.bin";
 const STORE_BLOCK_PRODUCER_DESCRIPTOR: &str = "store_block_producer_file_descriptor.bin";
 const BLOCK_PRODUCER_DESCRIPTOR: &str = "block_producer_file_descriptor.bin";
 const REMOTE_PROVER_DESCRIPTOR: &str = "remote_prover_file_descriptor.bin";
@@ -56,11 +56,11 @@ fn main() -> miette::Result<()> {
         .into_diagnostic()
         .wrap_err("writing store rpc file descriptor")?;
 
-    let store_ntx_builder_file_descriptor = protox::compile([STORE_NTX_BUILDER_PROTO], includes)?;
-    let store_ntx_builder_path = PathBuf::from(&out).join(STORE_NTX_BUILDER_DESCRIPTOR);
-    fs::write(&store_ntx_builder_path, store_ntx_builder_file_descriptor.encode_to_vec())
+    let store_ntx_producer_file_descriptor = protox::compile([STORE_NTX_PRODUCER_PROTO], includes)?;
+    let store_ntx_producer_path = PathBuf::from(&out).join(STORE_NTX_PRODUCER_DESCRIPTOR);
+    fs::write(&store_ntx_producer_path, store_ntx_producer_file_descriptor.encode_to_vec())
         .into_diagnostic()
-        .wrap_err("writing store ntx builder file descriptor")?;
+        .wrap_err("writing store ntx producer file descriptor")?;
 
     let store_block_producer_file_descriptor =
         protox::compile([STORE_BLOCK_PRODUCER_PROTO], includes)?;

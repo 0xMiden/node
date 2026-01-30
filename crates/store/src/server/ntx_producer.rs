@@ -5,7 +5,7 @@ use miden_crypto::merkle::smt::SmtProof;
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
-use miden_node_proto::generated::store::ntx_builder_server;
+use miden_node_proto::generated::store::ntx_producer_server;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::StorageSlotName;
 use miden_protocol::asset::AssetVaultKey;
@@ -26,11 +26,11 @@ use crate::server::api::{
     read_root,
 };
 
-// NTX BUILDER ENDPOINTS
+// NTX PRODUCER ENDPOINTS
 // ================================================================================================
 
 #[tonic::async_trait]
-impl ntx_builder_server::NtxBuilder for StoreApi {
+impl ntx_producer_server::NtxProducer for StoreApi {
     /// Returns block header for the specified block number.
     ///
     /// If the block number is not provided, block header for the latest block is returned.

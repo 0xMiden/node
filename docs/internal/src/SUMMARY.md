@@ -10,5 +10,5 @@
   - [RPC](./rpc.md)
   - [Store](./store.md)
   - [Block producer](./block-producer.md)
-  - [Network transaction builder](./ntx-builder.md)
+  - [Network transaction producer](./ntx-producer.md)
 - [Common issues other oddities](./oddities.md)

@@ -7,6 +7,7 @@
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
 ### Changes
 
+- [BREAKING] Renamed `NetworkTransactionBuilder` to `NetworkTransactionProducer`; crate renamed from `miden-node-ntx-builder` to `miden-node-ntx-producer`, CLI flags `--no-ntx-builder` and `--ntx-builder.*` renamed to `--no-ntx-producer` and `--ntx-producer.*`, env var `MIDEN_NODE_STORE_NTX_BUILDER_URL` renamed to `MIDEN_NODE_STORE_NTX_PRODUCER_URL` ([#1622](https://github.com/0xMiden/miden-node/pull/1622)).
 - Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
 
 ## v0.13.3 (2026-01-29)

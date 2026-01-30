@@ -2,16 +2,16 @@ use std::num::NonZeroUsize;
 
 mod actor;
 mod block_producer;
-mod builder;
 mod coordinator;
+mod producer;
 mod store;
 
-pub use builder::NetworkTransactionBuilder;
+pub use producer::NetworkTransactionProducer;
 
 // CONSTANTS
 // =================================================================================================
 
-const COMPONENT: &str = "miden-ntx-builder";
+const COMPONENT: &str = "miden-ntx-producer";
 
 /// Maximum number of network notes a network transaction is allowed to consume.
 const MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(20).unwrap();

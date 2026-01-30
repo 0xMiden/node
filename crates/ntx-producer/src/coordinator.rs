@@ -36,7 +36,7 @@ impl ActorHandle {
 
 /// Coordinator for managing [`AccountActor`] instances, tasks, and associated communication.
 ///
-/// The `Coordinator` is the central orchestrator of the network transaction builder system.
+/// The `Coordinator` is the central orchestrator of the network transaction producer system.
 /// It manages the lifecycle of account actors. Each actor is responsible for handling transactions
 /// for a specific network account. The coordinator provides the following core
 /// functionality:
@@ -112,7 +112,7 @@ impl Coordinator {
     /// This method creates a new [`AccountActor`] instance for the specified account origin
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
-    #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self, origin, actor_context))]
+    #[tracing::instrument(name = "ntx.producer.spawn_actor", skip(self, origin, actor_context))]
     pub async fn spawn_actor(
         &mut self,
         origin: AccountOrigin,

@@ -16,7 +16,7 @@ use super::ActorShutdownReason;
 use super::note_state::{NetworkAccountEffect, NetworkAccountNoteState};
 use crate::COMPONENT;
 use crate::actor::inflight_note::InflightNetworkNote;
-use crate::builder::ChainState;
+use crate::producer::ChainState;
 use crate::store::{StoreClient, StoreError};
 
 // TRANSACTION CANDIDATE
@@ -207,7 +207,7 @@ impl NetworkAccountState {
     ) {
         // Skip transactions we already know about.
         //
-        // This can occur since both ntx builder and the mempool might inform us of the same
+        // This can occur since both ntx producer and the mempool might inform us of the same
         // transaction. Once when it was submitted to the mempool, and once by the mempool event.
         if self.inflight_txs.contains_key(&id) {
             return;

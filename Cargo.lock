@@ -2755,7 +2755,7 @@ dependencies = [
  "hex",
  "humantime",
  "miden-node-block-producer",
- "miden-node-ntx-builder",
+ "miden-node-ntx-producer",
  "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-rpc",
  "miden-node-store",
@@ -2811,7 +2811,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "miden-node-ntx-builder"
+name = "miden-node-ntx-producer"
 version = "0.14.0"
 dependencies = [
  "anyhow",

@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::block_producer::BlockProducerClient;
-use crate::builder::ChainState;
+use crate::producer::ChainState;
 use crate::store::StoreClient;
 
 // ACTOR SHUTDOWN REASON

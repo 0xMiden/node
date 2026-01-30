@@ -26,7 +26,7 @@ const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_BLOCK_PROVER_URL";
 const ENV_NTX_PROVER_URL: &str = "MIDEN_NODE_NTX_PROVER_URL";
 const ENV_RPC_URL: &str = "MIDEN_NODE_RPC_URL";
 const ENV_STORE_RPC_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
-const ENV_STORE_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
+const ENV_STORE_NTX_PRODUCER_URL: &str = "MIDEN_NODE_STORE_NTX_PRODUCER_URL";
 const ENV_STORE_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_VALIDATOR_BLOCK_PRODUCER_URL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
@@ -47,21 +47,21 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-/// Configuration for the Network Transaction Builder component
+/// Configuration for the Network Transaction Producer component
 #[derive(clap::Args)]
-pub struct NtxBuilderConfig {
-    /// Disable spawning the network transaction builder.
-    #[arg(long = "no-ntx-builder", default_value_t = false)]
+pub struct NtxProducerConfig {
+    /// Disable spawning the network transaction producer.
+    #[arg(long = "no-ntx-producer", default_value_t = false)]
     pub disabled: bool,
 
-    /// The remote transaction prover's gRPC url, used for the ntx builder. If unset,
+    /// The remote transaction prover's gRPC url, used for the ntx producer. If unset,
     /// will default to running a prover in-process which is expensive.
     #[arg(long = "tx-prover.url", env = ENV_NTX_PROVER_URL, value_name = "URL")]
     pub tx_prover_url: Option<Url>,
 
-    /// Interval at which to run the network transaction builder's ticker.
+    /// Interval at which to run the network transaction producer's ticker.
     #[arg(
-        long = "ntx-builder.interval",
+        long = "ntx-producer.interval",
         default_value = &duration_to_human_readable_string(DEFAULT_NTX_TICKER_INTERVAL),
         value_parser = humantime::parse_duration,
         value_name = "DURATION"
@@ -69,7 +69,7 @@ pub struct NtxBuilderConfig {
     pub ticker_interval: Duration,
 
     #[arg(
-        long = "ntx-builder.script-cache-size",
+        long = "ntx-producer.script-cache-size",
         env = ENV_NTX_SCRIPT_CACHE_SIZE,
         value_name = "NUM",
         default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE

@@ -1,10 +1,10 @@
 [package]
-description            = "Miden node's network transaction builder component"
+description            = "Miden node's network transaction producer component"
 edition.workspace      = true
 homepage.workspace     = true
 keywords               = ["miden", "node"]
 license.workspace      = true
-name                   = "miden-node-ntx-builder"
+name                   = "miden-node-ntx-producer"
 readme                 = "README.md"
 repository.workspace   = true
 rust-version.workspace = true

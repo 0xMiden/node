@@ -31,7 +31,7 @@ miden-node-store
 miden-remote-prover
 miden-remote-prover-client
 miden-node-block-producer
-miden-node-ntx-builder
+miden-node-ntx-producer
 miden-node-rpc
 miden-node
 miden-network-monitor

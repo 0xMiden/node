@@ -1,6 +1,6 @@
-# Network Transaction Builder Component
+# Network Transaction Producer Component
 
-The network transaction builder (NTB) is responsible for driving the state of network accounts.
+The network transaction producer (NTP) is responsible for driving the state of network accounts.
 
 ## What is a network account
 
@@ -26,10 +26,10 @@ by the fact that it updates the state of a network account.
 
 At present, we artificially limit this such that only this component may create transactions against
 network accounts. This is enforced at the RPC layer by disallowing network transactions entirely in
-that component. The NTB skirts around this by submitting its transactions directly to the
+that component. The NTP skirts around this by submitting its transactions directly to the
 block-producer.
 
-This limitation is there to prevent complicating the NTBs implementation while the protocol and
+This limitation is there to prevent complicating the NTP's implementation while the protocol and
 definitions of network accounts, notes and transactions mature.
 
 ## Implementation
@@ -38,7 +38,7 @@ On startup the mempool loads all unconsumed network notes from the store. From t
 the mempool for events which would impact network account state. This communication takes the form
 of an event stream via gRPC.
 
-The NTB periodically selects an arbitrary network account with available network notes and creates
+The NTP periodically selects an arbitrary network account with available network notes and creates
 a network transaction for it.
 
 The block-producer remains blissfully unaware of network transactions. From its perspective a

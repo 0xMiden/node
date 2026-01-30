@@ -30,7 +30,7 @@ const MAX_BLOCK_COUNT: usize = 4;
 // CHAIN STATE
 // ================================================================================================
 
-/// Contains information about the chain that is relevant to the [`NetworkTransactionBuilder`] and
+/// Contains information about the chain that is relevant to the [`NetworkTransactionProducer`] and
 /// all account actors managed by the [`Coordinator`]
 #[derive(Debug, Clone)]
 pub struct ChainState {
@@ -55,18 +55,18 @@ impl ChainState {
     }
 }
 
-// NETWORK TRANSACTION BUILDER
+// NETWORK TRANSACTION PRODUCER
 // ================================================================================================
 
-/// Network transaction builder component.
+/// Network transaction producer component.
 ///
-/// The network transaction builder is in in charge of building transactions that consume notes
+/// The network transaction producer is in charge of producing transactions that consume notes
 /// against network accounts. These notes are identified and communicated by the block producer.
 /// The service maintains a list of unconsumed notes and periodically executes and proves
 /// transactions that consume them (reaching out to the store to retrieve state as necessary).
 ///
-/// The builder manages the tasks for every network account on the chain through the coordinator.
-pub struct NetworkTransactionBuilder {
+/// The producer manages the tasks for every network account on the chain through the coordinator.
+pub struct NetworkTransactionProducer {
     /// Address of the store gRPC server.
     store_url: Url,
     /// Address of the block producer gRPC server.
@@ -83,11 +83,11 @@ pub struct NetworkTransactionBuilder {
     coordinator: Coordinator,
 }
 
-impl NetworkTransactionBuilder {
+impl NetworkTransactionProducer {
     /// Channel capacity for account loading.
     const ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
-    /// Creates a new instance of the network transaction builder.
+    /// Creates a new instance of the network transaction producer.
     pub fn new(
         store_url: Url,
         block_producer_url: Url,
@@ -107,7 +107,7 @@ impl NetworkTransactionBuilder {
         }
     }
 
-    /// Runs the network transaction builder until a fatal error occurs.
+    /// Runs the network transaction producer until a fatal error occurs.
     pub async fn run(mut self) -> anyhow::Result<()> {
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
@@ -188,7 +188,7 @@ impl NetworkTransactionBuilder {
                     self.handle_loaded_account(account_id, &actor_context).await?;
                 },
                 // Handle account loader task completion/failure.
-                // If the task fails, we abort since the builder would be in a degraded state
+                // If the task fails, we abort since the producer would be in a degraded state
                 // where existing notes against network accounts won't be processed.
                 result = &mut account_loader_handle => {
                     result
@@ -204,7 +204,7 @@ impl NetworkTransactionBuilder {
 
     /// Handles a batch of account IDs loaded from the store by spawning actors for them.
     #[tracing::instrument(
-        name = "ntx.builder.handle_loaded_accounts",
+        name = "ntx.producer.handle_loaded_accounts",
         skip(self, account_id, actor_context)
     )]
     async fn handle_loaded_account(
@@ -221,7 +221,7 @@ impl NetworkTransactionBuilder {
     /// Handles mempool events by sending them to actors via the coordinator and/or spawning new
     /// actors as required.
     #[tracing::instrument(
-        name = "ntx.builder.handle_mempool_event",
+        name = "ntx.producer.handle_mempool_event",
         skip(self, event, actor_context, chain_state)
     )]
     async fn handle_mempool_event(

@@ -2229,7 +2229,7 @@ pub mod block_producer_server {
     }
 }
 /// Generated client implementations.
-pub mod ntx_builder_client {
+pub mod ntx_producer_client {
     #![allow(
         unused_variables,
         dead_code,
@@ -2239,12 +2239,12 @@ pub mod ntx_builder_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-    /// Store API for the network transaction builder component
+    /// Store API for the network transaction producer component
     #[derive(Debug, Clone)]
-    pub struct NtxBuilderClient<T> {
+    pub struct NtxProducerClient<T> {
         inner: tonic::client::Grpc<T>,
     }
-    impl NtxBuilderClient<tonic::transport::Channel> {
+    impl NtxProducerClient<tonic::transport::Channel> {
         /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
         where
@@ -2255,7 +2255,7 @@ pub mod ntx_builder_client {
             Ok(Self::new(conn))
         }
     }
-    impl<T> NtxBuilderClient<T>
+    impl<T> NtxProducerClient<T>
     where
         T: tonic::client::GrpcService<tonic::body::Body>,
         T::Error: Into<StdError>,
@@ -2273,7 +2273,7 @@ pub mod ntx_builder_client {
         pub fn with_interceptor<F>(
             inner: T,
             interceptor: F,
-        ) -> NtxBuilderClient<InterceptedService<T, F>>
+        ) -> NtxProducerClient<InterceptedService<T, F>>
         where
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
@@ -2287,7 +2287,7 @@ pub mod ntx_builder_client {
                 http::Request<tonic::body::Body>,
             >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
-            NtxBuilderClient::new(InterceptedService::new(inner, interceptor))
+            NtxProducerClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with the given encoding.
         ///
@@ -2341,11 +2341,11 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetBlockHeaderByNumber",
+                "/store.NtxProducer/GetBlockHeaderByNumber",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetBlockHeaderByNumber"));
+                .insert(GrpcMethod::new("store.NtxProducer", "GetBlockHeaderByNumber"));
             self.inner.unary(req, path, codec).await
         }
         /// Returns a paginated list of unconsumed network notes.
@@ -2366,12 +2366,12 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetUnconsumedNetworkNotes",
+                "/store.NtxProducer/GetUnconsumedNetworkNotes",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
-                    GrpcMethod::new("store.NtxBuilder", "GetUnconsumedNetworkNotes"),
+                    GrpcMethod::new("store.NtxProducer", "GetUnconsumedNetworkNotes"),
                 );
             self.inner.unary(req, path, codec).await
         }
@@ -2395,11 +2395,13 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetCurrentBlockchainData",
+                "/store.NtxProducer/GetCurrentBlockchainData",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetCurrentBlockchainData"));
+                .insert(
+                    GrpcMethod::new("store.NtxProducer", "GetCurrentBlockchainData"),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// Returns the latest state of a network account with the specified account ID.
@@ -2420,12 +2422,12 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetNetworkAccountDetailsById",
+                "/store.NtxProducer/GetNetworkAccountDetailsById",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
-                    GrpcMethod::new("store.NtxBuilder", "GetNetworkAccountDetailsById"),
+                    GrpcMethod::new("store.NtxProducer", "GetNetworkAccountDetailsById"),
                 );
             self.inner.unary(req, path, codec).await
         }
@@ -2447,11 +2449,11 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetNetworkAccountIds",
+                "/store.NtxProducer/GetNetworkAccountIds",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetNetworkAccountIds"));
+                .insert(GrpcMethod::new("store.NtxProducer", "GetNetworkAccountIds"));
             self.inner.unary(req, path, codec).await
         }
         /// Returns the latest details of the specified account.
@@ -2472,11 +2474,11 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetAccount",
+                "/store.NtxProducer/GetAccount",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetAccount"));
+                .insert(GrpcMethod::new("store.NtxProducer", "GetAccount"));
             self.inner.unary(req, path, codec).await
         }
         /// Returns the script for a note by its root.
@@ -2497,11 +2499,11 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetNoteScriptByRoot",
+                "/store.NtxProducer/GetNoteScriptByRoot",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetNoteScriptByRoot"));
+                .insert(GrpcMethod::new("store.NtxProducer", "GetNoteScriptByRoot"));
             self.inner.unary(req, path, codec).await
         }
         /// Returns vault asset witnesses for the specified account.
@@ -2522,11 +2524,11 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetVaultAssetWitnesses",
+                "/store.NtxProducer/GetVaultAssetWitnesses",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetVaultAssetWitnesses"));
+                .insert(GrpcMethod::new("store.NtxProducer", "GetVaultAssetWitnesses"));
             self.inner.unary(req, path, codec).await
         }
         /// Returns a storage map witness for the specified account and storage map entry.
@@ -2547,17 +2549,17 @@ pub mod ntx_builder_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/store.NtxBuilder/GetStorageMapWitness",
+                "/store.NtxProducer/GetStorageMapWitness",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("store.NtxBuilder", "GetStorageMapWitness"));
+                .insert(GrpcMethod::new("store.NtxProducer", "GetStorageMapWitness"));
             self.inner.unary(req, path, codec).await
         }
     }
 }
 /// Generated server implementations.
-pub mod ntx_builder_server {
+pub mod ntx_producer_server {
     #![allow(
         unused_variables,
         dead_code,
@@ -2566,9 +2568,9 @@ pub mod ntx_builder_server {
         clippy::let_unit_value,
     )]
     use tonic::codegen::*;
-    /// Generated trait containing gRPC methods that should be implemented for use with NtxBuilderServer.
+    /// Generated trait containing gRPC methods that should be implemented for use with NtxProducerServer.
     #[async_trait]
-    pub trait NtxBuilder: std::marker::Send + std::marker::Sync + 'static {
+    pub trait NtxProducer: std::marker::Send + std::marker::Sync + 'static {
         /// Retrieves block header by given block number. Optionally, it also returns the MMR path
         /// and current chain length to authenticate the block's inclusion.
         async fn get_block_header_by_number(
@@ -2645,16 +2647,16 @@ pub mod ntx_builder_server {
             tonic::Status,
         >;
     }
-    /// Store API for the network transaction builder component
+    /// Store API for the network transaction producer component
     #[derive(Debug)]
-    pub struct NtxBuilderServer<T> {
+    pub struct NtxProducerServer<T> {
         inner: Arc<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
         max_decoding_message_size: Option<usize>,
         max_encoding_message_size: Option<usize>,
     }
-    impl<T> NtxBuilderServer<T> {
+    impl<T> NtxProducerServer<T> {
         pub fn new(inner: T) -> Self {
             Self::from_arc(Arc::new(inner))
         }
@@ -2705,9 +2707,9 @@ pub mod ntx_builder_server {
             self
         }
     }
-    impl<T, B> tonic::codegen::Service<http::Request<B>> for NtxBuilderServer<T>
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for NtxProducerServer<T>
     where
-        T: NtxBuilder,
+        T: NtxProducer,
         B: Body + std::marker::Send + 'static,
         B::Error: Into<StdError> + std::marker::Send + 'static,
     {
@@ -2722,11 +2724,11 @@ pub mod ntx_builder_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
-                "/store.NtxBuilder/GetBlockHeaderByNumber" => {
+                "/store.NtxProducer/GetBlockHeaderByNumber" => {
                     #[allow(non_camel_case_types)]
-                    struct GetBlockHeaderByNumberSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetBlockHeaderByNumberSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<
                         super::super::rpc::BlockHeaderByNumberRequest,
                     > for GetBlockHeaderByNumberSvc<T> {
@@ -2743,7 +2745,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_block_header_by_number(
+                                <T as NtxProducer>::get_block_header_by_number(
                                         &inner,
                                         request,
                                     )
@@ -2774,11 +2776,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetUnconsumedNetworkNotes" => {
+                "/store.NtxProducer/GetUnconsumedNetworkNotes" => {
                     #[allow(non_camel_case_types)]
-                    struct GetUnconsumedNetworkNotesSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetUnconsumedNetworkNotesSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::UnconsumedNetworkNotesRequest>
                     for GetUnconsumedNetworkNotesSvc<T> {
                         type Response = super::UnconsumedNetworkNotes;
@@ -2792,7 +2794,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_unconsumed_network_notes(
+                                <T as NtxProducer>::get_unconsumed_network_notes(
                                         &inner,
                                         request,
                                     )
@@ -2823,11 +2825,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetCurrentBlockchainData" => {
+                "/store.NtxProducer/GetCurrentBlockchainData" => {
                     #[allow(non_camel_case_types)]
-                    struct GetCurrentBlockchainDataSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetCurrentBlockchainDataSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<
                         super::super::blockchain::MaybeBlockNumber,
                     > for GetCurrentBlockchainDataSvc<T> {
@@ -2844,7 +2846,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_current_blockchain_data(
+                                <T as NtxProducer>::get_current_blockchain_data(
                                         &inner,
                                         request,
                                     )
@@ -2875,11 +2877,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetNetworkAccountDetailsById" => {
+                "/store.NtxProducer/GetNetworkAccountDetailsById" => {
                     #[allow(non_camel_case_types)]
-                    struct GetNetworkAccountDetailsByIdSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetNetworkAccountDetailsByIdSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::super::account::AccountId>
                     for GetNetworkAccountDetailsByIdSvc<T> {
                         type Response = super::MaybeAccountDetails;
@@ -2893,7 +2895,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_network_account_details_by_id(
+                                <T as NtxProducer>::get_network_account_details_by_id(
                                         &inner,
                                         request,
                                     )
@@ -2924,11 +2926,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetNetworkAccountIds" => {
+                "/store.NtxProducer/GetNetworkAccountIds" => {
                     #[allow(non_camel_case_types)]
-                    struct GetNetworkAccountIdsSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetNetworkAccountIdsSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::super::rpc::BlockRange>
                     for GetNetworkAccountIdsSvc<T> {
                         type Response = super::NetworkAccountIdList;
@@ -2942,7 +2944,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_network_account_ids(&inner, request)
+                                <T as NtxProducer>::get_network_account_ids(&inner, request)
                                     .await
                             };
                             Box::pin(fut)
@@ -2970,11 +2972,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetAccount" => {
+                "/store.NtxProducer/GetAccount" => {
                     #[allow(non_camel_case_types)]
-                    struct GetAccountSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetAccountSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::super::rpc::AccountRequest>
                     for GetAccountSvc<T> {
                         type Response = super::super::rpc::AccountResponse;
@@ -2988,7 +2990,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_account(&inner, request).await
+                                <T as NtxProducer>::get_account(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -3015,11 +3017,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetNoteScriptByRoot" => {
+                "/store.NtxProducer/GetNoteScriptByRoot" => {
                     #[allow(non_camel_case_types)]
-                    struct GetNoteScriptByRootSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetNoteScriptByRootSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::super::note::NoteRoot>
                     for GetNoteScriptByRootSvc<T> {
                         type Response = super::super::rpc::MaybeNoteScript;
@@ -3033,7 +3035,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_note_script_by_root(&inner, request)
+                                <T as NtxProducer>::get_note_script_by_root(&inner, request)
                                     .await
                             };
                             Box::pin(fut)
@@ -3061,11 +3063,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetVaultAssetWitnesses" => {
+                "/store.NtxProducer/GetVaultAssetWitnesses" => {
                     #[allow(non_camel_case_types)]
-                    struct GetVaultAssetWitnessesSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetVaultAssetWitnessesSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::VaultAssetWitnessesRequest>
                     for GetVaultAssetWitnessesSvc<T> {
                         type Response = super::VaultAssetWitnessesResponse;
@@ -3079,7 +3081,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_vault_asset_witnesses(
+                                <T as NtxProducer>::get_vault_asset_witnesses(
                                         &inner,
                                         request,
                                     )
@@ -3110,11 +3112,11 @@ pub mod ntx_builder_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.NtxBuilder/GetStorageMapWitness" => {
+                "/store.NtxProducer/GetStorageMapWitness" => {
                     #[allow(non_camel_case_types)]
-                    struct GetStorageMapWitnessSvc<T: NtxBuilder>(pub Arc<T>);
+                    struct GetStorageMapWitnessSvc<T: NtxProducer>(pub Arc<T>);
                     impl<
-                        T: NtxBuilder,
+                        T: NtxProducer,
                     > tonic::server::UnaryService<super::StorageMapWitnessRequest>
                     for GetStorageMapWitnessSvc<T> {
                         type Response = super::StorageMapWitnessResponse;
@@ -3128,7 +3130,7 @@ pub mod ntx_builder_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as NtxBuilder>::get_storage_map_witness(&inner, request)
+                                <T as NtxProducer>::get_storage_map_witness(&inner, request)
                                     .await
                             };
                             Box::pin(fut)
@@ -3178,7 +3180,7 @@ pub mod ntx_builder_server {
             }
         }
     }
-    impl<T> Clone for NtxBuilderServer<T> {
+    impl<T> Clone for NtxProducerServer<T> {
         fn clone(&self) -> Self {
             let inner = self.inner.clone();
             Self {
@@ -3191,8 +3193,8 @@ pub mod ntx_builder_server {
         }
     }
     /// Generated gRPC service name
-    pub const SERVICE_NAME: &str = "store.NtxBuilder";
-    impl<T> tonic::server::NamedService for NtxBuilderServer<T> {
+    pub const SERVICE_NAME: &str = "store.NtxProducer";
+    impl<T> tonic::server::NamedService for NtxProducerServer<T> {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
