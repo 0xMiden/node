@@ -26,8 +26,7 @@ pub use builder::NetworkTransactionBuilder;
 const COMPONENT: &str = "miden-ntx-builder";
 
 /// Default maximum number of network notes a network transaction is allowed to consume.
-const DEFAULT_MAX_NOTES_PER_TX: NonZeroUsize =
-    NonZeroUsize::new(20).expect("literal is non-zero");
+const DEFAULT_MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(20).expect("literal is non-zero");
 const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX.get() <= miden_tx::MAX_NUM_CHECKER_NOTES);
 
 /// Default maximum number of network transactions which should be in progress concurrently.
