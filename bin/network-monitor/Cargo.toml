@@ -36,3 +36,6 @@ tokio            = { features = ["full"], workspace = true }
 tonic            = { features = ["codegen", "tls-native-roots", "transport"], workspace = true }
 tracing          = { workspace = true }
 url              = { features = ["serde"], workspace = true }
+
+[build-dependencies]
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
