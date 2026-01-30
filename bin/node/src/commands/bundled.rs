@@ -9,7 +9,6 @@ use miden_node_rpc::Rpc;
 use miden_node_store::Store;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::Validator;
-use miden_protocol::block::BlockSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
 use tokio::net::TcpListener;
@@ -25,6 +24,7 @@ use crate::commands::{
     ENV_VALIDATOR_INSECURE_SECRET_KEY,
     INSECURE_VALIDATOR_KEY_HEX,
     NtxBuilderConfig,
+    ValidatorConfig,
     duration_to_human_readable_string,
 };
 
@@ -78,6 +78,9 @@ pub enum BundledCommand {
         #[command(flatten)]
         ntx_builder: NtxBuilderConfig,
 
+        #[command(flatten)]
+        validator: ValidatorConfig,
+
         /// Enables the exporting of traces for OpenTelemetry.
         ///
         /// This can be further configured using environment variables as defined in the official
@@ -95,15 +98,6 @@ pub enum BundledCommand {
             value_name = "DURATION"
         )]
         grpc_timeout: Duration,
-
-        /// Insecure, hex-encoded validator secret key for development and testing purposes.
-        #[arg(
-            long = "validator.insecure.secret-key",
-            env = ENV_VALIDATOR_INSECURE_SECRET_KEY,
-            value_name = "VALIDATOR_INSECURE_SECRET_KEY",
-            default_value = INSECURE_VALIDATOR_KEY_HEX
-        )]
-        validator_insecure_secret_key: String,
     },
 }
 
@@ -132,19 +126,17 @@ impl BundledCommand {
                 data_directory,
                 block_producer,
                 ntx_builder,
+                validator,
                 enable_otel: _,
                 grpc_timeout,
-                validator_insecure_secret_key,
             } => {
-                let secret_key_bytes = hex::decode(validator_insecure_secret_key)?;
-                let signer = SecretKey::read_from_bytes(&secret_key_bytes)?;
                 Self::start(
                     rpc_url,
                     data_directory,
-                    ntx_builder,
                     block_producer,
+                    ntx_builder,
+                    validator,
                     grpc_timeout,
-                    signer,
                 )
                 .await
             },
@@ -155,10 +147,10 @@ impl BundledCommand {
     async fn start(
         rpc_url: Url,
         data_directory: PathBuf,
-        ntx_builder: NtxBuilderConfig,
         block_producer: BlockProducerConfig,
+        ntx_builder: NtxBuilderConfig,
+        validator: ValidatorConfig,
         grpc_timeout: Duration,
-        signer: impl BlockSigner + Send + Sync + 'static,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -170,17 +162,32 @@ impl BundledCommand {
             .await
             .context("Failed to bind to RPC gRPC endpoint")?;
 
-        let block_producer_address = TcpListener::bind("127.0.0.1:0")
-            .await
-            .context("Failed to bind to block-producer gRPC endpoint")?
-            .local_addr()
-            .context("Failed to retrieve the block-producer's gRPC address")?;
+        let (block_producer_url, block_producer_address) = {
+            let socket_addr = TcpListener::bind("127.0.0.1:0")
+                .await
+                .context("Failed to bind to block-producer gRPC endpoint")?
+                .local_addr()
+                .context("Failed to retrieve the block-producer's gRPC address")?;
+            let url = Url::parse(&format!("http://{socket_addr}"))
+                .context("Failed to parse Block Producer URL")?;
+            (url, socket_addr)
+        };
 
-        let validator_address = TcpListener::bind("127.0.0.1:0")
-            .await
-            .context("Failed to bind to validator gRPC endpoint")?
-            .local_addr()
-            .context("Failed to retrieve the validator's gRPC address")?;
+        // Validator URL is either specified remote, or generated local.
+        let (validator_url, validator_socket_address) = {
+            if let Some(remote_url) = validator.validator_url {
+                (remote_url, None)
+            } else {
+                let socket_addr = TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .context("Failed to bind to validator gRPC endpoint")?
+                    .local_addr()
+                    .context("Failed to retrieve the validator's gRPC address")?;
+                let url = Url::parse(&format!("http://{socket_addr}"))
+                    .context("Failed to parse Validator URL")?;
+                (url, Some(socket_addr))
+            }
+        };
 
         // Store addresses for each exposed API
         let store_rpc_listener = TcpListener::bind("127.0.0.1:0")
@@ -223,76 +230,60 @@ impl BundledCommand {
         let should_start_ntx_builder = !ntx_builder.disabled;
 
         // Start block-producer. The block-producer's endpoint is available after loading completes.
-        let block_producer_id = join_set
-            .spawn({
-                let store_url = Url::parse(&format!("http://{store_block_producer_address}"))
-                    .context("Failed to parse URL")?;
-                let validator_url = Url::parse(&format!("http://{validator_address}"))
-                    .context("Failed to parse URL")?;
-                async move {
-                    BlockProducer {
-                        block_producer_address,
-                        store_url,
-                        validator_url,
-                        batch_prover_url: block_producer.batch_prover_url,
-                        block_prover_url: block_producer.block_prover_url,
-                        batch_interval: block_producer.batch_interval,
-                        block_interval: block_producer.block_interval,
-                        max_batches_per_block: block_producer.max_batches_per_block,
-                        max_txs_per_batch: block_producer.max_txs_per_batch,
-                        grpc_timeout,
-                        mempool_tx_capacity: block_producer.mempool_tx_capacity,
+        let block_producer_id = {
+            let validator_url = validator_url.clone();
+            join_set
+                .spawn({
+                    let store_url = Url::parse(&format!("http://{store_block_producer_address}"))
+                        .context("Failed to parse URL")?;
+                    async move {
+                        BlockProducer {
+                            block_producer_address,
+                            store_url,
+                            validator_url,
+                            batch_prover_url: block_producer.batch_prover_url,
+                            block_prover_url: block_producer.block_prover_url,
+                            batch_interval: block_producer.batch_interval,
+                            block_interval: block_producer.block_interval,
+                            max_batches_per_block: block_producer.max_batches_per_block,
+                            max_txs_per_batch: block_producer.max_txs_per_batch,
+                            grpc_timeout,
+                            mempool_tx_capacity: block_producer.mempool_tx_capacity,
+                        }
+                        .serve()
+                        .await
+                        .context("failed while serving block-producer component")
                     }
-                    .serve()
-                    .await
-                    .context("failed while serving block-producer component")
-                }
-            })
-            .id();
-
-        let validator_id = join_set
-            .spawn({
-                async move {
-                    Validator {
-                        address: validator_address,
-                        grpc_timeout,
-                        signer,
-                        data_directory,
-                    }
-                    .serve()
-                    .await
-                    .context("failed while serving validator component")
-                }
-            })
-            .id();
+                })
+                .id()
+        };
 
         // Start RPC component.
-        let rpc_id = join_set
-            .spawn(async move {
-                let store_url = Url::parse(&format!("http://{store_rpc_address}"))
-                    .context("Failed to parse URL")?;
-                let block_producer_url = Url::parse(&format!("http://{block_producer_address}"))
-                    .context("Failed to parse URL")?;
-                let validator_url = Url::parse(&format!("http://{validator_address}"))
-                    .context("Failed to parse URL")?;
-                Rpc {
-                    listener: grpc_rpc,
-                    store_url,
-                    block_producer_url: Some(block_producer_url),
-                    validator_url,
-                    grpc_timeout,
-                }
-                .serve()
-                .await
-                .context("failed while serving RPC component")
-            })
-            .id();
+        let rpc_id = {
+            let block_producer_url = block_producer_url.clone();
+            let validator_url = validator_url.clone();
+            join_set
+                .spawn(async move {
+                    let store_url = Url::parse(&format!("http://{store_rpc_address}"))
+                        .context("Failed to parse URL")?;
+                    Rpc {
+                        listener: grpc_rpc,
+                        store_url,
+                        block_producer_url: Some(block_producer_url),
+                        validator_url,
+                        grpc_timeout,
+                    }
+                    .serve()
+                    .await
+                    .context("failed while serving RPC component")
+                })
+                .id()
+        };
 
         // Lookup table so we can identify the failed component.
         let mut component_ids = HashMap::from([
             (store_id, "store"),
             (block_producer_id, "block-producer"),
-            (validator_id, "validator"),
             (rpc_id, "rpc"),
         ]);
 
@@ -301,13 +292,10 @@ impl BundledCommand {
             .context("Failed to parse URL")?;
 
         if should_start_ntx_builder {
-            let validator_url = Url::parse(&format!("http://{validator_address}"))
-                .context("Failed to parse URL")?;
+            let block_producer_url = block_producer_url.clone();
+            let validator_url = validator_url.clone();
             let id = join_set
                 .spawn(async move {
-                    let block_producer_url =
-                        Url::parse(&format!("http://{block_producer_address}"))
-                            .context("Failed to parse URL")?;
                     NetworkTransactionBuilder::new(
                         store_ntx_builder_url,
                         block_producer_url,
@@ -321,6 +309,28 @@ impl BundledCommand {
                 })
                 .id();
             component_ids.insert(id, "ntx-builder");
+        }
+
+        // Start the Validator if we have bound a socket.
+        if let Some(address) = validator_socket_address {
+            let secret_key_bytes = hex::decode(validator.validator_insecure_secret_key)?;
+            let signer = SecretKey::read_from_bytes(&secret_key_bytes)?;
+            let id = join_set
+                .spawn({
+                    async move {
+                        Validator {
+                            address,
+                            grpc_timeout,
+                            signer,
+                            data_directory,
+                        }
+                        .serve()
+                        .await
+                        .context("failed while serving validator component")
+                    }
+                })
+                .id();
+            component_ids.insert(id, "validator");
         }
 
         // SAFETY: The joinset is definitely not empty.

@@ -47,7 +47,26 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-/// Configuration for the Network Transaction Builder component
+/// Configuration for the Validator component.
+#[derive(clap::Args)]
+pub struct ValidatorConfig {
+    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    /// Only used when the Validator URL argument is not set.
+    #[arg(
+        long = "validator.insecure.secret-key",
+        env = ENV_VALIDATOR_INSECURE_SECRET_KEY,
+        value_name = "VALIDATOR_INSECURE_SECRET_KEY",
+        default_value = INSECURE_VALIDATOR_KEY_HEX
+    )]
+    validator_insecure_secret_key: String,
+
+    /// The remote Validator's gRPC URL. If unset, will default to running a Validator
+    /// in-process. If set, the insecure key argument is ignored.
+    #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
+    pub validator_url: Option<Url>,
+}
+
+/// Configuration for the Network Transaction Builder component.
 #[derive(clap::Args)]
 pub struct NtxBuilderConfig {
     /// Disable spawning the network transaction builder.
@@ -77,7 +96,7 @@ pub struct NtxBuilderConfig {
     pub script_cache_size: NonZeroUsize,
 }
 
-/// Configuration for the Block Producer component
+/// Configuration for the Block Producer component.
 #[derive(clap::Args)]
 pub struct BlockProducerConfig {
     /// Interval at which to produce blocks.
