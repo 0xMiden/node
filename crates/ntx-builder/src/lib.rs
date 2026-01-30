@@ -26,8 +26,9 @@ pub use builder::NetworkTransactionBuilder;
 const COMPONENT: &str = "miden-ntx-builder";
 
 /// Default maximum number of network notes a network transaction is allowed to consume.
-const DEFAULT_MAX_NOTES_PER_TX: usize = 20;
-const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX <= miden_tx::MAX_NUM_CHECKER_NOTES);
+const DEFAULT_MAX_NOTES_PER_TX: NonZeroUsize =
+    NonZeroUsize::new(20).expect("literal is non-zero");
+const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX.get() <= miden_tx::MAX_NUM_CHECKER_NOTES);
 
 /// Default maximum number of network transactions which should be in progress concurrently.
 ///
@@ -48,7 +49,8 @@ const DEFAULT_ACTOR_CHANNEL_SIZE: usize = 100;
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 
 /// Default script cache size.
-const DEFAULT_SCRIPT_CACHE_SIZE: usize = 1_000;
+const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
+    NonZeroUsize::new(1_000).expect("literal is non-zero");
 
 // CONFIGURATION
 // =================================================================================================
@@ -102,9 +104,9 @@ impl NtxBuilderConfig {
             block_producer_url,
             validator_url,
             tx_prover_url: None,
-            script_cache_size: NonZeroUsize::new(DEFAULT_SCRIPT_CACHE_SIZE).unwrap(),
+            script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,
-            max_notes_per_tx: NonZeroUsize::new(DEFAULT_MAX_NOTES_PER_TX).unwrap(),
+            max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
