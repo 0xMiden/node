@@ -318,3 +318,74 @@ verification_base_fee = 0
     });
     Ok(())
 }
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn parsing_agglayer_sample_with_account_files() -> TestResult {
+    use miden_protocol::account::AccountType;
+
+    // Use the actual sample file path since it references relative .mac files
+    let sample_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/genesis/config/samples/02-with-account-files.toml");
+
+    let gcfg = GenesisConfig::read_toml_file(&sample_path)?;
+    let (state, secrets) = gcfg.into_state(SecretKey::new())?;
+
+    // Should have 4 accounts:
+    // 1. Native faucet (MIDEN) - built from parameters
+    // 2. Bridge account (bridge.mac) - loaded from file
+    // 3. ETH faucet (agglayer_faucet_eth.mac) - loaded from file
+    // 4. USDC faucet (agglayer_faucet_usdc.mac) - loaded from file
+    assert_eq!(state.accounts.len(), 4, "Expected 4 accounts in genesis state");
+
+    // Verify account types
+    let native_faucet = &state.accounts[0];
+    let bridge_account = &state.accounts[1];
+    let eth_faucet = &state.accounts[2];
+    let usdc_faucet = &state.accounts[3];
+
+    // Native faucet should be a fungible faucet (built from parameters)
+    assert_eq!(
+        native_faucet.id().account_type(),
+        AccountType::FungibleFaucet,
+        "Native faucet should be a FungibleFaucet"
+    );
+
+    // Verify native faucet symbol
+    {
+        let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
+        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+    }
+
+    // Bridge account is a regular account (not a faucet)
+    assert!(
+        bridge_account.is_regular_account(),
+        "Bridge account should be a regular account"
+    );
+
+    // ETH faucet should be a fungible faucet (AggLayer faucet loaded from file)
+    assert_eq!(
+        eth_faucet.id().account_type(),
+        AccountType::FungibleFaucet,
+        "ETH faucet should be a FungibleFaucet"
+    );
+
+    // USDC faucet should be a fungible faucet (AggLayer faucet loaded from file)
+    assert_eq!(
+        usdc_faucet.id().account_type(),
+        AccountType::FungibleFaucet,
+        "USDC faucet should be a FungibleFaucet"
+    );
+
+    // Only the native faucet generates a secret (built from parameters)
+    assert_eq!(
+        secrets.secrets.len(),
+        1,
+        "Only native faucet should generate a secret"
+    );
+
+    // Verify the genesis state can be converted to a block
+    let _block = state.into_block()?;
+
+    Ok(())
+}
