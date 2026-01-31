@@ -129,13 +129,28 @@ impl Default for GenesisConfig {
 }
 
 impl GenesisConfig {
-    /// Read the genesis accounts from a toml formatted string.
+    /// Read the genesis config from a TOML file.
     ///
-    /// The `config_dir` parameter is used to resolve relative paths for account files
+    /// The parent directory of `path` is used to resolve relative paths for account files
     /// referenced in the configuration (e.g., `[[account]]` entries with `path` fields).
     ///
     /// Notice: It will generate the specified case during [`fn into_state`].
-    pub fn read_toml(toml_str: &str, config_dir: &Path) -> Result<Self, GenesisConfigError> {
+    pub fn read_toml_file(path: &Path) -> Result<Self, GenesisConfigError> {
+        let toml_str = std::fs::read_to_string(path).map_err(|e| {
+            GenesisConfigError::ConfigFileRead {
+                path: path.to_path_buf(),
+                reason: e.to_string(),
+            }
+        })?;
+        let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        Self::read_toml(&toml_str, config_dir)
+    }
+
+    /// Read the genesis accounts from a TOML formatted string.
+    ///
+    /// The `config_dir` parameter is used to resolve relative paths for account files
+    /// referenced in the configuration (e.g., `[[account]]` entries with `path` fields).
+    fn read_toml(toml_str: &str, config_dir: &Path) -> Result<Self, GenesisConfigError> {
         // Parse TOML into intermediate struct
         let toml_config: GenesisConfigToml = toml::from_str(toml_str)?;
 

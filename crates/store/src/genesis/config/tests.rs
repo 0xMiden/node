@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::Path;
 
 use assert_matches::assert_matches;
@@ -8,12 +9,23 @@ use super::*;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+/// Helper to write TOML content to a file and return the path
+fn write_toml_file(dir: &Path, content: &str) -> std::path::PathBuf {
+    let path = dir.join("genesis.toml");
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.write_all(content.as_bytes()).unwrap();
+    path
+}
+
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn parsing_yields_expected_default_values() -> TestResult {
-    let s = include_str!("./samples/01-simple.toml");
-    // Use current directory since this sample doesn't reference any account files
-    let gcfg = GenesisConfig::read_toml(s, Path::new("."))?;
+    // Copy sample file to temp dir since read_toml_file needs a real file path
+    let temp_dir = tempfile::tempdir()?;
+    let sample_content = include_str!("./samples/01-simple.toml");
+    let config_path = write_toml_file(temp_dir.path(), sample_content);
+
+    let gcfg = GenesisConfig::read_toml_file(&config_path)?;
     let (state, _secrets) = gcfg.into_state(SecretKey::new())?;
     let _ = state;
     // faucets always precede wallet accounts
@@ -105,8 +117,7 @@ fn parsing_account_from_file() -> TestResult {
     account_file.write(&account_file_path)?;
 
     // Create a genesis config TOML that references the account file
-    let toml_content = format!(
-        r#"
+    let toml_content = r#"
 timestamp = 1717344256
 version   = 1
 
@@ -120,11 +131,11 @@ verification_base_fee = 0
 
 [[account]]
 path = "test_account.mac"
-"#
-    );
+"#;
+    let config_path = write_toml_file(config_dir, toml_content);
 
     // Parse the config
-    let gcfg = GenesisConfig::read_toml(&toml_content, config_dir)?;
+    let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // Convert to state and verify the account is included
     let (state, _secrets) = gcfg.into_state(SecretKey::new())?;
@@ -179,9 +190,10 @@ path = "native_faucet.mac"
 [fee_parameters]
 verification_base_fee = 0
 "#;
+    let config_path = write_toml_file(config_dir, toml_content);
 
     // Parse the config
-    let gcfg = GenesisConfig::read_toml(toml_content, config_dir)?;
+    let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // Convert to state and verify the native faucet is included
     let (state, secrets) = gcfg.into_state(SecretKey::new())?;
@@ -235,9 +247,10 @@ path = "not_a_faucet.mac"
 [fee_parameters]
 verification_base_fee = 0
 "#;
+    let config_path = write_toml_file(config_dir, toml_content);
 
     // Parse should fail with NativeFaucetNotFungible error
-    let result = GenesisConfig::read_toml(toml_content, config_dir);
+    let result = GenesisConfig::read_toml_file(&config_path);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -270,7 +283,8 @@ path = "does_not_exist.mac"
 
     // Use temp dir as config dir
     let temp_dir = tempfile::tempdir().unwrap();
-    let result = GenesisConfig::read_toml(toml_content, temp_dir.path());
+    let config_path = write_toml_file(temp_dir.path(), toml_content);
+    let result = GenesisConfig::read_toml_file(&config_path);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -290,7 +304,9 @@ version   = 1
 verification_base_fee = 0
 "#;
 
-    let result = GenesisConfig::read_toml(toml_content, Path::new("."));
+    let temp_dir = tempfile::tempdir()?;
+    let config_path = write_toml_file(temp_dir.path(), toml_content);
+    let result = GenesisConfig::read_toml_file(&config_path);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_matches!(err, GenesisConfigError::Toml(toml_err) => {
