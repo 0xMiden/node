@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use miden_protocol::account::AccountId;
 use miden_protocol::errors::{
     AccountDeltaError,
@@ -17,6 +19,12 @@ use crate::genesis::config::TokenSymbolStr;
 pub enum GenesisConfigError {
     #[error(transparent)]
     Toml(#[from] toml::de::Error),
+    #[error("failed to read config file at {path}: {reason}")]
+    ConfigFileRead { path: PathBuf, reason: String },
+    #[error("failed to read account file at {path}: {reason}")]
+    AccountFileRead { path: PathBuf, reason: String },
+    #[error("native faucet from file {path} is not a fungible faucet")]
+    NativeFaucetNotFungible { path: PathBuf },
     #[error("account translation from config to state failed")]
     Account(#[from] AccountError),
     #[error("asset translation from config to state failed")]
