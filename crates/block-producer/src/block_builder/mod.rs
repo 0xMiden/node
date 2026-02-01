@@ -115,7 +115,7 @@ impl BlockBuilder {
             .inspect_ok(|proposed_block| {
                 ProposedBlock::inject_telemetry(proposed_block);
             })
-            .and_then(|proposed_block| self.validate_block(proposed_block))
+            .and_then(|proposed_block| self.build_and_validate_block(proposed_block))
             .and_then(|(ordered_batches, signed_block)| self.commit_block(mempool, ordered_batches, signed_block))
             // Handle errors by propagating the error to the root span and rolling back the block.
             .inspect_err(|err| Span::current().set_error(err))
@@ -221,7 +221,7 @@ impl BlockBuilder {
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
-    async fn validate_block(
+    async fn build_and_validate_block(
         &self,
         proposed_block: ProposedBlock,
     ) -> Result<(OrderedBatches, SignedBlock), BuildBlockError> {
