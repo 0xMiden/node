@@ -2726,6 +2726,7 @@ dependencies = [
  "hex",
  "humantime",
  "miden-node-proto",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -2755,6 +2756,7 @@ dependencies = [
  "humantime",
  "miden-node-block-producer",
  "miden-node-ntx-builder",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-rpc",
  "miden-node-store",
  "miden-node-utils",
@@ -2867,6 +2869,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-rocksdb-cxx-linkage-fix"
+version = "0.14.0"
+
+[[package]]
 name = "miden-node-rpc"
 version = "0.14.0"
 dependencies = [
@@ -2917,6 +2923,7 @@ dependencies = [
  "miden-crypto",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
@@ -2949,6 +2956,7 @@ dependencies = [
  "miden-block-prover",
  "miden-node-block-producer",
  "miden-node-proto",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-store",
  "miden-node-utils",
  "miden-protocol",
@@ -3103,6 +3111,7 @@ dependencies = [
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -3463,7 +3472,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5479,7 +5488,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

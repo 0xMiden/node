@@ -9,6 +9,7 @@ members = [
   "crates/ntx-builder",
   "crates/proto",
   "crates/remote-prover-client",
+  "crates/rocksdb-cxx-linkage-fix",
   "crates/rpc",
   "crates/store",
   "crates/test-macro",
@@ -47,6 +48,9 @@ miden-node-test-macro       = { path = "crates/test-macro" }
 miden-node-utils            = { path = "crates/utils", version = "0.14" }
 miden-node-validator        = { path = "crates/validator", version = "0.14" }
 miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.14" }
+# Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
+# is part of `rocksdb-rust` release
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
 miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base" }

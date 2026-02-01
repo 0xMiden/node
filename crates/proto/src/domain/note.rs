@@ -23,6 +23,33 @@ use super::account::NetworkAccountId;
 use crate::errors::{ConversionError, MissingFieldHelper};
 use crate::generated as proto;
 
+// NOTE TYPE
+// ================================================================================================
+
+impl From<NoteType> for proto::note::NoteType {
+    fn from(note_type: NoteType) -> Self {
+        match note_type {
+            NoteType::Public => proto::note::NoteType::Public,
+            NoteType::Private => proto::note::NoteType::Private,
+        }
+    }
+}
+
+impl TryFrom<proto::note::NoteType> for NoteType {
+    type Error = ConversionError;
+
+    fn try_from(note_type: proto::note::NoteType) -> Result<Self, Self::Error> {
+        match note_type {
+            proto::note::NoteType::Public => Ok(NoteType::Public),
+            proto::note::NoteType::Private => Ok(NoteType::Private),
+            proto::note::NoteType::Unspecified => Err(ConversionError::EnumDiscriminantOutOfRange),
+        }
+    }
+}
+
+// NOTE METADATA
+// ================================================================================================
+
 impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
     type Error = ConversionError;
 
@@ -31,7 +58,9 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
             .sender
             .ok_or_else(|| proto::note::NoteMetadata::missing_field(stringify!(sender)))?
             .try_into()?;
-        let note_type = NoteType::try_from(u64::from(value.note_type))?;
+        let note_type = proto::note::NoteType::try_from(value.note_type)
+            .map_err(|_| ConversionError::EnumDiscriminantOutOfRange)?
+            .try_into()?;
         let tag = NoteTag::new(value.tag);
 
         // Deserialize attachment if present
@@ -77,7 +106,7 @@ impl From<NetworkNote> for proto::note::NetworkNote {
 impl From<NoteMetadata> for proto::note::NoteMetadata {
     fn from(val: NoteMetadata) -> Self {
         let sender = Some(val.sender().into());
-        let note_type = val.note_type() as u32;
+        let note_type = proto::note::NoteType::from(val.note_type()) as i32;
         let tag = val.tag().as_u32();
         let attachment = val.attachment().to_bytes();
 
