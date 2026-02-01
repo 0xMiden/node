@@ -47,7 +47,7 @@ impl block_producer_server::BlockProducer for StoreApi {
         request: Request<proto::store::ApplyBlockRequest>,
     ) -> Result<Response<()>, Status> {
         let request = request.into_inner();
-        // Read ordered batches and block inputs.
+        // Read ordered batches.
         let ordered_batches =
             OrderedBatches::read_from_bytes(&request.ordered_batches).map_err(|err| {
                 Status::invalid_argument(
@@ -99,8 +99,9 @@ impl block_producer_server::BlockProducer for StoreApi {
         // TODO(sergerad): Use block proof.
         let _block_proof = tokio::spawn(
             async move {
-                // SAFETY: The header, body, and signature are assumed to correspond to each other
-                // because they are provided by the Block Producer.
+                // SAFETY: The header, body, and signature are assumed to
+                // correspond to each other because they are provided by the Block
+                // Producer.
                 let signed_block = SignedBlock::new_unchecked(header.clone(), body, signature);
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
