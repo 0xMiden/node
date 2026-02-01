@@ -102,7 +102,7 @@ impl block_producer_server::BlockProducer for StoreApi {
                 // SAFETY: The header, body, and signature are assumed to
                 // correspond to each other because they are provided by the Block
                 // Producer.
-                let signed_block = SignedBlock::new_unchecked(header.clone(), body, signature);
+                let signed_block = SignedBlock::new_unchecked(header.clone(), body, signature); // TODO(sergerad): Use `SignedBlock::new()` when available.
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
                 this.state

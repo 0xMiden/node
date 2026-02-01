@@ -7,7 +7,7 @@ pub struct ApplyBlockRequest {
     #[prost(bytes = "vec", tag = "1")]
     pub ordered_batches: ::prost::alloc::vec::Vec<u8>,
     /// Block signed by the Validator.
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag = "2")]
     pub block: ::core::option::Option<super::blockchain::SignedBlock>,
 }
 /// Returns data required to prove the next block.
