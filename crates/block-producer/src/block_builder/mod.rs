@@ -19,7 +19,7 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
-use miden_remote_prover_client::remote_prover::block_prover::RemoteBlockProver;
+use miden_remote_prover_client::remote_prover::RemoteBlockProver;
 use rand::Rng;
 use tokio::time::Duration;
 use tracing::{Span, info, instrument};
