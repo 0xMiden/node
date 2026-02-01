@@ -19,6 +19,7 @@ use super::{ENV_DATA_DIRECTORY, ENV_RPC_URL};
 use crate::commands::{
     BlockProducerConfig,
     DEFAULT_TIMEOUT,
+    ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_INSECURE_SECRET_KEY,
@@ -67,6 +68,10 @@ pub enum BundledCommand {
         /// Url at which to serve the RPC component's gRPC API.
         #[arg(long = "rpc.url", env = ENV_RPC_URL, value_name = "URL")]
         rpc_url: Url,
+
+        /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
+        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
+        block_prover_url: Option<Url>,
 
         /// Directory in which the Store component should store the database and raw block data.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -123,6 +128,7 @@ impl BundledCommand {
             },
             BundledCommand::Start {
                 rpc_url,
+                block_prover_url,
                 data_directory,
                 block_producer,
                 ntx_builder,
@@ -132,6 +138,7 @@ impl BundledCommand {
             } => {
                 Self::start(
                     rpc_url,
+                    block_prover_url,
                     data_directory,
                     block_producer,
                     ntx_builder,
@@ -146,6 +153,7 @@ impl BundledCommand {
     #[allow(clippy::too_many_lines)]
     async fn start(
         rpc_url: Url,
+        block_prover_url: Option<Url>,
         data_directory: PathBuf,
         block_producer: BlockProducerConfig,
         ntx_builder: NtxBuilderConfig,
@@ -219,6 +227,7 @@ impl BundledCommand {
                     block_producer_listener: store_block_producer_listener,
                     ntx_builder_listener: store_ntx_builder_listener,
                     data_directory: data_directory_clone,
+                    block_prover_url,
                     grpc_timeout,
                 }
                 .serve()
@@ -242,7 +251,6 @@ impl BundledCommand {
                             store_url,
                             validator_url,
                             batch_prover_url: block_producer.batch_prover_url,
-                            block_prover_url: block_producer.block_prover_url,
                             batch_interval: block_producer.batch_interval,
                             block_interval: block_producer.block_interval,
                             max_batches_per_block: block_producer.max_batches_per_block,

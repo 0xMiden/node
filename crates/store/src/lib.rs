@@ -15,6 +15,7 @@ pub use db::manager::ConnectionManager;
 pub use db::models::conv::SqlTypeConvert;
 pub use errors::{DatabaseError, DatabaseSetupError};
 pub use genesis::GenesisState;
+pub use server::block_prover_client::BlockProver;
 pub use server::{DataDirectory, Store};
 
 // CONSTANTS
