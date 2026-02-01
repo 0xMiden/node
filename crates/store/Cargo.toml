@@ -54,10 +54,11 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
 regex                 = { version = "1.11" }
-tempfile              = "3.24.0"
+tempfile              = { workspace = true }
 termtree              = { version = "0.5" }
 
 [build-dependencies]
+fs-err         = { workspace = true }
 miden-agglayer = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
 miden-protocol = { features = ["std"], workspace = true }
 
