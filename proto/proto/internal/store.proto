@@ -121,7 +121,7 @@ message ApplyBlockRequest {
     // [miden_objects::batch::OrderedBatches].
     bytes ordered_batches = 1;
     // Block signed by the Validator.
-    blockchain.SignedBlock block = 3;
+    blockchain.SignedBlock block = 2;
 }
 
 // GET BLOCK INPUTS
