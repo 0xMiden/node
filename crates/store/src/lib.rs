@@ -11,6 +11,7 @@ pub mod state;
 pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
 pub use genesis::GenesisState;
+pub use server::block_prover_client::BlockProver;
 pub use server::{DataDirectory, Store};
 
 // CONSTANTS

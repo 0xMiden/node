@@ -103,11 +103,6 @@ pub struct BlockProducerConfig {
     #[arg(long = "batch-prover.url", env = ENV_BATCH_PROVER_URL, value_name = "URL")]
     pub batch_prover_url: Option<Url>,
 
-    /// The remote block prover's gRPC url. If unset, will default to running a prover
-    /// in-process which is expensive.
-    #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
-    pub block_prover_url: Option<Url>,
-
     /// The number of transactions per batch.
     #[arg(
         long = "max-txs-per-batch",
