@@ -139,7 +139,7 @@ path = "test_account.mac"
 
     // Convert to state and verify the account is included
     let (state, _secrets) = gcfg.into_state(SecretKey::new())?;
-    assert!(state.accounts.iter().find(|a| a.id() == account_id).is_some());
+    assert!(state.accounts.iter().any(|a| a.id() == account_id));
 
     Ok(())
 }
@@ -197,7 +197,7 @@ verification_base_fee = 0
 
     // Convert to state and verify the native faucet is included
     let (state, secrets) = gcfg.into_state(SecretKey::new())?;
-    assert!(state.accounts.iter().find(|a| a.id() == faucet_id).is_some());
+    assert!(state.accounts.iter().any(|a| a.id() == faucet_id));
 
     // No secrets should be generated for file-loaded native faucet
     assert!(secrets.secrets.is_empty());
@@ -255,8 +255,7 @@ verification_base_fee = 0
     let err = result.unwrap_err();
     assert!(
         matches!(err, GenesisConfigError::NativeFaucetNotFungible { .. }),
-        "Expected NativeFaucetNotFungible error, got: {:?}",
-        err
+        "Expected NativeFaucetNotFungible error, got: {err:?}"
     );
 
     Ok(())
@@ -289,20 +288,19 @@ path = "does_not_exist.mac"
     let err = result.unwrap_err();
     assert!(
         matches!(err, GenesisConfigError::AccountFileRead { .. }),
-        "Expected AccountFileRead error, got: {:?}",
-        err
+        "Expected AccountFileRead error, got: {err:?}"
     );
 }
 
 #[test]
 fn missing_native_faucet_not_allowed() -> TestResult {
-    let toml_content = r#"
+    let toml_content = r"
 timestamp = 1717344256
 version   = 1
 
 [fee_parameters]
 verification_base_fee = 0
-"#;
+";
 
     let temp_dir = tempfile::tempdir()?;
     let config_path = write_toml_file(temp_dir.path(), toml_content);
@@ -378,11 +376,7 @@ fn parsing_agglayer_sample_with_account_files() -> TestResult {
     );
 
     // Only the native faucet generates a secret (built from parameters)
-    assert_eq!(
-        secrets.secrets.len(),
-        1,
-        "Only native faucet should generate a secret"
-    );
+    assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
 
     // Verify the genesis state can be converted to a block
     let _block = state.into_block()?;

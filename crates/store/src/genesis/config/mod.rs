@@ -136,12 +136,11 @@ impl GenesisConfig {
     ///
     /// Notice: It will generate the specified case during [`fn into_state`].
     pub fn read_toml_file(path: &Path) -> Result<Self, GenesisConfigError> {
-        let toml_str = std::fs::read_to_string(path).map_err(|e| {
-            GenesisConfigError::ConfigFileRead {
+        let toml_str =
+            fs_err::read_to_string(path).map_err(|e| GenesisConfigError::ConfigFileRead {
                 path: path.to_path_buf(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
         let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
         Self::read_toml(&toml_str, config_dir)
     }
@@ -174,7 +173,7 @@ impl GenesisConfig {
                     return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
                 }
 
-                NativeFaucet::Account { account }
+                NativeFaucet::Account { account: Box::new(account) }
             },
         };
 
@@ -246,13 +245,13 @@ impl GenesisConfig {
                 ));
                 faucet_account
             },
-            NativeFaucet::Account { account } => account,
+            NativeFaucet::Account { account } => *account,
         };
         let native_faucet_account_id = native_faucet_account.id();
         faucet_accounts.insert(symbol.clone(), native_faucet_account);
 
         // Setup additional fungible faucets from parameters
-        for fungible_faucet_config in fungible_faucet_configs.into_iter() {
+        for fungible_faucet_config in fungible_faucet_configs {
             let symbol = fungible_faucet_config.symbol.clone();
             let (faucet_account, secret_key) = fungible_faucet_config.build_account()?;
 
@@ -415,7 +414,7 @@ enum NativeFaucet {
         max_supply: u64,
     },
     Account {
-        account: Account,
+        account: Box<Account>,
     },
 }
 
@@ -443,7 +442,7 @@ impl NativeFaucet {
             NativeFaucet::Parameters { symbol, .. } => symbol.clone(),
             NativeFaucet::Account { account } => {
                 // this is safe since we validate the account type when reading the genesis config
-                let faucet = BasicFungibleFaucet::try_from(account)
+                let faucet = BasicFungibleFaucet::try_from(account.as_ref())
                     .expect("native faucet account should be a fungible faucet");
                 TokenSymbolStr::from(faucet.symbol())
             },

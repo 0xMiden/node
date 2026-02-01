@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use miden_agglayer::{create_existing_agglayer_faucet, create_existing_bridge_account};
 use miden_protocol::account::AccountFile;
 use miden_protocol::{Felt, Word};
+
 fn main() {
     println!("cargo:rerun-if-changed=./src/db/migrations");
     // If we do one re-write, the default rules are disabled,
@@ -13,16 +14,16 @@ fn main() {
     // <https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-changed>
     println!("cargo:rerun-if-changed=Cargo.toml");
 
-    // Generate sample AggLayer account files for genesis config samples.
+    // Generate sample agglayer account files for genesis config samples.
     generate_agglayer_sample_accounts();
 }
 
-/// Generates sample AggLayer account files for the `02-with-account-files` genesis config sample.
+/// Generates sample agglayer account files for the `02-with-account-files` genesis config sample.
 ///
 /// Creates:
-/// - `bridge.mac` - AggLayer bridge account
-/// - `agglayer_faucet_eth.mac` - AggLayer faucet for wrapped ETH
-/// - `agglayer_faucet_usdc.mac` - AggLayer faucet for wrapped USDC
+/// - `bridge.mac` - agglayer bridge account
+/// - `agglayer_faucet_eth.mac` - agglayer faucet for wrapped ETH
+/// - `agglayer_faucet_usdc.mac` - agglayer faucet for wrapped USDC
 fn generate_agglayer_sample_accounts() {
     // Use CARGO_MANIFEST_DIR to get the absolute path to the crate root
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
@@ -32,7 +33,7 @@ fn generate_agglayer_sample_accounts() {
             .collect();
 
     // Create the directory if it doesn't exist
-    std::fs::create_dir_all(&samples_dir).expect("Failed to create samples directory");
+    fs_err::create_dir_all(&samples_dir).expect("Failed to create samples directory");
 
     // Use deterministic seeds for reproducible builds
     // WARNING: DO NOT USE THIS IN PRODUCTION
@@ -70,7 +71,9 @@ fn generate_agglayer_sample_accounts() {
     let usdc_faucet_file = AccountFile::new(usdc_faucet, vec![]);
 
     // Write files
-    bridge_file.write(samples_dir.join("bridge.mac")).expect("Failed to write bridge.mac");
+    bridge_file
+        .write(samples_dir.join("bridge.mac"))
+        .expect("Failed to write bridge.mac");
     eth_faucet_file
         .write(samples_dir.join("agglayer_faucet_eth.mac"))
         .expect("Failed to write agglayer_faucet_eth.mac");
@@ -80,6 +83,12 @@ fn generate_agglayer_sample_accounts() {
 
     // Track these files for rebuild
     println!("cargo:rerun-if-changed={}", samples_dir.join("bridge.mac").display());
-    println!("cargo:rerun-if-changed={}", samples_dir.join("agglayer_faucet_eth.mac").display());
-    println!("cargo:rerun-if-changed={}", samples_dir.join("agglayer_faucet_usdc.mac").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        samples_dir.join("agglayer_faucet_eth.mac").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        samples_dir.join("agglayer_faucet_usdc.mac").display()
+    );
 }
