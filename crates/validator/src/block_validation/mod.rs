@@ -14,14 +14,8 @@ use crate::db::select_validated_transactions;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlockValidationError {
-    #[error(
-        "proposed transaction count {proposed_tx_count} in block {block_num} does not match validated transaction count {validated_tx_count}"
-    )]
-    TransactionCountMismatch {
-        proposed_tx_count: usize,
-        validated_tx_count: usize,
-        block_num: BlockNumber,
-    },
+    #[error("found unvalidated transactions {0:?}")]
+    UnvalidatedTransactions(Vec<TransactionId>),
     #[error("transaction {0} in block {1} has not been validated")]
     TransactionNotValidated(TransactionId, BlockNumber),
     #[error(
@@ -67,13 +61,13 @@ pub async fn validate_block<S: BlockSigner>(
         })
         .await?;
 
-    // Validated transaction count must match proposed count exactly.
-    if validated_transactions.len() != proposed_tx_ids.len() {
-        return Err(BlockValidationError::TransactionCountMismatch {
-            proposed_tx_count: proposed_tx_ids.len(),
-            validated_tx_count: validated_transactions.len(),
-            block_num: proposed_block.block_num(),
-        });
+    // All proposed transactions must have been validated.
+    if proposed_tx_ids.len() > validated_transactions.len() {
+        let mut proposed_tx_ids = proposed_tx_ids;
+        // Return proposed transactions that have not been validated.
+        proposed_tx_ids
+            .retain(|proposed_tx_id| !validated_transactions.contains_key(proposed_tx_id));
+        return Err(BlockValidationError::UnvalidatedTransactions(proposed_tx_ids));
     }
 
     // Check that every transaction from the proposed block has been validated.
