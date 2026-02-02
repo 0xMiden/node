@@ -9,59 +9,28 @@ use miden_protocol::note::Nullifier;
 
 use crate::actor::inflight_note::InflightNetworkNote;
 
-// ACCOUNT STATE
+// ACCOUNT DELTA TRACKER
 // ================================================================================================
 
-/// Tracks the state of a network account and its notes.
+/// Tracks committed and inflight account state updates.
 #[derive(Clone)]
-pub struct NetworkAccountNoteState {
+pub struct AccountDeltaTracker {
     /// The committed account state, if any.
     ///
-    /// Its possible this is `None` if the account creation transaction is still inflight.
+    /// This may be `None` if the account creation transaction is still inflight.
     committed: Option<Account>,
 
     /// Inflight account updates in chronological order.
     inflight: VecDeque<Account>,
-
-    /// Unconsumed notes of this account.
-    available_notes: HashMap<Nullifier, InflightNetworkNote>,
-
-    /// Notes which have been consumed by transactions that are still inflight.
-    nullified_notes: HashMap<Nullifier, InflightNetworkNote>,
 }
 
-impl NetworkAccountNoteState {
-    /// Creates a new account state from the supplied account and notes.
-    pub fn new(account: Account, notes: Vec<SingleTargetNetworkNote>) -> Self {
-        let account_id = NetworkAccountId::try_from(account.id())
-            .expect("only network accounts are used for account state");
-
-        let mut state = Self {
+impl AccountDeltaTracker {
+    /// Creates a new tracker with the given committed account state.
+    pub fn new(account: Account) -> Self {
+        Self {
             committed: Some(account),
             inflight: VecDeque::default(),
-            available_notes: HashMap::default(),
-            nullified_notes: HashMap::default(),
-        };
-
-        for note in notes {
-            // Currently only support single target network notes in NTB.
-            assert!(
-                note.account_id() == account_id,
-                "Notes supplied into account state must match expected account ID"
-            );
-            state.add_note(note);
         }
-
-        state
-    }
-
-    /// Returns an iterator over inflight notes that are not currently within their respective
-    /// backoff periods based on block number.
-    pub fn available_notes(
-        &self,
-        block_num: &BlockNumber,
-    ) -> impl Iterator<Item = &InflightNetworkNote> {
-        self.available_notes.values().filter(|&note| note.is_available(*block_num))
     }
 
     /// Appends a delta to the set of inflight account updates.
@@ -85,77 +54,16 @@ impl NetworkAccountNoteState {
 
     /// Reverts the newest account state delta.
     ///
-    /// # Returns
-    ///
-    /// Returns `true` if this reverted the account creation delta. The caller _must_ remove this
-    /// account and associated notes as calls to `account` will panic.
+    /// Returns `true` if this reverted the account creation delta. The caller _must_ handle
+    /// cleanup as calls to `latest_account` will panic afterwards.
     ///
     /// # Panics
     ///
     /// Panics if there are no deltas to revert.
-    #[must_use = "must remove this account and its notes"]
+    #[must_use = "must handle account removal if this returns true"]
     pub fn revert_delta(&mut self) -> bool {
         self.inflight.pop_back().expect("must have a delta to revert");
         self.committed.is_none() && self.inflight.is_empty()
-    }
-
-    /// Adds a new network note making it available for consumption.
-    pub fn add_note(&mut self, note: SingleTargetNetworkNote) {
-        self.available_notes.insert(note.nullifier(), InflightNetworkNote::new(note));
-    }
-
-    /// Removes the note completely.
-    pub fn revert_note(&mut self, note: Nullifier) {
-        // Transactions can be reverted out of order.
-        //
-        // This means the tx which nullified the note might not have been reverted yet, and the note
-        // might still be in the nullified
-        self.available_notes.remove(&note);
-        self.nullified_notes.remove(&note);
-    }
-
-    /// Marks a note as being consumed.
-    ///
-    /// The note data is retained until the nullifier is committed.
-    ///
-    /// Returns `Err(())` if the note does not exist or was already nullified.
-    pub fn add_nullifier(&mut self, nullifier: Nullifier) -> Result<(), ()> {
-        if let Some(note) = self.available_notes.remove(&nullifier) {
-            self.nullified_notes.insert(nullifier, note);
-            Ok(())
-        } else {
-            tracing::warn!(%nullifier, "note must be available to nullify");
-            Err(())
-        }
-    }
-
-    /// Marks a nullifier as being committed, removing the associated note data entirely.
-    ///
-    /// Silently ignores the request if the nullifier is not present, which can happen
-    /// if the note's transaction wasn't available when the nullifier was added.
-    pub fn commit_nullifier(&mut self, nullifier: Nullifier) {
-        // we might not have this if we didn't add it with `add_nullifier`
-        // in case it's transaction wasn't available in the first place.
-        // It shouldn't happen practically, since we skip them if the
-        // relevant account cannot be retrieved via `fetch`.
-
-        let _ = self.nullified_notes.remove(&nullifier);
-    }
-
-    /// Reverts a nullifier, marking the associated note as available again.
-    pub fn revert_nullifier(&mut self, nullifier: Nullifier) {
-        // Transactions can be reverted out of order.
-        //
-        // The note may already have been fully removed by `revert_note` if the transaction creating
-        // the note was reverted before the transaction that consumed it.
-        if let Some(note) = self.nullified_notes.remove(&nullifier) {
-            self.available_notes.insert(nullifier, note);
-        }
-    }
-
-    /// Drops all notes that have failed to be consumed after a certain number of attempts.
-    pub fn drop_failing_notes(&mut self, max_attempts: usize) {
-        self.available_notes.retain(|_, note| note.attempt_count() < max_attempts);
     }
 
     /// Returns the latest inflight account state.
@@ -167,30 +75,99 @@ impl NetworkAccountNoteState {
             .clone()
     }
 
-    /// Returns `true` if there is no inflight state being tracked.
-    ///
-    /// This implies this state is safe to remove without losing uncommitted data.
-    pub fn is_empty(&self) -> bool {
+    /// Returns `true` if there are no inflight deltas.
+    pub fn has_no_inflight(&self) -> bool {
         self.inflight.is_empty()
-            && self.available_notes.is_empty()
-            && self.nullified_notes.is_empty()
+    }
+}
+
+// NOTE POOL
+// ================================================================================================
+
+/// Manages available and nullified notes for a network account.
+#[derive(Clone, Default)]
+pub struct NotePool {
+    /// Unconsumed notes available for consumption.
+    available: HashMap<Nullifier, InflightNetworkNote>,
+
+    /// Notes consumed by inflight transactions (not yet committed).
+    nullified: HashMap<Nullifier, InflightNetworkNote>,
+}
+
+impl NotePool {
+    /// Returns an iterator over notes that are available and not in backoff.
+    pub fn available_notes(
+        &self,
+        block_num: &BlockNumber,
+    ) -> impl Iterator<Item = &InflightNetworkNote> {
+        self.available.values().filter(|&note| note.is_available(*block_num))
+    }
+
+    /// Adds a new network note making it available for consumption.
+    pub fn add_note(&mut self, note: SingleTargetNetworkNote) {
+        self.available.insert(note.nullifier(), InflightNetworkNote::new(note));
+    }
+
+    /// Removes the note completely (used when reverting note creation).
+    pub fn remove_note(&mut self, nullifier: Nullifier) {
+        self.available.remove(&nullifier);
+        self.nullified.remove(&nullifier);
+    }
+
+    /// Marks a note as being consumed by moving it to the nullified set.
+    ///
+    /// Returns `Err(())` if the note does not exist or was already nullified.
+    pub fn nullify(&mut self, nullifier: Nullifier) -> Result<(), ()> {
+        if let Some(note) = self.available.remove(&nullifier) {
+            self.nullified.insert(nullifier, note);
+            Ok(())
+        } else {
+            tracing::warn!(%nullifier, "note must be available to nullify");
+            Err(())
+        }
+    }
+
+    /// Commits a nullifier, removing the associated note entirely.
+    ///
+    /// Silently ignores if the nullifier is not present.
+    pub fn commit_nullifier(&mut self, nullifier: Nullifier) {
+        let _ = self.nullified.remove(&nullifier);
+    }
+
+    /// Reverts a nullifier, making the note available again.
+    pub fn revert_nullifier(&mut self, nullifier: Nullifier) {
+        // Transactions can be reverted out of order.
+        if let Some(note) = self.nullified.remove(&nullifier) {
+            self.available.insert(nullifier, note);
+        }
+    }
+
+    /// Drops all notes that have exceeded the maximum attempt count.
+    pub fn drop_failing_notes(&mut self, max_attempts: usize) {
+        self.available.retain(|_, note| note.attempt_count() < max_attempts);
     }
 
     /// Marks the specified notes as failed.
     pub fn fail_notes(&mut self, nullifiers: &[Nullifier], block_num: BlockNumber) {
         for nullifier in nullifiers {
-            if let Some(note) = self.available_notes.get_mut(nullifier) {
+            if let Some(note) = self.available.get_mut(nullifier) {
                 note.fail(block_num);
             } else {
                 tracing::warn!(%nullifier, "failed note is not in account's state");
             }
         }
     }
+
+    /// Returns `true` if there are no notes being tracked.
+    pub fn is_empty(&self) -> bool {
+        self.available.is_empty() && self.nullified.is_empty()
+    }
 }
 
-// NETWORK ACCOUNT UPDATE
+// NETWORK ACCOUNT EFFECT
 // ================================================================================================
 
+/// Represents the effect of a transaction on a network account.
 #[derive(Clone)]
 pub enum NetworkAccountEffect {
     Created(Account),
