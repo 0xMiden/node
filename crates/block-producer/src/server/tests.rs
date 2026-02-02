@@ -93,12 +93,22 @@ async fn block_producer_startup_is_robust_to_network_failures() {
     let store_runtime = start_store(store_addr, data_directory.path()).await;
 
     // wait for the block producer's exponential backoff to connect to the store
-    sleep(Duration::from_secs(1)).await;
-
-    // test: now the block producer should be available
-    let block_producer_client = block_producer_client::ApiClient::connect(block_producer_endpoint)
-        .await
-        .expect("block producer client should connect after store is started");
+    // use a retry loop since CI environments may be slower
+    let block_producer_client = {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match block_producer_client::ApiClient::connect(block_producer_endpoint.clone()).await {
+                Ok(client) => break client,
+                Err(_) if attempts < 30 => {
+                    sleep(Duration::from_millis(200)).await;
+                },
+                Err(e) => panic!(
+                    "block producer client should connect after store is started (after {attempts} attempts): {e}"
+                ),
+            }
+        }
+    };
 
     // test: status request against block-producer should succeed
     let response = send_status_request(block_producer_client).await;
