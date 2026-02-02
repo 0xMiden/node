@@ -46,8 +46,6 @@ impl Command {
     /// Whether OpenTelemetry tracing exporter should be enabled.
     ///
     /// This is enabled for some subcommands if the `--open-telemetry` flag is specified.
-    ///
-    /// delta
     fn open_telemetry(&self) -> OpenTelemetry {
         if match self {
             Command::Store(subcommand) => subcommand.is_open_telemetry_enabled(),
