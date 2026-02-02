@@ -18,7 +18,7 @@ use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::TransactionId;
-use miden_remote_prover_client::remote_prover::RemoteTransactionProver;
+use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
