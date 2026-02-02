@@ -5,6 +5,7 @@ use deadpool_sync::InteractError;
 use miden_node_proto::domain::account::NetworkAccountError;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::{ConversionError, GrpcError};
+use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::QueryLimitError;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -311,6 +312,16 @@ pub enum ApplyBlockError {
     DbBlockHeaderEmpty,
     #[error("database update failed: {0}")]
     DbUpdateTaskFailed(String),
+}
+
+impl From<ApplyBlockError> for Status {
+    fn from(err: ApplyBlockError) -> Self {
+        match err {
+            ApplyBlockError::InvalidBlockError(_) => Status::invalid_argument(err.as_report()),
+
+            _ => Status::internal(err.as_report()),
+        }
+    }
 }
 
 #[derive(Error, Debug, GrpcError)]
