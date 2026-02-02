@@ -22,7 +22,6 @@ tracing-forest = ["miden-node-utils/tracing-forest"]
 anyhow                     = { workspace = true }
 futures                    = { workspace = true }
 itertools                  = { workspace = true }
-miden-block-prover         = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-proto-build     = { features = ["internal"], workspace = true }
 miden-node-utils           = { features = ["testing"], workspace = true }
