@@ -19,7 +19,7 @@ use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::TransactionId;
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
+use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -161,7 +161,6 @@ pub struct AccountActor {
     mode: ActorMode,
     event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
     cancel_token: CancellationToken,
-    // TODO(sergerad): Remove block producer when block proving moved to store.
     block_producer: BlockProducerClient,
     validator: ValidatorClient,
     prover: Option<RemoteTransactionProver>,
