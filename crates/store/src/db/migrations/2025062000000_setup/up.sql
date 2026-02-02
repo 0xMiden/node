@@ -1,6 +1,7 @@
 CREATE TABLE block_headers (
     block_num    INTEGER NOT NULL,
     block_header BLOB    NOT NULL,
+    signature    BLOB    NOT NULL,
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)

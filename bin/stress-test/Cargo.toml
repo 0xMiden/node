@@ -21,7 +21,6 @@ clap                      = { features = ["derive"], version = "4.5" }
 fs-err                    = { workspace = true }
 futures                   = { workspace = true }
 miden-air                 = { features = ["testing"], workspace = true }
-miden-block-prover        = { features = ["testing"], workspace = true }
 miden-node-block-producer = { workspace = true }
 miden-node-proto          = { workspace = true }
 miden-node-store          = { workspace = true }

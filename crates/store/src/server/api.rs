@@ -6,13 +6,15 @@ use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::BlockNumber;
+use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::{BlockInputs, BlockNumber};
 use miden_protocol::note::Nullifier;
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
 
-use crate::COMPONENT;
+use crate::errors::GetBlockInputsError;
 use crate::state::State;
+use crate::{BlockProver, COMPONENT};
 
 // STORE API
 // ================================================================================================
@@ -20,6 +22,7 @@ use crate::state::State;
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
+    pub(super) block_prover: Arc<BlockProver>,
 }
 
 impl StoreApi {
@@ -42,6 +45,40 @@ impl StoreApi {
             chain_length: mmr_proof.as_ref().map(|p| p.forest.num_leaves() as u32),
             mmr_path: mmr_proof.map(|p| Into::into(&p.merkle_path)),
         }))
+    }
+
+    /// Retrieves block inputs from state based on the contents of the supplied ordered batches.
+    pub(crate) async fn block_inputs_from_ordered_batches(
+        &self,
+        batches: &OrderedBatches,
+    ) -> Result<BlockInputs, GetBlockInputsError> {
+        // Construct fields required to retrieve block inputs.
+        let mut account_ids = BTreeSet::new();
+        let mut nullifiers = Vec::new();
+        let mut unauthenticated_note_commitments = BTreeSet::new();
+        let mut reference_blocks = BTreeSet::new();
+
+        for batch in batches.as_slice() {
+            account_ids.extend(batch.updated_accounts());
+            nullifiers.extend(batch.created_nullifiers());
+            reference_blocks.insert(batch.reference_block_num());
+
+            for note in batch.input_notes().iter() {
+                if let Some(header) = note.header() {
+                    unauthenticated_note_commitments.insert(header.commitment());
+                }
+            }
+        }
+
+        // Retrieve block inputs from the store.
+        self.state
+            .get_block_inputs(
+                account_ids.into_iter().collect(),
+                nullifiers,
+                unauthenticated_note_commitments,
+                reference_blocks,
+            )
+            .await
     }
 }
 

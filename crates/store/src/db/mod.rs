@@ -10,7 +10,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
 use miden_protocol::asset::{Asset, AssetVaultKey};
-use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, ProvenBlock};
+use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
@@ -249,6 +249,7 @@ impl Db {
             models::queries::apply_block(
                 conn,
                 genesis.header(),
+                genesis.signature(),
                 &[],
                 &[],
                 genesis.body().updated_accounts(),
@@ -566,17 +567,18 @@ impl Db {
         &self,
         allow_acquire: oneshot::Sender<()>,
         acquire_done: oneshot::Receiver<()>,
-        block: ProvenBlock,
+        signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
                 conn,
-                block.header(),
+                signed_block.header(),
+                signed_block.signature(),
                 &notes,
-                block.body().created_nullifiers(),
-                block.body().updated_accounts(),
-                block.body().transactions(),
+                signed_block.body().created_nullifiers(),
+                signed_block.body().updated_accounts(),
+                signed_block.body().transactions(),
             )?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist

@@ -156,7 +156,6 @@ pub struct AccountActor {
     mode: ActorMode,
     event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
     cancel_token: CancellationToken,
-    // TODO(sergerad): Remove block producer when block proving moved to store.
     block_producer: BlockProducerClient,
     validator: ValidatorClient,
     prover: Option<RemoteTransactionProver>,

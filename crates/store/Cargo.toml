@@ -22,13 +22,16 @@ deadpool-sync                      = { default-features = false, features = ["tr
 diesel                             = { features = ["numeric", "sqlite"], version = "2.3" }
 diesel_migrations                  = { features = ["sqlite"], version = "2.3" }
 fs-err                             = { workspace = true }
+futures                            = { workspace = true }
 hex                                = { version = "0.4" }
 indexmap                           = { workspace = true }
+miden-block-prover                 = { workspace = true }
 miden-crypto                       = { features = ["concurrent", "hashmaps"], workspace = true }
 miden-node-proto                   = { workspace = true }
 miden-node-proto-build             = { features = ["internal"], workspace = true }
 miden-node-rocksdb-cxx-linkage-fix = { optional = true, workspace = true }
 miden-node-utils                   = { workspace = true }
+miden-remote-prover-client         = { features = ["block-prover"], workspace = true }
 miden-standards                    = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
@@ -44,6 +47,7 @@ tonic             = { default-features = true, workspace = true }
 tonic-reflection  = { workspace = true }
 tower-http        = { features = ["util"], workspace = true }
 tracing           = { workspace = true }
+url               = { workspace = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }
