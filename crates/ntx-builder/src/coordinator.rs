@@ -154,9 +154,9 @@ impl Coordinator {
     /// message channel and can process it accordingly.
     ///
     /// If an actor fails to receive the event, it will be canceled.
-    #[tracing::instrument(name = "ntx.coordinator.broadcast", skip(self, event), fields(
-        actor_count = self.actor_registry.len(),
-        event_kind = %event.kind()
+    #[tracing::instrument(name = "ntx.coordinator.broadcast", skip_all, fields(
+        actor.count = self.actor_registry.len(),
+        event.kind = %event.kind()
     ))]
     pub async fn broadcast(&mut self, event: Arc<MempoolEvent>) {
         let mut failed_actors = Vec::new();
