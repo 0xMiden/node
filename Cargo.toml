@@ -80,6 +80,11 @@ lru               = { default-features = false, version = "0.16" }
 pretty_assertions = { version = "1.4" }
 # breaking change `DecodeError::new` is not exposed anymore
 # but is assumed public by some internal dependency
+deadpool           = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
+deadpool-diesel    = { features = ["sqlite"], version = "0.6" }
+deadpool-sync      = { default-features = false, features = ["tracing"], version = "0.1" }
+diesel             = { features = ["numeric", "sqlite"], version = "2.3" }
+diesel_migrations  = { features = ["sqlite"], version = "2.3" }
 prost              = { default-features = false, version = "=0.14.1" }
 protox             = { version = "=0.9.0" }
 rand               = { version = "0.9" }
@@ -99,11 +104,6 @@ tower-http         = { features = ["cors", "trace"], version = "0.6" }
 tracing            = { version = "0.1" }
 tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 url                = { features = ["serde"], version = "2.5" }
-deadpool                           = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
-deadpool-diesel                    = { features = ["sqlite"], version = "0.6" }
-deadpool-sync                      = { default-features = false, features = ["tracing"], version = "0.1" }
-diesel                             = { features = ["numeric", "sqlite"], version = "2.3" }
-diesel_migrations                  = { features = ["sqlite"], version = "2.3" }
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]

@@ -150,28 +150,12 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
         })?;
 
         // Store the validated transaction.
-        let result = self
-            .db
+        self.db
             .transact("insert_transaction", move |conn| {
                 insert_transaction(conn, &validated_tx_header)
             })
-            .await;
-
-        match result {
-            Ok(rows_affected) => {
-                if rows_affected == 1 {
-                    Ok(tonic::Response::new(()))
-                } else {
-                    tracing::error!(
-                        target: COMPONENT,
-                        rows_affected = rows_affected,
-                        "unexpected number of rows affected by insertion of proven transaction"
-                    );
-                    Err(tonic::Status::internal("failed to submit proven transaction"))
-                }
-            },
-            Err(err) => Err(err.into()),
-        }
+            .await?;
+        Ok(tonic::Response::new(()))
     }
 
     /// Validates a proposed block and returns the block header and body.
