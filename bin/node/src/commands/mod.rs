@@ -36,7 +36,7 @@ const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_MAX_TXS_PER_BATCH";
 const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_MAX_BATCHES_PER_BLOCK";
 const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_MEMPOOL_TX_CAPACITY";
 const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE";
-const ENV_VALIDATOR_INSECURE_SECRET_KEY: &str = "MIDEN_NODE_VALIDATOR_INSECURE_SECRET_KEY";
+const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,12 +53,12 @@ pub struct ValidatorConfig {
     /// Insecure, hex-encoded validator secret key for development and testing purposes.
     /// Only used when the Validator URL argument is not set.
     #[arg(
-        long = "validator.insecure.secret-key",
-        env = ENV_VALIDATOR_INSECURE_SECRET_KEY,
-        value_name = "VALIDATOR_INSECURE_SECRET_KEY",
+        long = "validator.key",
+        env = ENV_VALIDATOR_KEY,
+        value_name = "VALIDATOR_KEY",
         default_value = INSECURE_VALIDATOR_KEY_HEX
     )]
-    validator_insecure_secret_key: String,
+    validator_key: String,
 
     /// The remote Validator's gRPC URL. If unset, will default to running a Validator
     /// in-process. If set, the insecure key argument is ignored.

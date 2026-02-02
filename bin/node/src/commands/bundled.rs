@@ -21,7 +21,7 @@ use crate::commands::{
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_INSECURE_SECRET_KEY,
+    ENV_VALIDATOR_KEY,
     INSECURE_VALIDATOR_KEY_HEX,
     NtxBuilderConfig,
     ValidatorConfig,
@@ -51,12 +51,12 @@ pub enum BundledCommand {
         ///
         /// If not provided, a predefined key is used.
         #[arg(
-            long = "validator.insecure.secret-key",
-            env = ENV_VALIDATOR_INSECURE_SECRET_KEY,
-            value_name = "VALIDATOR_INSECURE_SECRET_KEY",
+            long = "validator.key",
+            env = ENV_VALIDATOR_KEY,
+            value_name = "VALIDATOR_KEY",
             default_value = INSECURE_VALIDATOR_KEY_HEX
         )]
-        validator_insecure_secret_key: String,
+        validator_key: String,
     },
 
     /// Runs all three node components in the same process.
@@ -112,14 +112,14 @@ impl BundledCommand {
                 data_directory,
                 accounts_directory,
                 genesis_config_file,
-                validator_insecure_secret_key,
+                validator_key: validator_insecure_secret_key,
             } => {
                 // Currently the bundled bootstrap is identical to the store's bootstrap.
                 crate::commands::store::StoreCommand::Bootstrap {
                     data_directory,
                     accounts_directory,
                     genesis_config_file,
-                    validator_insecure_secret_key,
+                    validator_key: validator_insecure_secret_key,
                 }
                 .handle()
                 .await
@@ -323,7 +323,7 @@ impl BundledCommand {
 
         // Start the Validator if we have bound a socket.
         if let Some(address) = validator_socket_address {
-            let secret_key_bytes = hex::decode(validator.validator_insecure_secret_key)?;
+            let secret_key_bytes = hex::decode(validator.validator_key)?;
             let signer = SecretKey::read_from_bytes(&secret_key_bytes)?;
             let id = join_set
                 .spawn({
