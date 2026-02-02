@@ -11,12 +11,27 @@ on:
 permissions:
   contents: read
 
+env:
+  ROCKSDB_STATIC: true
+  ROCKSDB_LIB_DIR: ${{ github.workspace }}/rocksdb-artifact
+  ROCKSDB_COMPILE: false
+  LZ4_LIB_DIR: ${{ github.workspace }}/rocksdb-artifact
+  LZ4_STATIC: true
+  LIBZ_SYS_STATIC: 1
+
 jobs:
+  rocksdb-static:
+    uses: ./.github/workflows/rocksdb-static.yml
+    with:
+      runs-on: ubuntu-24.04
+      checkout-ref: refs/heads/next
+
   # Run tests on the beta channel to provide feedback for Rust team.
   beta-test:
     name: test on beta channel
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    needs: rocksdb-static
     steps:
       - uses: actions/checkout@v6
         with:
@@ -25,6 +40,13 @@ jobs:
         uses: ./.github/actions/cleanup-runner
       - name: Install RocksDB
         uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup install beta && rustup default beta
       - uses: taiki-e/install-action@v2
@@ -39,6 +61,7 @@ jobs:
   check-features:
     name: feature combinations
     runs-on: ubuntu-24.04
+    needs: rocksdb-static
     steps:
       - uses: actions/checkout@v6
         with:
@@ -47,6 +70,13 @@ jobs:
         uses: ./.github/actions/cleanup-runner
       - name: Install RocksDB
         uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Install rust
         run: rustup update --no-self-update
       - name: Install cargo-hack
@@ -58,6 +88,7 @@ jobs:
   msrv:
     name: msrv check
     runs-on: ubuntu-24.04
+    needs: rocksdb-static
     steps:
       - uses: actions/checkout@v6
         with:

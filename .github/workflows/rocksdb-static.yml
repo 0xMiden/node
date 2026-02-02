@@ -1,0 +1,74 @@
+name: rocksdb-static
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        required: true
+        type: string
+      checkout-ref:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # Reduce cache usage by removing debug information.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  rocksdb-static:
+    name: rocksdb-static
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    env:
+      ROCKSDB_RUST_VERSION: ""
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout-ref || github.ref }}
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Rustup
+        run: rustup update --no-self-update
+      - name: Resolve RocksDB version
+        run: |
+          set -euo pipefail
+          rocksdb_version=$(cargo tree --locked --depth=0 -i librocksdb-sys | tail -n 1 | awk '{print $2}' | sed 's/^v//')
+          if [ -z "$rocksdb_version" ]; then
+            echo "::error::Unable to determine librocksdb-sys version from cargo tree."
+            exit 1
+          fi
+          echo "ROCKSDB_RUST_VERSION=$rocksdb_version" >> $GITHUB_ENV
+      - name: RocksDB cache date
+        id: rocksdb-date
+        run: echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+      - name: Cache RocksDB static library
+        id: rocksdb-cache
+        uses: actions/cache@v4
+        with:
+          path: rocksdb-artifact
+          key: rocksdb-${{ runner.os }}-${{ runner.arch }}-${{ env.ROCKSDB_RUST_VERSION }}-${{ steps.rocksdb-date.outputs.date }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build rocksdb.a
+        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR=rocksdb-target cargo build -p librocksdb-sys@${{ env.ROCKSDB_RUST_VERSION }} --locked
+          mkdir -p rocksdb-artifact
+          for lib in librocksdb.a liblz4.a; do
+            lib_path="$(find rocksdb-target -name "$lib" -print -quit)"
+            if [ -z "$lib_path" ]; then
+              echo "::error::Missing $lib."
+              exit 1
+            fi
+            cp "$lib_path" "rocksdb-artifact/$lib"
+          done
+      - name: Upload RocksDB static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+          if-no-files-found: error

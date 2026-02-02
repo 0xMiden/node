@@ -29,6 +29,12 @@ env:
   RUST_CACHE_KEY: rust-cache-2026.02.02
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
+  ROCKSDB_STATIC: true
+  ROCKSDB_LIB_DIR: ${{ github.workspace }}/rocksdb-artifact
+  ROCKSDB_COMPILE: false
+  LZ4_LIB_DIR: ${{ github.workspace }}/rocksdb-artifact
+  LZ4_STATIC: true
+  LIBZ_SYS_STATIC: 1
 
 # Limits workflow concurrency to only the latest commit in the PR.
 concurrency:
@@ -36,6 +42,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rocksdb-static:
+    uses: ./.github/workflows/rocksdb-static.yml
+    with:
+      runs-on: ubuntu-24.04
+      checkout-ref: ${{ github.ref }}
+
   # ===============================================================================================
   # Conventional builds, lints and tests that re-use a single cache for efficiency
   # ===============================================================================================
@@ -43,12 +55,20 @@ jobs:
   # Normal cargo build that populates a cache for all subsequent jobs to re-use.
   build:
     runs-on: ubuntu-24.04
+    needs: [rocksdb-static]
     steps:
       - uses: actions/checkout@v6
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - name: Install RocksDB
         uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
@@ -65,6 +85,15 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@v6
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
@@ -81,6 +110,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup update --no-self-update
       - uses: taiki-e/install-action@v2
@@ -105,6 +143,15 @@ jobs:
       - uses: actions/checkout@v6
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
@@ -124,6 +171,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup update --no-self-update
       - name: Install protobuf
@@ -148,6 +204,15 @@ jobs:
       DATA_DIR: /tmp/store
     steps:
       - uses: actions/checkout@v6
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Download RocksDB static library
+        uses: actions/download-artifact@v4
+        with:
+          name: rocksdb-static-${{ runner.arch }}
+          path: rocksdb-artifact
+      - name: Verify RocksDB static library
+        run: bash .github/verify-rocksdb-static.sh
       - name: Rustup
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
@@ -194,8 +259,18 @@ jobs:
   client-wasm:
     name: wasm targets
     runs-on: ubuntu-24.04
+    needs: [rocksdb-static]
     steps:
     - uses: actions/checkout@v6
+    - name: Install RocksDB
+      uses: ./.github/actions/install-rocksdb
+    - name: Download RocksDB static library
+      uses: actions/download-artifact@v4
+      with:
+        name: rocksdb-static-${{ runner.arch }}
+        path: rocksdb-artifact
+    - name: Verify RocksDB static library
+      run: bash .github/verify-rocksdb-static.sh
     - name: Rustup
       run: rustup update --no-self-update
     - name: cargo build

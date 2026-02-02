@@ -22,6 +22,8 @@ fn main() -> miette::Result<()> {
     println!("cargo::rerun-if-changed=../../proto/proto");
     println!("cargo::rerun-if-env-changed=BUILD_PROTO");
 
+    miden_node_rocksdb_cxx_linkage_fix::configure();
+
     // Skip this build script in BUILD_PROTO environment variable is not set to `1`.
     if env::var("BUILD_PROTO").unwrap_or("0".to_string()) == "0" {
         return Ok(());
