@@ -5,6 +5,8 @@
 ### Enhancements
 
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
+- [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).
+
 ### Changes
 
 - Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
@@ -16,6 +18,7 @@
 ### Changes
 
 - Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).
+- Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
 
 ## v0.13.2 (2026-01-27)
 
@@ -128,7 +131,7 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
-  - This presented as a database locked error and in rare cases a desync between the mempool and store. 
+  - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)
 

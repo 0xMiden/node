@@ -11,6 +11,7 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::utils::{Deserializable, Serializable};
@@ -131,6 +132,7 @@ pub struct BlockHeaderRawRow {
     #[allow(dead_code)]
     pub block_num: i64,
     pub block_header: Vec<u8>,
+    pub signature: Vec<u8>,
 }
 impl TryInto<BlockHeader> for BlockHeaderRawRow {
     type Error = DatabaseError;
@@ -140,18 +142,29 @@ impl TryInto<BlockHeader> for BlockHeaderRawRow {
     }
 }
 
+impl TryInto<(BlockHeader, Signature)> for BlockHeaderRawRow {
+    type Error = DatabaseError;
+    fn try_into(self) -> Result<(BlockHeader, Signature), Self::Error> {
+        let block_header = BlockHeader::read_from_bytes(&self.block_header[..])?;
+        let signature = Signature::read_from_bytes(&self.signature[..])?;
+        Ok((block_header, signature))
+    }
+}
+
 #[derive(Debug, Clone, Insertable)]
 #[diesel(table_name = schema::block_headers)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct BlockHeaderInsert {
     pub block_num: i64,
     pub block_header: Vec<u8>,
+    pub signature: Vec<u8>,
 }
-impl From<&BlockHeader> for BlockHeaderInsert {
-    fn from(block_header: &BlockHeader) -> Self {
+impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
+    fn from(from: (&BlockHeader, &Signature)) -> Self {
         Self {
-            block_num: block_header.block_num().to_raw_sql(),
-            block_header: block_header.to_bytes(),
+            block_num: from.0.block_num().to_raw_sql(),
+            block_header: from.0.to_bytes(),
+            signature: from.1.to_bytes(),
         }
     }
 }
@@ -174,8 +187,9 @@ impl From<&BlockHeader> for BlockHeaderInsert {
 pub(crate) fn insert_block_header(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,
+    signature: &Signature,
 ) -> Result<usize, DatabaseError> {
-    let block_header = BlockHeaderInsert::from(block_header);
+    let block_header = BlockHeaderInsert::from((block_header, signature));
     let count = diesel::insert_into(schema::block_headers::table)
         .values(&[block_header])
         .execute(conn)?;
