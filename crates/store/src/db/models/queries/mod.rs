@@ -48,6 +48,7 @@ pub use block_headers::*;
 mod accounts;
 pub use accounts::*;
 mod nullifiers;
+pub use nullifiers::NullifiersPage;
 pub(crate) use nullifiers::*;
 mod notes;
 pub(crate) use notes::*;
