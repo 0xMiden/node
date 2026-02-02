@@ -18,9 +18,9 @@ workspace = true
 
 [dependencies]
 anyhow                 = { workspace = true }
-deadpool-diesel        = { features = ["sqlite"], version = "0.6" }
-diesel                 = { features = ["numeric", "sqlite"], version = "2.2" }
-diesel_migrations      = { features = ["sqlite"], version = "2.2" }
+deadpool-diesel        = { workspace = true }
+diesel                 = { workspace = true }
+diesel_migrations      = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-store       = { workspace = true }

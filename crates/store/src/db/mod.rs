@@ -30,6 +30,11 @@ use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries::StorageMapValuesPage;
+pub use crate::db::models::queries::{
+    AccountCommitmentsPage,
+    NullifiersPage,
+    PublicAccountIdsPage,
+};
 use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
 use crate::genesis::GenesisBlock;
@@ -330,12 +335,15 @@ impl Db {
         Ok(me)
     }
 
-    /// Loads all the nullifiers from the DB.
+    /// Returns a page of nullifiers for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub(crate) async fn select_all_nullifiers(&self) -> Result<Vec<NullifierInfo>> {
-        self.transact("all nullifiers", move |conn| {
-            let nullifiers = queries::select_all_nullifiers(conn)?;
-            Ok(nullifiers)
+    pub async fn select_nullifiers_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_nullifier: Option<Nullifier>,
+    ) -> Result<NullifiersPage> {
+        self.transact("read nullifiers paged", move |conn| {
+            queries::select_nullifiers_paged(conn, page_size, after_nullifier)
         })
         .await
     }
@@ -401,20 +409,28 @@ impl Db {
         .await
     }
 
-    /// TODO marked for removal, replace with paged version
+    /// Returns a page of account commitments for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_account_commitments(&self) -> Result<Vec<(AccountId, Word)>> {
-        self.transact("read all account commitments", move |conn| {
-            queries::select_all_account_commitments(conn)
+    pub async fn select_account_commitments_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<AccountCommitmentsPage> {
+        self.transact("read account commitments paged", move |conn| {
+            queries::select_account_commitments_paged(conn, page_size, after_account_id)
         })
         .await
     }
 
-    /// Returns all account IDs that have public state.
+    /// Returns a page of public account IDs for forest rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_public_account_ids(&self) -> Result<Vec<AccountId>> {
-        self.transact("read all public account IDs", move |conn| {
-            queries::select_all_public_account_ids(conn)
+    pub async fn select_public_account_ids_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<PublicAccountIdsPage> {
+        self.transact("read public account IDs paged", move |conn| {
+            queries::select_public_account_ids_paged(conn, page_size, after_account_id)
         })
         .await
     }

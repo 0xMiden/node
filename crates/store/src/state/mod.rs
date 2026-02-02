@@ -53,13 +53,15 @@ use crate::{COMPONENT, DataDirectory};
 
 mod loader;
 
-pub use loader::{
+use loader::{
     ACCOUNT_TREE_STORAGE_DIR,
     NULLIFIER_TREE_STORAGE_DIR,
     StorageLoader,
     TreeStorage,
+    load_mmr,
+    load_smt_forest,
+    verify_tree_consistency,
 };
-use loader::{load_mmr, load_smt_forest, verify_tree_consistency};
 
 mod apply_block;
 mod sync_state;
