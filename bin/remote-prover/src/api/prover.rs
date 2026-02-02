@@ -180,7 +180,7 @@ impl ProverRpcApi {
         let block_proof = prover
             .try_lock()
             .map_err(|_| Status::resource_exhausted("Server is busy handling another request"))?
-            .prove(tx_batches, block_header, block_inputs)
+            .prove(tx_batches, &block_header, block_inputs)
             .map_err(internal_error)?;
 
         Ok(Response::new(proto::remote_prover::Proof { payload: block_proof.to_bytes() }))

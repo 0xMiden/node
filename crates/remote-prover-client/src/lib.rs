@@ -15,7 +15,14 @@ extern crate std;
 
 use thiserror::Error;
 
-pub mod remote_prover;
+mod remote_prover;
+
+#[cfg(feature = "batch-prover")]
+pub use remote_prover::batch_prover::RemoteBatchProver;
+#[cfg(feature = "block-prover")]
+pub use remote_prover::block_prover::RemoteBlockProver;
+#[cfg(feature = "tx-prover")]
+pub use remote_prover::tx_prover::RemoteTransactionProver;
 
 /// ERRORS
 /// ===============================================================================================

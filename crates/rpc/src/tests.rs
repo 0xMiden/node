@@ -421,6 +421,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
@@ -461,6 +462,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
