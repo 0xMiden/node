@@ -1,8 +1,7 @@
 use miden_block_prover::{BlockProverError, LocalBlockProver};
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof};
-use miden_remote_prover_client::RemoteProverClientError;
-use miden_remote_prover_client::remote_prover::block_prover::RemoteBlockProver;
+use miden_remote_prover_client::{RemoteBlockProver, RemoteProverClientError};
 use tracing::instrument;
 
 use crate::COMPONENT;
