@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+###############
+# Remove miden-validator installs
+##############
+sudo rm -rf /lib/systemd/system/miden-validator.service
+sudo rm -rf /etc/opt/miden-validator
+sudo deluser miden-validator
+sudo systemctl daemon-reload

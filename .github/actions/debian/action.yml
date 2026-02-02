@@ -34,6 +34,7 @@ inputs:
     type: choice
     options:
       - miden-node
+      - miden-validator
       - miden-prover
       - miden-prover-proxy
   package:
@@ -42,6 +43,7 @@ inputs:
     type: choice
     options:
       - node
+      - validator
       - prover
       - prover-proxy
 

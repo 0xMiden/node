@@ -1,0 +1,26 @@
+#!/bin/bash
+#
+# This is a postinstallation script so the service can be configured and started when requested.
+
+# user is expected by the systemd service file and `/opt/<user>` is its working directory,
+sudo adduser --disabled-password --disabled-login --shell /usr/sbin/nologin --quiet --system --no-create-home --home /nonexistent miden-validator
+
+# Working folder.
+if [ -d "/opt/miden-validator" ]
+then
+    echo "Directory /opt/miden-validator exists."
+else
+    mkdir -p /opt/miden-validator
+fi
+sudo chown -R miden-validator /opt/miden-validator
+
+# Configuration folder
+if [ -d "/etc/opt/miden-validator" ]
+then
+    echo "Directory /etc/opt/miden-validator exists."
+else
+    mkdir -p /etc/opt/miden-validator
+fi
+sudo chown -R miden-validator /etc/opt/miden-validator
+
+sudo systemctl daemon-reload

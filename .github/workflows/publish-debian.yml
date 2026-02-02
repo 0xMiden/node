@@ -10,6 +10,7 @@ on:
         options:
           - miden-network-monitor
           - miden-node
+          - miden-validator
           - miden-prover
           - miden-prover-proxy
       crate_dir:
@@ -19,6 +20,7 @@ on:
         options:
           - network-monitor
           - node
+          - validator
           - remote-prover
       package:
         required: true
@@ -27,6 +29,7 @@ on:
         options:
           - network-monitor
           - node
+          - validator
           - prover
           - prover-proxy
       crate:
@@ -36,6 +39,7 @@ on:
         options:
           - miden-network-monitor
           - miden-node
+          - miden-validator
           - miden-remote-prover
       version:
         description: "Version to release (E.G. v0.10.0-rc.1, v0.10.0). Corresponding git tag must already exist."
