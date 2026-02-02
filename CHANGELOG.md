@@ -5,10 +5,17 @@
 ### Enhancements
 
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
+- [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).
+
+### Changes
+
+- Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
+
+## v0.13.3 (2026-01-29)
+
+- Fixed network monitor faucet test failing to parse `/get_metadata` response due to field type mismatches ([#1612](https://github.com/0xMiden/miden-node/pull/1612)).
 
 ## v0.13.2 (2026-01-27)
-
-### Fixes
 
 - Network transaction builder no longer creates conflicting transactions by consuming the same notes twice ([#1597](https://github.com/0xMiden/miden-node/issues/1597)).
 
@@ -120,7 +127,7 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
-  - This presented as a database locked error and in rare cases a desync between the mempool and store. 
+  - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)
 

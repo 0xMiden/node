@@ -1,6 +1,5 @@
 use core::error::Error as CoreError;
 
-use miden_block_prover::BlockProverError;
 use miden_node_proto::errors::{ConversionError, GrpcError};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -223,16 +222,10 @@ pub enum BuildBlockError {
     ValidateBlockFailed(#[source] Box<ValidatorError>),
     #[error("block signature is invalid")]
     InvalidSignature,
-    #[error("failed to prove block")]
-    ProveBlockFailed(#[source] BlockProverError),
+
     /// We sometimes randomly inject errors into the batch building process to test our failure
     /// responses.
-    #[error("nothing actually went wrong, failure was injected on purpose")]
-    InjectedFailure,
-    #[error("failed to prove block with remote prover")]
-    RemoteProverClientError(#[source] RemoteProverClientError),
-    #[error("block proof security level is too low: {0} < {1}")]
-    SecurityLevelTooLow(u32, u32),
+
     /// Custom error variant for errors not covered by the other variants.
     #[error("{error_msg}")]
     Other {

@@ -7,11 +7,11 @@ import "types/primitives.proto";
 // BLOCK
 // ================================================================================================
 
-// Represents a block.
-message Block {
-    // Block data encoded using [winter_utils::Serializable] implementation for
-    // [miden_protocol::block::Block].
-    bytes block = 1;
+// Represents a signed block.
+message SignedBlock {
+    BlockHeader header = 1;
+    BlockBody body = 2;
+    BlockSignature signature = 3;
 }
 
 // Represents a proposed block.

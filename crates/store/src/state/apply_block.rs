@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::block::ProvenBlock;
+use miden_protocol::block::SignedBlock;
 use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::Serializable;
@@ -41,13 +41,14 @@ impl State {
     // TODO: This span is logged in a root span, we should connect it to the parent span.
     #[allow(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn apply_block(&self, block: ProvenBlock) -> Result<(), ApplyBlockError> {
+    pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
-        let header = block.header();
+        let header = signed_block.header();
+        let body = signed_block.body();
 
-        let tx_commitment = block.body().transactions().commitment();
-
+        // Validate that header and body match.
+        let tx_commitment = body.transactions().commitment();
         if header.tx_commitment() != tx_commitment {
             return Err(InvalidBlockError::InvalidBlockTxCommitment {
                 expected: tx_commitment,
@@ -59,13 +60,12 @@ impl State {
         let block_num = header.block_num();
         let block_commitment = header.commitment();
 
-        // ensures the right block header is being processed
+        // Validate that the applied block is the next block in sequence.
         let prev_block = self
             .db
             .select_block_header_by_block_num(None)
             .await?
             .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
-
         let expected_block_num = prev_block.block_num().child();
         if block_num != expected_block_num {
             return Err(InvalidBlockError::NewBlockInvalidBlockNum {
@@ -78,20 +78,19 @@ impl State {
             return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
         }
 
-        let block_data = block.to_bytes();
-
         // Save the block to the block store. In a case of a rolled-back DB transaction, the
         // in-memory state will be unchanged, but the block might still be written into the
         // block store. Thus, such block should be considered as block candidates, but not
         // finalized blocks. So we should check for the latest block when getting block from
         // the store.
+        let signed_block_bytes = signed_block.to_bytes();
         let store = Arc::clone(&self.block_store);
         let block_save_task = tokio::spawn(
-            async move { store.save_block(block_num, &block_data).await }.in_current_span(),
+            async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
         );
 
-        // scope to read in-memory data, compute mutations required for updating account
-        // and nullifier trees, and validate the request
+        // Scope to read in-memory data, compute mutations required for updating account
+        // and nullifier trees, and validate the request.
         let (
             nullifier_tree_old_root,
             nullifier_tree_update,
@@ -103,8 +102,7 @@ impl State {
             let _span = info_span!(target: COMPONENT, "update_in_memory_structs").entered();
 
             // nullifiers can be produced only once
-            let duplicate_nullifiers: Vec<_> = block
-                .body()
+            let duplicate_nullifiers: Vec<_> = body
                 .created_nullifiers()
                 .iter()
                 .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
@@ -126,11 +124,7 @@ impl State {
             let nullifier_tree_update = inner
                 .nullifier_tree
                 .compute_mutations(
-                    block
-                        .body()
-                        .created_nullifiers()
-                        .iter()
-                        .map(|nullifier| (*nullifier, block_num)),
+                    body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
                 )
                 .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
@@ -147,9 +141,7 @@ impl State {
             let account_tree_update = inner
                 .account_tree
                 .compute_mutations(
-                    block
-                        .body()
-                        .updated_accounts()
+                    body.updated_accounts()
                         .iter()
                         .map(|update| (update.account_id(), update.final_state_commitment())),
                 )
@@ -177,14 +169,13 @@ impl State {
             )
         };
 
-        // build note tree
-        let note_tree = block.body().compute_block_note_tree();
+        // Build note tree.
+        let note_tree = body.compute_block_note_tree();
         if note_tree.root() != header.note_root() {
             return Err(InvalidBlockError::NewBlockInvalidNoteRoot.into());
         }
 
-        let notes = block
-            .body()
+        let notes = body
             .output_notes()
             .map(|(note_index, note)| {
                 let (details, nullifier) = match note {
@@ -215,20 +206,20 @@ impl State {
             })
             .collect::<Result<Vec<_>, InvalidBlockError>>()?;
 
-        // Signals the transaction is ready to be committed, and the write lock can be acquired
+        // Signals the transaction is ready to be committed, and the write lock can be acquired.
         let (allow_acquire, acquired_allowed) = oneshot::channel::<()>();
-        // Signals the write lock has been acquired, and the transaction can be committed
+        // Signals the write lock has been acquired, and the transaction can be committed.
         let (inform_acquire_done, acquire_done) = oneshot::channel::<()>();
 
         // Extract public account updates with deltas before block is moved into async task.
         // Private accounts are filtered out since they don't expose their state changes.
         let account_deltas =
-            Vec::from_iter(block.body().updated_accounts().iter().filter_map(|update| {
-                match update.details() {
+            Vec::from_iter(body.updated_accounts().iter().filter_map(
+                |update| match update.details() {
                     AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
                     AccountUpdateDetails::Private => None,
-                }
-            }));
+                },
+            ));
 
         // The DB and in-memory state updates need to be synchronized and are partially
         // overlapping. Namely, the DB transaction only proceeds after this task acquires the
@@ -236,17 +227,17 @@ impl State {
         // spawned.
         let db = Arc::clone(&self.db);
         let db_update_task = tokio::spawn(
-            async move { db.apply_block(allow_acquire, acquire_done, block, notes).await }
+            async move { db.apply_block(allow_acquire, acquire_done, signed_block, notes).await }
                 .in_current_span(),
         );
 
-        // Wait for the message from the DB update task, that we ready to commit the DB transaction
+        // Wait for the message from the DB update task, that we ready to commit the DB transaction.
         acquired_allowed.await.map_err(ApplyBlockError::ClosedChannel)?;
 
-        // Awaiting the block saving task to complete without errors
+        // Awaiting the block saving task to complete without errors.
         block_save_task.await??;
 
-        // Scope to update the in-memory data
+        // Scope to update the in-memory data.
         async move {
             // We need to hold the write lock here to prevent inconsistency between the in-memory
             // state and the DB state. Thus, we need to wait for the DB update task to complete
@@ -264,7 +255,7 @@ impl State {
             }
 
             // Notify the DB update task that the write lock has been acquired, so it can commit
-            // the DB transaction
+            // the DB transaction.
             inform_acquire_done
                 .send(())
                 .map_err(|_| ApplyBlockError::DbUpdateTaskFailed("Receiver was dropped".into()))?;
