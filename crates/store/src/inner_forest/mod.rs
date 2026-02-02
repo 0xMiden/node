@@ -703,7 +703,9 @@ impl InnerForest {
             return Vec::new();
         };
         Vec::from_iter(slots.into_iter().filter_map(|(account_id, slot_name)| {
-            self.storage_map_roots.remove(&(account_id, slot_name, block))
+            let root = self.storage_map_roots.remove(&(account_id, slot_name.clone(), block));
+            self.storage_entries.remove(&(account_id, slot_name, block));
+            root
         }))
     }
 
