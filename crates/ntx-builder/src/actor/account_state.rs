@@ -72,9 +72,6 @@ pub struct NetworkAccountState {
 }
 
 impl NetworkAccountState {
-    /// Maximum number of attempts to execute a network note.
-    const MAX_NOTE_ATTEMPTS: usize = 30;
-
     /// Load's all available network notes from the store, along with the required account states.
     #[instrument(target = COMPONENT, name = "ntx.state.load", skip_all)]
     pub async fn load(
@@ -110,14 +107,21 @@ impl NetworkAccountState {
     }
 
     /// Selects the next candidate network transaction.
+    ///
+    /// # Parameters
+    ///
+    /// - `limit`: Maximum number of notes to include in the transaction.
+    /// - `max_note_attempts`: Maximum number of execution attempts before a note is dropped.
+    /// - `chain_state`: Current chain state for the transaction.
     #[instrument(target = COMPONENT, name = "ntx.state.select_candidate", skip_all)]
     pub fn select_candidate(
         &mut self,
         limit: NonZeroUsize,
+        max_note_attempts: usize,
         chain_state: ChainState,
     ) -> Option<TransactionCandidate> {
         // Remove notes that have failed too many times.
-        self.account.drop_failing_notes(Self::MAX_NOTE_ATTEMPTS);
+        self.account.drop_failing_notes(max_note_attempts);
 
         // Skip empty accounts, and prune them.
         // This is how we keep the number of accounts bounded.
