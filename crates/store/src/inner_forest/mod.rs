@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
@@ -97,7 +97,7 @@ pub(crate) struct InnerForest {
     vault_roots_by_block: BTreeMap<BlockNumber, Vec<AccountId>>,
 
     /// Tracks storage map roots by block number for pruning.
-    storage_slots_by_block: HashMap<BlockNumber, Vec<(AccountId, StorageSlotName)>>,
+    storage_slots_by_block: BTreeMap<BlockNumber, Vec<(AccountId, StorageSlotName)>>,
 }
 
 impl InnerForest {
@@ -108,7 +108,7 @@ impl InnerForest {
             storage_entries: BTreeMap::new(),
             vault_roots: BTreeMap::new(),
             vault_roots_by_block: BTreeMap::new(),
-            storage_slots_by_block: HashMap::new(),
+            storage_slots_by_block: BTreeMap::new(),
         }
     }
 
@@ -660,8 +660,11 @@ impl InnerForest {
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize, usize) {
         let cutoff_block =
             BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
-        let blocks_to_prune = Vec::from_iter(
+        let vault_blocks_to_prune = Vec::from_iter(
             self.vault_roots_by_block.range(..cutoff_block).map(|(block, _)| *block),
+        );
+        let storage_blocks_to_prune = Vec::from_iter(
+            self.storage_slots_by_block.range(..cutoff_block).map(|(block, _)| *block),
         );
 
         // prune block by block, to limit in memory sizes
@@ -669,15 +672,17 @@ impl InnerForest {
         let mut storage_roots_removed = 0;
         let mut storage_entries_removed = 0;
 
-        for block in blocks_to_prune {
+        for block in vault_blocks_to_prune {
             let vault_roots_to_be_removed = self.vault_roots_to_prune(block);
-            let storage_roots_to_be_removed = self.storage_roots_to_prune(block);
             vault_roots_removed += vault_roots_to_be_removed.len();
-            storage_roots_removed += storage_roots_to_be_removed.len();
-
-            storage_entries_removed += self.prune_entries(block);
-
             self.forest.pop_smts(vault_roots_to_be_removed);
+        }
+
+        for block in storage_blocks_to_prune {
+            let (storage_roots_to_be_removed, storage_entries_removed_already) =
+                self.storage_roots_to_prune(block);
+            storage_roots_removed += storage_roots_to_be_removed.len();
+            storage_entries_removed += storage_entries_removed_already;
             self.forest.pop_smts(storage_roots_to_be_removed);
         }
 
@@ -698,31 +703,19 @@ impl InnerForest {
 
     /// Accumulate storage roots to be deleted map roots from maps keyed by `(AccountId,
     /// StorageSlotName, BlockNumber)` with a block index.
-    fn storage_roots_to_prune(&mut self, block: BlockNumber) -> Vec<Word> {
+    fn storage_roots_to_prune(&mut self, block: BlockNumber) -> (Vec<Word>, usize) {
         let Some(slots) = self.storage_slots_by_block.remove(&block) else {
-            return Vec::new();
+            return (Vec::new(), 0);
         };
-        Vec::from_iter(slots.into_iter().filter_map(|(account_id, slot_name)| {
-            self.storage_map_roots.remove(&(account_id, slot_name.clone(), block))
-        }))
-    }
-
-    /// Prunes entries from a map keyed by `(AccountId, StorageSlotName, BlockNumber)`.
-    fn prune_entries(&mut self, block: BlockNumber) -> usize {
-        dbg!(block);
-        let keys_to_remove = Vec::from_iter(
-            // TODO this is rather expensive
-            self.storage_entries
-                .keys()
-                .filter(|(_, _, block_num)| dbg!(*block_num <= block))
-                .cloned(),
-        );
-
-        let removed = keys_to_remove.len();
-        for key in keys_to_remove {
-            self.storage_entries.remove(&key);
-        }
-
-        removed
+        let n = slots.len();
+        (
+            Vec::from_iter(slots.into_iter().filter_map(|(account_id, slot_name)| {
+                let key = (account_id, slot_name.clone(), block);
+                let root = self.storage_map_roots.remove(&key);
+                let _ = self.storage_entries.remove(&key);
+                root
+            })),
+            n,
+        )
     }
 }

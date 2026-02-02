@@ -503,9 +503,7 @@ fn test_prune_handles_empty_forest() {
 
 #[test]
 fn test_prune_removes_smt_roots_from_forest() {
-    use std::collections::BTreeMap;
-
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::StorageMapDelta;
 
     let mut forest = InnerForest::new();
     let account_id = dummy_account();
