@@ -519,29 +519,37 @@ fn test_prune_removes_smt_roots_from_forest() {
         vault_delta
             .add_asset(dummy_fungible_asset(faucet_id, (i * TEST_AMOUNT_MULTIPLIER).into()))
             .unwrap();
-        let storage_delta = if i == 1 {
+        let storage_delta = if i.is_multiple_of(3) {
             let mut map_delta = StorageMapDelta::default();
-            map_delta.insert(Word::from([1u32, 0, 0, 0]), Word::from([0u32, 0, 0, 1]));
-            let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-            AccountStorageDelta::from_raw(raw)
+            map_delta.insert(Word::from([1u32, 0, 0, 0]), Word::from([99u32, i, i * i, i * i * i]));
+            assert_eq!(map_delta.num_entries(), 1);
+            let asd = AccountStorageDelta::new();
+            asd.add_updated_maps([(slot_name.clone(), map_delta)])
         } else {
             AccountStorageDelta::default()
         };
 
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block_num, &delta).unwrap();
+
+        assert_eq!(forest.storage_entries.len() as u32, i / 3);
     }
 
+    assert_eq!(forest.storage_entries.len() as u32, TEST_PRUNE_CHAIN_TIP / 3);
+
+    // define expectations
     let retained_block = BlockNumber::from(TEST_PRUNE_CHAIN_TIP);
-    let pruned_block = BlockNumber::from(1u32);
+    let pruned_block = BlockNumber::from(3u32);
     let vault_root_retained = forest.vault_roots[&(account_id, retained_block)];
     let vault_root_pruned = forest.vault_roots[&(account_id, pruned_block)];
     let storage_root_pruned =
         forest.storage_map_roots[&(account_id, slot_name.clone(), pruned_block)];
 
+    // do the operations
     let (vault_removed, storage_roots_removed, storage_entries_removed) =
         forest.prune(retained_block);
 
+    // assert expectations
     assert!(vault_removed > 0);
     assert!(storage_roots_removed > 0);
     assert!(storage_entries_removed > 0);
@@ -641,9 +649,7 @@ fn test_prune_vault_roots_removes_old_entries() {
 
 #[test]
 fn test_prune_storage_map_roots_removes_old_entries() {
-    use std::collections::BTreeMap;
-
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::StorageMapDelta;
 
     let mut forest = InnerForest::new();
     let account_id = dummy_account();
@@ -651,14 +657,13 @@ fn test_prune_storage_map_roots_removes_old_entries() {
 
     for i in 1..=TEST_CHAIN_LENGTH {
         let block_num = BlockNumber::from(i);
-        let key = Word::from([i, 0, 0, 0]);
-        let value = Word::from([0, 0, 0, i]);
+        let key = Word::from([i, i * i, 5, 4]);
+        let value = Word::from([0, 0, i * i * i, 77]);
 
         let mut map_delta = StorageMapDelta::default();
         map_delta.insert(key, value);
-        let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-        let storage_delta = AccountStorageDelta::from_raw(raw);
-        let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
+        let asd = AccountStorageDelta::new().add_updated_maps([(slot_name.clone(), map_delta)]);
+        let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), asd);
         forest.update_account(block_num, &delta).unwrap();
     }
 

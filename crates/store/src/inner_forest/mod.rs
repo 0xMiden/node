@@ -675,7 +675,7 @@ impl InnerForest {
             vault_roots_removed += vault_roots_to_be_removed.len();
             storage_roots_removed += storage_roots_to_be_removed.len();
 
-            storage_entries_removed += self.prune_entries_by_block_slot(block);
+            storage_entries_removed += self.prune_entries(block);
 
             self.forest.pop_smts(vault_roots_to_be_removed);
             self.forest.pop_smts(storage_roots_to_be_removed);
@@ -703,19 +703,18 @@ impl InnerForest {
             return Vec::new();
         };
         Vec::from_iter(slots.into_iter().filter_map(|(account_id, slot_name)| {
-            let root = self.storage_map_roots.remove(&(account_id, slot_name.clone(), block));
-            self.storage_entries.remove(&(account_id, slot_name, block));
-            root
+            self.storage_map_roots.remove(&(account_id, slot_name.clone(), block))
         }))
     }
 
-    /// Prunes entries from a map keyed by `(AccountId, StorageSlotName, BlockNumber)`
-    /// where `block_num < cutoff`.
-    fn prune_entries_by_block_slot(&mut self, block: BlockNumber) -> usize {
+    /// Prunes entries from a map keyed by `(AccountId, StorageSlotName, BlockNumber)`.
+    fn prune_entries(&mut self, block: BlockNumber) -> usize {
+        dbg!(block);
         let keys_to_remove = Vec::from_iter(
+            // TODO this is rather expensive
             self.storage_entries
                 .keys()
-                .filter(|(_, _, block_num)| *block_num < block)
+                .filter(|(_, _, block_num)| dbg!(*block_num <= block))
                 .cloned(),
         );
 
