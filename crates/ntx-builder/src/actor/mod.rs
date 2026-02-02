@@ -3,6 +3,7 @@ mod execute;
 mod inflight_note;
 mod note_state;
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,6 +67,10 @@ pub struct AccountActorContext {
     /// Shared LRU cache for storing retrieved note scripts to avoid repeated store calls.
     /// This cache is shared across all account actors to maximize cache efficiency.
     pub script_cache: LruCache<Word, NoteScript>,
+    /// Maximum number of notes per transaction.
+    pub max_notes_per_tx: NonZeroUsize,
+    /// Maximum number of note execution attempts before dropping a note.
+    pub max_note_attempts: usize,
 }
 
 // ACCOUNT ORIGIN
@@ -161,6 +166,10 @@ pub struct AccountActor {
     prover: Option<RemoteTransactionProver>,
     chain_state: Arc<RwLock<ChainState>>,
     script_cache: LruCache<Word, NoteScript>,
+    /// Maximum number of notes per transaction.
+    max_notes_per_tx: NonZeroUsize,
+    /// Maximum number of note execution attempts before dropping a note.
+    max_note_attempts: usize,
 }
 
 impl AccountActor {
@@ -192,6 +201,8 @@ impl AccountActor {
             prover,
             chain_state: actor_context.chain_state.clone(),
             script_cache: actor_context.script_cache.clone(),
+            max_notes_per_tx: actor_context.max_notes_per_tx,
+            max_note_attempts: actor_context.max_note_attempts,
         }
     }
 
@@ -258,7 +269,11 @@ impl AccountActor {
                             // Read the chain state.
                             let chain_state = self.chain_state.read().await.clone();
                             // Find a candidate transaction and execute it.
-                            if let Some(tx_candidate) = state.select_candidate(crate::MAX_NOTES_PER_TX, chain_state) {
+                            if let Some(tx_candidate) = state.select_candidate(
+                                self.max_notes_per_tx,
+                                self.max_note_attempts,
+                                chain_state,
+                            ) {
                                 self.execute_transactions(&mut state, tx_candidate).await;
                             } else {
                                 // No transactions to execute, wait for events.

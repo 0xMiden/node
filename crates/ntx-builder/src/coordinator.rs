@@ -90,20 +90,21 @@ pub struct Coordinator {
     /// Cache of events received from the mempool that predate corresponding network accounts.
     /// Grouped by network account ID to allow targeted event delivery to actors upon creation.
     predating_events: HashMap<NetworkAccountId, IndexMap<TransactionId, Arc<MempoolEvent>>>,
+
+    /// Channel size for each actor's event channel.
+    actor_channel_size: usize,
 }
 
 impl Coordinator {
-    /// Maximum number of messages of the message channel for each actor.
-    const ACTOR_CHANNEL_SIZE: usize = 100;
-
     /// Creates a new coordinator with the specified maximum number of inflight transactions
-    /// and shared script cache.
-    pub fn new(max_inflight_transactions: usize) -> Self {
+    /// and actor channel size.
+    pub fn new(max_inflight_transactions: usize, actor_channel_size: usize) -> Self {
         Self {
             actor_registry: HashMap::new(),
             actor_join_set: JoinSet::new(),
             semaphore: Arc::new(Semaphore::new(max_inflight_transactions)),
             predating_events: HashMap::new(),
+            actor_channel_size,
         }
     }
 
@@ -126,7 +127,7 @@ impl Coordinator {
             handle.cancel_token.cancel();
         }
 
-        let (event_tx, event_rx) = mpsc::channel(Self::ACTOR_CHANNEL_SIZE);
+        let (event_tx, event_rx) = mpsc::channel(self.actor_channel_size);
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let actor = AccountActor::new(origin, actor_context, event_rx, cancel_token.clone());
         let handle = ActorHandle::new(event_tx, cancel_token);

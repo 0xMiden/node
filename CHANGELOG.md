@@ -15,6 +15,10 @@
 
 - Fixed network monitor faucet test failing to parse `/get_metadata` response due to field type mismatches ([#1612](https://github.com/0xMiden/miden-node/pull/1612)).
 
+### Changes
+
+- Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
+
 ## v0.13.2 (2026-01-27)
 
 - Network transaction builder no longer creates conflicting transactions by consuming the same notes twice ([#1597](https://github.com/0xMiden/miden-node/issues/1597)).
