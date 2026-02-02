@@ -1,0 +1,75 @@
+name: Publish Debian Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Name of service to publish"
+        required: true
+        type: choice
+        options:
+          - miden-network-monitor
+          - miden-node
+          - miden-prover
+          - miden-prover-proxy
+      crate_dir:
+        required: true
+        description: "Name of crate directory"
+        type: choice
+        options:
+          - network-monitor
+          - node
+          - remote-prover
+      package:
+        required: true
+        description: "Name of packaging directory"
+        type: choice
+        options:
+          - network-monitor
+          - node
+          - prover
+          - prover-proxy
+      crate:
+        description: "Name of the binary crate to publish"
+        required: true
+        type: choice
+        options:
+          - miden-network-monitor
+          - miden-node
+          - miden-remote-prover
+      version:
+        description: "Version to release (E.G. v0.10.0-rc.1, v0.10.0). Corresponding git tag must already exist."
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.service }} ${{ matrix.arch }} Debian
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on:
+      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+
+      - name: Build and Publish Packages
+        uses: ./.github/actions/debian
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gitref: ${{ inputs.version }}
+          crate_dir: ${{ inputs.crate_dir }}
+          service: ${{ inputs.service }}
+          package: ${{ inputs.package }}
+          crate: ${{ inputs.crate }}
+          arch: ${{ matrix.arch }}

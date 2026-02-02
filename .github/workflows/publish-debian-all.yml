@@ -1,0 +1,114 @@
+name: Publish All Debian Packages
+
+on:
+  release:
+    types: [prereleased, released]
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (E.G. v0.10.0-rc.1, v0.10.0). Corresponding git tag must already exist."
+        required: true
+        type: string
+
+env:
+  version: ${{ inputs.version || github.ref_name }}
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish-node:
+    name: Publish Node ${{ matrix.arch }} Debian
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on:
+      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Build and Publish Node
+        uses: ./.github/actions/debian
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gitref: ${{ env.version }}
+          crate_dir: node
+          service: miden-node
+          package: node
+          crate: miden-node
+          arch: ${{ matrix.arch }}
+
+  publish-prover:
+    name: Publish Prover ${{ matrix.arch }} Debian
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on:
+      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+      - name: Build and Publish Prover
+        uses: ./.github/actions/debian
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gitref: ${{ env.version }}
+          crate_dir: remote-prover
+          service: miden-prover
+          package: prover
+          crate: miden-remote-prover
+          arch: ${{ matrix.arch }}
+
+  publish-prover-proxy:
+    name: Publish Prover Proxy ${{ matrix.arch }} Debian
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on:
+      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+      - name: Build and Publish Prover Proxy
+        uses: ./.github/actions/debian
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gitref: ${{ env.version }}
+          crate_dir: remote-prover
+          service: miden-prover-proxy
+          package: prover-proxy
+          crate: miden-remote-prover
+          arch: ${{ matrix.arch }}
+
+  publish-network-monitor:
+    name: Publish Network Monitor ${{ matrix.arch }} Debian
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on:
+      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+      - name: Build and Publish Network Monitor
+        uses: ./.github/actions/debian
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gitref: ${{ env.version }}
+          crate_dir: network-monitor
+          service: miden-network-monitor
+          package: network-monitor
+          crate: miden-network-monitor
+          arch: ${{ matrix.arch }}

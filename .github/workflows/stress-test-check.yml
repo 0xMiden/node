@@ -1,0 +1,53 @@
+# Runs stress test related jobs.
+
+name: stress-test-check
+
+on:
+  push:
+    branches: [main, next]
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+# Limits workflow concurrency to only the latest commit in the PR.
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+env:
+  # Reduce cache usage by removing debug information.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  stress-test-check:
+    name: stress-test-check
+    runs-on: Linux-ARM64-Runner
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@main
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.122
+      - name: Install stress test
+        run: make install-stress-test
+      - name: Create directory for stress test store
+        run: mkdir -p stress-test-store
+      - name: Seed stress test store
+        run: miden-node-stress-test seed-store --data-directory stress-test-store --num-accounts 500 --public-accounts-percentage 50
+      - name: Run sync state benchmark
+        run: miden-node-stress-test benchmark-store --data-directory stress-test-store --iterations 10 --concurrency 1 sync-state
+      - name: Run sync notes benchmark
+        run: miden-node-stress-test benchmark-store --data-directory stress-test-store --iterations 10 --concurrency 1 sync-notes
+      - name: Run sync nullifiers benchmark
+        run: miden-node-stress-test benchmark-store --data-directory stress-test-store --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
