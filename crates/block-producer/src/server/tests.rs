@@ -65,7 +65,6 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             store_url,
             validator_url,
             batch_prover_url: None,
-            block_prover_url: None,
             batch_interval: Duration::from_millis(500),
             block_interval: Duration::from_millis(500),
             max_txs_per_batch: DEFAULT_MAX_TXS_PER_BATCH,
@@ -139,6 +138,7 @@ async fn start_store(
             rpc_listener,
             ntx_builder_listener,
             block_producer_listener,
+            block_prover_url: None,
             data_directory: dir,
             grpc_timeout: Duration::from_secs(30),
         }
