@@ -21,9 +21,9 @@ use crate::errors::{
     GetNoteScriptByRootError,
     GetNotesByIdError,
     NoteSyncError,
+    SyncAccountStorageMapsError,
     SyncAccountVaultError,
     SyncNullifiersError,
-    SyncStorageMapsError,
     SyncTransactionsError,
 };
 use crate::server::api::{
@@ -306,30 +306,30 @@ impl rpc_server::Rpc for StoreApi {
     /// Returns storage map updates for the specified account within a block range.
     ///
     /// Supports cursor-based pagination for large storage maps.
-    async fn sync_storage_maps(
+    async fn sync_account_storage_maps(
         &self,
-        request: Request<proto::rpc::SyncStorageMapsRequest>,
-    ) -> Result<Response<proto::rpc::SyncStorageMapsResponse>, Status> {
+        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
+    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<SyncStorageMapsError>(request.account_id)?;
+        let account_id = read_account_id::<SyncAccountStorageMapsError>(request.account_id)?;
 
         if !account_id.is_public() {
-            Err(SyncStorageMapsError::AccountNotPublic(account_id))?;
+            Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
         }
 
         let chain_tip = self.state.latest_block_num().await;
-        let block_range = read_block_range::<SyncStorageMapsError>(
+        let block_range = read_block_range::<SyncAccountStorageMapsError>(
             request.block_range,
-            "SyncStorageMapsRequest",
+            "SyncAccountStorageMapsRequest",
         )?
-        .into_inclusive_range::<SyncStorageMapsError>(&chain_tip)?;
+        .into_inclusive_range::<SyncAccountStorageMapsError>(&chain_tip)?;
 
         let storage_maps_page = self
             .state
-            .get_storage_map_sync_values(account_id, block_range)
+            .sync_account_storage_maps(account_id, block_range)
             .await
-            .map_err(SyncStorageMapsError::from)?;
+            .map_err(SyncAccountStorageMapsError::from)?;
 
         let updates = storage_maps_page
             .values
@@ -342,7 +342,7 @@ impl rpc_server::Rpc for StoreApi {
             })
             .collect();
 
-        Ok(Response::new(proto::rpc::SyncStorageMapsResponse {
+        Ok(Response::new(proto::rpc::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: storage_maps_page.last_block_included.as_u32(),

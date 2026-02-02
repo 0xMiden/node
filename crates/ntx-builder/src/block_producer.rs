@@ -62,7 +62,7 @@ impl BlockProducerClient {
     pub async fn subscribe_to_mempool_with_retry(
         &self,
         chain_tip: BlockNumber,
-    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status>, Status> {
+    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
         let mut retry_counter = 0;
         loop {
             match self.subscribe_to_mempool(chain_tip).await {
@@ -90,7 +90,7 @@ impl BlockProducerClient {
     async fn subscribe_to_mempool(
         &self,
         chain_tip: BlockNumber,
-    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status>, Status> {
+    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
         let request =
             proto::block_producer::MempoolSubscriptionRequest { chain_tip: chain_tip.as_u32() };
         let stream = self.client.clone().mempool_subscription(request).await?;

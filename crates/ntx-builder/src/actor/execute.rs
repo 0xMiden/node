@@ -31,7 +31,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
+use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::utils::Serializable;
 use miden_tx::{
@@ -83,7 +83,7 @@ type NtxResult<T> = Result<T, NtxError>;
 /// Provides the context for execution [network transaction candidates](TransactionCandidate).
 #[derive(Clone)]
 pub struct NtxContext {
-    /// TODO(sergerad): Remove block producer client when block proving moved to store.
+    /// Client for submitting proven transactions to the Block Producer.
     block_producer: BlockProducerClient,
 
     /// Client for validating transactions via the Validator.
@@ -438,6 +438,10 @@ impl DataStore for NtxDataStore {
                 self.store.get_account_inputs(foreign_account_id, ref_block).await.map_err(
                     |err| DataStoreError::other_with_source("failed to get account inputs", err),
                 )?;
+
+            // Ensure foreign account procedures are available to the executor via the mast store.
+            // This assumes the code was not loaded from before
+            self.mast_store.load_account_code(account_inputs.code());
 
             // Register slot names from the foreign account for later use.
             self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header())

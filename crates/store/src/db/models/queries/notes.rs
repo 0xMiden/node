@@ -41,10 +41,10 @@ use miden_protocol::note::{
     NoteDetails,
     NoteId,
     NoteInclusionProof,
-    NoteInputs,
     NoteMetadata,
     NoteRecipient,
     NoteScript,
+    NoteStorage,
     NoteTag,
     NoteType,
     Nullifier,
@@ -203,7 +203,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
 ///     notes.tag,
 ///     notes.attachment,
 ///     notes.assets,
-///     notes.inputs,
+///     notes.storage,
 ///     notes.serial_num,
 ///     notes.inclusion_path,
 ///     note_scripts.script
@@ -283,7 +283,7 @@ pub(crate) fn select_existing_note_commitments(
 ///     notes.tag,
 ///     notes.attachment,
 ///     notes.assets,
-///     notes.inputs,
+///     notes.storage,
 ///     notes.serial_num,
 ///     notes.inclusion_path,
 ///     note_scripts.script
@@ -427,7 +427,7 @@ pub(crate) fn select_note_script_by_root(
 ///     notes.tag,
 ///     notes.attachment,
 ///     notes.assets,
-///     notes.inputs,
+///     notes.storage,
 ///     notes.serial_num,
 ///     notes.inclusion_path,
 ///     note_scripts.script,
@@ -575,7 +575,7 @@ impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
 #[diesel(check_for_backend(Sqlite))]
 pub struct NoteDetailsRawRow {
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 }
 
@@ -601,7 +601,7 @@ pub struct NoteRecordWithScriptRawJoined {
     // #[diesel(embed)]
     // pub metadata: NoteMetadataRaw,
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 
     // #[diesel(embed)]
@@ -623,7 +623,7 @@ impl From<(NoteRecordRawRow, Option<Vec<u8>>)> for NoteRecordWithScriptRawJoined
             tag,
             attachment,
             assets,
-            inputs,
+            storage,
             serial_num,
             inclusion_path,
         } = note;
@@ -638,7 +638,7 @@ impl From<(NoteRecordRawRow, Option<Vec<u8>>)> for NoteRecordWithScriptRawJoined
             tag,
             attachment,
             assets,
-            inputs,
+            storage,
             serial_num,
             inclusion_path,
             script,
@@ -666,7 +666,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
             attachment,
             // metadata ^^^,
             assets,
-            inputs,
+            storage,
             serial_num,
             //details ^^^,
             inclusion_path,
@@ -675,7 +675,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         } = raw;
         let index = BlockNoteIndexRawRow { batch_index, note_index };
         let metadata = NoteMetadataRawRow { note_type, sender, tag, attachment };
-        let details = NoteDetailsRawRow { assets, inputs, serial_num };
+        let details = NoteDetailsRawRow { assets, storage, serial_num };
 
         let metadata = metadata.try_into()?;
         let committed_at = BlockNumber::from_raw_sql(committed_at)?;
@@ -684,16 +684,16 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         let script = script.map(|script| NoteScript::read_from_bytes(&script[..])).transpose()?;
         let details = if let NoteDetailsRawRow {
             assets: Some(assets),
-            inputs: Some(inputs),
+            storage: Some(storage),
             serial_num: Some(serial_num),
         } = details
         {
-            let inputs = NoteInputs::read_from_bytes(&inputs[..])?;
+            let storage = NoteStorage::read_from_bytes(&storage[..])?;
             let serial_num = Word::read_from_bytes(&serial_num[..])?;
             let script = script.ok_or_else(|| {
                 DatabaseError::conversiont_from_sql::<NoteRecipient, DatabaseError, _>(None)
             })?;
-            let recipient = NoteRecipient::new(serial_num, script, inputs);
+            let recipient = NoteRecipient::new(serial_num, script, storage);
             let assets = NoteAssets::read_from_bytes(&assets[..])?;
             Some(NoteDetails::new(assets, recipient))
         } else {
@@ -730,7 +730,7 @@ pub struct NoteRecordRawRow {
     pub attachment: Vec<u8>,
 
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 
     pub inclusion_path: Vec<u8>,
@@ -868,7 +868,7 @@ pub struct NoteInsertRow {
     pub consumed_at: Option<i64>,
     pub nullifier: Option<Vec<u8>>,
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub script_root: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 }
@@ -902,7 +902,7 @@ impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
             consumed_at: None::<i64>, // New notes are always unconsumed.
             nullifier: nullifier.as_ref().map(Nullifier::to_bytes),
             assets: note.details.as_ref().map(|d| d.assets().to_bytes()),
-            inputs: note.details.as_ref().map(|d| d.inputs().to_bytes()),
+            storage: note.details.as_ref().map(|d| d.storage().to_bytes()),
             script_root: note.details.as_ref().map(|d| d.script().root().to_bytes()),
             serial_num: note.details.as_ref().map(|d| d.serial_num().to_bytes()),
         }

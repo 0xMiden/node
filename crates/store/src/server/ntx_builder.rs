@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::num::{NonZero, TryFromIntError};
 
 use miden_crypto::merkle::smt::SmtProof;
-use miden_node_proto::domain::account::{AccountInfo, validate_network_account_prefix};
+use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
@@ -71,20 +71,14 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         Ok(Response::new(response))
     }
 
-    async fn get_network_account_details_by_prefix(
+    async fn get_network_account_details_by_id(
         &self,
-        request: Request<proto::store::AccountIdPrefix>,
+        request: Request<proto::account::AccountId>,
     ) -> Result<Response<proto::store::MaybeAccountDetails>, Status> {
-        let request = request.into_inner();
+        let account_id = read_account_id::<Status>(Some(request.into_inner()))?;
 
-        // Validate that the call is for a valid network account prefix
-        let prefix = validate_network_account_prefix(request.account_id_prefix).map_err(|err| {
-            Status::invalid_argument(
-                err.as_report_context("request does not contain a valid network account prefix"),
-            )
-        })?;
         let account_info: Option<AccountInfo> =
-            self.state.get_network_account_details_by_prefix(prefix).await?;
+            self.state.get_network_account_details_by_id(account_id).await?;
 
         Ok(Response::new(proto::store::MaybeAccountDetails {
             details: account_info.map(|acc| (&acc).into()),

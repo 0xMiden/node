@@ -17,7 +17,6 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
-use miden_node_proto as proto;
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
@@ -45,12 +44,7 @@ use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::{Deserializable, Serializable};
 
 use crate::COMPONENT;
-use crate::db::models::conv::{
-    SqlTypeConvert,
-    network_account_id_to_prefix_sql,
-    nonce_to_raw_sql,
-    raw_sql_to_nonce,
-};
+use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
 use crate::db::models::{serialize_vec, vec_raw_try_into};
 use crate::db::{AccountVaultValue, schema};
 use crate::errors::DatabaseError;
@@ -65,6 +59,18 @@ pub(crate) use at_block::{
 mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
+
+// NETWORK ACCOUNT TYPE
+// ================================================================================================
+
+/// Classifies accounts for database storage based on whether they are network accounts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkAccountType {
+    /// Not a network account.
+    None,
+    /// A network account.
+    Network,
+}
 
 // ACCOUNT CODE
 // ================================================================================================
@@ -205,11 +211,7 @@ fn select_full_account(
     Ok(Account::new(account_id, vault, storage, code, nonce, None)?)
 }
 
-/// Select the latest account info by account ID prefix from the DB using the given
-/// [`SqliteConnection`]. Meant to be used by the network transaction builder.
-/// Because network notes get matched through accounts through the account's 30-bit prefix, it is
-/// possible that multiple accounts match against a single prefix. In this scenario, the first
-/// account is returned.
+/// Select the latest account info for a network account by its full account ID.
 ///
 /// # Returns
 ///
@@ -225,16 +227,18 @@ fn select_full_account(
 /// FROM
 ///     accounts
 /// WHERE
-///     network_account_id_prefix = ?1
+///     account_id = ?1
+///     AND network_account_type = 1
 ///     AND is_latest = 1
 /// ```
-pub(crate) fn select_account_by_id_prefix(
+pub(crate) fn select_network_account_by_id(
     conn: &mut SqliteConnection,
-    id_prefix: u32,
+    account_id: AccountId,
 ) -> Result<Option<AccountInfo>, DatabaseError> {
     let maybe_summary = SelectDsl::select(schema::accounts::table, AccountSummaryRaw::as_select())
+        .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
+        .filter(schema::accounts::network_account_type.eq(NetworkAccountType::Network.to_raw_sql()))
         .filter(schema::accounts::is_latest.eq(true))
-        .filter(schema::accounts::network_account_id_prefix.eq(Some(i64::from(id_prefix))))
         .get_result::<AccountSummaryRaw>(conn)
         .optional()
         .map_err(DatabaseError::Diesel)?;
@@ -602,7 +606,10 @@ pub(crate) fn select_all_network_account_ids(
     let account_ids_raw: Vec<(Vec<u8>, i64)> = Box::new(
         QueryDsl::select(
             schema::accounts::table
-                .filter(schema::accounts::network_account_id_prefix.is_not_null())
+                .filter(
+                    schema::accounts::network_account_type
+                        .eq(NetworkAccountType::Network.to_raw_sql()),
+                )
                 .filter(schema::accounts::is_latest.eq(true)),
             (schema::accounts::account_id, schema::accounts::created_at_block),
         )
@@ -989,18 +996,16 @@ pub(crate) fn upsert_accounts(
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
 ) -> Result<usize, DatabaseError> {
-    use proto::domain::account::NetworkAccountId;
-
     let mut count = 0;
     for update in accounts {
         let account_id = update.account_id();
         let account_id_bytes = account_id.to_bytes();
         let block_num_raw = block_num.to_raw_sql();
 
-        let network_account_id = if account_id.is_network() {
-            Some(NetworkAccountId::try_from(account_id)?)
+        let network_account_type = if account_id.is_network() {
+            NetworkAccountType::Network
         } else {
-            None
+            NetworkAccountType::None
         };
 
         // Preserve the original creation block when updating existing accounts.
@@ -1128,7 +1133,7 @@ pub(crate) fn upsert_accounts(
 
         let account_value = AccountRowInsert {
             account_id: account_id_bytes,
-            network_account_id_prefix: network_account_id.map(network_account_id_to_prefix_sql),
+            network_account_type: network_account_type.to_raw_sql(),
             account_commitment: update.final_state_commitment().to_bytes(),
             block_num: block_num_raw,
             nonce: full_account.as_ref().map(|account| nonce_to_raw_sql(account.nonce())),
@@ -1193,7 +1198,7 @@ pub(crate) struct AccountCodeRowInsert {
 #[diesel(table_name = schema::accounts)]
 pub(crate) struct AccountRowInsert {
     pub(crate) account_id: Vec<u8>,
-    pub(crate) network_account_id_prefix: Option<i64>,
+    pub(crate) network_account_type: i32,
     pub(crate) block_num: i64,
     pub(crate) account_commitment: Vec<u8>,
     pub(crate) code_commitment: Option<Vec<u8>>,

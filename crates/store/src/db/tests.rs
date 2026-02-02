@@ -101,7 +101,8 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         11_u8.into(),
     );
 
-    conn.transaction(|conn| queries::insert_block_header(conn, &block_header))
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    conn.transaction(|conn| queries::insert_block_header(conn, &block_header, &dummy_signature))
         .unwrap();
 }
 
@@ -169,7 +170,7 @@ fn sql_select_transactions() {
         queries::select_transactions_by_accounts_and_block_range(
             conn,
             &[AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap()],
-            BlockNumber::from(0)..=BlockNumber::from(2),
+            BlockNumber::GENESIS..=BlockNumber::from(2),
         )
         .unwrap()
     }
@@ -767,7 +768,8 @@ fn db_block_header() {
     );
     // test insertion
 
-    queries::insert_block_header(conn, &block_header).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    queries::insert_block_header(conn, &block_header, &dummy_signature).unwrap();
 
     // test fetch unknown block header
     let block_number = 1;
@@ -798,7 +800,8 @@ fn db_block_header() {
         21_u8.into(),
     );
 
-    queries::insert_block_header(conn, &block_header2).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header2.commitment());
+    queries::insert_block_header(conn, &block_header2, &dummy_signature).unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
@@ -824,7 +827,7 @@ fn db_account() {
     let res = queries::select_accounts_by_block_range(
         conn,
         &account_ids,
-        BlockNumber::from(0)..=u32::MAX.into(),
+        BlockNumber::GENESIS..=u32::MAX.into(),
     )
     .unwrap();
     assert!(res.is_empty());
@@ -850,7 +853,7 @@ fn db_account() {
     let res = queries::select_accounts_by_block_range(
         conn,
         &account_ids,
-        BlockNumber::from(0)..=u32::MAX.into(),
+        BlockNumber::GENESIS..=u32::MAX.into(),
     )
     .unwrap();
     assert_eq!(
@@ -889,7 +892,7 @@ fn notes() {
     let block_num_1 = 1.into();
     create_block(conn, block_num_1);
 
-    let block_range = BlockNumber::from(0)..=BlockNumber::from(1);
+    let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
     let (res, last_included_block) =
@@ -1872,7 +1875,8 @@ fn db_roundtrip_block_header() {
     );
 
     // Insert
-    queries::insert_block_header(&mut conn, &block_header).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    queries::insert_block_header(&mut conn, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
     let retrieved =
@@ -2021,7 +2025,7 @@ fn db_roundtrip_transactions() {
     let retrieved = queries::select_transactions_by_accounts_and_block_range(
         &mut conn,
         &[account_id],
-        BlockNumber::from(0)..=BlockNumber::from(2),
+        BlockNumber::GENESIS..=BlockNumber::from(2),
     )
     .unwrap();
 

@@ -17,6 +17,13 @@ service Api {
     // Returns the status info of the node.
     rpc Status(google.protobuf.Empty) returns (RpcStatus) {}
 
+    // Returns the query parameter limits configured for RPC methods.
+    //
+    // These define the maximum number of each parameter a method will accept.
+    // Exceeding the limit will result in the request being rejected and you should instead send
+    // multiple smaller requests.
+    rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
+
     // Returns a Sparse Merkle Tree opening proof for each requested nullifier
     //
     // Each proof demonstrates either:
@@ -46,6 +53,9 @@ service Api {
     // Returns the script for a note by its root.
     rpc GetNoteScriptByRoot(note.NoteRoot) returns (MaybeNoteScript) {}
 
+    // TRANSACTION SUBMISSION ENDPOINTS
+    // --------------------------------------------------------------------------------------------
+
     // Submits proven transaction to the Miden network. Returns the node's current block height.
     rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
@@ -63,6 +73,25 @@ service Api {
     // Returns the node's current block height.
     rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
 
+    // STATE SYNCHRONIZATION ENDPOINTS
+    // --------------------------------------------------------------------------------------------
+
+    // Returns transactions records for specific accounts within a block range.
+    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
+
+    // Returns info which can be used by the client to sync up to the tip of chain for the notes
+    // they are interested in.
+    //
+    // Client specifies the `note_tags` they are interested in, and the block height from which to
+    // search for new for matching notes for. The request will then return the next block containing
+    // any note matching the provided tags.
+    //
+    // The response includes each note's metadata and inclusion proof.
+    //
+    // A basic note sync can be implemented by repeatedly requesting the previous response's block
+    // until reaching the tip of the chain.
+    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
+
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
     //
     // Note that only 16-bit prefixes are supported at this time.
@@ -71,16 +100,8 @@ service Api {
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
-    // Returns info which can be used by the client to sync up to the tip of chain for the notes they are interested in.
-    //
-    // Client specifies the `note_tags` they are interested in, and the block height from which to search for new for
-    // matching notes for. The request will then return the next block containing any note matching the provided tags.
-    //
-    // The response includes each note's metadata and inclusion proof.
-    //
-    // A basic note sync can be implemented by repeatedly requesting the previous response's block until reaching the
-    // tip of the chain.
-    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
+    // Returns storage map updates for specified account and storage slots within a block range.
+    rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
     // Returns info which can be used by the client to sync up to the latest state of the chain
     // for the objects (accounts and notes) the client is interested in.
@@ -90,27 +111,14 @@ service Api {
     // in a loop until `response.block_header.block_num == response.chain_tip`, at which point
     // the client is fully synchronized with the chain.
     //
-    // Each update response also contains info about new notes, accounts etc. created. It also returns
-    // Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain
-    // MMR peaks and chain MMR nodes.
+    // Each update response also contains info about new notes, accounts etc. created. It also
+    // returns Chain MMR delta that can be used to update the state of Chain MMR. This includes
+    // both chain MMR peaks and chain MMR nodes.
     //
     // For preserving some degree of privacy, note tags contain only high
     // part of hashes. Thus, returned data contains excessive notes, client can make
     // additional filtering of that data on its side.
     rpc SyncState(SyncStateRequest) returns (SyncStateResponse) {}
-
-    // Returns storage map updates for specified account and storage slots within a block range.
-    rpc SyncStorageMaps(SyncStorageMapsRequest) returns (SyncStorageMapsResponse) {}
-
-    // Returns transactions records for specific accounts within a block range.
-    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
-
-    // Returns the query parameter limits configured for RPC methods.
-    //
-    // These define the maximum number of each parameter a method will accept.
-    // Exceeding the limit will result in the request being rejected and you should instead send
-    // multiple smaller requests.
-    rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
 }
 
 // RPC STATUS
@@ -344,7 +352,7 @@ message AccountStorageDetails {
         string slot_name = 1;
 
         // True when the number of entries exceeds the response limit.
-        // When set, clients should use the `SyncStorageMaps` endpoint.
+        // When set, clients should use the `SyncAccountStorageMaps` endpoint.
         bool too_many_entries = 2;
 
         // The map entries (with or without proofs). Empty when too_many_entries is true.
@@ -533,14 +541,14 @@ message SyncStateResponse {
     repeated note.NoteSyncRecord notes = 7;
 }
 
-// SYNC STORAGE MAP
+// SYNC ACCOUNT STORAGE MAP
 // ================================================================================================
 
 // Storage map synchronization request.
 //
 // Allows requesters to sync storage map values for specific public accounts within a block range,
 // with support for cursor-based pagination to handle large storage maps.
-message SyncStorageMapsRequest {
+message SyncAccountStorageMapsRequest {
     // Block range from which to start synchronizing.
     //
     // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
@@ -551,7 +559,7 @@ message SyncStorageMapsRequest {
     account.AccountId account_id = 3;
 }
 
-message SyncStorageMapsResponse {
+message SyncAccountStorageMapsResponse {
     // Pagination information.
     PaginationInfo pagination_info = 1;
 

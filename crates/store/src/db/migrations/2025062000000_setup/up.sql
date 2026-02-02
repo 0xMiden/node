@@ -1,6 +1,7 @@
 CREATE TABLE block_headers (
     block_num    INTEGER NOT NULL,
     block_header BLOB    NOT NULL,
+    signature    BLOB    NOT NULL,
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
@@ -13,14 +14,14 @@ CREATE TABLE account_codes (
 ) WITHOUT ROWID;
 
 CREATE TABLE accounts (
-    account_id                              BLOB NOT NULL,
-    network_account_id_prefix               INTEGER NULL, -- 30-bit account ID prefix, only filled for network accounts
+    account_id                              BLOB    NOT NULL,
+    network_account_type                    INTEGER NOT NULL, -- 0-not a network account, 1-network account
     block_num                               INTEGER NOT NULL,
-    account_commitment                      BLOB NOT NULL,
+    account_commitment                      BLOB    NOT NULL,
     code_commitment                         BLOB,
     nonce                                   INTEGER,
-    storage_header                          BLOB, -- Serialized AccountStorageHeader from miden-objects
-    vault_root                              BLOB, -- Vault root commitment
+    storage_header                          BLOB,             -- Serialized AccountStorageHeader from miden-objects
+    vault_root                              BLOB,             -- Vault root commitment
     is_latest                               BOOLEAN NOT NULL DEFAULT 0, -- Indicates if this is the latest state for this account_id
     created_at_block                        INTEGER NOT NULL,
 
@@ -30,10 +31,11 @@ CREATE TABLE accounts (
             (code_commitment IS NOT NULL AND nonce IS NOT NULL AND storage_header IS NOT NULL AND vault_root IS NOT NULL)
             OR
             (code_commitment IS NULL AND nonce IS NULL AND storage_header IS NULL AND vault_root IS NULL)
-        )
+        ),
+    CONSTRAINT accounts_network_account_type_in_enum CHECK (network_account_type BETWEEN 0 AND 1)
 ) WITHOUT ROWID;
 
-CREATE INDEX idx_accounts_network_prefix ON accounts(network_account_id_prefix) WHERE network_account_id_prefix IS NOT NULL;
+CREATE INDEX idx_accounts_network_type ON accounts(network_account_type) WHERE network_account_type = 1;
 CREATE INDEX idx_accounts_id_block ON accounts(account_id, block_num DESC);
 CREATE INDEX idx_accounts_latest ON accounts(account_id, is_latest) WHERE is_latest = 1;
 CREATE INDEX idx_accounts_created_at_block ON accounts(created_at_block);
@@ -58,7 +60,7 @@ CREATE TABLE notes (
     consumed_at                   INTEGER,          -- Block number when the note was consumed
     nullifier                     BLOB,             -- Only known for public notes, null for private notes
     assets                        BLOB,
-    inputs                        BLOB,
+    storage                       BLOB,
     script_root                   BLOB,
     serial_num                    BLOB,
 

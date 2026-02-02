@@ -449,7 +449,7 @@ pub enum SyncAccountVaultError {
 // ================================================================================================
 
 #[derive(Debug, Error, GrpcError)]
-pub enum SyncStorageMapsError {
+pub enum SyncAccountStorageMapsError {
     #[error("database error")]
     #[grpc(internal)]
     DatabaseError(#[from] DatabaseError),

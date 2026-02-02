@@ -5,6 +5,7 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError, TransactionVerifier};
+use tracing::{Instrument, info_span};
 
 // TRANSACTION VALIDATION ERROR
 // ================================================================================================
@@ -34,8 +35,10 @@ pub async fn validate_transaction(
     tx_inputs: TransactionInputs,
 ) -> Result<TransactionHeader, TransactionValidationError> {
     // First, verify the transaction proof
-    let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
-    tx_verifier.verify(&proven_tx)?;
+    info_span!("verify").in_scope(|| {
+        let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
+        tx_verifier.verify(&proven_tx)
+    })?;
 
     // Create a DataStore from the transaction inputs.
     let data_store = TransactionInputsDataStore::new(tx_inputs.clone());
@@ -46,6 +49,7 @@ pub async fn validate_transaction(
         TransactionExecutor::new(&data_store);
     let executed_tx = executor
         .execute_transaction(account.id(), block_header.block_num(), input_notes, tx_args)
+        .instrument(info_span!("execute"))
         .await?;
 
     // Validate that the executed transaction matches the submitted transaction.

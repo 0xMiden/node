@@ -84,7 +84,7 @@ service Rpc {
     rpc SyncAccountVault(rpc.SyncAccountVaultRequest) returns (rpc.SyncAccountVaultResponse) {}
 
     // Returns storage map updates for specified account and storage slots within a block range.
-    rpc SyncStorageMaps(rpc.SyncStorageMapsRequest) returns (rpc.SyncStorageMapsResponse) {}
+    rpc SyncAccountStorageMaps(rpc.SyncAccountStorageMapsRequest) returns (rpc.SyncAccountStorageMapsResponse) {}
 
     // Returns transactions records for specific accounts within a block range.
     rpc SyncTransactions(rpc.SyncTransactionsRequest) returns (rpc.SyncTransactionsResponse) {}
@@ -96,7 +96,7 @@ service Rpc {
 // Store API for the BlockProducer component
 service BlockProducer {
     // Applies changes of a new block to the DB and in-memory data structures.
-    rpc ApplyBlock(blockchain.Block) returns (google.protobuf.Empty) {}
+    rpc ApplyBlock(ApplyBlockRequest) returns (google.protobuf.Empty) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
@@ -110,6 +110,18 @@ service BlockProducer {
 
     // Returns data required to validate a new transaction.
     rpc GetTransactionInputs(TransactionInputsRequest) returns (TransactionInputs) {}
+}
+
+// APPLY BLOCK REQUEST
+// ================================================================================================
+
+// Applies a block to the state.
+message ApplyBlockRequest {
+    // Ordered batches encoded using [winter_utils::Serializable] implementation for
+    // [miden_objects::batch::OrderedBatches].
+    bytes ordered_batches = 1;
+    // Block signed by the Validator.
+    blockchain.SignedBlock block = 2;
 }
 
 // GET BLOCK INPUTS
@@ -261,8 +273,8 @@ service NtxBuilder {
     // header and peaks will be retrieved.
     rpc GetCurrentBlockchainData(blockchain.MaybeBlockNumber) returns (CurrentBlockchainData) {}
 
-    // Returns the latest state of a network account with the specified account prefix.
-    rpc GetNetworkAccountDetailsByPrefix(AccountIdPrefix) returns (MaybeAccountDetails) {}
+    // Returns the latest state of a network account with the specified account ID.
+    rpc GetNetworkAccountDetailsById(account.AccountId) returns (MaybeAccountDetails) {}
 
     // Returns a list of all network account ids.
     rpc GetNetworkAccountIds(rpc.BlockRange) returns (NetworkAccountIdList) {}
@@ -280,16 +292,10 @@ service NtxBuilder {
     rpc GetStorageMapWitness(StorageMapWitnessRequest) returns (StorageMapWitnessResponse) {}
 }
 
-// GET NETWORK ACCOUNT DETAILS BY PREFIX
+// GET NETWORK ACCOUNT DETAILS BY ID
 // ================================================================================================
 
-// Account ID prefix.
-message AccountIdPrefix {
-    // Account ID prefix.
-    fixed32 account_id_prefix = 1;
-}
-
-// Represents the result of getting network account details by prefix.
+// Represents the result of getting network account details by ID.
 message MaybeAccountDetails {
     // Account details.
     optional account.AccountDetails details = 1;

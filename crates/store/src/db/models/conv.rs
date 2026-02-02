@@ -32,11 +32,12 @@
     on relevant platforms"
 )]
 
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Felt;
 use miden_protocol::account::{StorageSlotName, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteTag;
+
+use crate::db::models::queries::NetworkAccountType;
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from database type {from_type} into {into_type}")]
@@ -66,6 +67,29 @@ pub(crate) trait SqlTypeConvert: Sized {
     }
 }
 
+impl SqlTypeConvert for NetworkAccountType {
+    type Raw = i32;
+
+    fn to_raw_sql(self) -> Self::Raw {
+        match self {
+            NetworkAccountType::None => 0,
+            NetworkAccountType::Network => 1,
+        }
+    }
+
+    fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
+        #[derive(Debug, thiserror::Error)]
+        #[error("invalid network account type value {0}")]
+        struct ValueError(i32);
+
+        match raw {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Network),
+            other => Err(Self::map_err(ValueError(other))),
+        }
+    }
+}
+
 impl SqlTypeConvert for BlockNumber {
     type Raw = i64;
 
@@ -76,12 +100,6 @@ impl SqlTypeConvert for BlockNumber {
     fn to_raw_sql(self) -> Self::Raw {
         i64::from(self.as_u32())
     }
-}
-
-/// Converts a network account ID to its 30-bit prefix for database indexing.
-#[inline(always)]
-pub(crate) fn network_account_id_to_prefix_sql(id: NetworkAccountId) -> i64 {
-    i64::from(id.prefix())
 }
 
 impl SqlTypeConvert for NoteTag {

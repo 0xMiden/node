@@ -87,6 +87,10 @@ test:  ## Runs all tests
 check: ## Check all targets and features for errors without code generation
 	${BUILD_PROTO} cargo check --all-features --all-targets --locked --workspace
 
+.PHONY: check-features
+check-features: ## Checks all feature combinations compile without warnings using cargo-hack
+	@scripts/check-features.sh
+
 # --- building ------------------------------------------------------------------------------------
 
 .PHONY: build

@@ -22,10 +22,10 @@ use miden_protocol::note::{
     NoteAssets,
     NoteAttachment,
     NoteExecutionHint,
-    NoteInputs,
     NoteMetadata,
     NoteRecipient,
     NoteScript,
+    NoteStorage,
     NoteTag,
     NoteType,
 };
@@ -872,7 +872,7 @@ fn create_network_note(
         Felt::new(rng.random()),
     ]);
 
-    let recipient = NoteRecipient::new(serial_num, script, NoteInputs::new(vec![])?);
+    let recipient = NoteRecipient::new(serial_num, script, NoteStorage::new(vec![])?);
 
     let network_note = Note::new(NoteAssets::new(vec![])?, metadata, recipient.clone());
     Ok((network_note, recipient))

@@ -4,6 +4,7 @@ use miden_protocol::block::{BlockNumber, BlockSigner, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::TransactionId;
+use tracing::{Instrument, info_span};
 
 use crate::server::ValidatedTransactions;
 
@@ -31,9 +32,16 @@ pub async fn validate_block<S: BlockSigner>(
     validated_transactions: Arc<ValidatedTransactions>,
 ) -> Result<Signature, BlockValidationError> {
     // Check that all transactions in the proposed block have been validated
+    let verify_span = info_span!("verify_transactions");
     for tx_header in proposed_block.transactions() {
         let tx_id = tx_header.id();
-        if validated_transactions.get(&tx_id).await.is_none() {
+        // TODO: LruCache is a poor abstraction since it locks many times.
+        if validated_transactions
+            .get(&tx_id)
+            .instrument(verify_span.clone())
+            .await
+            .is_none()
+        {
             return Err(BlockValidationError::TransactionNotValidated(
                 tx_id,
                 proposed_block.block_num(),
@@ -45,7 +53,7 @@ pub async fn validate_block<S: BlockSigner>(
     let (header, _) = proposed_block.into_header_and_body()?;
 
     // Sign the header.
-    let signature = signer.sign(&header);
+    let signature = info_span!("sign_block").in_scope(|| signer.sign(&header));
 
     Ok(signature)
 }

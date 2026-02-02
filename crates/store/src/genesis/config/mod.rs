@@ -54,7 +54,9 @@ pub struct GenesisConfig {
     timestamp: u32,
     native_faucet: NativeFaucet,
     fee_parameters: FeeParameterConfig,
+    #[serde(default)]
     wallet: Vec<WalletConfig>,
+    #[serde(default)]
     fungible_faucet: Vec<FungibleFaucetConfig>,
 }
 

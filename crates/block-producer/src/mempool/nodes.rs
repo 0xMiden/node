@@ -416,7 +416,7 @@ mod tests {
                 BTreeMap::from([(account_update.account_id(), account_update)]),
                 InputNotes::default(),
                 Vec::default(),
-                BlockNumber::from(u32::MAX),
+                BlockNumber::MAX,
                 OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
             )
             .unwrap();

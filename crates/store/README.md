@@ -55,7 +55,7 @@ The full gRPC API can be found [here](../../proto/proto/store.proto).
 - [SyncAccountVault](#syncaccountvault)
 - [SyncNotes](#syncnotes)
 - [SyncState](#syncstate)
-- [SyncStorageMaps](#syncstoragemaps)
+- [SyncAccountStorageMaps](#syncaccountstoragemaps)
 - [SyncTransactions](#synctransactions)
 <!--toc:end-->
 
@@ -245,7 +245,7 @@ data contains excessive notes and nullifiers, client can make additional filteri
 
 ---
 
-### SyncStorageMaps
+### SyncAccountStorageMaps
 
 Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
 

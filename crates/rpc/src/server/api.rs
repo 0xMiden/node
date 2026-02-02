@@ -204,13 +204,13 @@ impl api_server::Api for RpcService {
         self.store.clone().sync_state(request).await
     }
 
-    async fn sync_storage_maps(
+    async fn sync_account_storage_maps(
         &self,
-        request: Request<proto::rpc::SyncStorageMapsRequest>,
-    ) -> Result<Response<proto::rpc::SyncStorageMapsResponse>, Status> {
+        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
+    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_storage_maps(request).await
+        self.store.clone().sync_account_storage_maps(request).await
     }
 
     async fn sync_notes(
@@ -294,7 +294,7 @@ impl api_server::Api for RpcService {
                 Arc::make_mut(&mut mast).strip_decorators();
                 let script = NoteScript::from_parts(mast, note.script().entrypoint());
                 let recipient =
-                    NoteRecipient::new(note.serial_num(), script, note.inputs().clone());
+                    NoteRecipient::new(note.serial_num(), script, note.storage().clone());
                 let new_note = Note::new(note.assets().clone(), note.metadata().clone(), recipient);
                 OutputNote::Full(new_note)
             },
@@ -356,7 +356,7 @@ impl api_server::Api for RpcService {
                     Arc::make_mut(&mut mast).strip_decorators();
                     let script = NoteScript::from_parts(mast, note.script().entrypoint());
                     let recipient =
-                        NoteRecipient::new(note.serial_num(), script, note.inputs().clone());
+                        NoteRecipient::new(note.serial_num(), script, note.storage().clone());
                     let new_note =
                         Note::new(note.assets().clone(), note.metadata().clone(), recipient);
                     OutputNote::Full(new_note)

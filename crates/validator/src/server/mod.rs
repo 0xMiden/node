@@ -10,6 +10,7 @@ use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::panic::catch_panic_layer_fn;
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::{BlockSigner, ProposedBlock};
 use miden_protocol::transaction::{
@@ -24,6 +25,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
+use tracing::{Instrument, info_span};
 
 use crate::COMPONENT;
 use crate::block_validation::validate_block;
@@ -130,30 +132,34 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
         &self,
         request: tonic::Request<proto::transaction::ProvenTransaction>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
-        let request = request.into_inner();
-        // Deserialize the transaction.
-        let proven_tx =
-            ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
+        let (tx, inputs) = info_span!("deserialize").in_scope(|| {
+            let request = request.into_inner();
+            let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
                 Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
             })?;
+            let inputs = request
+                .transaction_inputs
+                .ok_or(Status::invalid_argument("Missing transaction inputs"))?;
+            let inputs = TransactionInputs::read_from_bytes(&inputs).map_err(|err| {
+                Status::invalid_argument(err.as_report_context("Invalid transaction inputs"))
+            })?;
 
-        // Deserialize the transaction inputs.
-        let Some(tx_inputs) = request.transaction_inputs else {
-            return Err(Status::invalid_argument("Missing transaction inputs"));
-        };
-        let tx_inputs = TransactionInputs::read_from_bytes(&tx_inputs).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction inputs"))
+            Result::<_, tonic::Status>::Ok((tx, inputs))
         })?;
 
+        tracing::Span::current().set_attribute("transaction.id", tx.id());
+
         // Validate the transaction.
-        let validated_tx_header =
-            validate_transaction(proven_tx, tx_inputs).await.map_err(|err| {
-                Status::invalid_argument(err.as_report_context("Invalid transaction"))
-            })?;
+        let validated_tx_header = validate_transaction(tx, inputs).await.map_err(|err| {
+            Status::invalid_argument(err.as_report_context("Invalid transaction"))
+        })?;
 
         // Register the validated transaction.
         let tx_id = validated_tx_header.id();
-        self.validated_transactions.put(tx_id, validated_tx_header).await;
+        self.validated_transactions
+            .put(tx_id, validated_tx_header)
+            .instrument(info_span!("validated_txs.insert"))
+            .await;
 
         Ok(tonic::Response::new(()))
     }
@@ -163,15 +169,15 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
         &self,
         request: tonic::Request<proto::blockchain::ProposedBlock>,
     ) -> Result<tonic::Response<proto::blockchain::BlockSignature>, tonic::Status> {
-        let proposed_block_bytes = request.into_inner().proposed_block;
+        let proposed_block = info_span!("deserialize").in_scope(|| {
+            let proposed_block_bytes = request.into_inner().proposed_block;
 
-        // Deserialize the proposed block.
-        let proposed_block =
             ProposedBlock::read_from_bytes(&proposed_block_bytes).map_err(|err| {
                 tonic::Status::invalid_argument(format!(
                     "Failed to deserialize proposed block: {err}",
                 ))
-            })?;
+            })
+        })?;
 
         // Validate the block.
         let signature =
@@ -182,7 +188,9 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
                 })?;
 
         // Send the signature.
-        let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
-        Ok(tonic::Response::new(response))
+        info_span!("serialize").in_scope(|| {
+            let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
+            Ok(tonic::Response::new(response))
+        })
     }
 }
