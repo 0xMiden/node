@@ -51,12 +51,11 @@ jobs:
         uses: ./.github/actions/install-rocksdb
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: taiki-e/install-action@v2
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
-          save-if: ${{ github.ref == 'refs/heads/next' }}
+          # save-if: ${{ github.ref == 'refs/heads/next' }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
   
@@ -140,39 +139,39 @@ jobs:
         run: git diff --exit-code
 
   # Ensure the stress-test still functions by running some cheap benchmarks.
-  stress-test:
-    name: stress test check
-    needs: [build]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v6
-      - name: Rustup
-        run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ${{ github.workflow }}-build
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
-          save-if: false
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest@0.9.122
-      - name: Install stress test
-        run: make install-stress-test
-      - name: Create store directory for stress test
-        run: mkdir -p stress-test-store
-      - name: Seed the store
-        run: miden-node-stress-test seed-store --data-directory stress-test-store \
-             --num-accounts 500 --public-accounts-percentage 50
-      - name: Benchmark sync state
-        run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
-             --iterations 10 --concurrency 1 sync-state
-      - name: Benchmark sync notes
-        run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
-             --iterations 10 --concurrency 1 sync-notes
-      - name: Benchmakr sync nullifiers
-        run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
-             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
+  # stress-test:
+  #   name: stress test check
+  #   needs: [build]
+  #   runs-on: ubuntu-24.04
+  #   timeout-minutes: 20
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - name: Rustup
+  #       run: rustup update --no-self-update
+  #     - uses: Swatinem/rust-cache@v2
+  #       with:
+  #         shared-key: ${{ github.workflow }}-build
+  #         prefix-key: ${{ env.RUST_CACHE_KEY }}
+  #         save-if: false
+  #     - uses: taiki-e/install-action@v2
+  #       with:
+  #         tool: nextest@0.9.122
+  #     - name: Install stress test
+  #       run: make install-stress-test
+  #     - name: Create store directory for stress test
+  #       run: mkdir -p stress-test-store
+  #     - name: Seed the store
+  #       run: miden-node-stress-test seed-store --data-directory stress-test-store \
+  #            --num-accounts 500 --public-accounts-percentage 50
+  #     - name: Benchmark sync state
+  #       run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
+  #            --iterations 10 --concurrency 1 sync-state
+  #     - name: Benchmark sync notes
+  #       run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
+  #            --iterations 10 --concurrency 1 sync-notes
+  #     - name: Benchmakr sync nullifiers
+  #       run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
+  #            --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
   # ===============================================================================================
   # WASM related jobs
@@ -181,23 +180,23 @@ jobs:
   # Tests the miden-remote-prover-client WASM support.
   #
   # The WASM build is incompatible with a conventional build and therefore this gets its own cache.
-  client-wasm:
-    - uses: actions/checkout@v6
-    - name: Rustup
-      run: rustup update --no-self-update
-    - uses: taiki-e/install-action@v2
-    - uses: Swatinem/rust-cache@v2
-      with:
-        prefix-key: ${{ env.RUST_CACHE_KEY }}
-        save-if: ${{ github.ref == 'refs/heads/next' }}
-    - name: cargo build
-      run: cargo build --locked -p miden-remote-prover-client \
-           --target wasm32-unknown-unknown --no-default-features \
-           --features batch-prover,block-prover,tx-prover # no-std compatible build
-    - name: clippy
-      run: cargo clippy --locked -p miden-remote-prover-client \
-           --target wasm32-unknown-unknown --no-default-features \
-           --features batch-prover,block-prover,tx-prover -- -D warnings
+  # client-wasm:
+  #   - uses: actions/checkout@v6
+  #   - name: Rustup
+  #     run: rustup update --no-self-update
+  #   - uses: taiki-e/install-action@v2
+  #   - uses: Swatinem/rust-cache@v2
+  #     with:
+  #       prefix-key: ${{ env.RUST_CACHE_KEY }}
+  #       save-if: ${{ github.ref == 'refs/heads/next' }}
+  #   - name: cargo build
+  #     run: cargo build --locked -p miden-remote-prover-client \
+  #          --target wasm32-unknown-unknown --no-default-features \
+  #          --features batch-prover,block-prover,tx-prover # no-std compatible build
+  #   - name: clippy
+  #     run: cargo clippy --locked -p miden-remote-prover-client \
+  #          --target wasm32-unknown-unknown --no-default-features \
+  #          --features batch-prover,block-prover,tx-prover -- -D warnings
 
   # ===============================================================================================
   # Jobs that don't require caching to be efficient

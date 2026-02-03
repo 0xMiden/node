@@ -54,6 +54,7 @@ jobs:
   # Check that our MSRV complies with our specified rust version.
   msrv:
     - name: msrv check
+      runs-on: ubuntu-24.04
     - uses: actions/checkout@v5
       with:
         ref: 'next'
