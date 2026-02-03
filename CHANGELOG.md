@@ -6,6 +6,7 @@
 
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
+- [BREAKING] Remove `SynState` and introduce `SyncChainMmr` ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
 
 ### Changes
 
