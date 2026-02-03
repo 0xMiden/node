@@ -40,9 +40,6 @@ use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
 
-#[cfg(test)]
-mod tests;
-
 /// The block producer server.
 ///
 /// Specifies how to connect to the store, batch prover, and block prover components.
