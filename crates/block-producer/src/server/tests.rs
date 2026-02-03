@@ -48,7 +48,6 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             address: validator_addr,
             grpc_timeout,
             signer: SecretKey::random(),
-            data_directory: "/tmp/".into(),
         }
         .serve()
         .await
