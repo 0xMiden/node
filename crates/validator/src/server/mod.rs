@@ -6,6 +6,7 @@ use anyhow::Context;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
+use miden_node_store::Db;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -22,7 +23,7 @@ use tracing::info_span;
 
 use crate::COMPONENT;
 use crate::block_validation::validate_block;
-use crate::db::Database;
+use crate::db::{insert_transaction, load};
 use crate::tx_validation::validate_transaction;
 
 // VALIDATOR
@@ -55,7 +56,9 @@ impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
         tracing::info!(target: COMPONENT, endpoint=?self.address, "Initializing server");
 
         // Initialize database connection.
-        let db = Database::new(&self.data_directory)?;
+        let db = load(self.data_directory.join("validator.sqlite3"))
+            .await
+            .context("failed to initialize validator database")?;
 
         let listener = TcpListener::bind(self.address)
             .await
@@ -97,11 +100,11 @@ impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
 /// Implements the gRPC API for the validator.
 struct ValidatorServer<S> {
     signer: S,
-    db: Database,
+    db: Db,
 }
 
 impl<S> ValidatorServer<S> {
-    fn new(signer: S, db: Database) -> Self {
+    fn new(signer: S, db: Db) -> Self {
         Self { signer, db }
     }
 }
@@ -148,8 +151,10 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
 
         // Store the validated transaction.
         self.db
-            .put(&validated_tx_header)
-            .map_err(|err| Status::internal(err.as_report_context("Failed insert")))?;
+            .transact("insert_transaction", move |conn| {
+                insert_transaction(conn, &validated_tx_header)
+            })
+            .await?;
         Ok(tonic::Response::new(()))
     }
 
