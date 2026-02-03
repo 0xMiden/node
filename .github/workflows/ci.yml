@@ -1,0 +1,221 @@
+# Continuous integration jobs.
+#
+# These get run on every pull-request, with github cache updated on push into `next`.
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - next
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+      - "docs/**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+      - "docs/**"
+
+env:
+  # Shared prefix key for the rust cache.
+  # 
+  # This provides a convenient way to evict old or corrupted cache.
+  RUST_CACHE_KEY: rust-cache-2026.02.02
+
+# Limits workflow concurrency to only the latest commit in the PR.
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+env:
+  # Reduce cache usage by removing debug information.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  # ===============================================================================================
+  # Conventional builds, lints and tests that re-use a single cache for efficiency
+  # ===============================================================================================
+
+  # Normal cargo build that populates a cache for all subsequent jobs to re-use.
+  build:
+    runs-on: Linux-ARM64-Runner
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: ${{ github.ref == 'refs/heads/next' }}
+      - name: cargo build
+        run: cargo build --workspace --all-targets --locked
+  
+  clippy:
+    runs-on: Linux-ARM64-Runner
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: false
+      - name: clippy
+        run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
+
+  tests:
+    runs-on: Linux-ARM64-Runner
+    needs: [build]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.122
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: false
+      - name: Unit tests
+        run: make test
+      - name: Doc tests
+        run: cargo test --doc --workspace --all-features
+
+  doc:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@main
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: false
+      - name: Build docs
+        run: cargo doc --no-deps --workspace --all-features --locked
+
+  proto:
+    name: proto check
+    needs: [build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@main
+      - name: Rustup
+        run: rustup update --no-self-update
+      - name: Install protobuf
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: false
+      - name: Rebuild protos
+        run: BUILD_PROTO=1 cargo check --all-features --all-targets --locked --workspace
+      - name: Diff check
+        run: git diff --exit-code
+
+  # ===============================================================================================
+  # WASM related jobs
+  # ===============================================================================================
+
+  # Tests the miden-remote-prover-client WASM support.
+  #
+  # The WASM build is incompatible with a conventional build and therefore this gets its own cache.
+  client_wasm:
+    - uses: actions/checkout@v6
+    - name: Rustup
+      run: rustup update --no-self-update
+    - uses: taiki-e/install-action@v2
+    - uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: ${{ env.RUST_CACHE_KEY }}
+        save-if: ${{ github.ref == 'refs/heads/next' }}
+    - name: cargo build
+      run: cargo build --locked -p miden-remote-prover-client \
+           --target wasm32-unknown-unknown --no-default-features \
+           --features batch-prover,block-prover,tx-prover # no-std compatible build
+    - name: clippy
+      run: cargo clippy --locked -p miden-remote-prover-client \
+           --target wasm32-unknown-unknown --no-default-features \
+           --features batch-prover,block-prover,tx-prover -- -D warnings
+
+  # ===============================================================================================
+  # Jobs that don't require caching to be efficient
+  # ===============================================================================================
+
+  typos:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos@1.42.0
+      - run: make typos-check
+
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@main
+      - name: Rustup +nightly
+        run: |
+          rustup update --no-self-update nightly
+          rustup +nightly component add rustfmt
+      - name: Fmt
+        run: make format-check
+
+  toml:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: taplo-cli@0.10.0
+      - run: make toml-check
+
+  workspace-lints:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-workspace-lints@0.1.4
+      - run: |
+          make workspace-check
+
+  unused_deps:
+    name: check for unused dependencies
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@main
+      - name: machete
+        uses: bnjbvr/cargo-machete@main
+
+
