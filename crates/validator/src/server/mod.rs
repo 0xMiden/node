@@ -145,15 +145,14 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
         tracing::Span::current().set_attribute("transaction.id", tx.id());
 
         // Validate the transaction.
-        let validated_tx_header = validate_transaction(tx, inputs).await.map_err(|err| {
+        let id = tx.id();
+        let tx_summary = validate_transaction(tx, inputs).await.map_err(|err| {
             Status::invalid_argument(err.as_report_context("Invalid transaction"))
         })?;
 
         // Store the validated transaction.
         self.db
-            .transact("insert_transaction", move |conn| {
-                insert_transaction(conn, &validated_tx_header)
-            })
+            .transact("insert_transaction", move |conn| insert_transaction(conn, &id, &tx_summary))
             .await?;
         Ok(tonic::Response::new(()))
     }

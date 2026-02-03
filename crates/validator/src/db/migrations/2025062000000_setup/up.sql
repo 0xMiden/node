@@ -1,5 +1,8 @@
 CREATE TABLE transactions (
     id   BLOB NOT NULL,
-    data BLOB NOT NULL,
+    account_id   BLOB NOT NULL,
+    summary BLOB NOT NULL,
     PRIMARY KEY (id)
 ) WITHOUT ROWID;
+
+CREATE INDEX idx_transactions_account_id ON transactions(account_id);

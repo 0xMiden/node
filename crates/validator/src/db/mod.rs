@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use diesel::SqliteConnection;
 use diesel::prelude::*;
 use miden_node_store::{ConnectionManager, DatabaseError, DatabaseSetupError};
-use miden_protocol::transaction::{TransactionHeader, TransactionId};
+use miden_protocol::transaction::{TransactionId, TransactionSummary};
 use miden_protocol::utils::{Deserializable, Serializable};
 use tracing::instrument;
 
@@ -36,9 +36,10 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
 /// Inserts a new validated transaction into the database.
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
-    header: &TransactionHeader,
+    tx_id: &TransactionId,
+    summary: &TransactionSummary,
 ) -> Result<usize, DatabaseError> {
-    let row = TransactionSummaryRowInsert::new(header);
+    let row = TransactionSummaryRowInsert::new(tx_id, summary);
     let count = diesel::insert_into(schema::transactions::table).values(row).execute(conn)?;
     Ok(count)
 }
@@ -48,7 +49,7 @@ pub(crate) fn insert_transaction(
 pub(crate) fn select_validated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
-) -> Result<HashMap<TransactionId, TransactionHeader>, DatabaseError> {
+) -> Result<HashMap<TransactionId, TransactionSummary>, DatabaseError> {
     if tx_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -58,17 +59,17 @@ pub(crate) fn select_validated_transactions(
 
     // Query the database for matching transactions.
     let raw_transactions = schema::transactions::table
-        .filter(schema::transactions::transaction_id.eq_any(tx_id_bytes))
-        .order(schema::transactions::transaction_id.asc())
+        .filter(schema::transactions::id.eq_any(tx_id_bytes))
+        .order(schema::transactions::id.asc())
         .load::<TransactionSummaryRowSelect>(conn)
         .map_err(DatabaseError::from)?;
 
     // Deserialize the transaction blobs.
-    let mut transactions: HashMap<TransactionId, TransactionHeader> = HashMap::new();
+    let mut transactions: HashMap<TransactionId, TransactionSummary> = HashMap::new();
     for raw_tx in raw_transactions {
-        let tx_id = TransactionId::read_from_bytes(&raw_tx.transaction_id)?;
-        let tx_header = TransactionHeader::read_from_bytes(&raw_tx.data)?;
-        transactions.insert(tx_id, tx_header);
+        let id = TransactionId::read_from_bytes(&raw_tx.id)?;
+        let summary = TransactionSummary::read_from_bytes(&raw_tx.summary)?;
+        transactions.insert(id, summary);
     }
 
     Ok(transactions)
@@ -90,9 +91,9 @@ pub(crate) fn find_unvalidated_transactions(
 
     // Query the database for matching transactions ids.
     let raw_transactions_ids = schema::transactions::table
-        .select(schema::transactions::transaction_id)
-        .filter(schema::transactions::transaction_id.eq_any(tx_id_bytes))
-        .order(schema::transactions::transaction_id.asc())
+        .select(schema::transactions::id)
+        .filter(schema::transactions::id.eq_any(tx_id_bytes))
+        .order(schema::transactions::id.asc())
         .load::<Vec<u8>>(conn)
         .map_err(DatabaseError::from)?;
 

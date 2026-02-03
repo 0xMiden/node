@@ -1,5 +1,5 @@
 use diesel::prelude::*;
-use miden_protocol::transaction::TransactionHeader;
+use miden_protocol::transaction::{TransactionId, TransactionSummary};
 use miden_tx::utils::Serializable;
 
 use crate::db::schema;
@@ -8,15 +8,17 @@ use crate::db::schema;
 #[diesel(table_name = schema::transactions)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct TransactionSummaryRowInsert {
-    pub transaction_id: Vec<u8>,
-    pub data: Vec<u8>,
+    pub id: Vec<u8>,
+    pub account_id: Vec<u8>,
+    pub summary: Vec<u8>,
 }
 
 impl TransactionSummaryRowInsert {
-    pub fn new(transaction_header: &TransactionHeader) -> Self {
+    pub fn new(id: &TransactionId, summary: &TransactionSummary) -> Self {
         Self {
-            transaction_id: transaction_header.id().to_bytes(),
-            data: transaction_header.to_bytes(),
+            id: id.to_bytes(),
+            account_id: summary.account_delta().id().to_bytes(),
+            summary: summary.to_bytes(),
         }
     }
 }
@@ -25,6 +27,7 @@ impl TransactionSummaryRowInsert {
 #[diesel(table_name = schema::transactions)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct TransactionSummaryRowSelect {
-    pub transaction_id: Vec<u8>,
-    pub data: Vec<u8>,
+    pub id: Vec<u8>,
+    pub account_id: Vec<u8>,
+    pub summary: Vec<u8>,
 }

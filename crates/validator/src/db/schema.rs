@@ -1,6 +1,7 @@
 diesel::table! {
-    transactions (transaction_id) {
-        transaction_id -> Binary,
-        data -> Binary,
+    transactions (id, account_id, summary) {
+        id -> Binary,
+        account_id -> Binary,
+        summary -> Binary,
     }
 }
