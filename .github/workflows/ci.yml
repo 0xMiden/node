@@ -118,6 +118,9 @@ jobs:
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
+  # Ensures our checked-in protobuf generated code is aligned to the protobuf schema.
+  #
+  # We do this by rebuilding the generated code and ensuring there is no diff.
   proto:
     name: proto check
     needs: [build]
@@ -137,6 +140,41 @@ jobs:
         run: BUILD_PROTO=1 cargo check --all-features --all-targets --locked --workspace
       - name: Diff check
         run: git diff --exit-code
+
+  # Ensure the stress-test still functions by running some cheap benchmarks.
+  stress-test:
+    name: stress test check
+    needs: [build]
+    runs-on: Linux-ARM64-Runner
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@main
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.122
+      - name: Install stress test
+        run: make install-stress-test
+      - name: Create store directory for stress test
+        run: mkdir -p stress-test-store
+      - name: Seed the store
+        run: miden-node-stress-test seed-store --data-directory stress-test-store \
+             --num-accounts 500 --public-accounts-percentage 50
+      - name: Benchmark sync state
+        run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
+             --iterations 10 --concurrency 1 sync-state
+      - name: Benchmark sync notes
+        run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
+             --iterations 10 --concurrency 1 sync-notes
+      - name: Benchmakr sync nullifiers
+        run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
+             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
   # ===============================================================================================
   # WASM related jobs
