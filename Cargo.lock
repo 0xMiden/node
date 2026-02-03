@@ -2992,6 +2992,7 @@ dependencies = [
  "http-body-util",
  "itertools 0.14.0",
  "lru 0.16.3",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",

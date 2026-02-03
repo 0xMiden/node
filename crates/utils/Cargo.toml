@@ -42,5 +42,8 @@ tracing-opentelemetry = { version = "0.32" }
 tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
 
+[build-dependencies]
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
+
 [dev-dependencies]
 thiserror = { workspace = true }
