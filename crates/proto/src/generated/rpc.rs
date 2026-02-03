@@ -475,7 +475,7 @@ pub struct SyncStateResponse {
     pub notes: ::prost::alloc::vec::Vec<super::note::NoteSyncRecord>,
 }
 /// Chain MMR synchronization request.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncChainMmrRequest {
     /// Last block known by the requester. The response will contain data starting from the next
     /// block, until `block_to` or the chain tip.
@@ -1113,6 +1113,7 @@ pub mod api_client {
         /// For preserving some degree of privacy, note tags contain only high
         /// part of hashes. Thus, returned data contains excessive notes, client can make
         /// additional filtering of that data on its side.
+        #[deprecated]
         pub async fn sync_state(
             &mut self,
             request: impl tonic::IntoRequest<super::SyncStateRequest>,
@@ -1134,7 +1135,6 @@ pub mod api_client {
             req.extensions_mut().insert(GrpcMethod::new("rpc.Api", "SyncState"));
             self.inner.unary(req, path, codec).await
         }
-        /// Returns info which can be used by the client to sync the chain MMR.
         pub async fn sync_chain_mmr(
             &mut self,
             request: impl tonic::IntoRequest<super::SyncChainMmrRequest>,
@@ -1341,7 +1341,6 @@ pub mod api_server {
             tonic::Response<super::SyncStateResponse>,
             tonic::Status,
         >;
-        /// Returns info which can be used by the client to sync the chain MMR.
         async fn sync_chain_mmr(
             &self,
             request: tonic::Request<super::SyncChainMmrRequest>,
