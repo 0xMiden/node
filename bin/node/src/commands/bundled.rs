@@ -112,14 +112,14 @@ impl BundledCommand {
                 data_directory,
                 accounts_directory,
                 genesis_config_file,
-                validator_key: validator_insecure_secret_key,
+                validator_key,
             } => {
                 // Currently the bundled bootstrap is identical to the store's bootstrap.
                 crate::commands::store::StoreCommand::Bootstrap {
                     data_directory,
                     accounts_directory,
                     genesis_config_file,
-                    validator_key: validator_insecure_secret_key,
+                    validator_key,
                 }
                 .handle()
                 .await
