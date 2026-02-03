@@ -55,18 +55,18 @@ jobs:
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
-          # save-if: ${{ github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/next' }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
   
   clippy:
+    name: lint - clippy
     runs-on: ubuntu-24.04
     needs: [build]
     steps:
       - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: taiki-e/install-action@v2
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ github.workflow }}-build
@@ -91,8 +91,10 @@ jobs:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
-      - name: Unit tests
-        run: make test
+      - name: Build tests
+        run: cargo nextest run --all-features --workspace --no-run
+      - name: Run tests
+        run: cargo nextest run --all-features --workspace
       - name: Doc tests
         run: cargo test --doc --workspace --all-features
 
@@ -103,8 +105,6 @@ jobs:
       - uses: actions/checkout@v6
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
       - name: Rustup
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
@@ -119,7 +119,7 @@ jobs:
   #
   # We do this by rebuilding the generated code and ensuring there is no diff.
   proto:
-    name: proto check
+    name: gRPC codegen
     needs: [build]
     runs-on: ubuntu-24.04
     steps:
@@ -139,39 +139,49 @@ jobs:
         run: git diff --exit-code
 
   # Ensure the stress-test still functions by running some cheap benchmarks.
-  # stress-test:
-  #   name: stress test check
-  #   needs: [build]
-  #   runs-on: ubuntu-24.04
-  #   timeout-minutes: 20
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #     - name: Rustup
-  #       run: rustup update --no-self-update
-  #     - uses: Swatinem/rust-cache@v2
-  #       with:
-  #         shared-key: ${{ github.workflow }}-build
-  #         prefix-key: ${{ env.RUST_CACHE_KEY }}
-  #         save-if: false
-  #     - uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: nextest@0.9.122
-  #     - name: Install stress test
-  #       run: make install-stress-test
-  #     - name: Create store directory for stress test
-  #       run: mkdir -p stress-test-store
-  #     - name: Seed the store
-  #       run: miden-node-stress-test seed-store --data-directory stress-test-store \
-  #            --num-accounts 500 --public-accounts-percentage 50
-  #     - name: Benchmark sync state
-  #       run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
-  #            --iterations 10 --concurrency 1 sync-state
-  #     - name: Benchmark sync notes
-  #       run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
-  #            --iterations 10 --concurrency 1 sync-notes
-  #     - name: Benchmakr sync nullifiers
-  #       run: miden-node-stress-test benchmark-store --data-directory stress-test-store \
-  #            --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
+  stress-test:
+    name: stress test
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DATA_DIR: /tmp/store
+    steps:
+      - uses: actions/checkout@v6
+      - name: Rustup
+        run: rustup update --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ github.workflow }}-build
+          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          save-if: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.122
+      - name: Build
+        run: cargo build --bin miden-node-stress-test --locked
+      - name: Create store directory
+        run: mkdir -p ${{ env.DATA_DIR }}
+      - name: Seed the store
+        run: |
+          cargo run --bin miden-node-stress-test seed-store \
+            --data-directory ${{ env.DATA_DIR }} \
+            --num-accounts 500 --public-accounts-percentage 50
+      - name: Benchmark state sync
+        run: |
+          cargo run --bin miden-node-stress-test benchmark-store \
+            --data-directory ${{ env.DATA_DIR }} \
+            --iterations 10 --concurrency 1 sync-state
+      - name: Benchmark notes sync
+        run: |
+          cargo run --bin miden-node-stress-test benchmark-store \
+            --data-directory ${{ env.DATA_DIR }} \
+            --iterations 10 --concurrency 1 sync-notes
+      - name: Benchmakr nullifiers sync
+        run: |
+          cargo run --bin miden-node-stress-test benchmark-store \
+            --data-directory ${{ env.DATA_DIR }} \
+            --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
   # ===============================================================================================
   # WASM related jobs
@@ -179,30 +189,32 @@ jobs:
 
   # Tests the miden-remote-prover-client WASM support.
   #
-  # The WASM build is incompatible with a conventional build and therefore this gets its own cache.
-  # client-wasm:
-  #   - uses: actions/checkout@v6
-  #   - name: Rustup
-  #     run: rustup update --no-self-update
-  #   - uses: taiki-e/install-action@v2
-  #   - uses: Swatinem/rust-cache@v2
-  #     with:
-  #       prefix-key: ${{ env.RUST_CACHE_KEY }}
-  #       save-if: ${{ github.ref == 'refs/heads/next' }}
-  #   - name: cargo build
-  #     run: cargo build --locked -p miden-remote-prover-client \
-  #          --target wasm32-unknown-unknown --no-default-features \
-  #          --features batch-prover,block-prover,tx-prover # no-std compatible build
-  #   - name: clippy
-  #     run: cargo clippy --locked -p miden-remote-prover-client \
-  #          --target wasm32-unknown-unknown --no-default-features \
-  #          --features batch-prover,block-prover,tx-prover -- -D warnings
+  # The WASM build is incompatible with the build job's cache, thankfully this compilation is fairly
+  # quick so we don't need a separate cache here.
+  client-wasm:
+    name: wasm targets
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+    - name: Rustup
+      run: rustup update --no-self-update
+    - name: cargo build
+      run: |
+        cargo build --locked -p miden-remote-prover-client \
+          --target wasm32-unknown-unknown --no-default-features \
+          --features batch-prover,block-prover,tx-prover # no-std compatible build
+    - name: clippy
+      run: |
+        cargo clippy --locked -p miden-remote-prover-client \
+          --target wasm32-unknown-unknown --no-default-features \
+          --features batch-prover,block-prover,tx-prover -- -D warnings
 
   # ===============================================================================================
   # Jobs that don't require caching to be efficient
   # ===============================================================================================
 
   typos:
+    name: lint - spelling
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -213,7 +225,7 @@ jobs:
       - run: make typos-check
 
   fmt:
-    name: rustfmt
+    name: lint - rustfmt
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -225,6 +237,7 @@ jobs:
         run: make format-check
 
   toml:
+    name: lint - toml fmt
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -235,6 +248,7 @@ jobs:
       - run: make toml-check
 
   workspace-lints:
+    name: lint - workspace toml
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -242,15 +256,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-workspace-lints@0.1.4
-      - run: |
-          make workspace-check
+      - run: make workspace-check
 
   unused_deps:
-    name: check for unused dependencies
+    name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: machete
         uses: bnjbvr/cargo-machete@main
-
-
