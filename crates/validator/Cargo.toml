@@ -17,8 +17,11 @@ workspace = true
 [features]
 
 [dependencies]
+fjall = { version = "3.0" }
 anyhow                 = { workspace = true }
-fjall                  = { version = "3.0" }
+deadpool-diesel        = { workspace = true }
+diesel                 = { workspace = true }
+diesel_migrations      = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }

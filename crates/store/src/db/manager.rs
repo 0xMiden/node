@@ -36,12 +36,12 @@ impl ConnectionManagerError {
 /// Create a connection manager with per-connection setup
 ///
 /// Particularly, `foreign_key` checks are enabled and using a write-append-log for journaling.
-pub(crate) struct ConnectionManager {
+pub struct ConnectionManager {
     pub(crate) manager: deadpool_diesel::sqlite::Manager,
 }
 
 impl ConnectionManager {
-    pub(crate) fn new(database_path: &str) -> Self {
+    pub fn new(database_path: &str) -> Self {
         let manager = deadpool_diesel::sqlite::Manager::new(
             database_path.to_owned(),
             deadpool_diesel::sqlite::Runtime::Tokio1,
