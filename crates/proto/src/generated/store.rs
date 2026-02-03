@@ -654,7 +654,6 @@ pub mod rpc_client {
         /// For preserving some degree of privacy, note tags and nullifiers filters contain only high
         /// part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
         /// additional filtering of that data on its side.
-        #[deprecated]
         pub async fn sync_state(
             &mut self,
             request: impl tonic::IntoRequest<super::super::rpc::SyncStateRequest>,

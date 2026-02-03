@@ -79,7 +79,7 @@ service Rpc {
     // part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
     // additional filtering of that data on its side.
     rpc SyncState(rpc.SyncStateRequest) returns (rpc.SyncStateResponse) {
-        option deprecated = true;
+        // option deprecated = true;
     }
 
     // Returns chain MMR updates within a block range.

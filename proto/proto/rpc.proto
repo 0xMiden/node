@@ -119,7 +119,7 @@ service Api {
     // part of hashes. Thus, returned data contains excessive notes, client can make
     // additional filtering of that data on its side.
     rpc SyncState(SyncStateRequest) returns (SyncStateResponse) {
-        option deprecated = true;
+        // option deprecated = true;
     }
 
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}

@@ -1113,7 +1113,6 @@ pub mod api_client {
         /// For preserving some degree of privacy, note tags contain only high
         /// part of hashes. Thus, returned data contains excessive notes, client can make
         /// additional filtering of that data on its side.
-        #[deprecated]
         pub async fn sync_state(
             &mut self,
             request: impl tonic::IntoRequest<super::SyncStateRequest>,
