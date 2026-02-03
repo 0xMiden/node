@@ -1,20 +1,22 @@
 use std::path::Path;
 
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
+use miden_tx::utils::DeserializationError;
 
-use crate::db::DatabaseError;
 use crate::db::kv_conv::{ToKey, ToValue};
 
-/// Validator database for storing validated transaction data.
-///
-/// Transaction data stored in this database is intended to allow for the validation of proposed
-/// blocks. All transactions in proposed blocks are expected to have been validated and stored in
-/// this database before the proposed block has been received.
-pub struct Database {
-    /// The underlying key-value database.
-    _db: fjall::Database,
+#[derive(thiserror::Error, Debug)]
+pub enum DatabaseError {
+    #[error("underlying database error")]
+    ExecutionError(#[from] fjall::Error),
+    #[error("failed to deserialize value bytes from the database")]
+    DeserializationError(#[from] DeserializationError),
+    #[error("validated transactions not found {0:?}")]
+    TransactionsNotFound(Vec<TransactionId>),
+}
 
-    /// The "namespace" that all transaction data is stored in.
+pub struct Database {
+    _db: fjall::Database,
     keyspace: fjall::Keyspace,
 }
 

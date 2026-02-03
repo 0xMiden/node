@@ -1,7 +1,4 @@
 mod database;
-pub use database::Database;
-
-mod errors;
-pub use errors::DatabaseError;
+pub use database::{Database, DatabaseError};
 
 mod kv_conv;
