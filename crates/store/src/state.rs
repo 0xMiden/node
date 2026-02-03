@@ -565,27 +565,9 @@ impl State {
                 .apply_mutations(account_tree_update)
                 .expect("Unreachable: old account tree root must be checked before this step");
             inner.blockchain.push(block_commitment);
-
-            // Update forest while still holding the inner lock to ensure consistency.
-            // Readers acquiring the inner read lock will see both account tree and forest
-            // updated atomically.
-            let mut forest = self.forest.write().await;
-            forest.apply_block_updates(block_num, account_deltas)?;
-
-            // Prune old entries from the in-memory forest while holding both locks
-            let (vault_pruned, storage_roots_pruned, storage_entries_pruned) =
-                forest.prune(block_num);
-            if vault_pruned > 0 || storage_roots_pruned > 0 || storage_entries_pruned > 0 {
-                tracing::debug!(
-                    target: COMPONENT,
-                    block_num = block_num.as_u32(),
-                    vault_pruned,
-                    storage_roots_pruned,
-                    storage_entries_pruned,
-                    "Forest pruning applied"
-                );
-            }
         }
+
+        self.forest.write().await.apply_block_updates(block_num, account_deltas)?;
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 

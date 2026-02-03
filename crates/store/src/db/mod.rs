@@ -328,6 +328,7 @@ impl Db {
         let me2 = me.clone();
 
         // Spawn background cleanup task
+        // TODO: retain the join handle to coordinate shutdown or surface task failures.
         let _cleanup_task_handle =
             tokio::spawn(async move { Self::periodic_cleanup_task(me2, rx).await });
 

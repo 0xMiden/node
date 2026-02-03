@@ -13,14 +13,6 @@ use thiserror::Error;
 #[cfg(test)]
 mod tests;
 
-// CONSTANTS
-// ================================================================================================
-
-/// Number of historical blocks to retain in the in-memory forest.
-/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be pruned.
-/// This matches the database retention policy in [`crate::db::models::queries::accounts`].
-pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
-
 // ERRORS
 // ================================================================================================
 
@@ -451,89 +443,5 @@ impl InnerForest {
         }
     }
 
-    // PRUNING
-    // --------------------------------------------------------------------------------------------
-
-    /// Prunes old entries from the in-memory forest data structures.
-    ///
-    /// Removes entries where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION`.
-    ///
-    /// The SmtForest itself is not pruned directly as it uses structural sharing and old roots
-    /// are naturally garbage-collected when they become unreachable.
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing the number of entries removed from:
-    /// (vault_roots_removed, storage_map_roots_removed, storage_entries_removed)
-    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize, usize) {
-        let cutoff_block =
-            BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
-
-        let vault_removed = Self::prune_map_by_block(&mut self.vault_roots, cutoff_block);
-        let storage_roots_removed =
-            Self::prune_map_by_block_slot(&mut self.storage_map_roots, cutoff_block);
-        let storage_entries_removed =
-            Self::prune_map_by_block_slot(&mut self.storage_entries, cutoff_block);
-
-        if vault_removed > 0 || storage_roots_removed > 0 || storage_entries_removed > 0 {
-            tracing::info!(
-                target: crate::COMPONENT,
-                vault_roots_removed = vault_removed,
-                storage_map_roots_removed = storage_roots_removed,
-                storage_entries_removed = storage_entries_removed,
-                cutoff_block = cutoff_block.as_u32(),
-                "Forest pruning completed"
-            );
-        }
-
-        // Prune the underlying SmtForest by telling it which roots are still referenced.
-        // Collect all roots that we're keeping from both vault_roots and storage_map_roots.
-        let roots_to_keep: Vec<Word> = self
-            .vault_roots
-            .values()
-            .chain(self.storage_map_roots.values())
-            .copied()
-            .collect();
-        self.forest.pop_smts(roots_to_keep);
-
-        (vault_removed, storage_roots_removed, storage_entries_removed)
-    }
-
-    /// Prunes entries from a map keyed by (AccountId, BlockNumber) where block_num < cutoff.
-    fn prune_map_by_block<V>(
-        map: &mut BTreeMap<(AccountId, BlockNumber), V>,
-        cutoff_block: BlockNumber,
-    ) -> usize {
-        // BTreeMap iteration is sorted by key, so we can efficiently find all entries to remove.
-        // Keys are (AccountId, BlockNumber), but we need to remove across all accounts.
-        let keys_to_remove: Vec<_> =
-            map.keys().filter(|(_, block_num)| *block_num < cutoff_block).copied().collect();
-
-        let removed = keys_to_remove.len();
-        for key in keys_to_remove {
-            map.remove(&key);
-        }
-
-        removed
-    }
-
-    /// Prunes entries from a map keyed by (AccountId, StorageSlotName, BlockNumber)
-    /// where block_num < cutoff.
-    fn prune_map_by_block_slot<V>(
-        map: &mut BTreeMap<(AccountId, StorageSlotName, BlockNumber), V>,
-        cutoff_block: BlockNumber,
-    ) -> usize {
-        let keys_to_remove: Vec<_> = map
-            .keys()
-            .filter(|(_, _, block_num)| *block_num < cutoff_block)
-            .cloned()
-            .collect();
-
-        let removed = keys_to_remove.len();
-        for key in keys_to_remove {
-            map.remove(&key);
-        }
-
-        removed
-    }
+    // TODO: tie in-memory forest retention to DB pruning policy once forest queries rely on it.
 }
