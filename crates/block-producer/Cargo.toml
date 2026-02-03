@@ -28,7 +28,6 @@ miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
 miden-standards            = { workspace = true }
-miden-tx                   = { default-features = true, workspace = true }
 miden-tx-batch-prover      = { workspace = true }
 rand                       = { version = "0.9" }
 thiserror                  = { workspace = true }
@@ -45,6 +44,7 @@ assert_matches        = { workspace = true }
 miden-node-store      = { workspace = true }
 miden-node-test-macro = { workspace = true }
 miden-node-utils      = { features = ["testing"], workspace = true }
+miden-node-validator  = { workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 miden-tx              = { features = ["testing"], workspace = true }
