@@ -1,18 +1,23 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
     AccountId,
+    AccountStorageHeader,
     PartialAccount,
     StorageMapWitness,
-    StorageSlotContent,
+    StorageSlotName,
+    StorageSlotType,
 };
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::errors::TransactionInputError;
 use miden_protocol::note::{Note, NoteScript};
 use miden_protocol::transaction::{
     AccountInputs,
@@ -26,8 +31,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
-use miden_protocol::{TransactionInputError, Word};
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
+use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::utils::Serializable;
 use miden_tx::{
@@ -44,6 +48,7 @@ use miden_tx::{
     TransactionMastStore,
     TransactionProverError,
 };
+use tokio::sync::Mutex;
 use tokio::task::JoinError;
 use tracing::{Instrument, instrument};
 
@@ -78,7 +83,7 @@ type NtxResult<T> = Result<T, NtxError>;
 /// Provides the context for execution [network transaction candidates](TransactionCandidate).
 #[derive(Clone)]
 pub struct NtxContext {
-    /// TODO(sergerad): Remove block producer client when block proving moved to store.
+    /// Client for submitting proven transactions to the Block Producer.
     block_producer: BlockProducerClient,
 
     /// Client for validating transactions via the Validator.
@@ -221,7 +226,7 @@ impl NtxContext {
 
         match Box::pin(checker.check_notes_consumability(
             data_store.account.id(),
-            data_store.reference_header.block_num(),
+            data_store.reference_block.block_num(),
             notes,
             TransactionArgs::default(),
         ))
@@ -255,7 +260,7 @@ impl NtxContext {
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),
-            data_store.reference_header.block_num(),
+            data_store.reference_block.block_num(),
             notes,
             TransactionArgs::default(),
         ))
@@ -321,20 +326,42 @@ impl NtxContext {
 /// This is sufficient for executing a network transaction.
 struct NtxDataStore {
     account: Account,
-    reference_header: BlockHeader,
+    reference_block: BlockHeader,
     chain_mmr: PartialBlockchain,
     mast_store: TransactionMastStore,
     /// Store client for retrieving note scripts.
     store: StoreClient,
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+    /// Mapping of storage map roots to storage slot names observed during various calls.
+    ///
+    /// The registered slot names are subsequently used to retrieve storage map witnesses from the
+    /// store. We need this because the store interface (and the underling SMT forest) use storage
+    /// slot names, but the `DataStore` interface works with tree roots. To get around this problem
+    /// we populate this map when:
+    /// - The the native account is loaded (in `get_transaction_inputs()`).
+    /// - When a foreign account is loaded (in `get_foreign_account_inputs`).
+    ///
+    /// The assumption here are:
+    /// - Once an account is loaded, the mapping between `(account_id, map_root)` and slot names do
+    ///   not change. This is always the case.
+    /// - New storage slots created during transaction execution will not be accesses in the same
+    ///   transaction. The mechanism for adding new storage slots is not implemented yet, but the
+    ///   plan for it is consistent with this assumption.
+    ///
+    /// One nuance worth mentioning: it is possible that there could be a root collision where an
+    /// account has two storage maps with the same root. In this case, the map will contain only a
+    /// single entry with the storage slot name that was added last. Thus, technically, requests
+    /// to the store could be "wrong", but given that two identical maps have identical witnesses
+    /// this does not cause issues in practice.
+    storage_slots: Arc<Mutex<BTreeMap<(AccountId, Word), StorageSlotName>>>,
 }
 
 impl NtxDataStore {
     /// Creates a new `NtxDataStore` with default cache size.
     fn new(
         account: Account,
-        reference_header: BlockHeader,
+        reference_block: BlockHeader,
         chain_mmr: PartialBlockchain,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
@@ -344,11 +371,28 @@ impl NtxDataStore {
 
         Self {
             account,
-            reference_header,
+            reference_block,
             chain_mmr,
             mast_store,
             store,
             script_cache,
+            storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
+        }
+    }
+
+    /// Registers storage map slot names for the given account ID and storage header.
+    ///
+    /// These slot names are subsequently used to query for storage map witnesses against the store.
+    async fn register_storage_map_slots(
+        &self,
+        account_id: AccountId,
+        storage_header: &AccountStorageHeader,
+    ) {
+        let mut storage_slots = self.storage_slots.lock().await;
+        for slot_header in storage_header.slots() {
+            if let StorageSlotType::Map = slot_header.slot_type() {
+                storage_slots.insert((account_id, slot_header.value()), slot_header.name().clone());
+            }
         }
     }
 }
@@ -365,53 +409,67 @@ impl DataStore for NtxDataStore {
                 return Err(DataStoreError::AccountNotFound(account_id));
             }
 
+            // The latest supplied reference block must match the current reference block.
             match ref_blocks.last().copied() {
-                Some(reference) if reference == self.reference_header.block_num() => {},
-
+                Some(reference) if reference == self.reference_block.block_num() => {},
                 Some(other) => return Err(DataStoreError::BlockNotFound(other)),
                 None => return Err(DataStoreError::other("no reference block requested")),
             }
 
-            let partial_account = PartialAccount::from(&self.account);
+            // Register slot names from the native account for later use.
+            self.register_storage_map_slots(account_id, &self.account.storage().to_header())
+                .await;
 
-            Ok((partial_account, self.reference_header.clone(), self.chain_mmr.clone()))
+            let partial_account = PartialAccount::from(&self.account);
+            Ok((partial_account, self.reference_block.clone(), self.chain_mmr.clone()))
         }
     }
 
     fn get_foreign_account_inputs(
         &self,
         foreign_account_id: AccountId,
-        _ref_block: BlockNumber,
+        ref_block: BlockNumber,
     ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
-        async move { Err(DataStoreError::AccountNotFound(foreign_account_id)) }
+        async move {
+            debug_assert_eq!(ref_block, self.reference_block.block_num());
+
+            // Get foreign account inputs from store.
+            let account_inputs =
+                self.store.get_account_inputs(foreign_account_id, ref_block).await.map_err(
+                    |err| DataStoreError::other_with_source("failed to get account inputs", err),
+                )?;
+
+            // Ensure foreign account procedures are available to the executor via the mast store.
+            // This assumes the code was not loaded from before
+            self.mast_store.load_account_code(account_inputs.code());
+
+            // Register slot names from the foreign account for later use.
+            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header())
+                .await;
+
+            Ok(account_inputs)
+        }
     }
 
     fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
-        vault_root: Word,
+        _vault_root: Word,
         vault_keys: BTreeSet<AssetVaultKey>,
     ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
         async move {
-            if self.account.id() != account_id {
-                return Err(DataStoreError::AccountNotFound(account_id));
-            }
+            let ref_block = self.reference_block.block_num();
 
-            if self.account.vault().root() != vault_root {
-                return Err(DataStoreError::Other {
-                    error_msg: "vault root mismatch".into(),
-                    source: None,
-                });
-            }
+            // Get vault asset witnesses from the store.
+            let witnesses = self
+                .store
+                .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
+                .await
+                .map_err(|err| {
+                    DataStoreError::other_with_source("failed to get vault asset witnesses", err)
+                })?;
 
-            Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
-                AssetWitness::new(self.account.vault().open(vault_key).into()).map_err(|err| {
-                    DataStoreError::Other {
-                        error_msg: "failed to open vault asset tree".into(),
-                        source: Some(Box::new(err)),
-                    }
-                })
-            }))
+            Ok(witnesses)
         }
     }
 
@@ -422,27 +480,27 @@ impl DataStore for NtxDataStore {
         map_key: Word,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
-            if self.account.id() != account_id {
-                return Err(DataStoreError::AccountNotFound(account_id));
-            }
+            // The slot name that corresponds to the given account ID and map root must have been
+            // registered during previous calls of this data store.
+            let storage_slots = self.storage_slots.lock().await;
+            let Some(slot_name) = storage_slots.get(&(account_id, map_root)) else {
+                return Err(DataStoreError::other(
+                    "requested storage slot has not been registered",
+                ));
+            };
 
-            let mut map_witness = None;
-            for slot in self.account.storage().slots() {
-                if let StorageSlotContent::Map(map) = slot.content() {
-                    if map.root() == map_root {
-                        map_witness = Some(map.open(&map_key));
-                    }
-                }
-            }
+            let ref_block = self.reference_block.block_num();
 
-            if let Some(map_witness) = map_witness {
-                Ok(map_witness)
-            } else {
-                Err(DataStoreError::Other {
-                    error_msg: "account storage does not contain the expected root".into(),
-                    source: None,
-                })
-            }
+            // Get storage map witness from the store.
+            let witness = self
+                .store
+                .get_storage_map_witness(account_id, slot_name.clone(), map_key, Some(ref_block))
+                .await
+                .map_err(|err| {
+                    DataStoreError::other_with_source("failed to get storage map witness", err)
+                })?;
+
+            Ok(witness)
         }
     }
 

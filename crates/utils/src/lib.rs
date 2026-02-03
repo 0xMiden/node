@@ -10,7 +10,6 @@ pub mod logging;
 pub mod lru_cache;
 pub mod panic;
 pub mod tracing;
-pub mod version;
 
 pub trait ErrorReport: std::error::Error {
     /// Returns a string representation of the error and its source chain.

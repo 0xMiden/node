@@ -4,8 +4,8 @@ use std::num::TryFromIntError;
 // Re-export the GrpcError derive macro for convenience
 pub use miden_node_grpc_error_macro::GrpcError;
 use miden_protocol::crypto::merkle::smt::{SmtLeafError, SmtProofError};
+use miden_protocol::errors::{AccountError, AssetError, FeeError, NoteError, StorageSlotNameError};
 use miden_protocol::utils::DeserializationError;
-use miden_protocol::{AccountError, AssetError, FeeError, StorageSlotNameError};
 use thiserror::Error;
 
 use crate::domain::note::NetworkNoteError;
@@ -17,6 +17,8 @@ mod test_macro;
 pub enum ConversionError {
     #[error("asset error")]
     AssetError(#[from] AssetError),
+    #[error("account code missing")]
+    AccountCodeMissing,
     #[error("account error")]
     AccountError(#[from] AccountError),
     #[error("fee parameters error")]
@@ -24,7 +26,7 @@ pub enum ConversionError {
     #[error("hex error")]
     HexError(#[from] hex::FromHexError),
     #[error("note error")]
-    NoteError(#[from] miden_protocol::NoteError),
+    NoteError(#[from] NoteError),
     #[error("network note error")]
     NetworkNoteError(#[from] NetworkNoteError),
     #[error("SMT leaf error")]
@@ -48,8 +50,6 @@ pub enum ConversionError {
         entity: &'static str,
         field_name: &'static str,
     },
-    #[error("MMR error")]
-    MmrError(#[from] miden_protocol::crypto::merkle::mmr::MmrError),
     #[error("failed to deserialize {entity}")]
     DeserializationError {
         entity: &'static str,

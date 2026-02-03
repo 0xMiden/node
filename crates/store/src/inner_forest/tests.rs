@@ -165,39 +165,6 @@ fn test_incremental_vault_updates() {
 }
 
 #[test]
-fn test_full_state_delta_starts_from_empty_root() {
-    let mut forest = InnerForest::new();
-    let account_id = dummy_account();
-    let faucet_id = dummy_faucet();
-    let block_num = BlockNumber::GENESIS.child();
-
-    // Simulate a pre-existing vault state that should be ignored for full-state deltas
-    let mut vault_delta_pre = AccountVaultDelta::default();
-    vault_delta_pre.add_asset(dummy_fungible_asset(faucet_id, 999)).unwrap();
-    let delta_pre =
-        dummy_partial_delta(account_id, vault_delta_pre, AccountStorageDelta::default());
-    forest.update_account(block_num, &delta_pre).unwrap();
-    assert!(forest.vault_roots.contains_key(&(account_id, block_num)));
-
-    // Now create a full-state delta at the same block
-    // A full-state delta should start from an empty root, not from the previous state
-    let asset = dummy_fungible_asset(faucet_id, 100);
-    let full_delta = dummy_full_state_delta(account_id, &[asset]);
-
-    // Create a fresh forest to compare
-    let mut fresh_forest = InnerForest::new();
-    fresh_forest.update_account(block_num, &full_delta).unwrap();
-    let fresh_root = fresh_forest.vault_roots[&(account_id, block_num)];
-
-    // Update the original forest with the full-state delta
-    forest.update_account(block_num, &full_delta).unwrap();
-    let updated_root = forest.vault_roots[&(account_id, block_num)];
-
-    // The full-state delta should produce the same root regardless of prior state
-    assert_eq!(updated_root, fresh_root);
-}
-
-#[test]
 fn test_vault_state_persists_across_blocks_without_changes() {
     // Regression test for issue #7: vault state should persist across blocks
     // where no changes occur, not reset to empty.
@@ -378,6 +345,55 @@ fn test_update_storage_map() {
 }
 
 #[test]
+fn test_full_state_delta_with_empty_vault_records_root() {
+    // Regression test for issue #1581: full-state deltas with empty vaults must still record
+    // the vault root so that subsequent `get_vault_asset_witnesses` calls succeed.
+    //
+    // The network counter account from the network monitor has an empty vault (it only uses
+    // storage slots). Without this fix, `get_vault_asset_witnesses` fails with "root not found"
+    // because no vault root was ever recorded for the account.
+    use miden_protocol::account::{Account, AccountStorage};
+
+    let mut forest = InnerForest::new();
+    let account_id = dummy_account();
+    let block_num = BlockNumber::GENESIS.child();
+
+    // Create a full-state delta with an empty vault (like the network counter account).
+    let vault = AssetVault::new(&[]).unwrap();
+    let storage = AccountStorage::new(vec![]).unwrap();
+    let code = AccountCode::mock();
+    let nonce = Felt::ONE;
+    let account = Account::new(account_id, vault, storage, code, nonce, None).unwrap();
+    let full_delta = AccountDelta::try_from(account).unwrap();
+
+    // Sanity check: the vault delta should be empty.
+    assert!(full_delta.vault().is_empty());
+    assert!(full_delta.is_full_state());
+
+    forest.update_account(block_num, &full_delta).unwrap();
+
+    // The vault root must be recorded even though the vault is empty.
+    assert!(
+        forest.vault_roots.contains_key(&(account_id, block_num)),
+        "vault root should be recorded for full-state deltas with empty vaults"
+    );
+
+    // Verify the recorded root is the empty SMT root.
+    let recorded_root = forest.vault_roots[&(account_id, block_num)];
+    assert_eq!(
+        recorded_root,
+        InnerForest::empty_smt_root(),
+        "empty vault should have the empty SMT root"
+    );
+
+    // Verify `get_vault_asset_witnesses` succeeds (returns empty witnesses for empty keys).
+    let witnesses = forest
+        .get_vault_asset_witnesses(account_id, block_num, std::collections::BTreeSet::new())
+        .expect("get_vault_asset_witnesses should succeed for accounts with empty vaults");
+    assert!(witnesses.is_empty());
+}
+
+#[test]
 fn test_storage_map_incremental_updates() {
     use std::collections::BTreeMap;
 
@@ -427,37 +443,4 @@ fn test_storage_map_incremental_updates() {
     assert_ne!(root_1, root_2);
     assert_ne!(root_2, root_3);
     assert_ne!(root_1, root_3);
-}
-
-#[test]
-fn test_open_storage_map_returns_limit_exceeded_for_too_many_keys() {
-    use std::collections::BTreeMap;
-
-    use assert_matches::assert_matches;
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
-
-    let mut forest = InnerForest::new();
-    let account_id = dummy_account();
-    let slot_name = StorageSlotName::mock(3);
-    let block_num = BlockNumber::GENESIS.child();
-
-    // Create a storage map with a few entries
-    let mut map_delta = StorageMapDelta::default();
-    for i in 0..20u32 {
-        let key = Word::from([i, 0, 0, 0]);
-        let value = Word::from([0, 0, 0, i]);
-        map_delta.insert(key, value);
-    }
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
-    let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
-    forest.update_account(block_num, &delta).unwrap();
-
-    // Request proofs for more than MAX_SMT_PROOF_ENTRIES (16) keys.
-    // Should return LimitExceeded.
-    let keys: Vec<Word> = (0..20u32).map(|i| Word::from([i, 0, 0, 0])).collect();
-    let result = forest.open_storage_map(account_id, slot_name.clone(), block_num, &keys);
-
-    let details = result.expect("Should return Some").expect("Should not error");
-    assert_matches!(details.entries, StorageMapEntries::LimitExceeded);
 }

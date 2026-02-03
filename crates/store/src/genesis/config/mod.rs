@@ -23,9 +23,10 @@ use miden_protocol::account::{
 use miden_protocol::asset::{FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
-use miden_protocol::{Felt, FieldElement, ONE, TokenSymbolError, ZERO};
+use miden_protocol::errors::TokenSymbolError;
+use miden_protocol::{Felt, FieldElement, ONE, ZERO};
 use miden_standards::AuthScheme;
-use miden_standards::account::auth::AuthRpoFalcon512;
+use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::account::faucets::BasicFungibleFaucet;
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
@@ -53,7 +54,9 @@ pub struct GenesisConfig {
     timestamp: u32,
     native_faucet: NativeFaucet,
     fee_parameters: FeeParameterConfig,
+    #[serde(default)]
     wallet: Vec<WalletConfig>,
+    #[serde(default)]
     fungible_faucet: Vec<FungibleFaucetConfig>,
 }
 
@@ -159,7 +162,7 @@ impl GenesisConfig {
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-            let auth = AuthScheme::RpoFalcon512 { pub_key: secret_key.public_key().into() };
+            let auth = AuthScheme::Falcon512Rpo { pub_key: secret_key.public_key().into() };
             let init_seed: [u8; 32] = rng.random();
 
             let account_type = if has_updatable_code {
@@ -346,7 +349,7 @@ impl FungibleFaucetConfig {
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
         let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-        let auth = AuthRpoFalcon512::new(secret_key.public_key().into());
+        let auth = AuthFalcon512Rpo::new(secret_key.public_key().into());
         let init_seed: [u8; 32] = rng.random();
 
         let max_supply = Felt::try_from(max_supply)
@@ -451,7 +454,7 @@ impl AccountSecrets {
                 .get(&account_id)
                 .ok_or(GenesisConfigError::MissingGenesisAccount { account_id })?;
             let account_file =
-                AccountFile::new(account.clone(), vec![AuthSecretKey::RpoFalcon512(secret_key)]);
+                AccountFile::new(account.clone(), vec![AuthSecretKey::Falcon512Rpo(secret_key)]);
             Ok(AccountFileWithName { name, account_file })
         })
     }

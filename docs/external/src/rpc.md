@@ -23,7 +23,7 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [SyncAccountVault](#syncaccountvault)
 - [SyncNotes](#syncnotes)
 - [SyncState](#syncstate)
-- [SyncStorageMaps](#syncstoragemaps)
+- [SyncAccountStorageMaps](#syncaccountstoragemaps)
 - [SyncTransactions](#synctransactions)
 - [Status](#status)
 
@@ -206,7 +206,7 @@ The low part of note tags are redacted to preserve some degree of privacy. Retur
 
 **Limits:** `account_id` (1000), `note_tag` (1000)
 
-### SyncStorageMaps
+### SyncAccountStorageMaps
 
 Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
 

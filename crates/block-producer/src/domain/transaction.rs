@@ -6,7 +6,7 @@ use std::sync::Arc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteHeader, Nullifier};
 use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
 
 use crate::errors::VerifyTxError;
@@ -119,8 +119,7 @@ impl AuthenticatedTransaction {
     pub fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner
             .unauthenticated_notes()
-            .copied()
-            .map(|header| header.commitment())
+            .map(NoteHeader::commitment)
             .filter(|commitment| !self.notes_authenticated_by_store.contains(commitment))
     }
 

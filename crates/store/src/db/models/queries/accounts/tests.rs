@@ -35,7 +35,7 @@ use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
-use miden_standards::account::auth::AuthRpoFalcon512;
+use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::code_builder::CodeBuilder;
 
 use super::*;
@@ -151,7 +151,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthRpoFalcon512::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
         .build_existing()
         .unwrap();
 
@@ -161,6 +161,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
 fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
     use crate::db::schema::block_headers;
 
+    let secret_key = SecretKey::new();
     let block_header = BlockHeader::new(
         1_u8.into(),
         Word::default(),
@@ -171,15 +172,17 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
-        SecretKey::new().public_key(),
+        secret_key.public_key(),
         test_fee_params(),
         0_u8.into(),
     );
+    let signature = secret_key.sign(block_header.commitment());
 
     diesel::insert_into(block_headers::table)
         .values((
             block_headers::block_num.eq(i64::from(block_num.as_u32())),
             block_headers::block_header.eq(block_header.to_bytes()),
+            block_headers::signature.eq(signature.to_bytes()),
         ))
         .execute(conn)
         .expect("Failed to insert block header");
@@ -410,7 +413,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component_2)
-        .with_auth_component(AuthRpoFalcon512::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
         .build_existing()
         .unwrap();
 
@@ -503,7 +506,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthRpoFalcon512::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
         .build_existing()
         .unwrap();
 
@@ -565,7 +568,7 @@ fn test_upsert_accounts_with_empty_storage() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthRpoFalcon512::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
         .build_existing()
         .unwrap();
 

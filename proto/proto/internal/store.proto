@@ -31,7 +31,7 @@ service Rpc {
     // Verify proofs against the nullifier tree root in the latest block header.
     rpc CheckNullifiers(rpc.NullifierList) returns (rpc.CheckNullifiersResponse) {}
 
-    // Returns the latest state proof of the specified account.
+    // Returns the latest details the specified account.
     rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
 
     // Returns raw block data for the specified block number.
@@ -84,7 +84,7 @@ service Rpc {
     rpc SyncAccountVault(rpc.SyncAccountVaultRequest) returns (rpc.SyncAccountVaultResponse) {}
 
     // Returns storage map updates for specified account and storage slots within a block range.
-    rpc SyncStorageMaps(rpc.SyncStorageMapsRequest) returns (rpc.SyncStorageMapsResponse) {}
+    rpc SyncAccountStorageMaps(rpc.SyncAccountStorageMapsRequest) returns (rpc.SyncAccountStorageMapsResponse) {}
 
     // Returns transactions records for specific accounts within a block range.
     rpc SyncTransactions(rpc.SyncTransactionsRequest) returns (rpc.SyncTransactionsResponse) {}
@@ -96,7 +96,7 @@ service Rpc {
 // Store API for the BlockProducer component
 service BlockProducer {
     // Applies changes of a new block to the DB and in-memory data structures.
-    rpc ApplyBlock(blockchain.Block) returns (google.protobuf.Empty) {}
+    rpc ApplyBlock(ApplyBlockRequest) returns (google.protobuf.Empty) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
@@ -110,6 +110,18 @@ service BlockProducer {
 
     // Returns data required to validate a new transaction.
     rpc GetTransactionInputs(TransactionInputsRequest) returns (TransactionInputs) {}
+}
+
+// APPLY BLOCK REQUEST
+// ================================================================================================
+
+// Applies a block to the state.
+message ApplyBlockRequest {
+    // Ordered batches encoded using [winter_utils::Serializable] implementation for
+    // [miden_objects::batch::OrderedBatches].
+    bytes ordered_batches = 1;
+    // Block signed by the Validator.
+    blockchain.SignedBlock block = 2;
 }
 
 // GET BLOCK INPUTS
@@ -261,26 +273,29 @@ service NtxBuilder {
     // header and peaks will be retrieved.
     rpc GetCurrentBlockchainData(blockchain.MaybeBlockNumber) returns (CurrentBlockchainData) {}
 
-    // Returns the latest state of a network account with the specified account prefix.
-    rpc GetNetworkAccountDetailsByPrefix(AccountIdPrefix) returns (MaybeAccountDetails) {}
+    // Returns the latest state of a network account with the specified account ID.
+    rpc GetNetworkAccountDetailsById(account.AccountId) returns (MaybeAccountDetails) {}
 
     // Returns a list of all network account ids.
     rpc GetNetworkAccountIds(rpc.BlockRange) returns (NetworkAccountIdList) {}
 
+    // Returns the latest details of the specified account.
+    rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
+
     // Returns the script for a note by its root.
     rpc GetNoteScriptByRoot(note.NoteRoot) returns (rpc.MaybeNoteScript) {}
+
+    // Returns vault asset witnesses for the specified account.
+    rpc GetVaultAssetWitnesses(VaultAssetWitnessesRequest) returns (VaultAssetWitnessesResponse) {}
+
+    // Returns a storage map witness for the specified account and storage map entry.
+    rpc GetStorageMapWitness(StorageMapWitnessRequest) returns (StorageMapWitnessResponse) {}
 }
 
-// GET NETWORK ACCOUNT DETAILS BY PREFIX
+// GET NETWORK ACCOUNT DETAILS BY ID
 // ================================================================================================
 
-// Account ID prefix.
-message AccountIdPrefix {
-    // Account ID prefix.
-    fixed32 account_id_prefix = 1;
-}
-
-// Represents the result of getting network account details by prefix.
+// Represents the result of getting network account details by ID.
 message MaybeAccountDetails {
     // Account details.
     optional account.AccountDetails details = 1;
@@ -302,8 +317,8 @@ message UnconsumedNetworkNotesRequest {
      // Number of notes to retrieve per page.
      uint64 page_size = 2;
 
-     // The network account ID prefix to filter notes by.
-     uint32 network_account_id_prefix = 3;
+     // The full account ID to filter notes by.
+     account.AccountId account_id = 3;
 
      // The block number to filter the returned notes by.
      //
@@ -346,4 +361,82 @@ message CurrentBlockchainData {
     repeated primitives.Digest current_peaks = 1;
     // Current block header.
     optional blockchain.BlockHeader current_block_header = 2;
+}
+
+// GET VAULT ASSET WITNESSES
+// ================================================================================================
+
+// Request for vault asset witnesses for a specific account.
+message VaultAssetWitnessesRequest {
+    // The account ID for which to retrieve vault asset witnesses.
+    account.AccountId account_id = 1;
+
+    // Set of asset vault keys to retrieve witnesses for.
+    repeated primitives.Digest vault_keys = 2;
+
+    // The witnesses returned correspond to the account state at the specified block number.
+    //
+    // Optional block number. If not provided, uses the latest state.
+    //
+    // The specified block number should be relatively near the chain tip else an error will be
+    // returned.
+    optional fixed32 block_num = 3;
+}
+
+// Response containing vault asset witnesses.
+message VaultAssetWitnessesResponse {
+    // A vault asset witness containing the asset and its proof.
+    message VaultAssetWitness {
+        // The SMT opening proof for the asset's inclusion in the vault.
+        primitives.SmtOpening proof = 1;
+    }
+
+    // Block number at which the witnesses were generated.
+    //
+    // The witnesses returned corresponds to the account state at the specified block number.
+    fixed32 block_num = 1;
+
+    // List of asset witnesses.
+    repeated VaultAssetWitness asset_witnesses = 2;
+}
+
+// GET STORAGE MAP WITNESS
+// ================================================================================================
+
+// Request for a storage map witness for a specific account and storage slot.
+message StorageMapWitnessRequest {
+    // The account ID for which to retrieve the storage map witness.
+    account.AccountId account_id = 1;
+
+    // The raw, user-provided storage map key for which to retrieve the witness.
+    primitives.Digest map_key = 2;
+
+    // Optional block number. If not provided, uses the latest state.
+    //
+    // The witness returned corresponds to the account state at the specified block number.
+    //
+    // The specified block number should be relatively near the chain tip else an error will be
+    // returned.
+    optional fixed32 block_num = 3;
+
+    // The storage slot name for the map.
+    string slot_name = 4;
+}
+
+// Response containing a storage map witness.
+message StorageMapWitnessResponse {
+    // Storage map witness data.
+    message StorageWitness {
+        // The raw, user-provided storage map key.
+        primitives.Digest key = 1;
+
+        // The SMT opening proof for the key-value pair.
+        primitives.SmtOpening proof = 3;
+    }
+
+    // The storage map witness.
+    StorageWitness witness = 1;
+
+    // Block number at which the witness was generated.
+    fixed32 block_num = 2;
 }

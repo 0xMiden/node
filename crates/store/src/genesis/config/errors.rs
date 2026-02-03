@@ -1,6 +1,12 @@
 use miden_protocol::account::AccountId;
+use miden_protocol::errors::{
+    AccountDeltaError,
+    AccountError,
+    AssetError,
+    FeeError,
+    TokenSymbolError,
+};
 use miden_protocol::utils::DeserializationError;
-use miden_protocol::{AccountError, AssetError, FeeError, TokenSymbolError};
 use miden_standards::account::faucets::FungibleFaucetError;
 use miden_standards::account::wallets::BasicWalletError;
 
@@ -16,7 +22,7 @@ pub enum GenesisConfigError {
     #[error("asset translation from config to state failed")]
     Asset(#[from] AssetError),
     #[error("adding assets to account failed")]
-    AccountDelta(#[from] miden_protocol::AccountDeltaError),
+    AccountDelta(#[from] AccountDeltaError),
     #[error("the defined asset {symbol:?} has no corresponding faucet")]
     MissingFaucetDefinition { symbol: TokenSymbolStr },
     #[error("account with id {account_id} was referenced but is not part of given genesis state")]

@@ -94,6 +94,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
                 ntx_builder_listener,
                 block_producer_listener,
                 data_directory: dir,
+                grpc_timeout: std::time::Duration::from_secs(30),
             }
             .serve()
             .await
@@ -159,6 +160,7 @@ async fn restart_store(
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
+            grpc_timeout: std::time::Duration::from_secs(30),
         }
         .serve()
         .await

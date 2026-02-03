@@ -3,14 +3,14 @@ mod execute;
 mod inflight_note;
 mod note_state;
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
 use account_state::{NetworkAccountState, TransactionCandidate};
-use execute::NtxError;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::domain::account::NetworkAccountPrefix;
+use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
@@ -19,7 +19,7 @@ use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::TransactionId;
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
+use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -34,7 +34,7 @@ use crate::store::StoreClient;
 /// The reason an actor has shut down.
 pub enum ActorShutdownReason {
     /// Occurs when the transaction that created the actor is reverted.
-    AccountReverted(NetworkAccountPrefix),
+    AccountReverted(NetworkAccountId),
     /// Occurs when an account actor detects failure in the messaging channel used by the
     /// coordinator.
     EventChannelClosed,
@@ -43,7 +43,7 @@ pub enum ActorShutdownReason {
     /// Occurs when an account actor detects its corresponding cancellation token has been triggered
     /// by the coordinator. Cancellation tokens are triggered by the coordinator to initiate
     /// graceful shutdown of actors.
-    Cancelled(NetworkAccountPrefix),
+    Cancelled(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -67,6 +67,10 @@ pub struct AccountActorContext {
     /// Shared LRU cache for storing retrieved note scripts to avoid repeated store calls.
     /// This cache is shared across all account actors to maximize cache efficiency.
     pub script_cache: LruCache<Word, NoteScript>,
+    /// Maximum number of notes per transaction.
+    pub max_notes_per_tx: NonZeroUsize,
+    /// Maximum number of note execution attempts before dropping a note.
+    pub max_note_attempts: usize,
 }
 
 // ACCOUNT ORIGIN
@@ -79,7 +83,7 @@ pub enum AccountOrigin {
     /// store yet.
     Transaction(Box<Account>),
     /// Accounts that already exist in the store.
-    Store(NetworkAccountPrefix),
+    Store(NetworkAccountId),
 }
 
 impl AccountOrigin {
@@ -94,16 +98,16 @@ impl AccountOrigin {
     }
 
     /// Returns an [`AccountOrigin::Store`].
-    pub fn store(prefix: NetworkAccountPrefix) -> Self {
-        AccountOrigin::Store(prefix)
+    pub fn store(account_id: NetworkAccountId) -> Self {
+        AccountOrigin::Store(account_id)
     }
 
-    /// Returns the [`NetworkAccountPrefix`] of the account.
-    pub fn prefix(&self) -> NetworkAccountPrefix {
+    /// Returns the [`NetworkAccountId`] of the account.
+    pub fn id(&self) -> NetworkAccountId {
         match self {
-            AccountOrigin::Transaction(account) => NetworkAccountPrefix::try_from(account.id())
+            AccountOrigin::Transaction(account) => NetworkAccountId::try_from(account.id())
                 .expect("actor accounts are always network accounts"),
-            AccountOrigin::Store(prefix) => *prefix,
+            AccountOrigin::Store(account_id) => *account_id,
         }
     }
 }
@@ -157,12 +161,15 @@ pub struct AccountActor {
     mode: ActorMode,
     event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
     cancel_token: CancellationToken,
-    // TODO(sergerad): Remove block producer when block proving moved to store.
     block_producer: BlockProducerClient,
     validator: ValidatorClient,
     prover: Option<RemoteTransactionProver>,
     chain_state: Arc<RwLock<ChainState>>,
     script_cache: LruCache<Word, NoteScript>,
+    /// Maximum number of notes per transaction.
+    max_notes_per_tx: NonZeroUsize,
+    /// Maximum number of note execution attempts before dropping a note.
+    max_note_attempts: usize,
 }
 
 impl AccountActor {
@@ -194,6 +201,8 @@ impl AccountActor {
             prover,
             chain_state: actor_context.chain_state.clone(),
             script_cache: actor_context.script_cache.clone(),
+            max_notes_per_tx: actor_context.max_notes_per_tx,
+            max_note_attempts: actor_context.max_note_attempts,
         }
     }
 
@@ -203,9 +212,9 @@ impl AccountActor {
         // Load the account state from the store and set up the account actor state.
         let account = {
             match self.origin {
-                AccountOrigin::Store(account_prefix) => self
+                AccountOrigin::Store(account_id) => self
                     .store
-                    .get_network_account(account_prefix)
+                    .get_network_account(account_id)
                     .await
                     .expect("actor should be able to load account")
                     .expect("actor account should exist"),
@@ -214,7 +223,7 @@ impl AccountActor {
         };
         let block_num = self.chain_state.read().await.chain_tip_header.block_num();
         let mut state =
-            NetworkAccountState::load(account, self.origin.prefix(), &self.store, block_num)
+            NetworkAccountState::load(account, self.origin.id(), &self.store, block_num)
                 .await
                 .expect("actor should be able to load account state");
 
@@ -230,7 +239,7 @@ impl AccountActor {
             };
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
-                    return ActorShutdownReason::Cancelled(self.origin.prefix());
+                    return ActorShutdownReason::Cancelled(self.origin.id());
                 }
                 // Handle mempool events.
                 event = self.event_rx.recv() => {
@@ -260,7 +269,11 @@ impl AccountActor {
                             // Read the chain state.
                             let chain_state = self.chain_state.read().await.clone();
                             // Find a candidate transaction and execute it.
-                            if let Some(tx_candidate) = state.select_candidate(crate::MAX_NOTES_PER_TX, chain_state) {
+                            if let Some(tx_candidate) = state.select_candidate(
+                                self.max_notes_per_tx,
+                                self.max_note_attempts,
+                                chain_state,
+                            ) {
                                 self.execute_transactions(&mut state, tx_candidate).await;
                             } else {
                                 // No transactions to execute, wait for events.
@@ -296,6 +309,7 @@ impl AccountActor {
             self.script_cache.clone(),
         );
 
+        let notes = tx_candidate.notes.clone();
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
             // Execution completed without failed notes.
@@ -311,21 +325,10 @@ impl AccountActor {
             // Transaction execution failed.
             Err(err) => {
                 tracing::error!(err = err.as_report(), "network transaction failed");
-                match err {
-                    NtxError::AllNotesFailed(failed) => {
-                        let notes = failed.into_iter().map(|note| note.note).collect::<Vec<_>>();
-                        state.notes_failed(notes.as_slice(), block_num);
-                        self.mode = ActorMode::NoViableNotes;
-                    },
-                    NtxError::InputNotes(_)
-                    | NtxError::NoteFilter(_)
-                    | NtxError::Execution(_)
-                    | NtxError::Proving(_)
-                    | NtxError::Submission(_)
-                    | NtxError::Panic(_) => {
-                        self.mode = ActorMode::NoViableNotes;
-                    },
-                }
+                self.mode = ActorMode::NoViableNotes;
+                let notes =
+                    notes.into_iter().map(|note| note.into_inner().into()).collect::<Vec<_>>();
+                state.notes_failed(notes.as_slice(), block_num);
             },
         }
     }

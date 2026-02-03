@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display, Formatter};
 
 use miden_node_utils::formatting::format_opt;
+use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -17,8 +18,9 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
-use miden_protocol::note::{NoteExecutionMode, NoteTag};
+use miden_protocol::note::NoteAttachment;
 use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
 use thiserror::Error;
 
 use super::try_convert;
@@ -132,7 +134,7 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
     }
 }
 
-// ACCOUNT PROOF REQUEST
+// ACCOUNT REQUEST
 // ================================================================================================
 
 /// Represents a request for an account proof.
@@ -414,12 +416,12 @@ pub struct AccountStorageMapDetails {
 ///
 /// When a storage map contains many entries (> [`AccountStorageMapDetails::MAX_RETURN_ENTRIES`]),
 /// returning all entries in a single RPC response creates performance issues. In such cases,
-/// the `LimitExceeded` variant indicates to the client to use the `SyncStorageMaps` endpoint
+/// the `LimitExceeded` variant indicates to the client to use the `SyncAccountStorageMaps` endpoint
 /// instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageMapEntries {
     /// The map has too many entries to return inline.
-    /// Clients must use `SyncStorageMaps` endpoint instead.
+    /// Clients must use `SyncAccountStorageMaps` endpoint instead.
     LimitExceeded,
 
     /// All storage map entries (key-value pairs) without proofs.
@@ -439,7 +441,10 @@ impl AccountStorageMapDetails {
     ///
     /// This limit is more restrictive than [`Self::MAX_RETURN_ENTRIES`] because SMT proofs
     /// are larger (up to 64 inner nodes each) and more CPU-intensive to generate.
-    pub const MAX_SMT_PROOF_ENTRIES: usize = 16;
+    ///
+    /// This is defined by [`QueryParamStorageMapKeyTotalLimit::LIMIT`] and used both in RPC
+    /// validation and store-level enforcement to ensure consistent limits.
+    pub const MAX_SMT_PROOF_ENTRIES: usize = QueryParamStorageMapKeyTotalLimit::LIMIT;
 
     /// Creates storage map details with all entries from the storage map.
     ///
@@ -492,6 +497,14 @@ impl AccountStorageMapDetails {
                 slot_name,
                 entries: StorageMapEntries::EntriesWithProofs(proofs),
             }
+        }
+    }
+
+    /// Creates storage map details indicating the limit was exceeded.
+    pub fn limit_exceeded(slot_name: StorageSlotName) -> Self {
+        Self {
+            slot_name,
+            entries: StorageMapEntries::LimitExceeded,
         }
     }
 }
@@ -634,6 +647,21 @@ pub struct AccountStorageDetails {
     pub map_details: Vec<AccountStorageMapDetails>,
 }
 
+impl AccountStorageDetails {
+    /// Creates storage details where all map slots indicate limit exceeded.
+    pub fn all_limits_exceeded(
+        header: AccountStorageHeader,
+        slot_names: impl IntoIterator<Item = StorageSlotName>,
+    ) -> Self {
+        Self {
+            header,
+            map_details: Vec::from_iter(
+                slot_names.into_iter().map(AccountStorageMapDetails::limit_exceeded),
+            ),
+        }
+    }
+}
+
 impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
     type Error = ConversionError;
 
@@ -727,6 +755,24 @@ pub struct AccountDetails {
     pub account_code: Option<Vec<u8>>,
     pub vault_details: AccountVaultDetails,
     pub storage_details: AccountStorageDetails,
+}
+
+impl AccountDetails {
+    /// Creates account details where all storage map slots indicate limit exceeded.
+    pub fn with_storage_limits_exceeded(
+        account_header: AccountHeader,
+        account_code: Option<Vec<u8>>,
+        vault_details: AccountVaultDetails,
+        storage_header: AccountStorageHeader,
+        slot_names: impl IntoIterator<Item = StorageSlotName>,
+    ) -> Self {
+        Self {
+            account_header,
+            account_code,
+            vault_details,
+            storage_details: AccountStorageDetails::all_limits_exceeded(storage_header, slot_names),
+        }
+    }
 }
 
 impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
@@ -977,63 +1023,72 @@ impl From<Asset> for proto::primitives::Asset {
 
 pub type AccountPrefix = u32;
 
-/// Newtype wrapper for network account prefix.
+/// Newtype wrapper for network account IDs.
+///
 /// Provides type safety for accounts that are meant for network execution.
+/// This wraps the full `AccountId` of a network account, typically extracted
+/// from a `NetworkAccountTarget` attachment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct NetworkAccountPrefix(u32);
+pub struct NetworkAccountId(AccountId);
 
-impl std::fmt::Display for NetworkAccountPrefix {
+impl std::fmt::Display for NetworkAccountId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.0, f)
     }
 }
 
-impl NetworkAccountPrefix {
-    pub fn inner(&self) -> u32 {
+impl NetworkAccountId {
+    /// Returns the inner `AccountId`.
+    pub fn inner(&self) -> AccountId {
         self.0
     }
-}
 
-impl TryFrom<u32> for NetworkAccountPrefix {
-    type Error = NetworkAccountError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value >> 30 != 0 {
-            return Err(NetworkAccountError::InvalidPrefix(value));
-        }
-        Ok(NetworkAccountPrefix(value))
+    /// Gets the 30-bit prefix of the account ID used for tag matching.
+    pub fn prefix(&self) -> AccountPrefix {
+        get_account_id_tag_prefix(self.0)
     }
 }
 
-impl TryFrom<AccountId> for NetworkAccountPrefix {
+impl TryFrom<AccountId> for NetworkAccountId {
     type Error = NetworkAccountError;
 
     fn try_from(id: AccountId) -> Result<Self, Self::Error> {
         if !id.is_network() {
             return Err(NetworkAccountError::NotNetworkAccount(id));
         }
-        let prefix = get_account_id_tag_prefix(id);
-        Ok(NetworkAccountPrefix(prefix))
+        Ok(NetworkAccountId(id))
     }
 }
 
-impl TryFrom<NoteTag> for NetworkAccountPrefix {
+impl TryFrom<&NoteAttachment> for NetworkAccountId {
     type Error = NetworkAccountError;
 
-    fn try_from(tag: NoteTag) -> Result<Self, Self::Error> {
-        if tag.execution_mode() != NoteExecutionMode::Network || !tag.is_single_target() {
-            return Err(NetworkAccountError::InvalidExecutionMode(tag));
-        }
-
-        let tag_inner: u32 = tag.into();
-        assert!(tag_inner >> 30 == 0, "first 2 bits have to be 0");
-        Ok(NetworkAccountPrefix(tag_inner))
+    fn try_from(attachment: &NoteAttachment) -> Result<Self, Self::Error> {
+        let target = NetworkAccountTarget::try_from(attachment)
+            .map_err(NetworkAccountError::InvalidAttachment)?;
+        Ok(NetworkAccountId(target.target_id()))
     }
 }
 
-impl From<NetworkAccountPrefix> for u32 {
-    fn from(value: NetworkAccountPrefix) -> Self {
+impl TryFrom<NoteAttachment> for NetworkAccountId {
+    type Error = NetworkAccountError;
+
+    fn try_from(attachment: NoteAttachment) -> Result<Self, Self::Error> {
+        NetworkAccountId::try_from(&attachment)
+    }
+}
+
+impl From<NetworkAccountId> for AccountId {
+    fn from(value: NetworkAccountId) -> Self {
         value.inner()
+    }
+}
+
+impl From<NetworkAccountId> for u32 {
+    /// Returns the 30-bit prefix of the network account ID.
+    /// This is used for note tag matching.
+    fn from(value: NetworkAccountId) -> Self {
+        value.prefix()
     }
 }
 
@@ -1041,10 +1096,8 @@ impl From<NetworkAccountPrefix> for u32 {
 pub enum NetworkAccountError {
     #[error("account ID {0} is not a valid network account ID")]
     NotNetworkAccount(AccountId),
-    #[error("note tag {0} is not valid for network account execution")]
-    InvalidExecutionMode(NoteTag),
-    #[error("note prefix should be 30-bit long ({0} has non-zero in the 2 most significant bits)")]
-    InvalidPrefix(u32),
+    #[error("invalid network account attachment: {0}")]
+    InvalidAttachment(#[source] NetworkAccountTargetError),
 }
 
 /// Gets the 30-bit prefix of the account ID.

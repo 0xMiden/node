@@ -29,7 +29,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Update Rust toolchain
         run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-binstall@1.16.6

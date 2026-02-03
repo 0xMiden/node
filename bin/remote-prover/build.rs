@@ -12,7 +12,8 @@ const GENERATED_OUT_DIR: &str = "src/generated";
 
 /// Generates Rust protobuf bindings.
 fn main() -> miette::Result<()> {
-    println!("cargo::rerun-if-env-changed=BUILD_PROTO");
+    miden_node_rocksdb_cxx_linkage_fix::configure();
+    println!("cargo:rerun-if-env-changed=BUILD_PROTO");
     if !BUILD_GENERATED_FILES_IN_SRC {
         return Ok(());
     }

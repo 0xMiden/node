@@ -20,19 +20,21 @@ use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey;
 use miden_protocol::note::{
     Note,
     NoteAssets,
+    NoteAttachment,
     NoteExecutionHint,
-    NoteInputs,
     NoteMetadata,
     NoteRecipient,
     NoteScript,
+    NoteStorage,
     NoteTag,
     NoteType,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
 use miden_protocol::utils::Deserializable;
-use miden_protocol::{Felt, Word, ZERO};
+use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
+use miden_standards::note::NetworkAccountTarget;
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::utils::Serializable;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
@@ -318,7 +320,7 @@ async fn setup_increment_task(
         .await?
         .unwrap_or(wallet_account_file.account.clone());
 
-    let AuthSecretKey::RpoFalcon512(secret_key) = wallet_account_file
+    let AuthSecretKey::Falcon512Rpo(secret_key) = wallet_account_file
         .auth_secret_keys
         .first()
         .expect("wallet account file should have one auth secret key")
@@ -770,7 +772,7 @@ async fn create_and_submit_network_note(
     rng: &mut ChaCha20Rng,
 ) -> Result<(String, AccountHeader, BlockNumber)> {
     // Create authenticator for transaction signing
-    let authenticator = BasicAuthenticator::new(&[AuthSecretKey::RpoFalcon512(secret_key.clone())]);
+    let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Rpo(secret_key.clone())]);
 
     let account_interface = AccountInterface::from_account(wallet_account);
 
@@ -794,6 +796,8 @@ async fn create_and_submit_network_note(
     .await
     .context("Failed to execute transaction")?;
 
+    let tx_inputs = executed_tx.tx_inputs().to_bytes();
+
     let final_account = executed_tx.final_account().clone();
 
     // Prove the transaction
@@ -803,7 +807,7 @@ async fn create_and_submit_network_note(
     // Submit the proven transaction
     let request = ProvenTransaction {
         transaction: proven_tx.to_bytes(),
-        transaction_inputs: None,
+        transaction_inputs: Some(tx_inputs),
     };
 
     let block_height: BlockNumber = rpc_client
@@ -848,13 +852,18 @@ fn create_network_note(
     script: NoteScript,
     rng: &mut ChaCha20Rng,
 ) -> Result<(Note, NoteRecipient)> {
+    // Create the NetworkAccountTarget attachment - this is required for the note to be
+    // recognized as a network note by the ntx-builder
+    let target = NetworkAccountTarget::new(counter_account.id(), NoteExecutionHint::Always)
+        .context("Failed to create NetworkAccountTarget for counter account")?;
+    let attachment: NoteAttachment = target.into();
+
     let metadata = NoteMetadata::new(
         wallet_account.id(),
         NoteType::Public,
-        NoteTag::from_account_id(counter_account.id()),
-        NoteExecutionHint::Always,
-        ZERO,
-    )?;
+        NoteTag::with_account_target(counter_account.id()),
+    )
+    .with_attachment(attachment);
 
     let serial_num = Word::new([
         Felt::new(rng.random()),
@@ -863,7 +872,7 @@ fn create_network_note(
         Felt::new(rng.random()),
     ]);
 
-    let recipient = NoteRecipient::new(serial_num, script, NoteInputs::new(vec![])?);
+    let recipient = NoteRecipient::new(serial_num, script, NoteStorage::new(vec![])?);
 
     let network_note = Note::new(NoteAssets::new(vec![])?, metadata, recipient.clone());
     Ok((network_note, recipient))

@@ -17,6 +17,7 @@ use super::{
 };
 use crate::commands::{
     DEFAULT_TIMEOUT,
+    ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_INSECURE_SECRET_KEY,
@@ -42,7 +43,7 @@ pub enum StoreCommand {
         accounts_directory: PathBuf,
         /// Use the given configuration file to construct the genesis state from.
         #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
-        genesis_config_file: PathBuf,
+        genesis_config_file: Option<PathBuf>,
         /// Insecure, hex-encoded validator secret key for development and testing purposes.
         ///
         /// If not provided, a predefined key is used.
@@ -71,6 +72,10 @@ pub enum StoreCommand {
         /// Url at which to serve the store's block producer API.
         #[arg(long = "block-producer.url", env = ENV_STORE_BLOCK_PRODUCER_URL, value_name = "URL")]
         block_producer_url: Url,
+
+        /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
+        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
+        block_prover_url: Option<Url>,
 
         /// Directory in which to store the database and raw block data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -108,13 +113,14 @@ impl StoreCommand {
             } => Self::bootstrap(
                 &data_directory,
                 &accounts_directory,
-                &genesis_config_file,
+                genesis_config_file.as_ref(),
                 validator_insecure_secret_key,
             ),
             StoreCommand::Start {
                 rpc_url,
                 ntx_builder_url,
                 block_producer_url,
+                block_prover_url,
                 data_directory,
                 enable_otel: _,
                 grpc_timeout,
@@ -123,6 +129,7 @@ impl StoreCommand {
                     rpc_url,
                     ntx_builder_url,
                     block_producer_url,
+                    block_prover_url,
                     data_directory,
                     grpc_timeout,
                 )
@@ -143,6 +150,7 @@ impl StoreCommand {
         rpc_url: Url,
         ntx_builder_url: Url,
         block_producer_url: Url,
+        block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_timeout: Duration,
     ) -> anyhow::Result<()> {
@@ -169,6 +177,7 @@ impl StoreCommand {
 
         Store {
             rpc_listener,
+            block_prover_url,
             ntx_builder_listener,
             block_producer_listener,
             data_directory,
@@ -182,16 +191,22 @@ impl StoreCommand {
     fn bootstrap(
         data_directory: &Path,
         accounts_directory: &Path,
-        genesis_config: &PathBuf,
+        genesis_config: Option<&PathBuf>,
         validator_insecure_secret_key: String,
     ) -> anyhow::Result<()> {
         // Decode the validator key.
         let signer = SecretKey::read_from_bytes(&hex::decode(validator_insecure_secret_key)?)?;
 
-        // Read the toml.
-        let toml_str = fs_err::read_to_string(genesis_config)?;
-        let config = GenesisConfig::read_toml(toml_str.as_str())
-            .context(format!("Read from file: {}", genesis_config.display()))?;
+        // Parse genesis config (or default if not given).
+        let config = genesis_config
+            .map(|file_path| {
+                let toml_str = fs_err::read_to_string(file_path)?;
+                GenesisConfig::read_toml(toml_str.as_str()).with_context(|| {
+                    format!("failed to parse genesis config from file {}", file_path.display())
+                })
+            })
+            .transpose()?
+            .unwrap_or_default();
 
         let (genesis_state, secrets) = config.into_state(signer)?;
 

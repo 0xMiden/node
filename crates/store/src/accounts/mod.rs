@@ -21,7 +21,8 @@ use miden_protocol::crypto::merkle::{
     NodeIndex,
     SparseMerklePath,
 };
-use miden_protocol::{AccountTreeError, EMPTY_WORD, Word};
+use miden_protocol::errors::AccountTreeError;
+use miden_protocol::{EMPTY_WORD, Word};
 
 #[cfg(test)]
 mod tests;

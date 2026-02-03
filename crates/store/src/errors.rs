@@ -5,15 +5,15 @@ use deadpool_sync::InteractError;
 use miden_node_proto::domain::account::NetworkAccountError;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::{ConversionError, GrpcError};
+use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::QueryLimitError;
+use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::mmr::MmrError;
 use miden_protocol::crypto::utils::DeserializationError;
-use miden_protocol::note::{NoteId, Nullifier};
-use miden_protocol::transaction::OutputNote;
-use miden_protocol::{
+use miden_protocol::errors::{
     AccountDeltaError,
     AccountError,
     AccountTreeError,
@@ -23,15 +23,16 @@ use miden_protocol::{
     NoteError,
     NullifierTreeError,
     StorageMapError,
-    Word,
 };
+use miden_protocol::note::{NoteId, Nullifier};
+use miden_protocol::transaction::OutputNote;
 use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 use tonic::Status;
 
 use crate::db::manager::ConnectionManagerError;
 use crate::db::models::conv::DatabaseTypeConversionError;
-use crate::inner_forest::InnerForestError;
+use crate::inner_forest::{InnerForestError, WitnessError};
 
 // DATABASE ERRORS
 // =================================================================================================
@@ -208,6 +209,21 @@ pub enum StateInitializationError {
     DatabaseLoadError(#[from] DatabaseSetupError),
     #[error("inner forest error")]
     InnerForestError(#[from] InnerForestError),
+    #[error(
+        "{tree_name} SMT root ({tree_root:?}) does not match expected root from block {block_num} \
+         ({block_root:?}). Delete the tree storage directories and restart the node to rebuild \
+         from the database."
+    )]
+    TreeStorageDiverged {
+        tree_name: &'static str,
+        block_num: BlockNumber,
+        tree_root: Word,
+        block_root: Word,
+    },
+    #[error("public account {0} is missing details in database")]
+    PublicAccountMissingDetails(AccountId),
+    #[error("failed to convert account to delta: {0}")]
+    AccountToDeltaConversionFailed(String),
 }
 
 #[derive(Debug, Error)]
@@ -303,9 +319,9 @@ pub enum ApplyBlockError {
 impl From<ApplyBlockError> for Status {
     fn from(err: ApplyBlockError) -> Self {
         match err {
-            ApplyBlockError::InvalidBlockError(_) => Status::invalid_argument(err.to_string()),
+            ApplyBlockError::InvalidBlockError(_) => Status::invalid_argument(err.as_report()),
 
-            _ => Status::internal(err.to_string()),
+            _ => Status::internal(err.as_report()),
         }
     }
 }
@@ -435,7 +451,7 @@ pub enum SyncAccountVaultError {
 // ================================================================================================
 
 #[derive(Debug, Error, GrpcError)]
-pub enum SyncStorageMapsError {
+pub enum SyncAccountStorageMapsError {
     #[error("database error")]
     #[grpc(internal)]
     DatabaseError(#[from] DatabaseError),
@@ -531,6 +547,16 @@ pub enum SyncTransactionsError {
     DeserializationFailed(#[from] ConversionError),
     #[error("account {0} not found")]
     AccountNotFound(AccountId),
+    #[error("failed to retrieve witness")]
+    WitnessError(#[from] WitnessError),
+}
+
+#[derive(Debug, Error, GrpcError)]
+pub enum GetWitnessesError {
+    #[error("malformed request")]
+    DeserializationFailed(#[from] ConversionError),
+    #[error("failed to retrieve witness")]
+    WitnessError(#[from] WitnessError),
 }
 
 // SCHEMA VERIFICATION ERRORS

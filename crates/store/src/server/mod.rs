@@ -18,14 +18,17 @@ use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
 use tracing::{info, instrument};
+use url::Url;
 
 use crate::blocks::BlockStore;
 use crate::db::Db;
+use crate::errors::ApplyBlockError;
 use crate::state::State;
-use crate::{COMPONENT, GenesisState};
+use crate::{BlockProver, COMPONENT, GenesisState};
 
 mod api;
 mod block_producer;
+pub mod block_prover_client;
 mod ntx_builder;
 mod rpc_api;
 
@@ -34,6 +37,8 @@ pub struct Store {
     pub rpc_listener: TcpListener,
     pub ntx_builder_listener: TcpListener,
     pub block_producer_listener: TcpListener,
+    /// URL for the Block Prover client. Uses local prover if `None`.
+    pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
     /// Server-side timeout for an individual gRPC request.
     ///
@@ -88,19 +93,36 @@ impl Store {
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
         info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
-            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout, "Loading database");
+            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout,
+            "Loading database");
 
-        let state =
-            Arc::new(State::load(&self.data_directory).await.context("failed to load state")?);
+        let (termination_ask, mut termination_signal) =
+            tokio::sync::mpsc::channel::<ApplyBlockError>(1);
+        let state = Arc::new(
+            State::load(&self.data_directory, termination_ask)
+                .await
+                .context("failed to load state")?,
+        );
 
-        let rpc_service =
-            store::rpc_server::RpcServer::new(api::StoreApi { state: Arc::clone(&state) });
+        // Initialize local or remote block prover.
+        let block_prover = if let Some(url) = self.block_prover_url {
+            Arc::new(BlockProver::remote(url))
+        } else {
+            Arc::new(BlockProver::local())
+        };
+
+        let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
+            state: Arc::clone(&state),
+            block_prover: Arc::clone(&block_prover),
+        });
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
             state: Arc::clone(&state),
+            block_prover: Arc::clone(&block_prover),
         });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
+                block_prover: Arc::clone(&block_prover),
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())
@@ -123,6 +145,19 @@ impl Store {
         info!(target: COMPONENT, "Database loaded");
 
         let mut join_set = JoinSet::new();
+
+        join_set.spawn(async move {
+            // Manual tests on testnet indicate each iteration takes ~2s once things are OS cached.
+            //
+            // 5 minutes seems like a reasonable interval, where this should have minimal database
+            // IO impact while providing a decent view into table growth over time.
+            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            let database = Arc::clone(&state);
+            loop {
+                interval.tick().await;
+                let _ = database.analyze_table_sizes().await;
+            }
+        });
 
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
@@ -159,7 +194,13 @@ impl Store {
         );
 
         // SAFETY: The joinset is definitely not empty.
-        join_set.join_next().await.unwrap()?.map_err(Into::into)
+        let service = async move { join_set.join_next().await.unwrap()?.map_err(Into::into) };
+        tokio::select! {
+            result = service => result,
+            Some(err) = termination_signal.recv() => {
+                Err(anyhow::anyhow!("received termination signal").context(err))
+            }
+        }
     }
 }
 

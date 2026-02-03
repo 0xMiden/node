@@ -269,7 +269,7 @@ function renderCopyButton(value, label) {
     if (!value) return '';
     const escapedValue = JSON.stringify(value);
     return `
-        <button class="copy-button" onclick="copyToClipboard(${escapedValue}, event)" title="Copy full ${label}">
+        <button class="copy-button" onclick='copyToClipboard(${escapedValue}, event)' title="Copy full ${label}">
             ${COPY_ICON}
         </button>
     `;

@@ -62,14 +62,14 @@ impl BlockProducerClient {
     pub async fn subscribe_to_mempool_with_retry(
         &self,
         chain_tip: BlockNumber,
-    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status>, Status> {
+    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
         let mut retry_counter = 0;
         loop {
             match self.subscribe_to_mempool(chain_tip).await {
                 Err(err) if err.code() == tonic::Code::Unavailable => {
-                    // exponential backoff with base 500ms and max 30s
+                    // Exponential backoff with base 500ms and max 30s.
                     let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retry_counter)
+                        .saturating_mul(1 << retry_counter.min(6))
                         .min(Duration::from_secs(30));
 
                     tracing::warn!(
@@ -90,7 +90,7 @@ impl BlockProducerClient {
     async fn subscribe_to_mempool(
         &self,
         chain_tip: BlockNumber,
-    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status>, Status> {
+    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
         let request =
             proto::block_producer::MempoolSubscriptionRequest { chain_tip: chain_tip.as_u32() };
         let stream = self.client.clone().mempool_subscription(request).await?;

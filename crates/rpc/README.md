@@ -25,7 +25,7 @@ The full gRPC method definitions can be found in the [proto](../proto/README.md)
 - [SyncAccountVault](#SyncAccountVault)
 - [SyncNotes](#syncnotes)
 - [SyncState](#syncstate)
-- [SyncStorageMaps](#syncstoragemaps)
+- [SyncAccountStorageMaps](#syncaccountstoragemaps)
 - [SyncTransactions](#synctransactions)
 
 <!--toc:end-->
@@ -234,7 +234,7 @@ notes, client can make additional filtering of that data on its side.
 
 ---
 
-### SyncStorageMaps
+### SyncAccountStorageMaps
 
 Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
 

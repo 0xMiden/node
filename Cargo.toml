@@ -9,6 +9,7 @@ members = [
   "crates/ntx-builder",
   "crates/proto",
   "crates/remote-prover-client",
+  "crates/rocksdb-cxx-linkage-fix",
   "crates/rpc",
   "crates/store",
   "crates/test-macro",
@@ -28,7 +29,7 @@ license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/miden-node"
 rust-version = "1.90"
-version      = "0.13.0"
+version      = "0.14.0"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
@@ -36,25 +37,28 @@ opt-level = 2
 
 [workspace.dependencies]
 # Workspace crates.
-miden-node-block-producer   = { path = "crates/block-producer", version = "0.13" }
-miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.13" }
-miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.13" }
-miden-node-proto            = { path = "crates/proto", version = "0.13" }
-miden-node-proto-build      = { path = "proto", version = "0.13" }
-miden-node-rpc              = { path = "crates/rpc", version = "0.13" }
-miden-node-store            = { path = "crates/store", version = "0.13" }
+miden-node-block-producer   = { path = "crates/block-producer", version = "0.14" }
+miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.14" }
+miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.14" }
+miden-node-proto            = { path = "crates/proto", version = "0.14" }
+miden-node-proto-build      = { path = "proto", version = "0.14" }
+miden-node-rpc              = { path = "crates/rpc", version = "0.14" }
+miden-node-store            = { path = "crates/store", version = "0.14" }
 miden-node-test-macro       = { path = "crates/test-macro" }
-miden-node-utils            = { path = "crates/utils", version = "0.13" }
-miden-node-validator        = { path = "crates/validator", version = "0.13" }
-miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.13" }
+miden-node-utils            = { path = "crates/utils", version = "0.14" }
+miden-node-validator        = { path = "crates/validator", version = "0.14" }
+miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.14" }
+# Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
+# is part of `rocksdb-rust` release
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
-miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
-miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
-miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
-miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
-miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
-miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
+miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
+miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
+miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
 miden-air    = { features = ["std", "testing"], version = "0.20" }

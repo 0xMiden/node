@@ -1,33 +1,22 @@
-use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
-use futures::TryStreamExt;
-use miden_node_proto::domain::account::NetworkAccountPrefix;
+use futures::Stream;
+use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_utils::lru_cache::LruCache;
-use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
-use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{Barrier, RwLock};
-use tokio::time;
-use url::Url;
+use tokio::sync::{RwLock, mpsc};
+use tokio_stream::StreamExt;
+use tonic::Status;
 
-use crate::MAX_IN_PROGRESS_TXS;
+use crate::NtxBuilderConfig;
 use crate::actor::{AccountActorContext, AccountOrigin};
-use crate::block_producer::BlockProducerClient;
 use crate::coordinator::Coordinator;
 use crate::store::StoreClient;
-
-// CONSTANTS
-// =================================================================================================
-
-/// The maximum number of blocks to keep in memory while tracking the chain tip.
-const MAX_BLOCK_COUNT: usize = 4;
 
 // CHAIN STATE
 // ================================================================================================
@@ -44,7 +33,7 @@ pub struct ChainState {
 
 impl ChainState {
     /// Constructs a new instance of [`ChainState`].
-    fn new(chain_tip_header: BlockHeader, chain_mmr: PartialMmr) -> Self {
+    pub(crate) fn new(chain_tip_header: BlockHeader, chain_mmr: PartialMmr) -> Self {
         let chain_mmr = PartialBlockchain::new(chain_mmr, [])
             .expect("partial blockchain should build from partial mmr");
         Self { chain_tip_header, chain_mmr }
@@ -60,109 +49,83 @@ impl ChainState {
 // NETWORK TRANSACTION BUILDER
 // ================================================================================================
 
+/// A boxed, pinned stream of mempool events with a `'static` lifetime.
+///
+/// Boxing gives the stream a `'static` lifetime by ensuring it owns all its data, avoiding
+/// complex lifetime annotations that would otherwise be required when storing `impl TryStream`.
+pub(crate) type MempoolEventStream =
+    Pin<Box<dyn Stream<Item = Result<MempoolEvent, Status>> + Send>>;
+
 /// Network transaction builder component.
 ///
-/// The network transaction builder is in in charge of building transactions that consume notes
+/// The network transaction builder is in charge of building transactions that consume notes
 /// against network accounts. These notes are identified and communicated by the block producer.
 /// The service maintains a list of unconsumed notes and periodically executes and proves
 /// transactions that consume them (reaching out to the store to retrieve state as necessary).
 ///
 /// The builder manages the tasks for every network account on the chain through the coordinator.
+///
+/// Create an instance using [`NtxBuilderConfig::build()`].
 pub struct NetworkTransactionBuilder {
-    /// Address of the store gRPC server.
-    store_url: Url,
-    /// Address of the block producer gRPC server.
-    block_producer_url: Url,
-    /// Address of the Validator server.
-    validator_url: Url,
-    /// Address of the remote prover. If `None`, transactions will be proven locally, which is
-    /// undesirable due to the performance impact.
-    tx_prover_url: Option<Url>,
-    /// Interval for checking pending notes and executing network transactions.
-    ticker_interval: Duration,
-    /// A checkpoint used to sync start-up process with the block-producer.
-    ///
-    /// This informs the block-producer when we have subscribed to mempool events and that it is
-    /// safe to begin block-production.
-    bp_checkpoint: Arc<Barrier>,
-    /// Shared LRU cache for storing retrieved note scripts to avoid repeated store calls.
-    /// This cache is shared across all account actors.
-    script_cache: LruCache<Word, NoteScript>,
+    /// Configuration for the builder.
+    config: NtxBuilderConfig,
     /// Coordinator for managing actor tasks.
     coordinator: Coordinator,
+    /// Client for the store gRPC API.
+    store: StoreClient,
+    /// Shared chain state updated by the event loop and read by actors.
+    chain_state: Arc<RwLock<ChainState>>,
+    /// Context shared with all account actors.
+    actor_context: AccountActorContext,
+    /// Stream of mempool events from the block producer.
+    mempool_events: MempoolEventStream,
 }
 
 impl NetworkTransactionBuilder {
-    /// Creates a new instance of the network transaction builder.
-    pub fn new(
-        store_url: Url,
-        block_producer_url: Url,
-        validator_url: Url,
-        tx_prover_url: Option<Url>,
-        ticker_interval: Duration,
-        bp_checkpoint: Arc<Barrier>,
-        script_cache_size: NonZeroUsize,
+    pub(crate) fn new(
+        config: NtxBuilderConfig,
+        coordinator: Coordinator,
+        store: StoreClient,
+        chain_state: Arc<RwLock<ChainState>>,
+        actor_context: AccountActorContext,
+        mempool_events: MempoolEventStream,
     ) -> Self {
-        let script_cache = LruCache::new(script_cache_size);
-        let coordinator = Coordinator::new(MAX_IN_PROGRESS_TXS);
         Self {
-            store_url,
-            block_producer_url,
-            validator_url,
-            tx_prover_url,
-            ticker_interval,
-            bp_checkpoint,
-            script_cache,
+            config,
             coordinator,
+            store,
+            chain_state,
+            actor_context,
+            mempool_events,
         }
     }
 
-    /// Runs the network transaction builder until a fatal error occurs.
+    /// Runs the network transaction builder event loop until a fatal error occurs.
+    ///
+    /// This method:
+    /// 1. Spawns a background task to load existing network accounts from the store
+    /// 2. Runs the main event loop, processing mempool events and managing actors
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The mempool event stream ends unexpectedly
+    /// - An actor encounters a fatal error
+    /// - The account loader task fails
     pub async fn run(mut self) -> anyhow::Result<()> {
-        let store = StoreClient::new(self.store_url.clone());
-        let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
+        // Spawn a background task to load network accounts from the store.
+        // Accounts are sent through a channel and processed in the main event loop.
+        let (account_tx, mut account_rx) =
+            mpsc::channel::<NetworkAccountId>(self.config.account_channel_capacity);
+        let account_loader_store = self.store.clone();
+        let mut account_loader_handle = tokio::spawn(async move {
+            account_loader_store
+                .stream_network_account_ids(account_tx)
+                .await
+                .context("failed to load network accounts from store")
+        });
 
-        let (chain_tip_header, chain_mmr) = store
-            .get_latest_blockchain_data_with_retry()
-            .await?
-            .expect("store should contain a latest block");
-        let mut mempool_events = block_producer
-            .subscribe_to_mempool_with_retry(chain_tip_header.block_num())
-            .await
-            .context("failed to subscribe to mempool events")?;
-
-        // Unlock the block-producer's block production. The block-producer is prevented from
-        // producing blocks until we have subscribed to mempool events.
-        //
-        // This is a temporary work-around until the ntx-builder can resync on the fly.
-        self.bp_checkpoint.wait().await;
-
-        let mut interval = tokio::time::interval(self.ticker_interval);
-        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-        // Create chain state that will be updated by the coordinator and read by actors.
-        let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
-
-        let actor_context = AccountActorContext {
-            block_producer_url: self.block_producer_url.clone(),
-            validator_url: self.validator_url.clone(),
-            tx_prover_url: self.tx_prover_url.clone(),
-            chain_state: chain_state.clone(),
-            store: store.clone(),
-            script_cache: self.script_cache.clone(),
-        };
-
-        // Create initial set of actors based on all known network accounts.
-        let account_ids = store.get_network_account_ids().await?;
-        for account_id in account_ids {
-            if let Ok(account_prefix) = NetworkAccountPrefix::try_from(account_id) {
-                self.coordinator
-                    .spawn_actor(AccountOrigin::store(account_prefix), &actor_context)
-                    .await?;
-            }
-        }
-
-        // Main loop which manages actors and passes mempool events to them.
+        // Main event loop.
         loop {
             tokio::select! {
                 // Handle actor result.
@@ -170,32 +133,51 @@ impl NetworkTransactionBuilder {
                     result?;
                 },
                 // Handle mempool events.
-                event = mempool_events.try_next() => {
+                event = self.mempool_events.next() => {
                     let event = event
                         .context("mempool event stream ended")?
                         .context("mempool event stream failed")?;
 
-                    self.handle_mempool_event(
-                        event.into(),
-                        &actor_context,
-                        chain_state.clone(),
-                    ).await?;
+                    self.handle_mempool_event(event.into()).await?;
+                },
+                // Handle account batches loaded from the store.
+                // Once all accounts are loaded, the channel closes and this branch
+                // becomes inactive (recv returns None and we stop matching).
+                Some(account_id) = account_rx.recv() => {
+                    self.handle_loaded_account(account_id).await?;
+                },
+                // Handle account loader task completion/failure.
+                // If the task fails, we abort since the builder would be in a degraded state
+                // where existing notes against network accounts won't be processed.
+                result = &mut account_loader_handle => {
+                    result
+                        .context("account loader task panicked")
+                        .flatten()?;
+
+                    tracing::info!("account loading from store completed");
+                    account_loader_handle = tokio::spawn(std::future::pending());
                 },
             }
         }
     }
 
-    /// Handles mempool events by sending them to actors via the coordinator and/or spawning new
-    /// actors as required.
-    #[tracing::instrument(
-        name = "ntx.builder.handle_mempool_event",
-        skip(self, event, actor_context, chain_state)
-    )]
+    /// Handles account IDs loaded from the store by spawning actors for them.
+    #[tracing::instrument(name = "ntx.builder.handle_loaded_account", skip(self, account_id))]
+    async fn handle_loaded_account(
+        &mut self,
+        account_id: NetworkAccountId,
+    ) -> Result<(), anyhow::Error> {
+        self.coordinator
+            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context)
+            .await?;
+        Ok(())
+    }
+
+    /// Handles mempool events by routing them to actors and spawning new actors as needed.
+    #[tracing::instrument(name = "ntx.builder.handle_mempool_event", skip(self, event))]
     async fn handle_mempool_event(
         &mut self,
         event: Arc<MempoolEvent>,
-        actor_context: &AccountActorContext,
-        chain_state: Arc<RwLock<ChainState>>,
     ) -> Result<(), anyhow::Error> {
         match event.as_ref() {
             MempoolEvent::TransactionAdded { account_delta, .. } => {
@@ -203,10 +185,12 @@ impl NetworkTransactionBuilder {
                 if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
                     // Handle account deltas for network accounts only.
                     if let Some(network_account) = AccountOrigin::transaction(delta) {
-                        // Spawn new actors if a transaction creates a new network account
+                        // Spawn new actors if a transaction creates a new network account.
                         let is_creating_account = delta.is_full_state();
                         if is_creating_account {
-                            self.coordinator.spawn_actor(network_account, actor_context).await?;
+                            self.coordinator
+                                .spawn_actor(network_account, &self.actor_context)
+                                .await?;
                         }
                     }
                 }
@@ -215,11 +199,11 @@ impl NetworkTransactionBuilder {
             },
             // Update chain state and broadcast.
             MempoolEvent::BlockCommitted { header, txs } => {
-                self.update_chain_tip(header.as_ref().clone(), chain_state).await;
+                self.update_chain_tip(header.as_ref().clone()).await;
                 self.coordinator.broadcast(event.clone()).await;
 
-                // All transactions pertaining to predating events should now be available through
-                // the store. So we can now drain them.
+                // All transactions pertaining to predating events should now be available
+                // through the store. So we can now drain them.
                 for tx_id in txs {
                     self.coordinator.drain_predating_events(tx_id);
                 }
@@ -238,12 +222,9 @@ impl NetworkTransactionBuilder {
         }
     }
 
-    /// Updates the chain tip and MMR block count.
-    ///
-    /// Blocks in the MMR are pruned if the block count exceeds the maximum.
-    async fn update_chain_tip(&mut self, tip: BlockHeader, chain_state: Arc<RwLock<ChainState>>) {
-        // Lock the chain state.
-        let mut chain_state = chain_state.write().await;
+    /// Updates the chain tip and prunes old blocks from the MMR.
+    async fn update_chain_tip(&mut self, tip: BlockHeader) {
+        let mut chain_state = self.chain_state.write().await;
 
         // Update MMR which lags by one block.
         let mmr_tip = chain_state.chain_tip_header.clone();
@@ -253,9 +234,11 @@ impl NetworkTransactionBuilder {
         chain_state.chain_tip_header = tip;
 
         // Keep MMR pruned.
-        let pruned_block_height =
-            (chain_state.chain_mmr.chain_length().as_usize().saturating_sub(MAX_BLOCK_COUNT))
-                as u32;
+        let pruned_block_height = (chain_state
+            .chain_mmr
+            .chain_length()
+            .as_usize()
+            .saturating_sub(self.config.max_block_count)) as u32;
         chain_state.chain_mmr.prune_to(..pruned_block_height.into());
     }
 }

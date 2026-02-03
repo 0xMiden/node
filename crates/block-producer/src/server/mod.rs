@@ -18,7 +18,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
-use tokio::sync::{Barrier, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::Status;
 use tower_http::trace::TraceLayer;
@@ -55,8 +55,6 @@ pub struct BlockProducer {
     pub validator_url: Url,
     /// The address of the batch prover component.
     pub batch_prover_url: Option<Url>,
-    /// The address of the block prover component.
-    pub block_prover_url: Option<Url>,
     /// The interval at which to produce batches.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
@@ -65,11 +63,6 @@ pub struct BlockProducer {
     pub max_txs_per_batch: usize,
     /// The maximum number of batches per block.
     pub max_batches_per_block: usize,
-    /// Block production only begins after this checkpoint barrier completes.
-    ///
-    /// The block-producers gRPC endpoint will be available before this point, so this lets the
-    /// mempool synchronize its event stream without risking a race condition.
-    pub production_checkpoint: Arc<Barrier>,
     /// Server-side timeout for an individual gRPC request.
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
@@ -128,8 +121,7 @@ impl BlockProducer {
 
         info!(target: COMPONENT, "Server initialized");
 
-        let block_builder =
-            BlockBuilder::new(store.clone(), validator, self.block_prover_url, self.block_interval);
+        let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
             store.clone(),
             SERVER_NUM_BATCH_BUILDERS,
@@ -155,12 +147,7 @@ impl BlockProducer {
         // any complete or fail, we can shutdown the rest (somewhat) gracefully.
         let mut tasks = tokio::task::JoinSet::new();
 
-        // Launch the gRPC server and wait at the checkpoint for any other components to be in sync.
-        //
-        // This is used to ensure the ntx-builder can subscribe to the mempool events without
-        // playing catch up caused by block-production.
-        //
-        // This is a temporary work-around until the ntx-builder can resync on the fly.
+        // Launch the gRPC server.
         let rpc_id = tasks
             .spawn({
                 let mempool = mempool.clone();
@@ -171,7 +158,6 @@ impl BlockProducer {
                 }
             })
             .id();
-        self.production_checkpoint.wait().await;
 
         let batch_builder_id = tasks
             .spawn({
@@ -405,12 +391,6 @@ impl api_server::Api for BlockProducerRpcServer {
              .map_err(Into::into)
     }
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.server.status",
-         skip_all,
-         err
-     )]
     async fn status(
         &self,
         _request: tonic::Request<()>,

@@ -19,22 +19,19 @@ pub struct NoteMetadata {
     /// The account which sent the note.
     #[prost(message, optional, tag = "1")]
     pub sender: ::core::option::Option<super::account::AccountId>,
-    /// The type of the note (0b01 = public, 0b10 = private, 0b11 = encrypted).
-    #[prost(uint32, tag = "2")]
-    pub note_type: u32,
+    /// The type of the note.
+    #[prost(enumeration = "NoteType", tag = "2")]
+    pub note_type: i32,
     /// A value which can be used by the recipient(s) to identify notes intended for them.
     ///
     /// See `miden_protocol::note::note_tag` for more info.
     #[prost(fixed32, tag = "3")]
     pub tag: u32,
-    /// Specifies when a note is ready to be consumed.
+    /// Serialized note attachment
     ///
-    /// See `miden_protocol::note::execution_hint` for more info.
-    #[prost(fixed64, tag = "4")]
-    pub execution_hint: u64,
-    /// An arbitrary user-defined value.
-    #[prost(fixed64, tag = "5")]
-    pub aux: u64,
+    /// See `miden_protocol::note::NoteAttachment` for more info.
+    #[prost(bytes = "vec", tag = "4")]
+    pub attachment: ::prost::alloc::vec::Vec<u8>,
 }
 /// Represents a note.
 ///
@@ -130,4 +127,37 @@ pub struct NoteScript {
     /// Mast of the script.
     #[prost(bytes = "vec", tag = "2")]
     pub mast: ::prost::alloc::vec::Vec<u8>,
+}
+/// The type of a note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum NoteType {
+    /// Unspecified note type (default value, should not be used).
+    Unspecified = 0,
+    /// Public note - details are visible on-chain.
+    Public = 1,
+    /// Private note - details are not visible on-chain.
+    Private = 2,
+}
+impl NoteType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "NOTE_TYPE_UNSPECIFIED",
+            Self::Public => "NOTE_TYPE_PUBLIC",
+            Self::Private => "NOTE_TYPE_PRIVATE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "NOTE_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "NOTE_TYPE_PUBLIC" => Some(Self::Public),
+            "NOTE_TYPE_PRIVATE" => Some(Self::Private),
+            _ => None,
+        }
+    }
 }

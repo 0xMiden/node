@@ -1,10 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_utils::grpc::UrlExt;
-use tokio::sync::Barrier;
 use url::Url;
 
 use super::{ENV_BLOCK_PRODUCER_URL, ENV_STORE_BLOCK_PRODUCER_URL};
@@ -88,12 +86,10 @@ impl BlockProducerCommand {
             store_url,
             validator_url,
             batch_prover_url: block_producer.batch_prover_url,
-            block_prover_url: block_producer.block_prover_url,
             batch_interval: block_producer.batch_interval,
             block_interval: block_producer.block_interval,
             max_txs_per_batch: block_producer.max_txs_per_batch,
             max_batches_per_block: block_producer.max_batches_per_block,
-            production_checkpoint: Arc::new(Barrier::new(1)),
             grpc_timeout,
             mempool_tx_capacity: block_producer.mempool_tx_capacity,
         }
@@ -128,7 +124,6 @@ mod tests {
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {
                 batch_prover_url: None,
-                block_prover_url: None,
                 block_interval: std::time::Duration::from_secs(1),
                 batch_interval: std::time::Duration::from_secs(1),
                 max_txs_per_batch: 8,
@@ -152,7 +147,6 @@ mod tests {
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {
                 batch_prover_url: None,
-                block_prover_url: None,
                 block_interval: std::time::Duration::from_secs(1),
                 batch_interval: std::time::Duration::from_secs(1),
                 max_txs_per_batch: miden_protocol::MAX_ACCOUNTS_PER_BATCH + 1, /* Use protocol

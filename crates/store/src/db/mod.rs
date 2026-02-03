@@ -3,13 +3,14 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use diesel::{Connection, RunQueryDsl, SqliteConnection};
-use miden_node_proto::domain::account::{AccountInfo, AccountSummary, NetworkAccountPrefix};
+use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
+use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
 use miden_protocol::asset::{Asset, AssetVaultKey};
-use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, ProvenBlock};
+use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
@@ -22,13 +23,18 @@ use miden_protocol::note::{
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use tokio::sync::oneshot;
-use tracing::{info, info_span, instrument};
+use tracing::{Instrument, info, info_span, instrument};
 
 use crate::COMPONENT;
 use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries::StorageMapValuesPage;
+pub use crate::db::models::queries::{
+    AccountCommitmentsPage,
+    NullifiersPage,
+    PublicAccountIdsPage,
+};
 use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
 use crate::genesis::GenesisBlock;
@@ -250,6 +256,7 @@ impl Db {
             models::queries::apply_block(
                 conn,
                 genesis.header(),
+                genesis.signature(),
                 &[],
                 &[],
                 genesis.body().updated_accounts(),
@@ -275,10 +282,12 @@ impl Db {
         let conn = self
             .pool
             .get()
+            .in_current_span()
             .await
             .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
 
         conn.interact(|conn| <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query))
+            .in_current_span()
             .await
             .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
@@ -337,12 +346,15 @@ impl Db {
         Ok(me)
     }
 
-    /// Loads all the nullifiers from the DB.
+    /// Returns a page of nullifiers for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub(crate) async fn select_all_nullifiers(&self) -> Result<Vec<NullifierInfo>> {
-        self.transact("all nullifiers", move |conn| {
-            let nullifiers = queries::select_all_nullifiers(conn)?;
-            Ok(nullifiers)
+    pub async fn select_nullifiers_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_nullifier: Option<Nullifier>,
+    ) -> Result<NullifiersPage> {
+        self.transact("read nullifiers paged", move |conn| {
+            queries::select_nullifiers_paged(conn, page_size, after_nullifier)
         })
         .await
     }
@@ -408,20 +420,28 @@ impl Db {
         .await
     }
 
-    /// TODO marked for removal, replace with paged version
+    /// Returns a page of account commitments for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_account_commitments(&self) -> Result<Vec<(AccountId, Word)>> {
-        self.transact("read all account commitments", move |conn| {
-            queries::select_all_account_commitments(conn)
+    pub async fn select_account_commitments_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<AccountCommitmentsPage> {
+        self.transact("read account commitments paged", move |conn| {
+            queries::select_account_commitments_paged(conn, page_size, after_account_id)
         })
         .await
     }
 
-    /// Returns all account IDs that have public state.
+    /// Returns a page of public account IDs for forest rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_public_account_ids(&self) -> Result<Vec<AccountId>> {
-        self.transact("read all public account IDs", move |conn| {
-            queries::select_all_public_account_ids(conn)
+    pub async fn select_public_account_ids_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<PublicAccountIdsPage> {
+        self.transact("read public account IDs paged", move |conn| {
+            queries::select_public_account_ids_paged(conn, page_size, after_account_id)
         })
         .await
     }
@@ -433,14 +453,14 @@ impl Db {
             .await
     }
 
-    /// Loads public account details from the DB based on the account ID's prefix.
+    /// Loads public account details for a network account by its full account ID.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_network_account_by_prefix(
+    pub async fn select_network_account_by_id(
         &self,
-        id_prefix: u32,
+        account_id: AccountId,
     ) -> Result<Option<AccountInfo>> {
-        self.transact("Get account by id prefix", move |conn| {
-            queries::select_account_by_id_prefix(conn, id_prefix)
+        self.transact("Get network account by id", move |conn| {
+            queries::select_network_account_by_id(conn, account_id)
         })
         .await
     }
@@ -579,10 +599,10 @@ impl Db {
         &self,
         allow_acquire: oneshot::Sender<()>,
         acquire_done: oneshot::Receiver<()>,
-        block: ProvenBlock,
+        signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
     ) -> Result<()> {
-        let block_num = block.header().block_num();
+        let block_num = signed_block.header().block_num();
 
         let result = self
             .transact("apply block", move |conn| -> Result<()> {
@@ -591,11 +611,12 @@ impl Db {
 
                 models::queries::apply_block(
                     conn,
-                    block.header(),
+                    signed_block.header(),
+                    signed_block.signature(),
                     &notes,
-                    block.body().created_nullifiers(),
-                    block.body().updated_accounts(),
-                    block.body().transactions(),
+                    signed_block.body().created_nullifiers(),
+                    signed_block.body().updated_accounts(),
+                    signed_block.body().transactions(),
                 )?;
 
                 // XXX FIXME TODO free floating mutex MUST NOT exist
@@ -612,6 +633,7 @@ impl Db {
 
         // Notify the cleanup task of the latest applied block
         // Ignore errors since cleanup is non-critical and shouldn't block block application
+        // TODO: track dropped cleanup notifications to surface backpressure.
         let _res = self.notify_cleanup_task.try_send(block_num);
 
         result
@@ -762,23 +784,58 @@ impl Db {
         .await
     }
 
+    /// Emits size metrics for each table in the database, and the entire database.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn analyze_table_sizes(&self) -> Result<(), DatabaseError> {
+        self.transact("db analysis", |conn| {
+            #[derive(QueryableByName)]
+            struct TotalSize {
+                #[diesel(sql_type = diesel::sql_types::BigInt)]
+                size: i64,
+            }
+
+            #[derive(QueryableByName)]
+            struct Table {
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                name: String,
+                #[diesel(sql_type = diesel::sql_types::BigInt)]
+                size: i64,
+            }
+
+            let tables =
+                diesel::sql_query("SELECT name, sum(payload) AS size FROM dbstat GROUP BY name")
+                    .load::<Table>(conn)?;
+
+            let span = tracing::Span::current();
+            for Table { name, size } in tables {
+                span.set_attribute(format!("database.table.{name}.size"), size);
+            }
+
+            let total = diesel::sql_query(
+                "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()",
+            )
+            .get_result::<TotalSize>(conn)?;
+            span.set_attribute("database.total.size", total.size);
+
+            Result::<_, DatabaseError>::Ok(())
+        })
+        .await
+        .inspect_err(|err| tracing::Span::current().set_error(err))?;
+
+        Ok(())
+    }
+
     /// Loads the network notes for an account that are unconsumed by a specified block number.
     /// Pagination is used to limit the number of notes returned.
     pub(crate) async fn select_unconsumed_network_notes(
         &self,
-        network_account_id_prefix: NetworkAccountPrefix,
+        account_id: AccountId,
         block_num: BlockNumber,
         page: Page,
     ) -> Result<(Vec<NoteRecord>, Page)> {
-        // Network notes sent to a specific account have their tags set to the prefix of the target
-        // account ID. So we can convert the ID prefix into a note tag to query the notes for a
-        // given account.
         self.transact("unconsumed network notes for account", move |conn| {
-            models::queries::select_unconsumed_network_notes_by_tag(
-                conn,
-                network_account_id_prefix.into(),
-                block_num,
-                page,
+            models::queries::select_unconsumed_network_notes_by_account_id(
+                conn, account_id, block_num, page,
             )
         })
         .await

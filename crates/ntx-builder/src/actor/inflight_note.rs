@@ -46,15 +46,10 @@ impl InflightNetworkNote {
 
     /// Checks if the network note is available for execution.
     ///
-    /// The note is available if it can be consumed and the backoff period has passed.
+    /// The note is available if the backoff period has passed.
     pub fn is_available(&self, block_num: BlockNumber) -> bool {
-        let can_consume = self
-            .to_inner()
-            .metadata()
-            .execution_hint()
-            .can_be_consumed(block_num)
-            .unwrap_or(true);
-        can_consume && has_backoff_passed(block_num, self.last_attempt, self.attempt_count)
+        self.note.can_be_consumed(block_num).unwrap_or(true)
+            && has_backoff_passed(block_num, self.last_attempt, self.attempt_count)
     }
 
     /// Registers a failed attempt to execute the network note at the specified block number.

@@ -120,3 +120,14 @@ impl QueryParamLimiter for QueryParamBlockLimit {
     const PARAM_NAME: &str = "block_header";
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
+
+/// Used for the following RPC endpoints
+/// * `get_account`
+///
+/// Capped at 64 total storage map keys across all slots to limit the number of SMT proofs
+/// returned.
+pub struct QueryParamStorageMapKeyTotalLimit;
+impl QueryParamLimiter for QueryParamStorageMapKeyTotalLimit {
+    const PARAM_NAME: &str = "storage_map_key";
+    const LIMIT: usize = 64;
+}
