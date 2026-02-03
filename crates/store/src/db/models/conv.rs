@@ -50,7 +50,7 @@ pub struct DatabaseTypeConversionError {
 /// Convert from and to it's database representation and back
 ///
 /// We do not assume sanity of DB types.
-pub trait SqlTypeConvert: Sized {
+pub(crate) trait SqlTypeConvert: Sized {
     type Raw: Sized;
 
     fn to_raw_sql(self) -> Self::Raw;

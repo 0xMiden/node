@@ -10,9 +10,6 @@ pub mod state;
 #[cfg(feature = "rocksdb")]
 pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
-pub use db::Db;
-pub use db::manager::ConnectionManager;
-pub use db::models::conv::SqlTypeConvert;
 pub use errors::{DatabaseError, DatabaseSetupError};
 pub use genesis::GenesisState;
 pub use server::block_prover_client::BlockProver;
