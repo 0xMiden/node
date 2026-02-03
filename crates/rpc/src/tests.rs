@@ -520,10 +520,7 @@ async fn get_limits_endpoint() {
     );
 
     let sync_chain_mmr = limits.endpoints.get("SyncChainMmr").expect("SyncChainMmr should exist");
-    assert!(
-        sync_chain_mmr.parameters.is_empty(),
-        "SyncChainMmr parameters should be empty"
-    );
+    assert!(sync_chain_mmr.parameters.is_empty(), "SyncChainMmr parameters should be empty");
 
     // Verify GetNotesById endpoint
     let get_notes_by_id = limits.endpoints.get("GetNotesById").expect("GetNotesById should exist");
@@ -548,10 +545,7 @@ async fn sync_chain_mmr_returns_delta() {
         block_num: Some(proto::blockchain::BlockNumber { block_num: 0 }),
         block_to: None,
     };
-    let response = rpc_client
-        .sync_chain_mmr(request)
-        .await
-        .expect("sync_chain_mmr should succeed");
+    let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();
 
     let pagination_info = response.pagination_info.expect("pagination_info should exist");
