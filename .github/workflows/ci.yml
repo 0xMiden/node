@@ -27,15 +27,13 @@ env:
   # 
   # This provides a convenient way to evict old or corrupted cache.
   RUST_CACHE_KEY: rust-cache-2026.02.02
+  # Reduce cache usage by removing debug information.
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 # Limits workflow concurrency to only the latest commit in the PR.
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
-
-env:
-  # Reduce cache usage by removing debug information.
-  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   # ===============================================================================================
@@ -103,7 +101,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v6
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - name: Install RocksDB
@@ -126,7 +124,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
       - name: Install protobuf
@@ -148,7 +146,7 @@ jobs:
     runs-on: Linux-ARM64-Runner
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
@@ -183,7 +181,7 @@ jobs:
   # Tests the miden-remote-prover-client WASM support.
   #
   # The WASM build is incompatible with a conventional build and therefore this gets its own cache.
-  client_wasm:
+  client-wasm:
     - uses: actions/checkout@v6
     - name: Rustup
       run: rustup update --no-self-update
@@ -209,7 +207,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@v2
         with:
           tool: typos@1.42.0
@@ -219,7 +217,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v6
       - name: Rustup +nightly
         run: |
           rustup update --no-self-update nightly
@@ -231,7 +229,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@v2
         with:
           tool: taplo-cli@0.10.0
@@ -241,7 +239,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-workspace-lints@0.1.4
@@ -252,7 +250,7 @@ jobs:
     name: check for unused dependencies
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v6
       - name: machete
         uses: bnjbvr/cargo-machete@main
 
