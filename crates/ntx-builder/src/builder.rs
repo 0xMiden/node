@@ -22,12 +22,25 @@ use crate::store::StoreClient;
 // ================================================================================================
 
 /// Contains information about the chain that is relevant to the [`NetworkTransactionBuilder`] and
-/// all account actors managed by the [`Coordinator`]
+/// all account actors managed by the [`Coordinator`].
+///
+/// The chain MMR stored here contains:
+/// - The MMR peaks.
+/// - Block headers and authentication paths for the last [`NtxBuilderConfig::max_block_count`]
+///   blocks.
+///
+/// Authentication paths for older blocks are pruned because the NTX builder executes all notes as
+/// "unauthenticated" (see [`InputNotes::from_unauthenticated_notes`]) and therefore does not need
+/// to prove that input notes were created in specific past blocks.
 #[derive(Debug, Clone)]
 pub struct ChainState {
     /// The current tip of the chain.
     pub chain_tip_header: BlockHeader,
-    /// A partial representation of the latest state of the chain.
+    /// A partial representation of the chain MMR.
+    ///
+    /// Contains block headers and authentication paths for the last
+    /// [`NtxBuilderConfig::max_block_count`] blocks only, since all notes are executed as
+    /// unauthenticated.
     pub chain_mmr: Arc<PartialBlockchain>,
 }
 
