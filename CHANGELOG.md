@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.9 (2026-02-03)
+
+### Fixes
+
+- Fix node crash caused by reverting a transaction in the network transaction buiḓer ([#1511](https://github.com/0xMiden/miden-node/pull/1511)).
+
 ## v0.12.8 (2026-01-15)
 
 ### Enhancements

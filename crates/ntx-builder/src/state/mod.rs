@@ -413,7 +413,17 @@ impl State {
         }
 
         for note in impact.notes {
-            let prefix = self.nullifier_idx.remove(&note).unwrap();
+            // Hot-fix for a crash in v0.12.8. Unclear how this occurs but since this flow no longer
+            // exists for v0.13 we're just patching out the cause of the panic.
+            let Some(prefix) = self.nullifier_idx.remove(&note) else {
+                tracing::warn!(
+                    transaction.id=%tx,
+                    nullifier=%note,
+                    "note nullifier missing during tx revert"
+                );
+                continue;
+            };
+
             // Its possible for the account to no longer exist if the transaction creating it was
             // reverted.
             if let Some(account) = self.accounts.get_mut(&prefix) {
@@ -422,7 +432,16 @@ impl State {
         }
 
         for nullifier in impact.nullifiers {
-            let prefix = self.nullifier_idx.get(&nullifier).unwrap();
+            // Hot-fix for a crash in v0.12.8. Unclear how this occurs but since this flow no longer
+            // exists for v0.13 we're just patching out the cause of the panic.
+            let Some(prefix) = self.nullifier_idx.get(&nullifier) else {
+                tracing::warn!(
+                    transaction.id=%tx,
+                    %nullifier,
+                    "nullifier missing during tx revert"
+                );
+                continue;
+            };
             // Its possible for the account to no longer exist if the transaction creating it was
             // reverted.
             if let Some(account) = self.accounts.get_mut(prefix) {
