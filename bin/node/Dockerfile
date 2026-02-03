@@ -1,4 +1,4 @@
-FROM rust:1.90-slim-bullseye AS builder
+FROM rust:1.91-slim-bookworm AS builder
 
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
