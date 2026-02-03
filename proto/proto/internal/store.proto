@@ -78,7 +78,12 @@ service Rpc {
     // For preserving some degree of privacy, note tags and nullifiers filters contain only high
     // part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
     // additional filtering of that data on its side.
-    rpc SyncState(rpc.SyncStateRequest) returns (rpc.SyncStateResponse) {}
+    rpc SyncState(rpc.SyncStateRequest) returns (rpc.SyncStateResponse) {
+        option deprecated = true;
+    }
+
+    // Returns chain MMR updates within a block range.
+    rpc SyncChainMmr(rpc.SyncChainMmrRequest) returns (rpc.SyncChainMmrResponse) {}
 
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(rpc.SyncAccountVaultRequest) returns (rpc.SyncAccountVaultResponse) {}

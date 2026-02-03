@@ -25,6 +25,40 @@ impl State {
         self.db.select_transactions_records(account_ids, block_range).await
     }
 
+    /// Returns the chain MMR delta for the specified block range.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn sync_chain_mmr(
+        &self,
+        block_num: BlockNumber,
+        block_to: BlockNumber,
+    ) -> Result<MmrDelta, StateSyncError> {
+        let inner = self.inner.read().await;
+
+        if block_num == block_to {
+            return Ok(MmrDelta {
+                forest: Forest::new(block_num.as_usize()),
+                data: vec![],
+            });
+        }
+
+        // Important notes about the boundary conditions:
+        //
+        // - The Mmr forest is 1-indexed whereas the block number is 0-indexed. The Mmr root
+        //   contained in the block header always lag behind by one block, this is because the Mmr
+        //   leaves are hashes of block headers, and we can't have self-referential hashes. These
+        //   two points cancel out and don't require adjusting.
+        // - Mmr::get_delta is inclusive, whereas the sync request block_num is defined to be
+        //   exclusive, so the from_forest has to be adjusted with a +1.
+        let from_forest = (block_num + 1).as_usize();
+        let to_forest = block_to.as_usize();
+
+        inner
+            .blockchain
+            .as_mmr()
+            .get_delta(Forest::new(from_forest), Forest::new(to_forest))
+            .map_err(StateSyncError::FailedToBuildMmrDelta)
+    }
+
     /// Loads data to synchronize a client's notes.
     ///
     /// The client's request contains a list of tags, this method will return the first

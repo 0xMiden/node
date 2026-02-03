@@ -204,6 +204,15 @@ impl api_server::Api for RpcService {
         self.store.clone().sync_state(request).await
     }
 
+    async fn sync_chain_mmr(
+        &self,
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request.get_ref());
+
+        self.store.clone().sync_chain_mmr(request).await
+    }
+
     async fn sync_account_storage_maps(
         &self,
         request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
@@ -544,6 +553,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
                     (NoteTag::PARAM_NAME, NoteTag::LIMIT),
                 ]),
             ),
+            ("SyncChainMmr".into(), endpoint_limits(&[])),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
             (

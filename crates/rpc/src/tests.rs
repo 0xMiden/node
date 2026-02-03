@@ -519,6 +519,12 @@ async fn get_limits_endpoint() {
         QueryParamNoteTagLimit::LIMIT
     );
 
+    let sync_chain_mmr = limits.endpoints.get("SyncChainMmr").expect("SyncChainMmr should exist");
+    assert!(
+        sync_chain_mmr.parameters.is_empty(),
+        "SyncChainMmr parameters should be empty"
+    );
+
     // Verify GetNotesById endpoint
     let get_notes_by_id = limits.endpoints.get("GetNotesById").expect("GetNotesById should exist");
     assert_eq!(
@@ -530,5 +536,31 @@ async fn get_limits_endpoint() {
     );
 
     // Shutdown to avoid runtime drop error.
+    shutdown_store(store_runtime).await;
+}
+
+#[tokio::test]
+async fn sync_chain_mmr_returns_delta() {
+    let (mut rpc_client, _rpc_addr, store_addr) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+
+    let request = proto::rpc::SyncChainMmrRequest {
+        block_num: Some(proto::blockchain::BlockNumber { block_num: 0 }),
+        block_to: None,
+    };
+    let response = rpc_client
+        .sync_chain_mmr(request)
+        .await
+        .expect("sync_chain_mmr should succeed");
+    let response = response.into_inner();
+
+    let pagination_info = response.pagination_info.expect("pagination_info should exist");
+    assert_eq!(pagination_info.chain_tip, 0);
+    assert_eq!(pagination_info.block_num, 0);
+
+    let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
+    assert_eq!(mmr_delta.forest, 0);
+    assert!(mmr_delta.data.is_empty());
+
     shutdown_store(store_runtime).await;
 }

@@ -675,6 +675,28 @@ pub mod rpc_client {
             req.extensions_mut().insert(GrpcMethod::new("store.Rpc", "SyncState"));
             self.inner.unary(req, path, codec).await
         }
+        /// Returns chain MMR updates within a block range.
+        pub async fn sync_chain_mmr(
+            &mut self,
+            request: impl tonic::IntoRequest<super::super::rpc::SyncChainMmrRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::rpc::SyncChainMmrResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/store.Rpc/SyncChainMmr");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new("store.Rpc", "SyncChainMmr"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Returns account vault updates for specified account within a block range.
         pub async fn sync_account_vault(
             &mut self,
@@ -882,6 +904,14 @@ pub mod rpc_server {
             request: tonic::Request<super::super::rpc::SyncStateRequest>,
         ) -> std::result::Result<
             tonic::Response<super::super::rpc::SyncStateResponse>,
+            tonic::Status,
+        >;
+        /// Returns chain MMR updates within a block range.
+        async fn sync_chain_mmr(
+            &self,
+            request: tonic::Request<super::super::rpc::SyncChainMmrRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::rpc::SyncChainMmrResponse>,
             tonic::Status,
         >;
         /// Returns account vault updates for specified account within a block range.
@@ -1424,6 +1454,51 @@ pub mod rpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SyncStateSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/store.Rpc/SyncChainMmr" => {
+                    #[allow(non_camel_case_types)]
+                    struct SyncChainMmrSvc<T: Rpc>(pub Arc<T>);
+                    impl<
+                        T: Rpc,
+                    > tonic::server::UnaryService<super::super::rpc::SyncChainMmrRequest>
+                    for SyncChainMmrSvc<T> {
+                        type Response = super::super::rpc::SyncChainMmrResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::rpc::SyncChainMmrRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Rpc>::sync_chain_mmr(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SyncChainMmrSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

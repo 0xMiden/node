@@ -1,4 +1,6 @@
 use miden_node_proto::convert;
+use miden_node_proto::domain::block::InvalidBlockRange;
+use miden_node_proto::errors::MissingFieldHelper;
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -10,6 +12,7 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteId;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
@@ -23,6 +26,7 @@ use crate::errors::{
     NoteSyncError,
     SyncAccountStorageMapsError,
     SyncAccountVaultError,
+    SyncChainMmrError,
     SyncNullifiersError,
     SyncTransactionsError,
 };
@@ -193,6 +197,48 @@ impl rpc_server::Rpc for StoreApi {
             block_header: Some(state.block_header.into()),
             mmr_path: Some(mmr_proof.merkle_path.into()),
             notes,
+        }))
+    }
+
+    /// Returns chain MMR updates within a block range.
+    async fn sync_chain_mmr(
+        &self,
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
+        let request = request.into_inner();
+        let chain_tip = self.state.latest_block_num().await;
+        let block_num = request
+            .block_num
+            .ok_or_else(|| proto::rpc::SyncChainMmrRequest::missing_field(stringify!(block_num)))
+            .map_err(SyncChainMmrError::from)?;
+        let block_num = BlockNumber::from(block_num);
+        let block_to = request
+            .block_to
+            .map(BlockNumber::from)
+            .unwrap_or(chain_tip)
+            .min(chain_tip);
+
+        if block_num > block_to {
+            return Err(SyncChainMmrError::InvalidBlockRange(InvalidBlockRange::StartGreaterThanEnd {
+                start: block_num,
+                end: block_to,
+            })
+            .into());
+        }
+
+        let last_block_included = block_to;
+        let mmr_delta = self
+            .state
+            .sync_chain_mmr(block_num, block_to)
+            .await
+            .map_err(internal_error)?;
+
+        Ok(Response::new(proto::rpc::SyncChainMmrResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: last_block_included.as_u32(),
+            }),
+            mmr_delta: Some(mmr_delta.into()),
         }))
     }
 

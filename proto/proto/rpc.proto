@@ -118,7 +118,11 @@ service Api {
     // For preserving some degree of privacy, note tags contain only high
     // part of hashes. Thus, returned data contains excessive notes, client can make
     // additional filtering of that data on its side.
-    rpc SyncState(SyncStateRequest) returns (SyncStateResponse) {}
+    rpc SyncState(SyncStateRequest) returns (SyncStateResponse) {
+        option deprecated = true;
+    }
+
+    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 }
 
 // RPC STATUS
@@ -539,6 +543,29 @@ message SyncStateResponse {
 
     // List of all notes together with the Merkle paths from `response.block_header.note_root`.
     repeated note.NoteSyncRecord notes = 7;
+}
+
+// SYNC CHAIN MMR
+// ================================================================================================
+
+// Chain MMR synchronization request.
+message SyncChainMmrRequest {
+    // Last block known by the requester. The response will contain data starting from the next
+    // block, until `block_to` or the chain tip.
+    blockchain.BlockNumber block_num = 1;
+
+    // Optional last block to include in the response (inclusive).
+    optional blockchain.BlockNumber block_to = 2;
+}
+
+// Represents the result of syncing chain MMR.
+message SyncChainMmrResponse {
+    // Pagination information.
+    PaginationInfo pagination_info = 1;
+
+    // Data needed to update the partial MMR from `request.block_num + 1` to
+    // `pagination_info.block_num`.
+    primitives.MmrDelta mmr_delta = 2;
 }
 
 // SYNC ACCOUNT STORAGE MAP

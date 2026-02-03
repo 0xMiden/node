@@ -359,6 +359,14 @@ pub enum StateSyncError {
     FailedToBuildMmrDelta(#[from] MmrError),
 }
 
+#[derive(Error, Debug, GrpcError)]
+pub enum SyncChainMmrError {
+    #[error("invalid block range")]
+    InvalidBlockRange(#[from] InvalidBlockRange),
+    #[error("malformed block number")]
+    DeserializationFailed(#[from] ConversionError),
+}
+
 impl From<diesel::result::Error> for StateSyncError {
     fn from(value: diesel::result::Error) -> Self {
         Self::DatabaseError(DatabaseError::from(value))
