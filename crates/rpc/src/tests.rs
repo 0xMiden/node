@@ -247,6 +247,9 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     let (_, rpc_addr, store_addr) = start_rpc().await;
     let (store_runtime, _data_directory, genesis) = start_store(store_addr).await;
 
+    // Wait for the store to be ready before sending requests.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
         miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())

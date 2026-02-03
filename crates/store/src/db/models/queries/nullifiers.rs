@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use diesel::query_dsl::methods::SelectDsl;
@@ -128,6 +129,7 @@ pub(crate) fn select_nullifiers_by_prefix(
 /// ORDER BY
 ///     block_num ASC
 /// ```
+#[cfg(test)]
 pub(crate) fn select_all_nullifiers(
     conn: &mut SqliteConnection,
 ) -> Result<Vec<NullifierInfo>, DatabaseError> {
@@ -135,6 +137,67 @@ pub(crate) fn select_all_nullifiers(
         SelectDsl::select(schema::nullifiers::table, NullifierWithoutPrefixRawRow::as_select())
             .load::<NullifierWithoutPrefixRawRow>(conn)?;
     vec_raw_try_into(nullifiers_raw)
+}
+
+/// Page of nullifiers returned by [`select_nullifiers_paged`].
+#[derive(Debug)]
+pub struct NullifiersPage {
+    /// The nullifiers in this page.
+    pub nullifiers: Vec<NullifierInfo>,
+    /// If `Some`, there are more results. Use this as the `after_nullifier` for the next page.
+    pub next_cursor: Option<Nullifier>,
+}
+
+/// Selects nullifiers with pagination.
+///
+/// Returns up to `page_size` nullifiers, starting after `after_nullifier` if provided.
+/// Results are ordered by nullifier bytes for stable pagination.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT
+///     nullifier,
+///     block_num
+/// FROM
+///     nullifiers
+/// WHERE
+///     (nullifier > :after_nullifier OR :after_nullifier IS NULL)
+/// ORDER BY
+///     nullifier ASC
+/// LIMIT :page_size + 1
+/// ```
+pub(crate) fn select_nullifiers_paged(
+    conn: &mut SqliteConnection,
+    page_size: NonZeroUsize,
+    after_nullifier: Option<Nullifier>,
+) -> Result<NullifiersPage, DatabaseError> {
+    // Fetch one extra to determine if there are more results
+    #[allow(clippy::cast_possible_wrap)]
+    let limit = (page_size.get() + 1) as i64;
+
+    let mut query =
+        SelectDsl::select(schema::nullifiers::table, NullifierWithoutPrefixRawRow::as_select())
+            .order_by(schema::nullifiers::nullifier.asc())
+            .limit(limit)
+            .into_boxed();
+
+    if let Some(cursor) = after_nullifier {
+        query = query.filter(schema::nullifiers::nullifier.gt(cursor.to_bytes()));
+    }
+
+    let nullifiers_raw = query.load::<NullifierWithoutPrefixRawRow>(conn)?;
+    let mut nullifiers: Vec<NullifierInfo> = vec_raw_try_into(nullifiers_raw)?;
+
+    // If we got more than page_size, there are more results
+    let next_cursor = if nullifiers.len() > page_size.get() {
+        nullifiers.pop(); // Remove the extra element
+        nullifiers.last().map(|info| info.nullifier)
+    } else {
+        None
+    };
+
+    Ok(NullifiersPage { nullifiers, next_cursor })
 }
 
 /// Insert nullifiers for a block into the database.

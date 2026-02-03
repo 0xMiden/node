@@ -12,38 +12,16 @@ permissions:
 
 jobs:
   docker-build:
-    strategy:
-      matrix:
-        component: [node]
     runs-on: Linux-ARM64-Runner
-    name: Build ${{ matrix.component }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        if: github.event.pull_request.head.repo.fork == false
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ secrets.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE }}
-          role-session-name: GithubActionsSession
-
-      - name: Set cache parameters
-        if: github.event.pull_request.head.repo.fork == false
-        run: |
-          echo "CACHE_FROM=type=s3,region=${{ secrets.AWS_REGION }},bucket=${{ secrets.AWS_CACHE_BUCKET }},name=miden-${{ matrix.component }}" >> $GITHUB_ENV
-          echo "CACHE_TO=type=s3,region=${{ secrets.AWS_REGION }},bucket=${{ secrets.AWS_CACHE_BUCKET }},name=miden-${{ matrix.component }}" >> $GITHUB_ENV
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          cache-binary: true
 
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
+      - name: Build and push
+        uses: docker/build-push-action@v6
         with:
           push: false
-          file: ./bin/${{ matrix.component }}/Dockerfile
-          cache-from: ${{ env.CACHE_FROM || '' }}
-          cache-to: ${{ env.CACHE_TO || '' }}
+          file: ./bin/node/Dockerfile
+          cache-from: type=gha
+          # Only save cache on push into next
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' && 'type=gha,mode=max' || '' }}
