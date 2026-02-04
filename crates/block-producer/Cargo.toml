@@ -45,6 +45,7 @@ assert_matches        = { workspace = true }
 miden-node-store      = { workspace = true }
 miden-node-test-macro = { workspace = true }
 miden-node-utils      = { features = ["testing"], workspace = true }
+miden-node-validator  = { workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 miden-tx              = { features = ["testing"], workspace = true }

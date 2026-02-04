@@ -2784,6 +2784,7 @@ dependencies = [
  "miden-node-store",
  "miden-node-test-macro",
  "miden-node-utils",
+ "miden-node-validator",
  "miden-protocol",
  "miden-remote-prover-client",
  "miden-standards",
