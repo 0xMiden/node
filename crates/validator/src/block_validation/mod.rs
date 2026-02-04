@@ -30,7 +30,7 @@ pub async fn validate_block<S: BlockSigner>(
     signer: &S,
     db: &Db,
 ) -> Result<Signature, BlockValidationError> {
-    // Retrieve all validated transactions pertaining to the proposed block.
+    // Search for any proposed transactions that have not previously been validated.
     let proposed_tx_ids =
         proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
     let unvalidated_transactions = db
