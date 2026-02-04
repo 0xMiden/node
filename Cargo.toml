@@ -31,6 +31,15 @@ rust-version = "1.90"
 version      = "0.12.9"
 
 # Optimize the cryptography for faster tests involving account creation.
+[profile.release]
+#opt-level = 2
+#overflow-checks = true
+#debug-assertions = true
+#panic = "unwind"
+debug = "full"
+split-debuginfo = "packed"
+
+# Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
 opt-level = 2
 
