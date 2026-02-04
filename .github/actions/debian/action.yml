@@ -93,9 +93,11 @@ runs:
         pkg=${{ inputs.package }}
         crate=${{ inputs.crate_dir }}
         git show ${{ steps.git-sha.outputs.sha }}:bin/$crate/.env             > packaging/deb/$svc/lib/systemd/system/$svc.env
-        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/$svc.service > packaging/deb/$svc/lib/systemd/system/$svc.service
         git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/postinst     > packaging/deb/$svc/DEBIAN/postinst
         git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/postrm       > packaging/deb/$svc/DEBIAN/postrm
+        for service_file in $(ls packaging/$pkg/*.service | sed "s/.*miden/miden/g"); do
+          git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/$service_file;            > packaging/deb/$svc/lib/systemd/system/$service_file
+        done
         chmod 0775 packaging/deb/$svc/DEBIAN/postinst
         chmod 0775 packaging/deb/$svc/DEBIAN/postrm
 
