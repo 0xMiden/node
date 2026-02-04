@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
@@ -40,7 +41,9 @@ pub struct TransactionCandidate {
     pub chain_tip_header: BlockHeader,
 
     /// The chain MMR, which lags behind the tip by one block.
-    pub chain_mmr: PartialBlockchain,
+    ///
+    /// Wrapped in `Arc` to avoid expensive clones when reading the chain state.
+    pub chain_mmr: Arc<PartialBlockchain>,
 }
 
 // NETWORK ACCOUNT STATE
