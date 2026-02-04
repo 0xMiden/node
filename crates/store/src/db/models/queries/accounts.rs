@@ -610,27 +610,25 @@ pub(crate) fn insert_account_vault_asset(
 ) -> Result<usize, DatabaseError> {
     let record = AccountAssetRowInsert::new(&account_id, &vault_key, block_num, asset, true);
 
-    diesel::Connection::transaction(conn, |conn| {
-        // First, update any existing rows with the same (account_id, vault_key) to set
-        // is_latest_update=false
-        let vault_key: Word = vault_key.into();
-        let update_count = diesel::update(schema::account_vault_assets::table)
-            .filter(
-                schema::account_vault_assets::account_id
-                    .eq(&account_id.to_bytes())
-                    .and(schema::account_vault_assets::vault_key.eq(&vault_key.to_bytes()))
-                    .and(schema::account_vault_assets::is_latest_update.eq(true)),
-            )
-            .set(schema::account_vault_assets::is_latest_update.eq(false))
-            .execute(conn)?;
+    // First, update any existing rows with the same (account_id, vault_key) to set
+    // is_latest_update=false
+    let vault_key: Word = vault_key.into();
+    let update_count = diesel::update(schema::account_vault_assets::table)
+        .filter(
+            schema::account_vault_assets::account_id
+                .eq(&account_id.to_bytes())
+                .and(schema::account_vault_assets::vault_key.eq(&vault_key.to_bytes()))
+                .and(schema::account_vault_assets::is_latest_update.eq(true)),
+        )
+        .set(schema::account_vault_assets::is_latest_update.eq(false))
+        .execute(conn)?;
 
-        // Insert the new latest row
-        let insert_count = diesel::insert_into(schema::account_vault_assets::table)
-            .values(record)
-            .execute(conn)?;
+    // Insert the new latest row
+    let insert_count = diesel::insert_into(schema::account_vault_assets::table)
+        .values(record)
+        .execute(conn)?;
 
-        Ok(update_count + insert_count)
-    })
+    Ok(update_count + insert_count)
 }
 
 /// Insert an account storage map value into the DB using the given [`SqliteConnection`].
