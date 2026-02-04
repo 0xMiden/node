@@ -28,7 +28,6 @@ miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
 miden-standards            = { workspace = true }
-miden-tx                   = { default-features = true, workspace = true }
 miden-tx-batch-prover      = { workspace = true }
 rand                       = { version = "0.9" }
 thiserror                  = { workspace = true }
