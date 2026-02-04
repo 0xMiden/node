@@ -4,8 +4,7 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use diesel::sql_types::Integer;
-use diesel::{Connection, RunQueryDsl, SqliteConnection};
+use diesel::{Connection, SqliteConnection};
 use miden_lib::account::auth::AuthRpoFalcon512;
 use miden_lib::note::create_p2id_note;
 use miden_lib::transaction::TransactionKernel;
