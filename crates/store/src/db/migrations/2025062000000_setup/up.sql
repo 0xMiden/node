@@ -93,6 +93,7 @@ CREATE TABLE account_storage_map_values (
 ) WITHOUT ROWID;
 
 CREATE INDEX asm_latest_by_acct_block_slot_key ON account_storage_map_values(account_id, block_num);
+CREATE INDEX asm_latest_by_acct_slot_key ON account_storage_map_values(account_id, slot, key, is_latest_update) WHERE is_latest_update = 1;
 
 CREATE TABLE account_vault_assets (
     account_id          BLOB    NOT NULL,
@@ -105,6 +106,7 @@ CREATE TABLE account_vault_assets (
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_vault_assets_id_block ON account_vault_assets (account_id, block_num);
+CREATE INDEX idx_vault_assets_latest ON account_vault_assets(account_id, vault_key, is_latest_update) WHERE is_latest_update = 1;
 
 CREATE TABLE nullifiers (
     nullifier        BLOB    NOT NULL,
