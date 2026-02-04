@@ -5,6 +5,7 @@
 ### Fixes
 
 - Fixed network monitor displaying explorer URL as a "null" hyperlink when unset ([#1617](https://github.com/0xMiden/miden-node/pull/1617)).
+- Fixed empty storage maps not being inserted into `storage_entries` table when inserting storage delta ([#1642](https://github.com/0xMiden/miden-node/pull/1642)).
 
 ## v0.13.3 (2026-01-29)
 
