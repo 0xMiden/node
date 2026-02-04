@@ -90,7 +90,7 @@ pub(crate) fn find_unvalidated_transactions(
     let tx_id_bytes: Vec<Vec<u8>> = tx_ids.iter().map(TransactionId::to_bytes).collect();
 
     // Query the database for matching transactions ids.
-    let raw_transactions_ids = schema::transactions::table
+    let raw_transaction_ids = schema::transactions::table
         .select(schema::transactions::id)
         .filter(schema::transactions::id.eq_any(tx_id_bytes))
         .order(schema::transactions::id.asc())
@@ -98,12 +98,14 @@ pub(crate) fn find_unvalidated_transactions(
         .map_err(DatabaseError::from)?;
 
     // Find any requested ids that the database does not contain.
-    let expected_tx_ids = tx_ids.iter().copied().collect::<HashSet<TransactionId>>();
+    let validated_tx_ids = raw_transaction_ids
+        .into_iter()
+        .map(|raw_id| TransactionId::read_from_bytes(&raw_id))
+        .collect::<Result<HashSet<TransactionId>, _>>()?;
     let mut unvalidated_tx_ids = Vec::new();
-    for raw_tx_id in raw_transactions_ids {
-        let tx_id = TransactionId::read_from_bytes(&raw_tx_id)?;
-        if !expected_tx_ids.contains(&tx_id) {
-            unvalidated_tx_ids.push(tx_id);
+    for tx_id in tx_ids {
+        if !validated_tx_ids.contains(tx_id) {
+            unvalidated_tx_ids.push(*tx_id);
         }
     }
     Ok(unvalidated_tx_ids)
