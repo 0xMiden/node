@@ -500,11 +500,13 @@ impl InnerForest {
                 })
                 .collect();
 
-            // if the delta is empty, make sure we create an entry in the storage map roots map,
-            // but no need to do anything else
+            // if the delta is empty, make sure we create an entry in the storage map roots map
+            // and storage entries map (so storage_map_entries() queries work)
             if map_entries.is_empty() {
                 self.storage_map_roots
                     .insert((account_id, slot_name.clone(), block_num), prev_root);
+                self.storage_entries
+                    .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
 
                 continue;
             }
