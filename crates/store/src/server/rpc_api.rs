@@ -17,6 +17,7 @@ use tracing::{debug, info};
 use crate::COMPONENT;
 use crate::errors::{
     CheckNullifiersError,
+    GetAccountError,
     GetBlockByNumberError,
     GetNoteScriptByRootError,
     GetNotesByIdError,
@@ -250,7 +251,7 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         debug!(target: COMPONENT, ?request);
         let request = request.into_inner();
-        let account_request = request.try_into()?;
+        let account_request = request.try_into().map_err(GetAccountError::DeserializationFailed)?;
 
         let account_data = self.state.get_account(account_request).await?;
 

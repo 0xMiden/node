@@ -489,6 +489,26 @@ pub enum GetBlockByNumberError {
     DeserializationFailed(#[from] DeserializationError),
 }
 
+// GET ACCOUNT ERRORS
+// ================================================================================================
+
+#[derive(Debug, Error, GrpcError)]
+pub enum GetAccountError {
+    #[error("database error")]
+    #[grpc(internal)]
+    DatabaseError(#[from] DatabaseError),
+    #[error("malformed request")]
+    DeserializationFailed(#[from] ConversionError),
+    #[error("account {0} not found")]
+    AccountNotFound(AccountId),
+    #[error("account {0} is not public")]
+    AccountNotPublic(AccountId),
+    #[error("block {0} is unknown")]
+    UnknownBlock(BlockNumber),
+    #[error("block {0} has been pruned")]
+    BlockPruned(BlockNumber),
+}
+
 // GET NOTES BY ID ERRORS
 // ================================================================================================
 
