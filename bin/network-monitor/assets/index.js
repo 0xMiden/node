@@ -550,6 +550,7 @@ function updateDisplay() {
                                         <span class="metric-label">PoW Difficulty:</span>
                                         <span class="metric-value">${details.FaucetTest.faucet_metadata.pow_load_difficulty}</span>
                                     </div>
+                                    ${details.FaucetTest.faucet_metadata.explorer_url ? `
                                     <div class="metric-row">
                                         <span class="metric-label">Explorer URL:</span>
                                         <span class="metric-value">
@@ -558,6 +559,7 @@ function updateDisplay() {
                                             </a>
                                         </span>
                                     </div>
+                                    ` : ''}
                                 </div>
                             </div>
                           ` : ''}

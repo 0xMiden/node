@@ -444,3 +444,77 @@ fn test_storage_map_incremental_updates() {
     assert_ne!(root_2, root_3);
     assert_ne!(root_1, root_3);
 }
+
+#[test]
+fn test_empty_storage_map_entries_query() {
+    use miden_protocol::account::auth::PublicKeyCommitment;
+    use miden_protocol::account::{
+        AccountBuilder,
+        AccountComponent,
+        AccountStorageMode,
+        AccountType,
+        StorageMap,
+        StorageSlot,
+    };
+    use miden_standards::account::auth::AuthFalcon512Rpo;
+    use miden_standards::code_builder::CodeBuilder;
+
+    let mut forest = InnerForest::new();
+    let block_num = BlockNumber::GENESIS.child();
+    let slot_name = StorageSlotName::mock(0);
+
+    // Create an account with an empty storage map slot
+    let storage_map = StorageMap::with_entries(vec![]).unwrap();
+    let component_storage = vec![StorageSlot::with_map(slot_name.clone(), storage_map)];
+
+    let component_code = CodeBuilder::default()
+        .compile_component_code("test::interface", "pub proc test push.1 end")
+        .unwrap();
+    let account_component = AccountComponent::new(component_code, component_storage)
+        .unwrap()
+        .with_supports_all_types();
+
+    let account = AccountBuilder::new([1u8; 32])
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_component(account_component)
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .build_existing()
+        .unwrap();
+
+    let account_id = account.id();
+
+    // Convert to full-state delta (this triggers insert_account_storage path)
+    let full_delta = AccountDelta::try_from(account).unwrap();
+    assert!(full_delta.is_full_state(), "delta should be full-state");
+
+    // Apply the delta
+    forest.update_account(block_num, &full_delta).unwrap();
+
+    // Verify storage_map_roots has an entry
+    assert!(
+        forest
+            .storage_map_roots
+            .contains_key(&(account_id, slot_name.clone(), block_num)),
+        "storage_map_roots should have an entry for the empty map"
+    );
+
+    // Verify storage_map_entries returns Some (not None) - this is the bug fix validation
+    let result = forest.storage_map_entries(account_id, slot_name.clone(), block_num);
+    assert!(result.is_some(), "storage_map_entries should return Some for empty maps");
+
+    // Verify the entries are empty
+    let details = result.unwrap();
+    assert_eq!(details.slot_name, slot_name);
+    match details.entries {
+        StorageMapEntries::AllEntries(entries) => {
+            assert!(entries.is_empty(), "entries should be empty for an empty map");
+        },
+        StorageMapEntries::LimitExceeded => {
+            panic!("should not exceed limit for empty map");
+        },
+        StorageMapEntries::EntriesWithProofs(_) => {
+            panic!("should not have proofs for empty map query");
+        },
+    }
+}
