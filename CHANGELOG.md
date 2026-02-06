@@ -2,6 +2,10 @@
 
 ## v0.14.0 (TBD)
 
+### Fixes
+
+- Improved `miden-network-monitor` health status policies: faucet now correctly transitions to unhealthy on failure, RPC reports unhealthy when store or block producer sub-components are missing or degraded, explorer detects stale block data, counter tracking flags persistent account absence, and faucet HTTP errors are no longer silently ignored.
+
 ### Enhancements
 
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).

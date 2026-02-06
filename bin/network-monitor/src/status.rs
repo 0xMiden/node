@@ -303,8 +303,9 @@ impl From<BlockProducerStatus> for BlockProducerStatusDetails {
 
 impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
     fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
-        let status =
-            proto::remote_prover::WorkerHealthStatus::try_from(value.status).unwrap().into();
+        let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status)
+            .map(Status::from)
+            .unwrap_or(Status::Unknown);
 
         Self {
             name: value.name,
@@ -317,8 +318,8 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
 impl RemoteProverStatusDetails {
     pub fn from_proxy_status(status: proto::remote_prover::ProxyStatus, url: String) -> Self {
         let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
-            .unwrap()
-            .into();
+            .map(ProofType::from)
+            .unwrap_or(ProofType::Transaction);
 
         let workers: Vec<WorkerStatusDetails> =
             status.workers.into_iter().map(WorkerStatusDetails::from).collect();
@@ -440,28 +441,79 @@ pub(crate) async fn check_rpc_status(
             let status = response.into_inner();
             let rpc_details = RpcStatusDetails::from_rpc_status(status, url);
 
-            // Check for stale chain tip using the store's chain tip
-            if let Some(store_status) = &rpc_details.store_status {
-                if let Some(stale_duration) =
-                    stale_tracker.update(store_status.chain_tip, current_time)
-                {
+            // Check if store sub-component is missing or unhealthy
+            match &rpc_details.store_status {
+                None => {
+                    debug!(target: COMPONENT, "Store status is missing from RPC response");
+                    return ServiceStatus {
+                        name: "RPC".to_string(),
+                        status: Status::Unhealthy,
+                        last_checked: current_time,
+                        error: Some("Store status not available".to_string()),
+                        details: ServiceDetails::RpcStatus(rpc_details),
+                    };
+                },
+                Some(store_status) if store_status.status == Status::Unhealthy => {
+                    debug!(target: COMPONENT, "Store reports unhealthy status");
+                    return ServiceStatus {
+                        name: "RPC".to_string(),
+                        status: Status::Unhealthy,
+                        last_checked: current_time,
+                        error: Some("Store is unhealthy".to_string()),
+                        details: ServiceDetails::RpcStatus(rpc_details),
+                    };
+                },
+                Some(store_status) => {
+                    // Check for stale chain tip using the store's chain tip
+                    if let Some(stale_duration) =
+                        stale_tracker.update(store_status.chain_tip, current_time)
+                    {
+                        debug!(
+                            target: COMPONENT,
+                            chain_tip = store_status.chain_tip,
+                            stale_duration_secs = stale_duration,
+                            "Chain tip is stale"
+                        );
+                        return ServiceStatus {
+                            name: "RPC".to_string(),
+                            status: Status::Unhealthy,
+                            last_checked: current_time,
+                            error: Some(format!(
+                                "Chain tip {} has not changed for {} seconds",
+                                store_status.chain_tip, stale_duration
+                            )),
+                            details: ServiceDetails::RpcStatus(rpc_details),
+                        };
+                    }
+                },
+            }
+
+            // Check if block producer sub-component is missing or unhealthy
+            match &rpc_details.block_producer_status {
+                None => {
                     debug!(
                         target: COMPONENT,
-                        chain_tip = store_status.chain_tip,
-                        stale_duration_secs = stale_duration,
-                        "Chain tip is stale"
+                        "Block producer status is missing from RPC response"
                     );
                     return ServiceStatus {
                         name: "RPC".to_string(),
                         status: Status::Unhealthy,
                         last_checked: current_time,
-                        error: Some(format!(
-                            "Chain tip {} has not changed for {} seconds",
-                            store_status.chain_tip, stale_duration
-                        )),
+                        error: Some("Block producer status not available".to_string()),
                         details: ServiceDetails::RpcStatus(rpc_details),
                     };
-                }
+                },
+                Some(bp_status) if bp_status.status == Status::Unhealthy => {
+                    debug!(target: COMPONENT, "Block producer reports unhealthy status");
+                    return ServiceStatus {
+                        name: "RPC".to_string(),
+                        status: Status::Unhealthy,
+                        last_checked: current_time,
+                        error: Some("Block producer is unhealthy".to_string()),
+                        details: ServiceDetails::RpcStatus(rpc_details),
+                    };
+                },
+                Some(_) => {},
             }
 
             ServiceStatus {

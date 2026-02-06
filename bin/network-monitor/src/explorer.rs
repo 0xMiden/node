@@ -11,7 +11,13 @@ use tokio::time::MissedTickBehavior;
 use tracing::{info, instrument};
 use url::Url;
 
-use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus, Status};
+use crate::status::{
+    ExplorerStatusDetails,
+    ServiceDetails,
+    ServiceStatus,
+    StaleChainTracker,
+    Status,
+};
 use crate::{COMPONENT, current_unix_timestamp_secs};
 
 const LATEST_BLOCK_QUERY: &str = "
@@ -70,8 +76,10 @@ pub async fn run_explorer_status_task(
     status_sender: watch::Sender<ServiceStatus>,
     status_check_interval: Duration,
     request_timeout: Duration,
+    stale_chain_tip_threshold: Duration,
 ) {
-    let mut explorer_client = reqwest::Client::new();
+    let explorer_client = reqwest::Client::new();
+    let mut stale_tracker = StaleChainTracker::new(stale_chain_tip_threshold);
 
     let mut interval = tokio::time::interval(status_check_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -82,11 +90,12 @@ pub async fn run_explorer_status_task(
         let current_time = current_unix_timestamp_secs();
 
         let status = check_explorer_status(
-            &mut explorer_client,
+            &explorer_client,
             explorer_url.clone(),
             name.clone(),
             current_time,
             request_timeout,
+            &mut stale_tracker,
         )
         .await;
 
@@ -118,11 +127,12 @@ pub async fn run_explorer_status_task(
 /// A `ServiceStatus` containing the status of the explorer service.
 #[instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
 pub(crate) async fn check_explorer_status(
-    explorer_client: &mut Client,
+    explorer_client: &Client,
     explorer_url: Url,
     name: String,
     current_time: u64,
     request_timeout: Duration,
+    stale_tracker: &mut StaleChainTracker,
 ) -> ServiceStatus {
     let resp = explorer_client
         .post(explorer_url.clone())
@@ -142,12 +152,30 @@ pub(crate) async fn check_explorer_status(
     };
 
     match details {
-        Ok(details) => ServiceStatus {
-            name: name.clone(),
-            status: Status::Healthy,
-            last_checked: current_time,
-            error: None,
-            details: ServiceDetails::ExplorerStatus(details),
+        Ok(details) => {
+            // Check for stale block data
+            if let Some(stale_duration) =
+                stale_tracker.update(details.block_number as u32, current_time)
+            {
+                return ServiceStatus {
+                    name: name.clone(),
+                    status: Status::Unhealthy,
+                    last_checked: current_time,
+                    error: Some(format!(
+                        "Block {} has not changed for {} seconds",
+                        details.block_number, stale_duration
+                    )),
+                    details: ServiceDetails::ExplorerStatus(details),
+                };
+            }
+
+            ServiceStatus {
+                name: name.clone(),
+                status: Status::Healthy,
+                last_checked: current_time,
+                error: None,
+                details: ServiceDetails::ExplorerStatus(details),
+            }
         },
         Err(e) => unhealthy(&name, current_time, &e),
     }

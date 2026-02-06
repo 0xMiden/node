@@ -120,6 +120,7 @@ impl Tasks {
         let name = "Explorer".to_string();
         let status_check_interval = config.status_check_interval;
         let request_timeout = config.request_timeout;
+        let stale_chain_tip_threshold = config.stale_chain_tip_threshold;
         let (explorer_status_tx, explorer_status_rx) = watch::channel(initial_explorer_status());
 
         let id = self
@@ -131,13 +132,14 @@ impl Tasks {
                     explorer_status_tx,
                     status_check_interval,
                     request_timeout,
+                    stale_chain_tip_threshold,
                 )
                 .await;
             })
             .id();
         self.names.insert(id, "explorer-checker".to_string());
 
-        println!("Spawned explorer status checker task");
+        debug!(target: COMPONENT, "Spawned explorer status checker task");
 
         Ok(explorer_status_rx)
     }

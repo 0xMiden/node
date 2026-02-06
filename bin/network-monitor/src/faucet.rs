@@ -113,6 +113,7 @@ pub async fn run_faucet_test_task(
 
         let start_time = std::time::Instant::now();
 
+        let mut last_error = None;
         match perform_faucet_test(&client, &faucet_url).await {
             Ok((minted_tokens, metadata)) => {
                 success_count += 1;
@@ -122,6 +123,7 @@ pub async fn run_faucet_test_task(
             },
             Err(e) => {
                 failure_count += 1;
+                last_error = Some(format!("{e:#}"));
                 warn!("Faucet test failed: {}", e);
             },
         }
@@ -138,13 +140,13 @@ pub async fn run_faucet_test_task(
 
         let status = ServiceStatus {
             name: "Faucet".to_string(),
-            status: if success_count > 0 || failure_count == 0 {
-                Status::Healthy
-            } else {
+            status: if last_error.is_some() {
                 Status::Unhealthy
+            } else {
+                Status::Healthy
             },
             last_checked: current_time,
-            error: None,
+            error: last_error,
             details: ServiceDetails::FaucetTest(test_details),
         };
 
@@ -192,7 +194,9 @@ async fn perform_faucet_test(
         .get(pow_url)
         .query(&[("account_id", &account_id), ("amount", &MINT_AMOUNT.to_string())])
         .send()
-        .await?;
+        .await?
+        .error_for_status()
+        .context("PoW challenge request returned error status")?;
 
     let response_text = response.text().await?;
     debug!("Faucet PoW response: {}", response_text);
@@ -225,7 +229,9 @@ async fn perform_faucet_test(
             ("nonce", &nonce.to_string()),
         ])
         .send()
-        .await?;
+        .await?
+        .error_for_status()
+        .context("Get tokens request returned error status")?;
 
     let response_text = response.text().await?;
 
@@ -235,7 +241,12 @@ async fn perform_faucet_test(
     // Step 4: Get faucet metadata
     let metadata_url = faucet_url.join("/get_metadata")?;
 
-    let response = client.get(metadata_url).send().await?;
+    let response = client
+        .get(metadata_url)
+        .send()
+        .await?
+        .error_for_status()
+        .context("Get metadata request returned error status")?;
 
     let response_text = response.text().await?;
 

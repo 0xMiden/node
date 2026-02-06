@@ -56,6 +56,9 @@ use crate::status::{
     Status,
 };
 
+/// Number of consecutive `Ok(None)` polls before flagging the counter as unhealthy.
+const MAX_ABSENT_POLLS: u64 = 10;
+
 #[derive(Debug, Default, Clone)]
 pub struct LatencyState {
     pending: Option<PendingLatencyDetails>,
@@ -564,6 +567,11 @@ pub async fn run_counter_tracking_task(
 
     let mut poll_interval = tokio::time::interval(config.counter_increment_interval / 2);
 
+    // Track consecutive polls where the counter account is absent (Ok(None)).
+    // After enough consecutive absences we flag the service as unhealthy rather
+    // than staying Unknown forever.
+    let mut consecutive_absent_polls: u64 = 0;
+
     loop {
         poll_interval.tick().await;
 
@@ -574,8 +582,21 @@ pub async fn run_counter_tracking_task(
             &latency_state,
             &mut details,
             &config,
+            &mut consecutive_absent_polls,
         )
         .await;
+
+        let last_error = if last_error.is_none()
+            && details.current_value.is_none()
+            && consecutive_absent_polls >= MAX_ABSENT_POLLS
+        {
+            Some(format!(
+                "Counter account not found on-chain for {consecutive_absent_polls} consecutive polls"
+            ))
+        } else {
+            last_error
+        };
+
         let status = build_tracking_status(&details, last_error);
         send_status(&tx, status)?;
     }
@@ -621,12 +642,14 @@ async fn poll_counter_once(
     latency_state: &Arc<Mutex<LatencyState>>,
     details: &mut CounterTrackingDetails,
     config: &MonitorConfig,
+    consecutive_absent_polls: &mut u64,
 ) -> Option<String> {
     let mut last_error = None;
     let current_time = crate::monitor::tasks::current_unix_timestamp_secs();
 
     match fetch_counter_value(rpc_client, counter_account.id()).await {
         Ok(Some(value)) => {
+            *consecutive_absent_polls = 0;
             details.current_value = Some(value);
             details.last_updated = Some(current_time);
 
@@ -635,7 +658,7 @@ async fn poll_counter_once(
                 .await;
         },
         Ok(None) => {
-            // Counter value not available, but not an error
+            *consecutive_absent_polls += 1;
         },
         Err(e) => {
             error!("Failed to fetch counter value: {:?}", e);
