@@ -123,7 +123,10 @@ impl Coordinator {
 
         // If an actor already exists for this account ID, something has gone wrong.
         if let Some(handle) = self.actor_registry.remove(&account_id) {
-            tracing::error!("account actor already exists for account: {}", account_id);
+            tracing::error!(
+                account_id = %account_id,
+                "Account actor already exists"
+            );
             handle.cancel_token.cancel();
         }
 
@@ -144,7 +147,7 @@ impl Coordinator {
         }
 
         self.actor_registry.insert(account_id, handle);
-        tracing::info!("created actor for account: {}", account_id);
+        tracing::info!(account_id = %account_id, "Created actor for account prefix");
         Ok(())
     }
 
@@ -165,7 +168,11 @@ impl Coordinator {
         // Send event to all actors.
         for (account_id, handle) in &self.actor_registry {
             if let Err(err) = Self::send(handle, event.clone()).await {
-                tracing::error!("failed to send event to actor {}: {}", account_id, err);
+                tracing::error!(
+                    account_id = %account_id,
+                    error = %err,
+                    "Failed to send event to actor"
+                );
                 failed_actors.push(*account_id);
             }
         }
@@ -192,11 +199,11 @@ impl Coordinator {
                 ActorShutdownReason::Cancelled(account_id) => {
                     // Do not remove the actor from the registry, as it may be re-spawned.
                     // The coordinator should always remove actors immediately after cancellation.
-                    tracing::info!("account actor cancelled: {}", account_id);
+                    tracing::info!(account_id = %account_id, "Account actor cancelled");
                     Ok(())
                 },
                 ActorShutdownReason::AccountReverted(account_id) => {
-                    tracing::info!("account reverted: {}", account_id);
+                    tracing::info!(account_id = %account_id, "Account reverted");
                     self.actor_registry.remove(&account_id);
                     Ok(())
                 },

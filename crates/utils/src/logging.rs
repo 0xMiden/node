@@ -89,7 +89,7 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     // This chains with the default panic hook to preserve backtrace printing.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!(panic = true, "{info}");
+        tracing::error!(panic = true, info = %info, "panic");
 
         // Flush traces before the program terminates.
         // This ensures the panic trace is exported even though the OtelGuard won't be dropped.
