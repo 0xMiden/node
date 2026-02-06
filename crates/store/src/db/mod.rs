@@ -610,6 +610,8 @@ impl Db {
                 tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
             }
 
+            models::queries::cleanup_all_accounts(conn, signed_block.header().block_num())?;
+
             acquire_done.blocking_recv()?;
 
             Ok(())

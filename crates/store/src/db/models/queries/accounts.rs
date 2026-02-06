@@ -1252,3 +1252,46 @@ pub(crate) struct AccountStorageMapRowInsert {
     pub(crate) value: Vec<u8>,
     pub(crate) is_latest: bool,
 }
+
+// CLEANUP FUNCTIONS
+// ================================================================================================
+
+/// Number of historical blocks to retain for vault assets and storage map values.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
+/// except for entries marked with `is_latest=true` which are always retained.
+pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
+
+/// Clean up old entries for all accounts, deleting entries older than the retention window.
+///
+/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`.
+/// This is a simple and efficient approach that doesn't require window functions.
+///
+/// # Returns
+/// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
+pub fn cleanup_all_accounts(
+    conn: &mut SqliteConnection,
+    chain_tip: BlockNumber,
+) -> Result<(usize, usize), DatabaseError> {
+    let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+    let vault_deleted = diesel::delete(
+        schema::account_vault_assets::table.filter(
+            schema::account_vault_assets::block_num
+                .lt(cutoff_block)
+                .and(schema::account_vault_assets::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)?;
+
+    let storage_deleted = diesel::delete(
+        schema::account_storage_map_values::table.filter(
+            schema::account_storage_map_values::block_num
+                .lt(cutoff_block)
+                .and(schema::account_storage_map_values::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)?;
+
+    Ok((vault_deleted, storage_deleted))
+}
