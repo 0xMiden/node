@@ -207,23 +207,28 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
-        let block_num = request
-            .block_num
-            .ok_or_else(|| proto::rpc::SyncChainMmrRequest::missing_field(stringify!(block_num)))
-            .map_err(SyncChainMmrError::from)?;
-        let block_num = BlockNumber::from(block_num);
-        let block_to = request.block_to.map_or(chain_tip, BlockNumber::from).min(chain_tip);
 
-        if block_num > block_to {
+        let block_range = request
+            .block_range
+            .ok_or_else(|| proto::rpc::SyncChainMmrRequest::missing_field(stringify!(block_range)))
+            .map_err(SyncChainMmrError::DeserializationFailed)?;
+
+        let block_from = BlockNumber::from(block_range.block_from);
+        let block_to = block_range.block_to.map_or(chain_tip, BlockNumber::from).min(chain_tip);
+
+        if block_from > block_to {
             return Err(SyncChainMmrError::InvalidBlockRange(
-                InvalidBlockRange::StartGreaterThanEnd { start: block_num, end: block_to },
+                InvalidBlockRange::StartGreaterThanEnd { start: block_from, end: block_to },
             )
             .into());
         }
 
         let last_block_included = block_to;
-        let mmr_delta =
-            self.state.sync_chain_mmr(block_num, block_to).await.map_err(internal_error)?;
+        let mmr_delta = self
+            .state
+            .sync_chain_mmr(block_from..=block_to)
+            .await
+            .map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {

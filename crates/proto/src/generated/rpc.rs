@@ -477,13 +477,12 @@ pub struct SyncStateResponse {
 /// Chain MMR synchronization request.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncChainMmrRequest {
-    /// Last block known by the requester. The response will contain data starting from the next
-    /// block, until `block_to` or the chain tip.
+    /// Block range from which to synchronize the chain MMR.
+    ///
+    /// The response will contain MMR delta from `block_range.block_from + 1` up to
+    /// `block_range.block_to` or the chain tip (whichever is lower).
     #[prost(message, optional, tag = "1")]
-    pub block_num: ::core::option::Option<super::blockchain::BlockNumber>,
-    /// Optional last block to include in the response (inclusive).
-    #[prost(message, optional, tag = "2")]
-    pub block_to: ::core::option::Option<super::blockchain::BlockNumber>,
+    pub block_range: ::core::option::Option<BlockRange>,
 }
 /// Represents the result of syncing chain MMR.
 #[derive(Clone, PartialEq, ::prost::Message)]

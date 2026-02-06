@@ -550,12 +550,11 @@ message SyncStateResponse {
 
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
-    // Last block known by the requester. The response will contain data starting from the next
-    // block, until `block_to` or the chain tip.
-    blockchain.BlockNumber block_num = 1;
-
-    // Optional last block to include in the response (inclusive).
-    optional blockchain.BlockNumber block_to = 2;
+    // Block range from which to synchronize the chain MMR.
+    //
+    // The response will contain MMR delta from `block_range.block_from + 1` up to
+    // `block_range.block_to` or the chain tip (whichever is lower).
+    BlockRange block_range = 1;
 }
 
 // Represents the result of syncing chain MMR.

@@ -362,9 +362,9 @@ pub enum StateSyncError {
 #[derive(Error, Debug, GrpcError)]
 pub enum SyncChainMmrError {
     #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
+    InvalidBlockRange(#[source] InvalidBlockRange),
     #[error("malformed block number")]
-    DeserializationFailed(#[from] ConversionError),
+    DeserializationFailed(#[source] ConversionError),
 }
 
 impl From<diesel::result::Error> for StateSyncError {

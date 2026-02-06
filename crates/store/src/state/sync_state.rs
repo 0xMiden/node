@@ -29,14 +29,16 @@ impl State {
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn sync_chain_mmr(
         &self,
-        block_num: BlockNumber,
-        block_to: BlockNumber,
+        block_range: RangeInclusive<BlockNumber>,
     ) -> Result<MmrDelta, StateSyncError> {
         let inner = self.inner.read().await;
 
-        if block_num == block_to {
+        let block_from = *block_range.start();
+        let block_to = *block_range.end();
+
+        if block_from == block_to {
             return Ok(MmrDelta {
-                forest: Forest::new(block_num.as_usize()),
+                forest: Forest::new(block_from.as_usize()),
                 data: vec![],
             });
         }
@@ -47,9 +49,9 @@ impl State {
         //   contained in the block header always lag behind by one block, this is because the Mmr
         //   leaves are hashes of block headers, and we can't have self-referential hashes. These
         //   two points cancel out and don't require adjusting.
-        // - Mmr::get_delta is inclusive, whereas the sync request block_num is defined to be
+        // - Mmr::get_delta is inclusive, whereas the sync request block_from is defined to be
         //   exclusive, so the from_forest has to be adjusted with a +1.
-        let from_forest = (block_num + 1).as_usize();
+        let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 
         inner
