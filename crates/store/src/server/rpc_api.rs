@@ -224,11 +224,8 @@ impl rpc_server::Rpc for StoreApi {
         }
 
         let last_block_included = block_to;
-        let mmr_delta = self
-            .state
-            .sync_chain_mmr(block_from..=block_to)
-            .await
-            .map_err(internal_error)?;
+        let mmr_delta =
+            self.state.sync_chain_mmr(block_from..=block_to).await.map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
