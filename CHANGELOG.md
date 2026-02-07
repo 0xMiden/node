@@ -13,6 +13,7 @@
 - Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
 - Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).
 - Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/miden-node/pull/1651)).
+- Improved tracing span fields ([#1650](https://github.com/0xMiden/miden-node/pull/1650))
 
 ## v0.13.5 (TBD)
 
