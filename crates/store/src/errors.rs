@@ -499,8 +499,8 @@ pub enum GetAccountError {
     DatabaseError(#[from] DatabaseError),
     #[error("malformed request")]
     DeserializationFailed(#[from] ConversionError),
-    #[error("account {0} not found")]
-    AccountNotFound(AccountId),
+    #[error("account {0} not found at block {1}")]
+    AccountNotFound(AccountId, BlockNumber),
     #[error("account {0} is not public")]
     AccountNotPublic(AccountId),
     #[error("block {0} is unknown")]
@@ -599,6 +599,83 @@ pub enum SchemaVerificationError {
         missing_count: usize,
         extra_count: usize,
     },
+}
+
+#[cfg(test)]
+mod get_account_error_tests {
+    use miden_protocol::account::AccountId;
+    use miden_protocol::block::BlockNumber;
+    use miden_protocol::testing::account_id::AccountIdBuilder;
+    use tonic::Status;
+
+    use super::GetAccountError;
+
+    fn test_account_id() -> AccountId {
+        AccountIdBuilder::new().build_with_seed([1; 32])
+    }
+
+    #[test]
+    fn unknown_block_returns_invalid_argument() {
+        let block = BlockNumber::from(999);
+        let err = GetAccountError::UnknownBlock(block);
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(!status.metadata().is_empty() || !status.details().is_empty());
+    }
+
+    #[test]
+    fn block_pruned_returns_invalid_argument() {
+        let block = BlockNumber::from(1);
+        let err = GetAccountError::BlockPruned(block);
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn account_not_public_returns_invalid_argument() {
+        let err = GetAccountError::AccountNotPublic(test_account_id());
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn account_not_found_returns_invalid_argument_with_block_context() {
+        let account_id = test_account_id();
+        let block = BlockNumber::from(5);
+        let err = GetAccountError::AccountNotFound(account_id, block);
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "error message should mention 'not found'");
+        assert!(msg.contains("block"), "error message should include block context");
+
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn each_variant_has_unique_discriminant() {
+        let account_id = test_account_id();
+        let block = BlockNumber::from(1);
+
+        let errors = [
+            GetAccountError::AccountNotFound(account_id, block),
+            GetAccountError::AccountNotPublic(account_id),
+            GetAccountError::UnknownBlock(block),
+            GetAccountError::BlockPruned(block),
+        ];
+
+        let codes: Vec<u8> = errors.iter().map(|e| e.api_error().api_code()).collect();
+
+        // All non-internal variants should have unique, non-zero discriminants
+        for &code in &codes {
+            assert_ne!(code, 0, "non-internal variants should not map to Internal (0)");
+        }
+
+        // Check uniqueness
+        let mut sorted = codes.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), codes.len(), "all error variants should have unique codes");
+    }
 }
 
 // Do not scope for `cfg(test)` - if it the traitbounds don't suffice the issue will already appear

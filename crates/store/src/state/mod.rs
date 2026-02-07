@@ -702,7 +702,7 @@ impl State {
             .db
             .select_account_header_with_storage_header_at_block(account_id, block_num)
             .await?
-            .ok_or(GetAccountError::AccountNotFound(account_id))?;
+            .ok_or(GetAccountError::AccountNotFound(account_id, block_num))?;
 
         let account_code = match code_commitment {
             Some(commitment) if commitment == account_header.code_commitment() => None,
