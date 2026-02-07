@@ -672,7 +672,7 @@ mod get_account_error_tests {
 
         // Check uniqueness
         let mut sorted = codes.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), codes.len(), "all error variants should have unique codes");
     }
