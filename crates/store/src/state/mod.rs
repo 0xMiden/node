@@ -32,7 +32,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{info, instrument};
 
 use crate::accounts::AccountTreeWithHistory;
@@ -65,6 +65,9 @@ use loader::{
 
 mod apply_block;
 mod sync_state;
+
+#[cfg(test)]
+mod tests;
 
 // STRUCTURES
 // ================================================================================================
@@ -116,9 +119,9 @@ pub struct State {
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
     forest: RwLock<InnerForest>,
 
-    /// To allow readers to access the tree data while an update in being performed, and prevent
-    /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
-    writer: Mutex<()>,
+    /// To allow readers to access the tree data while an update is being performed, and prevent
+    /// TOCTOU issues, there must be no concurrent writers. This serializes writers.
+    writer: Semaphore,
 
     /// Request termination of the process due to a fatal internal state error.
     termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
@@ -168,7 +171,7 @@ impl State {
         let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 
         let forest = RwLock::new(forest);
-        let writer = Mutex::new(());
+        let writer = Semaphore::new(1);
         let db = Arc::new(db);
 
         Ok(Self {

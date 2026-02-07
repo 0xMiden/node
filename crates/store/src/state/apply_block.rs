@@ -42,7 +42,7 @@ impl State {
     #[allow(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
-        let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
+        let _permit = self.writer.try_acquire().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
         let header = signed_block.header();
         let body = signed_block.body();
