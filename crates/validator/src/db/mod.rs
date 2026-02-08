@@ -47,6 +47,19 @@ pub(crate) fn insert_transaction(
 /// Scans the database for transaction Ids that do not exist.
 ///
 /// If the resulting vector is empty, all supplied transaction ids have been validated in the past.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT
+///     id
+/// FROM
+///     transactions
+/// WHERE
+///     id IN (?, ...)
+/// ORDER BY
+///     id ASC
+/// ```
 pub(crate) fn find_unvalidated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
