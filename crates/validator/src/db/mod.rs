@@ -60,7 +60,6 @@ pub(crate) fn select_validated_transactions(
     // Query the database for matching transactions.
     let raw_transactions = schema::transactions::table
         .filter(schema::transactions::id.eq_any(tx_id_bytes))
-        .order(schema::transactions::id.asc())
         .load::<TransactionSummaryRowSelect>(conn)
         .map_err(DatabaseError::from)?;
 
