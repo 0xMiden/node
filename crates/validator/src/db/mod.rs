@@ -2,7 +2,7 @@ mod migrations;
 mod models;
 mod schema;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use diesel::SqliteConnection;
@@ -14,7 +14,7 @@ use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
-use crate::db::models::{TransactionSummaryRowInsert, TransactionSummaryRowSelect};
+use crate::db::models::TransactionSummaryRowInsert;
 
 /// Open a connection to the DB and apply any pending migrations.
 #[instrument(target = COMPONENT, skip_all)]
@@ -42,36 +42,6 @@ pub(crate) fn insert_transaction(
     let row = TransactionSummaryRowInsert::new(tx_id, summary);
     let count = diesel::insert_into(schema::transactions::table).values(row).execute(conn)?;
     Ok(count)
-}
-
-/// Retrieves validated transactions from the database.
-#[allow(dead_code)]
-pub(crate) fn select_validated_transactions(
-    conn: &mut SqliteConnection,
-    tx_ids: &[TransactionId],
-) -> Result<HashMap<TransactionId, TransactionSummary>, DatabaseError> {
-    if tx_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Convert TransactionIds to bytes for query.
-    let tx_id_bytes: Vec<Vec<u8>> = tx_ids.iter().map(TransactionId::to_bytes).collect();
-
-    // Query the database for matching transactions.
-    let raw_transactions = schema::transactions::table
-        .filter(schema::transactions::id.eq_any(tx_id_bytes))
-        .load::<TransactionSummaryRowSelect>(conn)
-        .map_err(DatabaseError::from)?;
-
-    // Deserialize the transaction blobs.
-    let mut transactions: HashMap<TransactionId, TransactionSummary> = HashMap::new();
-    for raw_tx in raw_transactions {
-        let id = TransactionId::read_from_bytes(&raw_tx.id)?;
-        let summary = TransactionSummary::read_from_bytes(&raw_tx.summary)?;
-        transactions.insert(id, summary);
-    }
-
-    Ok(transactions)
 }
 
 /// Scans the database for transaction Ids that do not exist.

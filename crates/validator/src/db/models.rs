@@ -22,12 +22,3 @@ impl TransactionSummaryRowInsert {
         }
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Queryable, Selectable)]
-#[diesel(table_name = schema::transactions)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct TransactionSummaryRowSelect {
-    pub id: Vec<u8>,
-    pub account_id: Vec<u8>,
-    pub summary: Vec<u8>,
-}
