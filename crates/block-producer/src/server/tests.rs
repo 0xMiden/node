@@ -44,11 +44,13 @@ async fn block_producer_startup_is_robust_to_network_failures() {
 
     // start the validator
     task::spawn(async move {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let data_directory = temp_dir.path().to_path_buf();
         Validator {
             address: validator_addr,
             grpc_timeout,
             signer: SecretKey::random(),
-            data_directory: "/tmp/".into(),
+            data_directory,
         }
         .serve()
         .await
