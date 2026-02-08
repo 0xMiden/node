@@ -46,6 +46,8 @@ pub enum StoreCommand {
         genesis_config_file: Option<PathBuf>,
         /// Insecure, hex-encoded validator secret key for development and testing purposes.
         ///
+        /// Used to sign the genesis block in the bootstrap process.
+        ///
         /// If not provided, a predefined key is used.
         #[arg(
             long = "validator.key",
