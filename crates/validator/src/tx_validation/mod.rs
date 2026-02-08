@@ -1,13 +1,10 @@
 mod data_store;
+mod info;
 
 pub use data_store::TransactionInputsDataStore;
-use miden_protocol::transaction::{
-    ProvenTransaction,
-    TransactionHeader,
-    TransactionInputs,
-    TransactionSummary,
-};
-use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
+pub use info::ValidatedTransactionInfo;
+use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
+use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError, TransactionVerifier};
 use tracing::{Instrument, info_span};
@@ -38,7 +35,7 @@ pub enum TransactionValidationError {
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
-) -> Result<TransactionSummary, TransactionValidationError> {
+) -> Result<ValidatedTransactionInfo, TransactionValidationError> {
     // First, verify the transaction proof
     info_span!("verify").in_scope(|| {
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
@@ -61,12 +58,7 @@ pub async fn validate_transaction(
     let executed_tx_header: TransactionHeader = (&executed_tx).into();
     let proven_tx_header: TransactionHeader = (&proven_tx).into();
     if executed_tx_header == proven_tx_header {
-        let account_delta = executed_tx.account_delta().clone();
-        let input_notes = executed_tx.input_notes().clone();
-        let output_notes = executed_tx.output_notes().clone();
-        let salt = Word::empty();
-        let summary = TransactionSummary::new(account_delta, input_notes, output_notes, salt);
-        Ok(summary)
+        Ok(executed_tx.into())
     } else {
         Err(TransactionValidationError::Mismatch {
             proven_tx_header: proven_tx_header.into(),

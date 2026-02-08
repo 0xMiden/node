@@ -1,7 +1,7 @@
 diesel::table! {
-    transactions (id, account_id, summary) {
+    validated_transactions (id, account_id, info) {
         id -> Binary,
         account_id -> Binary,
-        summary -> Binary,
+        info -> Binary,
     }
 }

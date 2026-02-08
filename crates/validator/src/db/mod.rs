@@ -8,13 +8,14 @@ use std::path::PathBuf;
 use diesel::SqliteConnection;
 use diesel::prelude::*;
 use miden_node_store::{ConnectionManager, DatabaseError, DatabaseSetupError};
-use miden_protocol::transaction::{TransactionId, TransactionSummary};
+use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
-use crate::db::models::TransactionSummaryRowInsert;
+use crate::db::models::ValidatedTransactionInfoRowInsert;
+use crate::tx_validation::ValidatedTransactionInfo;
 
 /// Open a connection to the DB and apply any pending migrations.
 #[instrument(target = COMPONENT, skip_all)]
@@ -37,10 +38,12 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
     tx_id: &TransactionId,
-    summary: &TransactionSummary,
+    summary: &ValidatedTransactionInfo,
 ) -> Result<usize, DatabaseError> {
-    let row = TransactionSummaryRowInsert::new(tx_id, summary);
-    let count = diesel::insert_into(schema::transactions::table).values(row).execute(conn)?;
+    let row = ValidatedTransactionInfoRowInsert::new(tx_id, summary);
+    let count = diesel::insert_into(schema::validated_transactions::table)
+        .values(row)
+        .execute(conn)?;
     Ok(count)
 }
 
@@ -72,10 +75,10 @@ pub(crate) fn find_unvalidated_transactions(
     let tx_id_bytes: Vec<Vec<u8>> = tx_ids.iter().map(TransactionId::to_bytes).collect();
 
     // Query the database for matching transactions ids.
-    let raw_transaction_ids = schema::transactions::table
-        .select(schema::transactions::id)
-        .filter(schema::transactions::id.eq_any(tx_id_bytes))
-        .order(schema::transactions::id.asc())
+    let raw_transaction_ids = schema::validated_transactions::table
+        .select(schema::validated_transactions::id)
+        .filter(schema::validated_transactions::id.eq_any(tx_id_bytes))
+        .order(schema::validated_transactions::id.asc())
         .load::<Vec<u8>>(conn)
         .map_err(DatabaseError::from)?;
 

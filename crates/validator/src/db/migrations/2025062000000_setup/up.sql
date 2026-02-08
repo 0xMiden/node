@@ -1,8 +1,8 @@
-CREATE TABLE transactions (
+CREATE TABLE validated_transactions (
     id         BLOB NOT NULL,
     account_id BLOB NOT NULL,
-    summary    BLOB NOT NULL, -- Binary encoded TransactionSummary.
+    info       BLOB NOT NULL, -- Binary encoded ValidatedTransactionInfo.
     PRIMARY KEY (id)
 ) WITHOUT ROWID;
 
-CREATE INDEX idx_transactions_account_id ON transactions(account_id);
+CREATE INDEX idx__validated_transactions_account_id ON validated_transactions(account_id);
