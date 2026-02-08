@@ -12,7 +12,7 @@ use crate::db::find_unvalidated_transactions;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlockValidationError {
-    #[error("found unvalidated transactions {0:?}")]
+    #[error("block contains unvalidated transactions {0:?}")]
     UnvalidatedTransactions(Vec<TransactionId>),
     #[error("failed to build block")]
     BlockBuildingFailed(#[from] ProposedBlockError),
