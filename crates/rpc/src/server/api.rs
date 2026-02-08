@@ -10,7 +10,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
@@ -190,18 +189,6 @@ impl api_server::Api for RpcService {
         info!(target: COMPONENT, request = ?request.get_ref());
 
         self.store.clone().get_block_header_by_number(request).await
-    }
-
-    async fn sync_state(
-        &self,
-        request: Request<proto::rpc::SyncStateRequest>,
-    ) -> Result<Response<proto::rpc::SyncStateResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request.get_ref());
-
-        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
-        check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
-
-        self.store.clone().sync_state(request).await
     }
 
     async fn sync_chain_mmr(
@@ -529,7 +516,6 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use {
-        QueryParamAccountIdLimit as AccountId,
         QueryParamNoteIdLimit as NoteId,
         QueryParamNoteTagLimit as NoteTag,
         QueryParamNullifierLimit as Nullifier,
@@ -545,13 +531,6 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
             (
                 "SyncNullifiers".into(),
                 endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
-            ),
-            (
-                "SyncState".into(),
-                endpoint_limits(&[
-                    (AccountId::PARAM_NAME, AccountId::LIMIT),
-                    (NoteTag::PARAM_NAME, NoteTag::LIMIT),
-                ]),
             ),
             ("SyncChainMmr".into(), endpoint_limits(&[])),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),

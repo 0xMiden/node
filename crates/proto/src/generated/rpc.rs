@@ -428,52 +428,6 @@ pub struct SyncNotesResponse {
     #[prost(message, repeated, tag = "4")]
     pub notes: ::prost::alloc::vec::Vec<super::note::NoteSyncRecord>,
 }
-/// State synchronization request.
-///
-/// Specifies state updates the requester is interested in. The server will return the first block which
-/// contains a note matching `note_tags` or the chain tip. And the corresponding updates to
-/// `account_ids` for that block range.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SyncStateRequest {
-    /// Last block known by the requester. The response will contain data starting from the next block,
-    /// until the first block which contains a note of matching the requested tag, or the chain tip
-    /// if there are no notes.
-    #[prost(fixed32, tag = "1")]
-    pub block_num: u32,
-    /// Accounts' commitment to include in the response.
-    ///
-    /// An account commitment will be included if-and-only-if it is the latest update. Meaning it is
-    /// possible there was an update to the account for the given range, but if it is not the latest,
-    /// it won't be included in the response.
-    #[prost(message, repeated, tag = "2")]
-    pub account_ids: ::prost::alloc::vec::Vec<super::account::AccountId>,
-    /// Specifies the tags which the requester is interested in.
-    #[prost(fixed32, repeated, tag = "3")]
-    pub note_tags: ::prost::alloc::vec::Vec<u32>,
-}
-/// Represents the result of syncing state request.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SyncStateResponse {
-    /// Number of the latest block in the chain.
-    #[prost(fixed32, tag = "1")]
-    pub chain_tip: u32,
-    /// Block header of the block with the first note matching the specified criteria.
-    #[prost(message, optional, tag = "2")]
-    pub block_header: ::core::option::Option<super::blockchain::BlockHeader>,
-    /// Data needed to update the partial MMR from `request.block_num + 1` to `response.block_header.block_num`.
-    #[prost(message, optional, tag = "3")]
-    pub mmr_delta: ::core::option::Option<super::primitives::MmrDelta>,
-    /// List of account commitments updated after `request.block_num + 1` but not after `response.block_header.block_num`.
-    #[prost(message, repeated, tag = "5")]
-    pub accounts: ::prost::alloc::vec::Vec<super::account::AccountSummary>,
-    /// List of transactions executed against requested accounts between `request.block_num + 1` and
-    /// `response.block_header.block_num`.
-    #[prost(message, repeated, tag = "6")]
-    pub transactions: ::prost::alloc::vec::Vec<super::transaction::TransactionSummary>,
-    /// List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    #[prost(message, repeated, tag = "7")]
-    pub notes: ::prost::alloc::vec::Vec<super::note::NoteSyncRecord>,
-}
 /// Chain MMR synchronization request.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncChainMmrRequest {
@@ -606,7 +560,7 @@ pub struct TransactionRecord {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RpcLimits {
     /// Maps RPC endpoint names to their parameter limits.
-    /// Key: endpoint name (e.g., "CheckNullifiers", "SyncState")
+    /// Key: endpoint name (e.g., "CheckNullifiers")
     /// Value: map of parameter names to their limit values
     #[prost(map = "string, message", tag = "1")]
     pub endpoints: ::std::collections::HashMap<
@@ -1097,42 +1051,6 @@ pub mod api_client {
                 .insert(GrpcMethod::new("rpc.Api", "SyncAccountStorageMaps"));
             self.inner.unary(req, path, codec).await
         }
-        /// Returns info which can be used by the client to sync up to the latest state of the chain
-        /// for the objects (accounts and notes) the client is interested in.
-        ///
-        /// This request returns the next block containing requested data. It also returns `chain_tip`
-        /// which is the latest block number in the chain. Client is expected to repeat these requests
-        /// in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-        /// the client is fully synchronized with the chain.
-        ///
-        /// Each update response also contains info about new notes, accounts etc. created. It also
-        /// returns Chain MMR delta that can be used to update the state of Chain MMR. This includes
-        /// both chain MMR peaks and chain MMR nodes.
-        ///
-        /// For preserving some degree of privacy, note tags contain only high
-        /// part of hashes. Thus, returned data contains excessive notes, client can make
-        /// additional filtering of that data on its side.
-        pub async fn sync_state(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SyncStateRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SyncStateResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/rpc.Api/SyncState");
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("rpc.Api", "SyncState"));
-            self.inner.unary(req, path, codec).await
-        }
         pub async fn sync_chain_mmr(
             &mut self,
             request: impl tonic::IntoRequest<super::SyncChainMmrRequest>,
@@ -1315,28 +1233,6 @@ pub mod api_server {
             request: tonic::Request<super::SyncAccountStorageMapsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::SyncAccountStorageMapsResponse>,
-            tonic::Status,
-        >;
-        /// Returns info which can be used by the client to sync up to the latest state of the chain
-        /// for the objects (accounts and notes) the client is interested in.
-        ///
-        /// This request returns the next block containing requested data. It also returns `chain_tip`
-        /// which is the latest block number in the chain. Client is expected to repeat these requests
-        /// in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-        /// the client is fully synchronized with the chain.
-        ///
-        /// Each update response also contains info about new notes, accounts etc. created. It also
-        /// returns Chain MMR delta that can be used to update the state of Chain MMR. This includes
-        /// both chain MMR peaks and chain MMR nodes.
-        ///
-        /// For preserving some degree of privacy, note tags contain only high
-        /// part of hashes. Thus, returned data contains excessive notes, client can make
-        /// additional filtering of that data on its side.
-        async fn sync_state(
-            &self,
-            request: tonic::Request<super::SyncStateRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SyncStateResponse>,
             tonic::Status,
         >;
         async fn sync_chain_mmr(
@@ -2075,49 +1971,6 @@ pub mod api_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SyncAccountStorageMapsSvc(inner);
-                        let codec = tonic_prost::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/rpc.Api/SyncState" => {
-                    #[allow(non_camel_case_types)]
-                    struct SyncStateSvc<T: Api>(pub Arc<T>);
-                    impl<T: Api> tonic::server::UnaryService<super::SyncStateRequest>
-                    for SyncStateSvc<T> {
-                        type Response = super::SyncStateResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::SyncStateRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Api>::sync_state(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = SyncStateSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

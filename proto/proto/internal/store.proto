@@ -63,25 +63,6 @@ service Rpc {
     // tip of the chain.
     rpc SyncNotes(rpc.SyncNotesRequest) returns (rpc.SyncNotesResponse) {}
 
-    // Returns info which can be used by the requester to sync up to the latest state of the chain
-    // for the objects (accounts, notes, nullifiers) the requester is interested in.
-    //
-    // This request returns the next block containing requested data. It also returns `chain_tip`
-    // which is the latest block number in the chain. requester is expected to repeat these requests
-    // in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-    // the requester is fully synchronized with the chain.
-    //
-    // Each request also returns info about new notes, nullifiers etc. created. It also returns
-    // Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain
-    // MMR peaks and chain MMR nodes.
-    //
-    // For preserving some degree of privacy, note tags and nullifiers filters contain only high
-    // part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
-    // additional filtering of that data on its side.
-    rpc SyncState(rpc.SyncStateRequest) returns (rpc.SyncStateResponse) {
-        // option deprecated = true;
-    }
-
     // Returns chain MMR updates within a block range.
     rpc SyncChainMmr(rpc.SyncChainMmrRequest) returns (rpc.SyncChainMmrResponse) {}
 

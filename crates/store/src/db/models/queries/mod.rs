@@ -32,14 +32,12 @@
 
 use diesel::SqliteConnection;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::account::AccountId;
-use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
+use miden_protocol::block::{BlockAccountUpdate, BlockHeader};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::OrderedTransactionHeaders;
 
 use super::DatabaseError;
-use crate::db::{NoteRecord, StateSyncUpdate};
-use crate::errors::StateSyncError;
+use crate::db::NoteRecord;
 
 mod transactions;
 pub use transactions::*;
@@ -76,53 +74,4 @@ pub(crate) fn apply_block(
     count += insert_transactions(conn, block_header.block_num(), transactions)?;
     count += insert_nullifiers_for_block(conn, nullifiers, block_header.block_num())?;
     Ok(count)
-}
-
-/// Loads the state necessary for a state sync
-///
-/// The state sync covers from `from_start_block` until the last block that has a note matching the
-/// given `note_tags`.
-pub(crate) fn get_state_sync(
-    conn: &mut SqliteConnection,
-    from_start_block: BlockNumber,
-    account_ids: Vec<AccountId>,
-    note_tags: Vec<u32>,
-) -> Result<StateSyncUpdate, StateSyncError> {
-    let chain_tip = select_block_header_by_block_num(conn, None)?
-        .expect("Chain tip is not found")
-        .block_num();
-
-    // Sync notes from the starting block to the latest in the chain.
-    let block_range = from_start_block..=chain_tip;
-
-    // select notes since block by tag and sender
-    let (notes, _) = select_notes_since_block_by_tag_and_sender(
-        conn,
-        &account_ids[..],
-        &note_tags[..],
-        block_range,
-    )?;
-
-    // select block header by block num
-    let maybe_note_block_num = notes.first().map(|note| note.block_num);
-    let block_header: BlockHeader = select_block_header_by_block_num(conn, maybe_note_block_num)?
-        .ok_or_else(|| StateSyncError::EmptyBlockHeadersTable)?;
-
-    // select accounts by block range
-    let to_end_block = block_header.block_num();
-    let account_updates =
-        select_accounts_by_block_range(conn, &account_ids, from_start_block..=to_end_block)?;
-
-    // select transactions by accounts and block range
-    let transactions = select_transactions_by_accounts_and_block_range(
-        conn,
-        &account_ids,
-        from_start_block..=to_end_block,
-    )?;
-    Ok(StateSyncUpdate {
-        notes,
-        block_header,
-        account_updates,
-        transactions,
-    })
 }

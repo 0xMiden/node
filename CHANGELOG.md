@@ -11,6 +11,7 @@
 
 ### Changes
 
+- [BREAKING] Removed obsolete `SyncState` RPC endpoint; clients should use `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, or `SyncChainMmr` instead (#XXXX).
 - Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
 - Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
 - Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).

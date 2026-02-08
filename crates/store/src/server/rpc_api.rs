@@ -121,54 +121,6 @@ impl rpc_server::Rpc for StoreApi {
         }))
     }
 
-    /// Returns info which can be used by the client to sync up to the latest state of the chain
-    /// for the objects the client is interested in.
-    async fn sync_state(
-        &self,
-        request: Request<proto::rpc::SyncStateRequest>,
-    ) -> Result<Response<proto::rpc::SyncStateResponse>, Status> {
-        let request = request.into_inner();
-
-        let account_ids: Vec<AccountId> = read_account_ids::<Status>(&request.account_ids)?;
-
-        let (state, delta) = self
-            .state
-            .sync_state(request.block_num.into(), account_ids, request.note_tags)
-            .await
-            .map_err(internal_error)?;
-
-        let accounts = state
-            .account_updates
-            .into_iter()
-            .map(|account_info| proto::account::AccountSummary {
-                account_id: Some(account_info.account_id.into()),
-                account_commitment: Some(account_info.account_commitment.into()),
-                block_num: account_info.block_num.as_u32(),
-            })
-            .collect();
-
-        let transactions = state
-            .transactions
-            .into_iter()
-            .map(|transaction_summary| proto::transaction::TransactionSummary {
-                account_id: Some(transaction_summary.account_id.into()),
-                block_num: transaction_summary.block_num.as_u32(),
-                transaction_id: Some(transaction_summary.transaction_id.into()),
-            })
-            .collect();
-
-        let notes = state.notes.into_iter().map(Into::into).collect();
-
-        Ok(Response::new(proto::rpc::SyncStateResponse {
-            chain_tip: self.state.latest_block_num().await.as_u32(),
-            block_header: Some(state.block_header.into()),
-            mmr_delta: Some(delta.into()),
-            accounts,
-            transactions,
-            notes,
-        }))
-    }
-
     /// Returns info which can be used by the client to sync note state.
     async fn sync_notes(
         &self,

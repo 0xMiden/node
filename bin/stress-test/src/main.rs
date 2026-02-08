@@ -3,13 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
 use seeding::seed_store;
-use store::{
-    bench_sync_notes,
-    bench_sync_nullifiers,
-    bench_sync_state,
-    bench_sync_transactions,
-    load_state,
-};
+use store::{bench_sync_notes, bench_sync_nullifiers, bench_sync_transactions, load_state};
 
 mod seeding;
 mod store;
@@ -70,8 +64,6 @@ pub enum Endpoint {
         #[arg(short, long, value_name = "PREFIXES", default_value = "10")]
         prefixes: usize,
     },
-    #[command(name = "sync-state")]
-    SyncState,
     #[command(name = "sync-notes")]
     SyncNotes,
     #[command(name = "sync-transactions")]
@@ -110,9 +102,6 @@ async fn main() {
         } => match endpoint {
             Endpoint::SyncNullifiers { prefixes } => {
                 bench_sync_nullifiers(data_directory, iterations, concurrency, prefixes).await;
-            },
-            Endpoint::SyncState => {
-                bench_sync_state(data_directory, iterations, concurrency).await;
             },
             Endpoint::SyncNotes => {
                 bench_sync_notes(data_directory, iterations, concurrency).await;

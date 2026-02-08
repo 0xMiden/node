@@ -103,25 +103,6 @@ service Api {
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
-    // Returns info which can be used by the client to sync up to the latest state of the chain
-    // for the objects (accounts and notes) the client is interested in.
-    //
-    // This request returns the next block containing requested data. It also returns `chain_tip`
-    // which is the latest block number in the chain. Client is expected to repeat these requests
-    // in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-    // the client is fully synchronized with the chain.
-    //
-    // Each update response also contains info about new notes, accounts etc. created. It also
-    // returns Chain MMR delta that can be used to update the state of Chain MMR. This includes
-    // both chain MMR peaks and chain MMR nodes.
-    //
-    // For preserving some degree of privacy, note tags contain only high
-    // part of hashes. Thus, returned data contains excessive notes, client can make
-    // additional filtering of that data on its side.
-    rpc SyncState(SyncStateRequest) returns (SyncStateResponse) {
-        // option deprecated = true;
-    }
-
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 }
 
@@ -498,53 +479,6 @@ message SyncNotesResponse {
     repeated note.NoteSyncRecord notes = 4;
 }
 
-// SYNC STATE
-// ================================================================================================
-
-// State synchronization request.
-//
-// Specifies state updates the requester is interested in. The server will return the first block which
-// contains a note matching `note_tags` or the chain tip. And the corresponding updates to
-// `account_ids` for that block range.
-message SyncStateRequest {
-    // Last block known by the requester. The response will contain data starting from the next block,
-    // until the first block which contains a note of matching the requested tag, or the chain tip
-    // if there are no notes.
-    fixed32 block_num = 1;
-
-    // Accounts' commitment to include in the response.
-    //
-    // An account commitment will be included if-and-only-if it is the latest update. Meaning it is
-    // possible there was an update to the account for the given range, but if it is not the latest,
-    // it won't be included in the response.
-    repeated account.AccountId account_ids = 2;
-
-    // Specifies the tags which the requester is interested in.
-    repeated fixed32 note_tags = 3;
-}
-
-// Represents the result of syncing state request.
-message SyncStateResponse {
-    // Number of the latest block in the chain.
-    fixed32 chain_tip = 1;
-
-    // Block header of the block with the first note matching the specified criteria.
-    blockchain.BlockHeader block_header = 2;
-
-    // Data needed to update the partial MMR from `request.block_num + 1` to `response.block_header.block_num`.
-    primitives.MmrDelta mmr_delta = 3;
-
-    // List of account commitments updated after `request.block_num + 1` but not after `response.block_header.block_num`.
-    repeated account.AccountSummary accounts = 5;
-
-    // List of transactions executed against requested accounts between `request.block_num + 1` and
-    // `response.block_header.block_num`.
-    repeated transaction.TransactionSummary transactions = 6;
-
-    // List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    repeated note.NoteSyncRecord notes = 7;
-}
-
 // SYNC CHAIN MMR
 // ================================================================================================
 
@@ -684,7 +618,7 @@ message TransactionRecord {
 // Represents the query parameter limits for RPC endpoints.
 message RpcLimits {
     // Maps RPC endpoint names to their parameter limits.
-    // Key: endpoint name (e.g., "CheckNullifiers", "SyncState")
+    // Key: endpoint name (e.g., "CheckNullifiers")
     // Value: map of parameter names to their limit values
     map<string, EndpointLimits> endpoints = 1;
 }
