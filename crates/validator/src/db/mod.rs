@@ -38,9 +38,9 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
     tx_id: &TransactionId,
-    summary: &ValidatedTransactionInfo,
+    tx_info: &ValidatedTransactionInfo,
 ) -> Result<usize, DatabaseError> {
-    let row = ValidatedTransactionInfoRowInsert::new(tx_id, summary);
+    let row = ValidatedTransactionInfoRowInsert::new(tx_id, tx_info);
     let count = diesel::insert_into(schema::validated_transactions::table)
         .values(row)
         .execute(conn)?;
@@ -57,7 +57,7 @@ pub(crate) fn insert_transaction(
 /// SELECT
 ///     id
 /// FROM
-///     transactions
+///     validated_transactions
 /// WHERE
 ///     id IN (?, ...)
 /// ORDER BY
