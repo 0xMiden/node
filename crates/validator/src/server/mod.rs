@@ -175,7 +175,10 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
         // Validate the block.
         let signature =
             validate_block(proposed_block, &self.signer, &self.db).await.map_err(|err| {
-                tonic::Status::invalid_argument(format!("Failed to validate block: {err}",))
+                tonic::Status::invalid_argument(format!(
+                    "Failed to validate block: {}",
+                    err.as_report()
+                ))
             })?;
 
         // Send the signature.
