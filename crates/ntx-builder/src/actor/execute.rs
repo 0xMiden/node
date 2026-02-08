@@ -327,7 +327,8 @@ impl NtxContext {
 struct NtxDataStore {
     account: Account,
     reference_block: BlockHeader,
-    chain_mmr: PartialBlockchain,
+    /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
+    chain_mmr: Arc<PartialBlockchain>,
     mast_store: TransactionMastStore,
     /// Store client for retrieving note scripts.
     store: StoreClient,
@@ -362,7 +363,7 @@ impl NtxDataStore {
     fn new(
         account: Account,
         reference_block: BlockHeader,
-        chain_mmr: PartialBlockchain,
+        chain_mmr: Arc<PartialBlockchain>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
     ) -> Self {
@@ -421,7 +422,7 @@ impl DataStore for NtxDataStore {
                 .await;
 
             let partial_account = PartialAccount::from(&self.account);
-            Ok((partial_account, self.reference_block.clone(), self.chain_mmr.clone()))
+            Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
         }
     }
 
