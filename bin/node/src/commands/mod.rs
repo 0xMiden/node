@@ -1,12 +1,15 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use tokio::net::TcpListener;
 use url::Url;
 
 pub mod block_producer;
@@ -64,6 +67,29 @@ pub struct ValidatorConfig {
     /// in-process. If set, the insecure key argument is ignored.
     #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
     pub validator_url: Option<Url>,
+}
+
+impl ValidatorConfig {
+    /// Converts the [`ValidatorConfig`] into a URL and an optional [`SocketAddr`].
+    ///
+    /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
+    ///
+    /// If `validator_url` is not set, it binds to a random port on localhost, creates a URL,
+    /// and returns the URL and the bound [`SocketAddr`].
+    async fn to_addresses(&self) -> anyhow::Result<(Url, Option<SocketAddr>)> {
+        if let Some(url) = &self.validator_url {
+            Ok((url.clone(), None))
+        } else {
+            let socket_addr = TcpListener::bind("127.0.0.1:0")
+                .await
+                .context("Failed to bind to validator gRPC endpoint")?
+                .local_addr()
+                .context("Failed to retrieve the validator's gRPC address")?;
+            let url = Url::parse(&format!("http://{socket_addr}"))
+                .context("Failed to parse Validator URL")?;
+            Ok((url, Some(socket_addr)))
+        }
+    }
 }
 
 /// Configuration for the Network Transaction Builder component.

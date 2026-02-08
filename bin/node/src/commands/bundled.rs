@@ -181,20 +181,7 @@ impl BundledCommand {
         };
 
         // Validator URL is either specified remote, or generated local.
-        let (validator_url, validator_socket_address) = {
-            if let Some(remote_url) = validator.validator_url {
-                (remote_url, None)
-            } else {
-                let socket_addr = TcpListener::bind("127.0.0.1:0")
-                    .await
-                    .context("Failed to bind to validator gRPC endpoint")?
-                    .local_addr()
-                    .context("Failed to retrieve the validator's gRPC address")?;
-                let url = Url::parse(&format!("http://{socket_addr}"))
-                    .context("Failed to parse Validator URL")?;
-                (url, Some(socket_addr))
-            }
-        };
+        let (validator_url, validator_socket_address) = validator.to_addresses().await?;
 
         // Store addresses for each exposed API
         let store_rpc_listener = TcpListener::bind("127.0.0.1:0")
