@@ -66,7 +66,7 @@ pub struct ValidatorConfig {
     /// The remote Validator's gRPC URL. If unset, will default to running a Validator
     /// in-process. If set, the insecure key argument is ignored.
     #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
-    pub validator_url: Option<Url>,
+    validator_url: Option<Url>,
 }
 
 impl ValidatorConfig {
