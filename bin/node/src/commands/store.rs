@@ -109,12 +109,12 @@ impl StoreCommand {
                 data_directory,
                 accounts_directory,
                 genesis_config_file,
-                validator_key: validator_insecure_secret_key,
+                validator_key,
             } => Self::bootstrap(
                 &data_directory,
                 &accounts_directory,
                 genesis_config_file.as_ref(),
-                validator_insecure_secret_key,
+                validator_key,
             ),
             StoreCommand::Start {
                 rpc_url,
