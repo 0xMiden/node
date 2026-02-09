@@ -146,6 +146,7 @@ runs:
 
         # Save the .deb files, delete the rest.
         mv packaging/deb/*.deb .
+        rm -rf packaging
 
     - name: Package names
       shell: bash
@@ -155,12 +156,7 @@ runs:
     - name: Rename package files
       shell: bash
       run: |
-        pkg_dir=${{ inputs.packaging_dir }}
-        for service_file in $(ls packaging/$pkg_dir/*.service | sed "s/.*miden/miden/g"); do
-          svc=$(echo $service_file | sed "s/.service//g")
-          mv $svc.deb ${{ env.package }}
-        done
-        rm -rf packaging
+        mv ${{ inputs.package}}.deb ${{ env.package }}
 
     - name: shasum packages
       shell: bash
