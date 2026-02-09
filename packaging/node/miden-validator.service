@@ -1,0 +1,16 @@
+[Unit]
+Description=Miden validator
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=exec
+Environment="OTEL_SERVICE_NAME=miden-validator"
+EnvironmentFile=/lib/systemd/system/miden-validator.env
+ExecStart=/usr/bin/miden-node validator start
+WorkingDirectory=/opt/miden-validator
+User=miden-validator
+RestartSec=5
+Restart=always

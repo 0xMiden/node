@@ -2,25 +2,28 @@
 #
 # This is a postinstallation script so the service can be configured and started when requested.
 
-# user is expected by the systemd service file and `/opt/<user>` is its working directory,
-sudo adduser --disabled-password --disabled-login --shell /usr/sbin/nologin --quiet --system --no-create-home --home /nonexistent miden-node
+for svc in miden-node miden-validator; do
+    # user is expected by the systemd service file and `/opt/<user>` is its working directory,
+    sudo adduser --disabled-password --disabled-login --shell /usr/sbin/nologin --quiet --system --no-create-home --home /nonexistent "$svc"
 
-# Working folder.
-if [ -d "/opt/miden-node" ]
-then
-    echo "Directory /opt/miden-node exists."
-else
-    mkdir -p /opt/miden-node
-fi
-sudo chown -R miden-node /opt/miden-node
+    # Working folder.
+    if [ -d "/opt/$svc" ]
+    then
+        echo "Directory /opt/$svc exists."
+    else
+        mkdir -p "/opt/$svc"
+    fi
+    sudo chown -R "$svc" "/opt/$svc"
 
-# Configuration folder
-if [ -d "/etc/opt/miden-node" ]
-then
-    echo "Directory /etc/opt/miden-node exists."
-else
-    mkdir -p /etc/opt/miden-node
-fi
-sudo chown -R miden-node /etc/opt/miden-node
+    # Configuration folder
+    if [ -d "/etc/opt/$svc" ]
+    then
+        echo "Directory /etc/opt/$svc exists."
+    else
+        mkdir -p "/etc/opt/$svc"
+    fi
+    sudo chown -R "$svc" "/etc/opt/$svc"
+
+done
 
 sudo systemctl daemon-reload
