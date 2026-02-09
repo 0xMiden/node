@@ -82,5 +82,11 @@ pub(crate) fn configure_connection_on_creation(
     diesel::sql_query("PRAGMA foreign_keys=ON")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
+    // Set busy timeout to handle concurrent access from actors and coordinator.
+    diesel::sql_query("PRAGMA busy_timeout=5000")
+        .execute(conn)
+        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
     Ok(())
 }

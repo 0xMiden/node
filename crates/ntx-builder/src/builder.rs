@@ -16,6 +16,8 @@ use tonic::Status;
 use crate::NtxBuilderConfig;
 use crate::actor::{AccountActorContext, AccountOrigin};
 use crate::coordinator::Coordinator;
+use crate::db::Db;
+use crate::db::models::queries;
 use crate::store::StoreClient;
 
 // CHAIN STATE
@@ -89,6 +91,8 @@ pub struct NetworkTransactionBuilder {
     coordinator: Coordinator,
     /// Client for the store gRPC API.
     store: StoreClient,
+    /// Database for persistent state.
+    db: Db,
     /// Shared chain state updated by the event loop and read by actors.
     chain_state: Arc<RwLock<ChainState>>,
     /// Context shared with all account actors.
@@ -102,6 +106,7 @@ impl NetworkTransactionBuilder {
         config: NtxBuilderConfig,
         coordinator: Coordinator,
         store: StoreClient,
+        db: Db,
         chain_state: Arc<RwLock<ChainState>>,
         actor_context: AccountActorContext,
         mempool_events: MempoolEventStream,
@@ -110,6 +115,7 @@ impl NetworkTransactionBuilder {
             config,
             coordinator,
             store,
+            db,
             chain_state,
             actor_context,
             mempool_events,
@@ -177,19 +183,56 @@ impl NetworkTransactionBuilder {
         }
     }
 
-    /// Handles account IDs loaded from the store by spawning actors for them.
+    /// Handles account IDs loaded from the store by syncing state to DB and spawning actors.
     #[tracing::instrument(name = "ntx.builder.handle_loaded_account", skip(self, account_id))]
     async fn handle_loaded_account(
         &mut self,
         account_id: NetworkAccountId,
     ) -> Result<(), anyhow::Error> {
+        // Fetch account from store and write to DB.
+        let account = self
+            .store
+            .get_network_account(account_id)
+            .await
+            .context("failed to load account from store")?
+            .context("account should exist in store")?;
+
+        let block_num = self.chain_state.read().await.chain_tip_header.block_num();
+        let notes = self
+            .store
+            .get_unconsumed_network_notes(account_id, block_num.as_u32())
+            .await
+            .context("failed to load notes from store")?;
+
+        let notes: Vec<_> = notes
+            .into_iter()
+            .map(|n| {
+                let miden_node_proto::domain::note::NetworkNote::SingleTarget(note) = n;
+                note
+            })
+            .collect();
+
+        // Write account and notes to DB.
+        self.db
+            .transact("sync_account_from_store", {
+                let account = account.clone();
+                let notes = notes.clone();
+                move |conn| {
+                    queries::upsert_committed_account(conn, &account)?;
+                    queries::insert_committed_notes(conn, account_id, &notes)?;
+                    Ok::<(), crate::db::errors::DatabaseError>(())
+                }
+            })
+            .await
+            .context("failed to sync account to DB")?;
+
         self.coordinator
             .spawn_actor(AccountOrigin::store(account_id), &self.actor_context)
             .await?;
         Ok(())
     }
 
-    /// Handles mempool events by routing them to actors and spawning new actors as needed.
+    /// Handles mempool events by writing to DB first, then routing to actors.
     #[tracing::instrument(name = "ntx.builder.handle_mempool_event", skip(self, event))]
     async fn handle_mempool_event(
         &mut self,
@@ -197,6 +240,12 @@ impl NetworkTransactionBuilder {
     ) -> Result<(), anyhow::Error> {
         match event.as_ref() {
             MempoolEvent::TransactionAdded { account_delta, .. } => {
+                // Write event effects to DB first.
+                self.coordinator
+                    .write_event(&event)
+                    .await
+                    .context("failed to write TransactionAdded to DB")?;
+
                 // Handle account deltas in case an account is being created.
                 if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
                     // Handle account deltas for network accounts only.
@@ -214,24 +263,31 @@ impl NetworkTransactionBuilder {
                 Ok(())
             },
             // Update chain state and broadcast.
-            MempoolEvent::BlockCommitted { header, txs } => {
+            MempoolEvent::BlockCommitted { header, .. } => {
+                // Write event effects to DB first.
+                self.coordinator
+                    .write_event(&event)
+                    .await
+                    .context("failed to write BlockCommitted to DB")?;
+
                 self.update_chain_tip(header.as_ref().clone()).await;
                 self.coordinator.broadcast(event.clone()).await;
-
-                // All transactions pertaining to predating events should now be available
-                // through the store. So we can now drain them.
-                for tx_id in txs {
-                    self.coordinator.drain_predating_events(tx_id);
-                }
                 Ok(())
             },
             // Broadcast to all actors.
-            MempoolEvent::TransactionsReverted(txs) => {
+            MempoolEvent::TransactionsReverted(_) => {
+                // Write event effects to DB first; returns reverted account IDs.
+                let reverted_accounts = self
+                    .coordinator
+                    .write_event(&event)
+                    .await
+                    .context("failed to write TransactionsReverted to DB")?;
+
                 self.coordinator.broadcast(event.clone()).await;
 
-                // Reverted predating transactions need not be processed.
-                for tx_id in txs {
-                    self.coordinator.drain_predating_events(tx_id);
+                // Cancel actors for reverted account creations.
+                for account_id in &reverted_accounts {
+                    self.coordinator.cancel_actor(account_id);
                 }
                 Ok(())
             },

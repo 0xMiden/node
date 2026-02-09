@@ -2834,6 +2834,7 @@ dependencies = [
  "miden-remote-prover-client",
  "miden-standards",
  "miden-tx",
+ "prost",
  "rstest",
  "thiserror 2.0.18",
  "tokio",

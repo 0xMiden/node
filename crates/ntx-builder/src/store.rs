@@ -271,7 +271,7 @@ impl StoreClient {
     #[instrument(target = COMPONENT, name = "store.client.fetch_network_account_ids_page", skip_all, err)]
     async fn fetch_network_account_ids_page(
         &self,
-        block_range: std::ops::RangeInclusive<BlockNumber>,
+        block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<NetworkAccountId>, proto::rpc::PaginationInfo), StoreError> {
         self.fetch_network_account_ids_page_inner(block_range)
             .await
@@ -280,7 +280,7 @@ impl StoreClient {
 
     async fn fetch_network_account_ids_page_inner(
         &self,
-        block_range: std::ops::RangeInclusive<BlockNumber>,
+        block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<NetworkAccountId>, proto::rpc::PaginationInfo), StoreError> {
         let mut retry_counter = 0u32;
 

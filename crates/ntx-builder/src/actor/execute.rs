@@ -5,7 +5,6 @@ use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
     AccountId,
@@ -31,6 +30,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
+use miden_protocol::{MastForest, Word};
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::utils::Serializable;
@@ -539,10 +539,7 @@ impl DataStore for NtxDataStore {
 }
 
 impl MastForestStore for NtxDataStore {
-    fn get(
-        &self,
-        procedure_hash: &miden_protocol::Word,
-    ) -> Option<std::sync::Arc<miden_protocol::MastForest>> {
+    fn get(&self, procedure_hash: &Word) -> Option<Arc<MastForest>> {
         self.mast_store.get(procedure_hash)
     }
 }

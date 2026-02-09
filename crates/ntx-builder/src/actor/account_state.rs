@@ -1,24 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::account::Account;
-use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{Note, Nullifier};
-use miden_protocol::transaction::{PartialBlockchain, TransactionId};
-use tracing::instrument;
+use miden_protocol::block::BlockHeader;
+use miden_protocol::transaction::PartialBlockchain;
 
-use super::ActorShutdownReason;
-use super::note_state::{AccountDeltaTracker, NetworkAccountEffect, NotePool};
-use crate::COMPONENT;
 use crate::actor::inflight_note::InflightNetworkNote;
-use crate::builder::ChainState;
-use crate::store::{StoreClient, StoreError};
 
 // TRANSACTION CANDIDATE
 // ================================================================================================
@@ -46,337 +32,17 @@ pub struct TransactionCandidate {
     pub chain_mmr: Arc<PartialBlockchain>,
 }
 
-// NETWORK ACCOUNT STATE
-// ================================================================================================
-
-/// The current state of a network account.
-#[derive(Clone)]
-pub struct NetworkAccountState {
-    /// The network account ID this state represents.
-    account_id: NetworkAccountId,
-
-    /// Tracks committed and inflight account state updates.
-    account: AccountDeltaTracker,
-
-    /// Manages available and nullified notes.
-    notes: NotePool,
-
-    /// Uncommitted transactions which have some impact on the network state.
-    ///
-    /// This is tracked so we can commit or revert transaction effects. Transactions _without_ an
-    /// impact are ignored.
-    inflight_txs: BTreeMap<TransactionId, TransactionImpact>,
-
-    /// Nullifiers of all network notes targeted at this account.
-    ///
-    /// Used to filter mempool events: when a `TransactionAdded` event reports consumed nullifiers,
-    /// only those present in this set are processed. Nullifiers are added when notes are loaded
-    /// or created, and removed when the consuming transaction is committed.
-    known_nullifiers: HashSet<Nullifier>,
-}
-
-impl NetworkAccountState {
-    /// Load's all available network notes from the store, along with the required account states.
-    #[instrument(target = COMPONENT, name = "ntx.state.load", skip_all)]
-    pub async fn load(
-        account: Account,
-        account_id: NetworkAccountId,
-        store: &StoreClient,
-        block_num: BlockNumber,
-    ) -> Result<Self, StoreError> {
-        let notes = store.get_unconsumed_network_notes(account_id, block_num.as_u32()).await?;
-        let notes = notes
-            .into_iter()
-            .map(|note| {
-                let NetworkNote::SingleTarget(note) = note;
-                note
-            })
-            .collect::<Vec<_>>();
-
-        let known_nullifiers: HashSet<Nullifier> =
-            notes.iter().map(SingleTargetNetworkNote::nullifier).collect();
-
-        let account_tracker = AccountDeltaTracker::new(account);
-        let mut note_pool = NotePool::default();
-        for note in notes {
-            note_pool.add_note(note);
-        }
-
-        let state = Self {
-            account: account_tracker,
-            notes: note_pool,
-            account_id,
-            inflight_txs: BTreeMap::default(),
-            known_nullifiers,
-        };
-
-        state.inject_telemetry();
-
-        Ok(state)
-    }
-
-    /// Selects the next candidate network transaction.
-    ///
-    /// # Parameters
-    ///
-    /// - `limit`: Maximum number of notes to include in the transaction.
-    /// - `max_note_attempts`: Maximum number of execution attempts before a note is dropped.
-    /// - `chain_state`: Current chain state for the transaction.
-    #[instrument(target = COMPONENT, name = "ntx.state.select_candidate", skip_all)]
-    pub fn select_candidate(
-        &mut self,
-        limit: NonZeroUsize,
-        max_note_attempts: usize,
-        chain_state: ChainState,
-    ) -> Option<TransactionCandidate> {
-        // Remove notes that have failed too many times.
-        self.notes.drop_failing_notes(max_note_attempts);
-
-        // Skip empty accounts, and prune them.
-        // This is how we keep the number of accounts bounded.
-        if self.is_empty() {
-            return None;
-        }
-
-        // Select notes from the account that can be consumed or are ready for a retry.
-        let notes = self
-            .notes
-            .available_notes(&chain_state.chain_tip_header.block_num())
-            .take(limit.get())
-            .cloned()
-            .collect::<Vec<_>>();
-
-        // Skip accounts with no available notes.
-        if notes.is_empty() {
-            return None;
-        }
-
-        let (chain_tip_header, chain_mmr) = chain_state.into_parts();
-        TransactionCandidate {
-            account: self.account.latest_account(),
-            notes,
-            chain_tip_header,
-            chain_mmr,
-        }
-        .into()
-    }
-
-    /// Marks notes of a previously selected candidate as failed.
-    ///
-    /// Does not remove the candidate from the in-progress pool.
-    #[instrument(target = COMPONENT, name = "ntx.state.notes_failed", skip_all)]
-    pub fn notes_failed(&mut self, notes: &[Note], block_num: BlockNumber) {
-        let nullifiers = notes.iter().map(Note::nullifier).collect::<Vec<_>>();
-        self.notes.fail_notes(nullifiers.as_slice(), block_num);
-    }
-
-    /// Updates state with the mempool event.
-    #[instrument(target = COMPONENT, name = "ntx.state.mempool_update", skip_all)]
-    pub fn mempool_update(&mut self, update: &MempoolEvent) -> Option<ActorShutdownReason> {
-        let span = tracing::Span::current();
-        span.set_attribute("mempool_event.kind", update.kind());
-
-        match update {
-            MempoolEvent::TransactionAdded {
-                id,
-                nullifiers,
-                network_notes,
-                account_delta,
-            } => {
-                // Filter network notes relevant to this account.
-                let network_notes = filter_by_account_id_and_map_to_single_target(
-                    self.account_id,
-                    network_notes.clone(),
-                );
-                self.add_transaction(*id, nullifiers, &network_notes, account_delta.as_ref());
-            },
-            MempoolEvent::TransactionsReverted(txs) => {
-                for tx in txs {
-                    let shutdown_reason = self.revert_transaction(*tx);
-                    if shutdown_reason.is_some() {
-                        return shutdown_reason;
-                    }
-                }
-            },
-            MempoolEvent::BlockCommitted { txs, .. } => {
-                for tx in txs {
-                    self.commit_transaction(*tx);
-                }
-            },
-        }
-        self.inject_telemetry();
-
-        // No shutdown, continue running actor.
-        None
-    }
-
-    /// Returns `true` if there is no inflight state being tracked.
-    fn is_empty(&self) -> bool {
-        self.account.has_no_inflight() && self.notes.is_empty()
-    }
-
-    /// Handles a [`MempoolEvent::TransactionAdded`] event.
-    fn add_transaction(
-        &mut self,
-        id: TransactionId,
-        nullifiers: &[Nullifier],
-        network_notes: &[SingleTargetNetworkNote],
-        account_delta: Option<&AccountUpdateDetails>,
-    ) {
-        // Skip transactions we already know about.
-        //
-        // This can occur since both ntx builder and the mempool might inform us of the same
-        // transaction. Once when it was submitted to the mempool, and once by the mempool event.
-        if self.inflight_txs.contains_key(&id) {
-            return;
-        }
-
-        let mut tx_impact = TransactionImpact::default();
-        if let Some(update) = account_delta.and_then(NetworkAccountEffect::from_protocol) {
-            let account_id = update.network_account_id();
-            if account_id == self.account_id {
-                match update {
-                    NetworkAccountEffect::Updated(account_delta) => {
-                        self.account.add_delta(&account_delta);
-                        tx_impact.account_delta = Some(account_id);
-                    },
-                    NetworkAccountEffect::Created(_) => {},
-                }
-            }
-        }
-        for note in network_notes {
-            assert_eq!(
-                note.account_id(),
-                self.account_id,
-                "note's account ID does not match network account actor's account ID"
-            );
-            tx_impact.notes.insert(note.nullifier());
-            self.known_nullifiers.insert(note.nullifier());
-            self.notes.add_note(note.clone());
-        }
-        for nullifier in nullifiers {
-            // Ignore nullifiers that aren't network note nullifiers.
-            if !self.known_nullifiers.contains(nullifier) {
-                continue;
-            }
-            tx_impact.nullifiers.insert(*nullifier);
-            let _ = self.notes.nullify(*nullifier);
-        }
-
-        if !tx_impact.is_empty() {
-            self.inflight_txs.insert(id, tx_impact);
-        }
-    }
-
-    /// Handles [`MempoolEvent::BlockCommitted`] events.
-    fn commit_transaction(&mut self, tx: TransactionId) {
-        // We only track transactions which have an impact on the network state.
-        let Some(impact) = self.inflight_txs.remove(&tx) else {
-            return;
-        };
-
-        if let Some(delta_account_id) = impact.account_delta {
-            if delta_account_id == self.account_id {
-                self.account.commit_delta();
-            }
-        }
-
-        for nullifier in impact.nullifiers {
-            if self.known_nullifiers.remove(&nullifier) {
-                // Its possible for the account to no longer exist if the transaction creating it
-                // was reverted.
-                self.notes.commit_nullifier(nullifier);
-            }
-        }
-    }
-
-    /// Handles [`MempoolEvent::TransactionsReverted`] events.
-    fn revert_transaction(&mut self, tx: TransactionId) -> Option<ActorShutdownReason> {
-        // We only track transactions which have an impact on the network state.
-        let Some(impact) = self.inflight_txs.remove(&tx) else {
-            tracing::debug!("transaction {tx} not found in inflight transactions");
-            return None;
-        };
-
-        // Revert account creation.
-        if let Some(account_id) = impact.account_delta {
-            // Account creation reverted, actor must stop.
-            if account_id == self.account_id && self.account.revert_delta() {
-                return Some(ActorShutdownReason::AccountReverted(account_id));
-            }
-        }
-
-        // Revert notes.
-        for note_nullifier in impact.notes {
-            if self.known_nullifiers.contains(&note_nullifier) {
-                self.notes.remove_note(note_nullifier);
-                self.known_nullifiers.remove(&note_nullifier);
-            }
-        }
-
-        // Revert nullifiers.
-        for nullifier in impact.nullifiers {
-            if self.known_nullifiers.contains(&nullifier) {
-                self.notes.revert_nullifier(nullifier);
-                self.known_nullifiers.remove(&nullifier);
-            }
-        }
-
-        None
-    }
-
-    /// Adds stats to the current tracing span.
-    ///
-    /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
-    /// does not track fields added dynamically.
-    fn inject_telemetry(&self) {
-        let span = tracing::Span::current();
-
-        span.set_attribute("ntx.state.transactions", self.inflight_txs.len());
-        span.set_attribute("ntx.state.notes.total", self.known_nullifiers.len());
-    }
-}
-
-/// The impact a transaction has on the state.
-#[derive(Clone, Default)]
-struct TransactionImpact {
-    /// The network account this transaction added an account delta to.
-    account_delta: Option<NetworkAccountId>,
-
-    /// Network notes this transaction created.
-    notes: BTreeSet<Nullifier>,
-
-    /// Network notes this transaction consumed.
-    nullifiers: BTreeSet<Nullifier>,
-}
-
-impl TransactionImpact {
-    fn is_empty(&self) -> bool {
-        self.account_delta.is_none() && self.notes.is_empty() && self.nullifiers.is_empty()
-    }
-}
-
-/// Filters network notes by account ID and maps them to single target network notes.
-fn filter_by_account_id_and_map_to_single_target(
-    account_id: NetworkAccountId,
-    notes: Vec<NetworkNote>,
-) -> Vec<SingleTargetNetworkNote> {
-    notes
-        .into_iter()
-        .filter_map(|note| match note {
-            NetworkNote::SingleTarget(note) if note.account_id() == account_id => Some(note),
-            NetworkNote::SingleTarget(_) => None,
-        })
-        .collect::<Vec<_>>()
-}
-
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
-    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
-    use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
+    use diesel::Connection;
+    use miden_node_proto::domain::account::NetworkAccountId;
+    use miden_node_proto::domain::note::SingleTargetNetworkNote;
+    use miden_protocol::account::{Account, AccountBuilder, AccountStorageMode, AccountType};
     use miden_protocol::asset::{Asset, FungibleAsset};
+    use miden_protocol::block::BlockNumber;
     use miden_protocol::crypto::rand::RpoRandomCoin;
     use miden_protocol::note::{Note, NoteAttachment, NoteExecutionHint, NoteType};
     use miden_protocol::testing::account_id::AccountIdBuilder;
@@ -384,7 +50,8 @@ mod tests {
     use miden_protocol::{EMPTY_WORD, Felt, Hasher};
     use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
 
-    use super::*;
+    use crate::db::Db;
+    use crate::db::models::queries;
 
     // HELPERS
     // ============================================================================================
@@ -474,43 +141,39 @@ mod tests {
         )
     }
 
-    impl NetworkAccountState {
-        /// Creates a new `NetworkAccountState` for testing.
-        ///
-        /// This mirrors the behavior of `load()` but with provided notes instead of
-        /// fetching from the store.
-        #[cfg(test)]
-        pub fn new_for_testing(
-            account: Account,
-            account_id: NetworkAccountId,
-            notes: Vec<SingleTargetNetworkNote>,
-        ) -> Self {
-            let known_nullifiers: HashSet<Nullifier> =
-                notes.iter().map(SingleTargetNetworkNote::nullifier).collect();
-
-            let account_tracker = AccountDeltaTracker::new(account);
-            let mut note_pool = NotePool::default();
-            for note in notes {
-                note_pool.add_note(note);
-            }
-
-            Self {
-                account: account_tracker,
-                notes: note_pool,
-                account_id,
-                inflight_txs: BTreeMap::default(),
-                known_nullifiers,
-            }
-        }
-    }
-
     // TESTS
     // ============================================================================================
 
-    /// Tests that initial notes loaded into `NetworkAccountState` have their nullifiers
-    /// registered in `known_nullifiers`.
+    /// Tests that committed notes can be loaded and queried from the DB.
     #[test]
-    fn test_initial_notes_have_nullifiers_indexed() {
+    fn test_committed_notes_round_trip() {
+        let mut conn = Db::test_conn();
+        let account = create_network_account(1);
+        let account_id = account.id();
+        let network_account_id =
+            NetworkAccountId::try_from(account_id).expect("should be a network account");
+
+        let note1 = to_single_target_note(create_network_note(account_id, 1));
+        let note2 = to_single_target_note(create_network_note(account_id, 2));
+
+        conn.transaction(|conn| {
+            queries::upsert_committed_account(conn, &account)?;
+            queries::insert_committed_notes(conn, network_account_id, &[note1, note2])?;
+            Ok::<(), crate::db::errors::DatabaseError>(())
+        })
+        .expect("should insert account and notes");
+
+        let available =
+            queries::available_notes(&mut conn, network_account_id, BlockNumber::from(0), 30)
+                .expect("should query available notes");
+
+        assert_eq!(available.len(), 2, "should have 2 available notes");
+    }
+
+    /// Tests that `handle_transaction_added` properly nullifies notes.
+    #[test]
+    fn test_transaction_added_nullifies_notes() {
+        let mut conn = Db::test_conn();
         let account = create_network_account(1);
         let account_id = account.id();
         let network_account_id =
@@ -519,78 +182,29 @@ mod tests {
         let note1 = to_single_target_note(create_network_note(account_id, 1));
         let note2 = to_single_target_note(create_network_note(account_id, 2));
         let nullifier1 = note1.nullifier();
-        let nullifier2 = note2.nullifier();
 
-        let state =
-            NetworkAccountState::new_for_testing(account, network_account_id, vec![note1, note2]);
-
-        assert!(
-            state.known_nullifiers.contains(&nullifier1),
-            "known_nullifiers should contain first note's nullifier"
-        );
-        assert!(
-            state.known_nullifiers.contains(&nullifier2),
-            "known_nullifiers should contain second note's nullifier"
-        );
-        assert_eq!(
-            state.known_nullifiers.len(),
-            2,
-            "known_nullifiers should have exactly 2 entries"
-        );
-    }
-
-    /// Tests that when a `TransactionAdded` event arrives with nullifiers from initial notes,
-    /// those notes are properly moved from `available_notes` to `nullified_notes`.
-    #[test]
-    fn test_mempool_event_nullifies_initial_notes() {
-        let account = create_network_account(1);
-        let account_id = account.id();
-        let network_account_id =
-            NetworkAccountId::try_from(account_id).expect("should be a network account");
-
-        let note1 = to_single_target_note(create_network_note(account_id, 1));
-        let note2 = to_single_target_note(create_network_note(account_id, 2));
-        let nullifier1 = note1.nullifier();
-        let nullifier2 = note2.nullifier();
-
-        let mut state =
-            NetworkAccountState::new_for_testing(account, network_account_id, vec![note1, note2]);
-
-        let available_count = state.notes.available_notes(&BlockNumber::from(0)).count();
-        assert_eq!(available_count, 2, "both notes should be available initially");
+        conn.transaction(|conn| {
+            queries::upsert_committed_account(conn, &account)?;
+            queries::insert_committed_notes(conn, network_account_id, &[note1, note2])?;
+            Ok::<(), crate::db::errors::DatabaseError>(())
+        })
+        .expect("should insert state");
 
         let tx_id = mock_tx_id(1);
-        let event = MempoolEvent::TransactionAdded {
-            id: tx_id,
-            nullifiers: vec![nullifier1],
-            network_notes: vec![],
-            account_delta: None,
-        };
+        queries::handle_transaction_added(&mut conn, &tx_id, None, &[], &[nullifier1])
+            .expect("should handle transaction added");
 
-        let shutdown = state.mempool_update(&event);
-        assert!(shutdown.is_none(), "mempool_update should not trigger shutdown");
+        let available =
+            queries::available_notes(&mut conn, network_account_id, BlockNumber::from(0), 30)
+                .expect("should query available notes");
 
-        let available_nullifiers: Vec<_> = state
-            .notes
-            .available_notes(&BlockNumber::from(0))
-            .map(|n| n.to_inner().nullifier())
-            .collect();
-        assert!(
-            !available_nullifiers.contains(&nullifier1),
-            "note1 should no longer be available"
-        );
-        assert!(available_nullifiers.contains(&nullifier2), "note2 should still be available");
-        assert_eq!(available_nullifiers.len(), 1, "only one note should be available");
-
-        assert!(
-            state.inflight_txs.contains_key(&tx_id),
-            "transaction should be tracked in inflight_txs"
-        );
+        assert_eq!(available.len(), 1, "only one note should be available");
     }
 
-    /// Tests that after committing a transaction, the nullifier is removed from `known_nullifiers`.
+    /// Tests that committing a transaction moves state appropriately.
     #[test]
-    fn test_commit_removes_nullifier_from_index() {
+    fn test_block_committed_removes_nullified_notes() {
+        let mut conn = Db::test_conn();
         let account = create_network_account(1);
         let account_id = account.id();
         let network_account_id =
@@ -599,38 +213,32 @@ mod tests {
         let note1 = to_single_target_note(create_network_note(account_id, 1));
         let nullifier1 = note1.nullifier();
 
-        let mut state =
-            NetworkAccountState::new_for_testing(account, network_account_id, vec![note1]);
+        conn.transaction(|conn| {
+            queries::upsert_committed_account(conn, &account)?;
+            queries::insert_committed_notes(conn, network_account_id, &[note1])?;
+            Ok::<(), crate::db::errors::DatabaseError>(())
+        })
+        .expect("should insert state");
 
         let tx_id = mock_tx_id(1);
-        let event = MempoolEvent::TransactionAdded {
-            id: tx_id,
-            nullifiers: vec![nullifier1],
-            network_notes: vec![],
-            account_delta: None,
-        };
-        state.mempool_update(&event);
+        queries::handle_transaction_added(&mut conn, &tx_id, None, &[], &[nullifier1])
+            .expect("should handle transaction added");
 
-        assert!(
-            state.known_nullifiers.contains(&nullifier1),
-            "nullifier should still be in index while transaction is inflight"
-        );
+        let header = mock_block_header(1);
+        queries::handle_block_committed(&mut conn, &[tx_id], BlockNumber::from(1), &header)
+            .expect("should handle block committed");
 
-        let commit_event = MempoolEvent::BlockCommitted {
-            header: Box::new(mock_block_header(1)),
-            txs: vec![tx_id],
-        };
-        state.mempool_update(&commit_event);
+        let available =
+            queries::available_notes(&mut conn, network_account_id, BlockNumber::from(1), 30)
+                .expect("should query available notes");
 
-        assert!(
-            !state.known_nullifiers.contains(&nullifier1),
-            "nullifier should be removed from index after commit"
-        );
+        assert!(available.is_empty(), "no notes should be available after commit");
     }
 
-    /// Tests that reverting a transaction restores the note to `available_notes`.
+    /// Tests that reverting a transaction restores nullified notes.
     #[test]
-    fn test_revert_restores_note_to_available() {
+    fn test_revert_restores_notes() {
+        let mut conn = Db::test_conn();
         let account = create_network_account(1);
         let account_id = account.id();
         let network_account_id =
@@ -639,79 +247,46 @@ mod tests {
         let note1 = to_single_target_note(create_network_note(account_id, 1));
         let nullifier1 = note1.nullifier();
 
-        let mut state =
-            NetworkAccountState::new_for_testing(account, network_account_id, vec![note1]);
+        conn.transaction(|conn| {
+            queries::upsert_committed_account(conn, &account)?;
+            queries::insert_committed_notes(conn, network_account_id, &[note1])?;
+            Ok::<(), crate::db::errors::DatabaseError>(())
+        })
+        .expect("should insert state");
 
         let tx_id = mock_tx_id(1);
-        let event = MempoolEvent::TransactionAdded {
-            id: tx_id,
-            nullifiers: vec![nullifier1],
-            network_notes: vec![],
-            account_delta: None,
-        };
-        state.mempool_update(&event);
+        queries::handle_transaction_added(&mut conn, &tx_id, None, &[], &[nullifier1])
+            .expect("should handle transaction added");
 
-        // Verify note is not available
-        let available_count = state.notes.available_notes(&BlockNumber::from(0)).count();
-        assert_eq!(available_count, 0, "note should not be available after being consumed");
+        queries::handle_transactions_reverted(&mut conn, &[tx_id]).expect("should handle revert");
 
-        // Revert the transaction
-        let revert_event =
-            MempoolEvent::TransactionsReverted(HashSet::from_iter(std::iter::once(tx_id)));
-        state.mempool_update(&revert_event);
+        let available =
+            queries::available_notes(&mut conn, network_account_id, BlockNumber::from(0), 30)
+                .expect("should query available notes");
 
-        // Verify note is available again
-        let available_nullifiers: Vec<_> = state
-            .notes
-            .available_notes(&BlockNumber::from(0))
-            .map(|n| n.to_inner().nullifier())
-            .collect();
-        assert!(
-            available_nullifiers.contains(&nullifier1),
-            "note should be available again after revert"
-        );
+        assert_eq!(available.len(), 1, "note should be available after revert");
     }
 
-    /// Tests that nullifiers from dynamically added notes are also indexed.
+    /// Tests that dynamically added inflight notes are available.
     #[test]
-    fn test_dynamically_added_notes_are_indexed() {
+    fn test_inflight_notes_are_available() {
+        let mut conn = Db::test_conn();
         let account = create_network_account(1);
         let account_id = account.id();
         let network_account_id =
             NetworkAccountId::try_from(account_id).expect("should be a network account");
 
-        let mut state = NetworkAccountState::new_for_testing(account, network_account_id, vec![]);
-
-        assert!(state.known_nullifiers.is_empty(), "known_nullifiers should be empty initially");
+        queries::upsert_committed_account(&mut conn, &account).expect("should insert account");
 
         let new_note = to_single_target_note(create_network_note(account_id, 1));
-        let new_nullifier = new_note.nullifier();
-
         let tx_id = mock_tx_id(1);
-        let event = MempoolEvent::TransactionAdded {
-            id: tx_id,
-            nullifiers: vec![],
-            network_notes: vec![NetworkNote::SingleTarget(new_note)],
-            account_delta: None,
-        };
+        queries::handle_transaction_added(&mut conn, &tx_id, None, &[new_note], &[])
+            .expect("should handle transaction added");
 
-        state.mempool_update(&event);
+        let available =
+            queries::available_notes(&mut conn, network_account_id, BlockNumber::from(0), 30)
+                .expect("should query available notes");
 
-        // Verify the new note's nullifier is now indexed
-        assert!(
-            state.known_nullifiers.contains(&new_nullifier),
-            "dynamically added note's nullifier should be indexed"
-        );
-
-        // Verify the note is available
-        let available_nullifiers: Vec<_> = state
-            .notes
-            .available_notes(&BlockNumber::from(0))
-            .map(|n| n.to_inner().nullifier())
-            .collect();
-        assert!(
-            available_nullifiers.contains(&new_nullifier),
-            "dynamically added note should be available"
-        );
+        assert_eq!(available.len(), 1, "inflight note should be available");
     }
 }
