@@ -146,7 +146,6 @@ runs:
 
         # Save the .deb files, delete the rest.
         mv packaging/deb/*.deb .
-        rm -rf packaging
 
     - name: Package names
       shell: bash
@@ -161,6 +160,7 @@ runs:
           svc=$(echo $service_file | sed "s/.service//g")
           mv $svc.deb ${{ env.package }}
         done
+        rm -rf packaging
 
     - name: shasum packages
       shell: bash
