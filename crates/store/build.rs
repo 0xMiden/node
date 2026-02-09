@@ -2,9 +2,10 @@
 // `store/src/db/migrations.rs` to include the latest version of the migrations into the binary, see <https://docs.rs/diesel_migrations/latest/diesel_migrations/macro.embed_migrations.html#automatic-rebuilds>.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use miden_agglayer::{create_existing_agglayer_faucet, create_existing_bridge_account};
-use miden_protocol::account::AccountFile;
+use miden_protocol::account::{Account, AccountCode, AccountFile};
 use miden_protocol::{Felt, Word};
 
 fn main() {
@@ -66,6 +67,11 @@ fn generate_agglayer_sample_accounts() {
         bridge_account_id,
     );
 
+    // Strip source location decorators from account code to ensure deterministic output.
+    let bridge_account = strip_code_decorators(bridge_account);
+    let eth_faucet = strip_code_decorators(eth_faucet);
+    let usdc_faucet = strip_code_decorators(usdc_faucet);
+
     // Save account files (without secret keys since these use NoAuth)
     let bridge_file = AccountFile::new(bridge_account, vec![]);
     let eth_faucet_file = AccountFile::new(eth_faucet, vec![]);
@@ -81,4 +87,20 @@ fn generate_agglayer_sample_accounts() {
     usdc_faucet_file
         .write(samples_dir.join("agglayer_faucet_usdc.mac"))
         .expect("Failed to write agglayer_faucet_usdc.mac");
+}
+
+/// Strips source location decorators from an account's code MAST forest.
+///
+/// This is necessary because the MAST forest embeds absolute file paths from the Cargo build
+/// directory, which include a hash that differs between `cargo check` and `cargo build`. Stripping
+/// decorators ensures the serialized `.mac` files are identical regardless of which cargo command
+/// is used (CI or local builds or tests).
+fn strip_code_decorators(account: Account) -> Account {
+    let (id, vault, storage, code, nonce, seed) = account.into_parts();
+
+    let mut mast = code.mast();
+    Arc::make_mut(&mut mast).strip_decorators();
+    let code = AccountCode::from_parts(mast, code.procedures().to_vec());
+
+    Account::new_unchecked(id, vault, storage, code, nonce, seed)
 }
