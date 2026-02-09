@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithTonicConfig;
@@ -8,6 +9,12 @@ use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::{Filter, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
+
+/// Global tracer provider for flushing traces on panic.
+///
+/// This is necessary because the panic hook needs access to the tracer provider to flush
+/// pending spans before the program terminates.
+static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
 /// Configures [`setup_tracing`] to enable or disable the open-telemetry exporter.
 #[derive(Clone, Copy)]
@@ -57,7 +64,15 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     // `then_some`) to avoid crashing sync callers (with OpenTelemetry::Disabled set). Examples of
     // such callers are tests with logging enabled.
     let tracer_provider = if otel.is_enabled() {
-        Some(init_tracer_provider()?)
+        let provider = init_tracer_provider()?;
+
+        // Store the provider globally so the panic hook can flush it.
+        // SdkTracerProvider is internally reference-counted, so cloning is cheap.
+        TRACER_PROVIDER
+            .set(provider.clone())
+            .expect("setup_tracing should only be called once");
+
+        Some(provider)
     } else {
         None
     };
@@ -71,8 +86,21 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
 
     // Register panic hook now that tracing is initialized.
-    std::panic::set_hook(Box::new(|info| {
+    // This chains with the default panic hook to preserve backtrace printing.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
         tracing::error!(panic = true, "{info}");
+
+        // Flush traces before the program terminates.
+        // This ensures the panic trace is exported even though the OtelGuard won't be dropped.
+        if let Some(provider) = TRACER_PROVIDER.get() {
+            if let Err(err) = provider.force_flush() {
+                eprintln!("Failed to flush traces on panic: {err:?}");
+            }
+        }
+
+        // Call the default hook to print the backtrace.
+        default_hook(info);
     }));
 
     Ok(tracer_provider.map(|tracer_provider| OtelGuard { tracer_provider }))
