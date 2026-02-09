@@ -2820,6 +2820,11 @@ name = "miden-node-ntx-builder"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "deadpool",
+ "deadpool-diesel",
+ "deadpool-sync",
+ "diesel",
+ "diesel_migrations",
  "futures",
  "indexmap 2.13.0",
  "miden-node-proto",
