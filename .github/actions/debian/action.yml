@@ -97,10 +97,10 @@ runs:
         for service_file in $(ls packaging/$pkg_dir/*.service | sed "s/.*miden/miden/g"); do
           svc=$(echo $service_file | sed "s/.service//g")
           git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/$service_file > packaging/deb/$pkg/lib/systemd/system/$service_file
-          git show ${{ steps.git-sha.outputs.sha }}:bin/$crate/.env              > packaging/deb/$pkg/lib/systemd/system/$svc.env
+          git show ${{ steps.git-sha.outputs.sha }}:bin/$crate/.env                  > packaging/deb/$pkg/lib/systemd/system/$svc.env
         done
-        chmod 0775 packaging/deb/$svc/DEBIAN/postinst
-        chmod 0775 packaging/deb/$svc/DEBIAN/postrm
+        chmod 0775 packaging/deb/$pkg/DEBIAN/postinst
+        chmod 0775 packaging/deb/$pkg/DEBIAN/postrm
 
     - name: Create control files
       shell: bash
