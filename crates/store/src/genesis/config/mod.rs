@@ -89,9 +89,6 @@ struct GenesisConfigToml {
 /// Specify a set of faucets and wallets with assets for easier test deployments.
 ///
 /// Notice: Any faucet must be declared _before_ it's use in a wallet/regular account.
-///
-/// This struct holds the parsed configuration. Accounts referenced via file paths
-/// are loaded during [`read_toml`] and stored directly as [`Account`] objects.
 #[derive(Debug, Clone)]
 pub struct GenesisConfig {
     version: u32,

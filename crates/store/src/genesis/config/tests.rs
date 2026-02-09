@@ -163,7 +163,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
     let auth = AuthFalcon512Rpo::new(secret_key.public_key().into());
 
     let faucet_component =
-        BasicFungibleFaucet::new(TokenSymbol::new("NFAU").unwrap(), 6, Felt::new(1_000_000_000))?;
+        BasicFungibleFaucet::new(TokenSymbol::new("MIDEN").unwrap(), 6, Felt::new(1_000_000_000))?;
 
     let faucet_account = AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
