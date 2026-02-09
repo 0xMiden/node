@@ -81,15 +81,4 @@ fn generate_agglayer_sample_accounts() {
     usdc_faucet_file
         .write(samples_dir.join("agglayer_faucet_usdc.mac"))
         .expect("Failed to write agglayer_faucet_usdc.mac");
-
-    // Track these files for rebuild
-    println!("cargo:rerun-if-changed={}", samples_dir.join("bridge.mac").display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        samples_dir.join("agglayer_faucet_eth.mac").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        samples_dir.join("agglayer_faucet_usdc.mac").display()
-    );
 }
