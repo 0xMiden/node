@@ -10,7 +10,7 @@ Type=exec
 Environment="OTEL_SERVICE_NAME=miden-validator"
 EnvironmentFile=/lib/systemd/system/miden-validator.env
 ExecStart=/usr/bin/miden-node validator start
-WorkingDirectory=/opt/miden-node
+WorkingDirectory=/opt/miden-validator
 User=miden-validator
 RestartSec=5
 Restart=always

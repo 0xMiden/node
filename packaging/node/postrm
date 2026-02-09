@@ -3,7 +3,10 @@
 ###############
 # Remove miden-node installs
 ##############
-sudo rm -rf /lib/systemd/system/miden-node.service
-sudo rm -rf /etc/opt/miden-node
-sudo deluser miden-node
+for svc in miden-node miden-validator; do
+    sudo rm -rf "/lib/systemd/system/$svc.service"
+    sudo rm -rf "/etc/opt/$svc"
+    sudo deluser "$svc"
+done
+
 sudo systemctl daemon-reload
