@@ -105,7 +105,7 @@ impl RemoteBlockProver {
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,
-        block_header: BlockHeader,
+        block_header: &BlockHeader,
         block_inputs: BlockInputs,
     ) -> Result<BlockProof, RemoteProverClientError> {
         use miden_protocol::utils::Serializable;

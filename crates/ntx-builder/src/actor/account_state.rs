@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
@@ -13,7 +14,7 @@ use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use tracing::instrument;
 
 use super::ActorShutdownReason;
-use super::note_state::{NetworkAccountEffect, NetworkAccountNoteState};
+use super::note_state::{AccountDeltaTracker, NetworkAccountEffect, NotePool};
 use crate::COMPONENT;
 use crate::actor::inflight_note::InflightNetworkNote;
 use crate::builder::ChainState;
@@ -40,7 +41,9 @@ pub struct TransactionCandidate {
     pub chain_tip_header: BlockHeader,
 
     /// The chain MMR, which lags behind the tip by one block.
-    pub chain_mmr: PartialBlockchain,
+    ///
+    /// Wrapped in `Arc` to avoid expensive clones when reading the chain state.
+    pub chain_mmr: Arc<PartialBlockchain>,
 }
 
 // NETWORK ACCOUNT STATE
@@ -49,32 +52,30 @@ pub struct TransactionCandidate {
 /// The current state of a network account.
 #[derive(Clone)]
 pub struct NetworkAccountState {
-    /// The network account ID corresponding to the network account this state represents.
+    /// The network account ID this state represents.
     account_id: NetworkAccountId,
 
-    /// Component of this state which Contains the committed and inflight account updates as well
-    /// as available and nullified notes.
-    account: NetworkAccountNoteState,
+    /// Tracks committed and inflight account state updates.
+    account: AccountDeltaTracker,
+
+    /// Manages available and nullified notes.
+    notes: NotePool,
 
     /// Uncommitted transactions which have some impact on the network state.
     ///
-    /// This is tracked so we can commit or revert such transaction effects. Transactions _without_
-    /// an impact are ignored.
+    /// This is tracked so we can commit or revert transaction effects. Transactions _without_ an
+    /// impact are ignored.
     inflight_txs: BTreeMap<TransactionId, TransactionImpact>,
 
     /// Nullifiers of all network notes targeted at this account.
     ///
     /// Used to filter mempool events: when a `TransactionAdded` event reports consumed nullifiers,
-    /// only those present in this set are processed (moved from `available_notes` to
-    /// `nullified_notes`). Nullifiers are added when notes are loaded or created, and removed
-    /// when the consuming transaction is committed.
+    /// only those present in this set are processed. Nullifiers are added when notes are loaded
+    /// or created, and removed when the consuming transaction is committed.
     known_nullifiers: HashSet<Nullifier>,
 }
 
 impl NetworkAccountState {
-    /// Maximum number of attempts to execute a network note.
-    const MAX_NOTE_ATTEMPTS: usize = 30;
-
     /// Load's all available network notes from the store, along with the required account states.
     #[instrument(target = COMPONENT, name = "ntx.state.load", skip_all)]
     pub async fn load(
@@ -95,10 +96,15 @@ impl NetworkAccountState {
         let known_nullifiers: HashSet<Nullifier> =
             notes.iter().map(SingleTargetNetworkNote::nullifier).collect();
 
-        let account = NetworkAccountNoteState::new(account, notes);
+        let account_tracker = AccountDeltaTracker::new(account);
+        let mut note_pool = NotePool::default();
+        for note in notes {
+            note_pool.add_note(note);
+        }
 
         let state = Self {
-            account,
+            account: account_tracker,
+            notes: note_pool,
             account_id,
             inflight_txs: BTreeMap::default(),
             known_nullifiers,
@@ -110,24 +116,31 @@ impl NetworkAccountState {
     }
 
     /// Selects the next candidate network transaction.
+    ///
+    /// # Parameters
+    ///
+    /// - `limit`: Maximum number of notes to include in the transaction.
+    /// - `max_note_attempts`: Maximum number of execution attempts before a note is dropped.
+    /// - `chain_state`: Current chain state for the transaction.
     #[instrument(target = COMPONENT, name = "ntx.state.select_candidate", skip_all)]
     pub fn select_candidate(
         &mut self,
         limit: NonZeroUsize,
+        max_note_attempts: usize,
         chain_state: ChainState,
     ) -> Option<TransactionCandidate> {
         // Remove notes that have failed too many times.
-        self.account.drop_failing_notes(Self::MAX_NOTE_ATTEMPTS);
+        self.notes.drop_failing_notes(max_note_attempts);
 
         // Skip empty accounts, and prune them.
         // This is how we keep the number of accounts bounded.
-        if self.account.is_empty() {
+        if self.is_empty() {
             return None;
         }
 
         // Select notes from the account that can be consumed or are ready for a retry.
         let notes = self
-            .account
+            .notes
             .available_notes(&chain_state.chain_tip_header.block_num())
             .take(limit.get())
             .cloned()
@@ -154,7 +167,7 @@ impl NetworkAccountState {
     #[instrument(target = COMPONENT, name = "ntx.state.notes_failed", skip_all)]
     pub fn notes_failed(&mut self, notes: &[Note], block_num: BlockNumber) {
         let nullifiers = notes.iter().map(Note::nullifier).collect::<Vec<_>>();
-        self.account.fail_notes(nullifiers.as_slice(), block_num);
+        self.notes.fail_notes(nullifiers.as_slice(), block_num);
     }
 
     /// Updates state with the mempool event.
@@ -197,6 +210,11 @@ impl NetworkAccountState {
         None
     }
 
+    /// Returns `true` if there is no inflight state being tracked.
+    fn is_empty(&self) -> bool {
+        self.account.has_no_inflight() && self.notes.is_empty()
+    }
+
     /// Handles a [`MempoolEvent::TransactionAdded`] event.
     fn add_transaction(
         &mut self,
@@ -234,7 +252,7 @@ impl NetworkAccountState {
             );
             tx_impact.notes.insert(note.nullifier());
             self.known_nullifiers.insert(note.nullifier());
-            self.account.add_note(note.clone());
+            self.notes.add_note(note.clone());
         }
         for nullifier in nullifiers {
             // Ignore nullifiers that aren't network note nullifiers.
@@ -242,8 +260,7 @@ impl NetworkAccountState {
                 continue;
             }
             tx_impact.nullifiers.insert(*nullifier);
-            // We don't use the entry wrapper here because the account must already exist.
-            let _ = self.account.add_nullifier(*nullifier);
+            let _ = self.notes.nullify(*nullifier);
         }
 
         if !tx_impact.is_empty() {
@@ -268,7 +285,7 @@ impl NetworkAccountState {
             if self.known_nullifiers.remove(&nullifier) {
                 // Its possible for the account to no longer exist if the transaction creating it
                 // was reverted.
-                self.account.commit_nullifier(nullifier);
+                self.notes.commit_nullifier(nullifier);
             }
         }
     }
@@ -292,7 +309,7 @@ impl NetworkAccountState {
         // Revert notes.
         for note_nullifier in impact.notes {
             if self.known_nullifiers.contains(&note_nullifier) {
-                self.account.revert_note(note_nullifier);
+                self.notes.remove_note(note_nullifier);
                 self.known_nullifiers.remove(&note_nullifier);
             }
         }
@@ -300,7 +317,7 @@ impl NetworkAccountState {
         // Revert nullifiers.
         for nullifier in impact.nullifiers {
             if self.known_nullifiers.contains(&nullifier) {
-                self.account.revert_nullifier(nullifier);
+                self.notes.revert_nullifier(nullifier);
                 self.known_nullifiers.remove(&nullifier);
             }
         }
@@ -471,10 +488,15 @@ mod tests {
             let known_nullifiers: HashSet<Nullifier> =
                 notes.iter().map(SingleTargetNetworkNote::nullifier).collect();
 
-            let account = NetworkAccountNoteState::new(account, notes);
+            let account_tracker = AccountDeltaTracker::new(account);
+            let mut note_pool = NotePool::default();
+            for note in notes {
+                note_pool.add_note(note);
+            }
 
             Self {
-                account,
+                account: account_tracker,
+                notes: note_pool,
                 account_id,
                 inflight_txs: BTreeMap::default(),
                 known_nullifiers,
@@ -534,7 +556,7 @@ mod tests {
         let mut state =
             NetworkAccountState::new_for_testing(account, network_account_id, vec![note1, note2]);
 
-        let available_count = state.account.available_notes(&BlockNumber::from(0)).count();
+        let available_count = state.notes.available_notes(&BlockNumber::from(0)).count();
         assert_eq!(available_count, 2, "both notes should be available initially");
 
         let tx_id = mock_tx_id(1);
@@ -549,7 +571,7 @@ mod tests {
         assert!(shutdown.is_none(), "mempool_update should not trigger shutdown");
 
         let available_nullifiers: Vec<_> = state
-            .account
+            .notes
             .available_notes(&BlockNumber::from(0))
             .map(|n| n.to_inner().nullifier())
             .collect();
@@ -630,7 +652,7 @@ mod tests {
         state.mempool_update(&event);
 
         // Verify note is not available
-        let available_count = state.account.available_notes(&BlockNumber::from(0)).count();
+        let available_count = state.notes.available_notes(&BlockNumber::from(0)).count();
         assert_eq!(available_count, 0, "note should not be available after being consumed");
 
         // Revert the transaction
@@ -640,7 +662,7 @@ mod tests {
 
         // Verify note is available again
         let available_nullifiers: Vec<_> = state
-            .account
+            .notes
             .available_notes(&BlockNumber::from(0))
             .map(|n| n.to_inner().nullifier())
             .collect();
@@ -683,7 +705,7 @@ mod tests {
 
         // Verify the note is available
         let available_nullifiers: Vec<_> = state
-            .account
+            .notes
             .available_notes(&BlockNumber::from(0))
             .map(|n| n.to_inner().nullifier())
             .collect();

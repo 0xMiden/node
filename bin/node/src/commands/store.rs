@@ -17,6 +17,7 @@ use super::{
 };
 use crate::commands::{
     DEFAULT_TIMEOUT,
+    ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_INSECURE_SECRET_KEY,
@@ -72,6 +73,10 @@ pub enum StoreCommand {
         #[arg(long = "block-producer.url", env = ENV_STORE_BLOCK_PRODUCER_URL, value_name = "URL")]
         block_producer_url: Url,
 
+        /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
+        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
+        block_prover_url: Option<Url>,
+
         /// Directory in which to store the database and raw block data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
@@ -115,6 +120,7 @@ impl StoreCommand {
                 rpc_url,
                 ntx_builder_url,
                 block_producer_url,
+                block_prover_url,
                 data_directory,
                 enable_otel: _,
                 grpc_timeout,
@@ -123,6 +129,7 @@ impl StoreCommand {
                     rpc_url,
                     ntx_builder_url,
                     block_producer_url,
+                    block_prover_url,
                     data_directory,
                     grpc_timeout,
                 )
@@ -143,6 +150,7 @@ impl StoreCommand {
         rpc_url: Url,
         ntx_builder_url: Url,
         block_producer_url: Url,
+        block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_timeout: Duration,
     ) -> anyhow::Result<()> {
@@ -169,6 +177,7 @@ impl StoreCommand {
 
         Store {
             rpc_listener,
+            block_prover_url,
             ntx_builder_listener,
             block_producer_listener,
             data_directory,

@@ -68,6 +68,9 @@ pub struct NtxBuilderConfig {
     )]
     pub ticker_interval: Duration,
 
+    /// Number of note scripts to cache locally.
+    ///
+    /// Note scripts not in cache must first be retrieved from the store.
     #[arg(
         long = "ntx-builder.script-cache-size",
         env = ENV_NTX_SCRIPT_CACHE_SIZE,
@@ -75,6 +78,20 @@ pub struct NtxBuilderConfig {
         default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
     )]
     pub script_cache_size: NonZeroUsize,
+}
+
+impl NtxBuilderConfig {
+    /// Converts this CLI config into the ntx-builder's internal config.
+    pub fn into_builder_config(
+        self,
+        store_url: Url,
+        block_producer_url: Url,
+        validator_url: Url,
+    ) -> miden_node_ntx_builder::NtxBuilderConfig {
+        miden_node_ntx_builder::NtxBuilderConfig::new(store_url, block_producer_url, validator_url)
+            .with_tx_prover_url(self.tx_prover_url)
+            .with_script_cache_size(self.script_cache_size)
+    }
 }
 
 /// Configuration for the Block Producer component
@@ -102,11 +119,6 @@ pub struct BlockProducerConfig {
     /// in-process which is expensive.
     #[arg(long = "batch-prover.url", env = ENV_BATCH_PROVER_URL, value_name = "URL")]
     pub batch_prover_url: Option<Url>,
-
-    /// The remote block prover's gRPC url. If unset, will default to running a prover
-    /// in-process which is expensive.
-    #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
-    pub block_prover_url: Option<Url>,
 
     /// The number of transactions per batch.
     #[arg(

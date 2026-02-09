@@ -28,15 +28,15 @@ inputs:
     options:
       - miden-node
       - miden-remote-prover
-  service:
+  package:
     required: true
-    description: The service to build the packages for.
+    description: The Debian package name.
     type: choice
     options:
       - miden-node
       - miden-prover
       - miden-prover-proxy
-  package:
+  packaging_dir:
     required: true
     description: Name of packaging directory.
     type: choice
@@ -78,7 +78,7 @@ runs:
     - name: Create package directories
       shell: bash
       run: |
-        pkg=${{ inputs.service }}
+        pkg=${{ inputs.package }}
         mkdir -p \
           packaging/deb/$pkg/DEBIAN \
           packaging/deb/$pkg/usr/bin \
@@ -89,15 +89,18 @@ runs:
     - name: Copy package install scripts
       shell: bash
       run: |
-        svc=${{ inputs.service }}
         pkg=${{ inputs.package }}
+        pkg_dir=${{ inputs.packaging_dir }}
         crate=${{ inputs.crate_dir }}
-        git show ${{ steps.git-sha.outputs.sha }}:bin/$crate/.env             > packaging/deb/$svc/lib/systemd/system/$svc.env
-        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/$svc.service > packaging/deb/$svc/lib/systemd/system/$svc.service
-        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/postinst     > packaging/deb/$svc/DEBIAN/postinst
-        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg/postrm       > packaging/deb/$svc/DEBIAN/postrm
-        chmod 0775 packaging/deb/$svc/DEBIAN/postinst
-        chmod 0775 packaging/deb/$svc/DEBIAN/postrm
+        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/postinst > packaging/deb/$pkg/DEBIAN/postinst
+        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/postrm   > packaging/deb/$pkg/DEBIAN/postrm
+        for service_file in $(ls packaging/$pkg_dir/*.service | sed "s/.*miden/miden/g"); do
+          svc=$(echo $service_file | sed "s/.service//g")
+          git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/$service_file > packaging/deb/$pkg/lib/systemd/system/$service_file
+          git show ${{ steps.git-sha.outputs.sha }}:bin/$crate/.env                  > packaging/deb/$pkg/lib/systemd/system/$svc.env
+        done
+        chmod 0775 packaging/deb/$pkg/DEBIAN/postinst
+        chmod 0775 packaging/deb/$pkg/DEBIAN/postrm
 
     - name: Create control files
       shell: bash
@@ -108,7 +111,7 @@ runs:
         # Control file's version field must be x.y.z format so strip the rest.
         version=$(git describe --tags --abbrev=0 | sed 's/[^0-9.]//g' )
 
-        pkg=${{ inputs.service }}
+        pkg=${{ inputs.package }}
         cat > packaging/deb/$pkg/DEBIAN/control << EOF
         Package: $pkg
         Version: $version
@@ -132,14 +135,14 @@ runs:
     - name: Copy binary files
       shell: bash
       run: |
-        pkg=${{ inputs.service }}
+        pkg=${{ inputs.package }}
         bin=${{ inputs.crate }}
         cp -p ./bin/$bin   packaging/deb/$pkg/usr/bin/
 
     - name: Build packages
       shell: bash
       run: |
-        dpkg-deb --build --root-owner-group packaging/deb/${{ inputs.service }}
+        dpkg-deb --build --root-owner-group packaging/deb/${{ inputs.package }}
 
         # Save the .deb files, delete the rest.
         mv packaging/deb/*.deb .
@@ -148,12 +151,12 @@ runs:
     - name: Package names
       shell: bash
       run: |
-        echo "package=${{ inputs.service }}-${{ inputs.gitref }}-${{ inputs.arch }}.deb" >> $GITHUB_ENV
+        echo "package=${{ inputs.package }}-${{ inputs.gitref }}-${{ inputs.arch }}.deb" >> $GITHUB_ENV
 
     - name: Rename package files
       shell: bash
       run: |
-        mv ${{ inputs.service }}.deb ${{ env.package }}
+        mv ${{ inputs.package}}.deb ${{ env.package }}
 
     - name: shasum packages
       shell: bash

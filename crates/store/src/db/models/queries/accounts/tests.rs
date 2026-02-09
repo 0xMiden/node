@@ -161,6 +161,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
 fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
     use crate::db::schema::block_headers;
 
+    let secret_key = SecretKey::new();
     let block_header = BlockHeader::new(
         1_u8.into(),
         Word::default(),
@@ -171,15 +172,17 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
-        SecretKey::new().public_key(),
+        secret_key.public_key(),
         test_fee_params(),
         0_u8.into(),
     );
+    let signature = secret_key.sign(block_header.commitment());
 
     diesel::insert_into(block_headers::table)
         .values((
             block_headers::block_num.eq(i64::from(block_num.as_u32())),
             block_headers::block_header.eq(block_header.to_bytes()),
+            block_headers::signature.eq(signature.to_bytes()),
         ))
         .execute(conn)
         .expect("Failed to insert block header");

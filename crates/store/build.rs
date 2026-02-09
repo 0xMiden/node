@@ -16,6 +16,7 @@ fn main() {
 
     // Generate sample agglayer account files for genesis config samples.
     generate_agglayer_sample_accounts();
+    miden_node_rocksdb_cxx_linkage_fix::configure();
 }
 
 /// Generates sample agglayer account files for the `02-with-account-files` genesis config sample.

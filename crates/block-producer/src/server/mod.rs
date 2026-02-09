@@ -40,6 +40,9 @@ use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
 
+#[cfg(test)]
+mod tests;
+
 /// The block producer server.
 ///
 /// Specifies how to connect to the store, batch prover, and block prover components.
@@ -55,8 +58,6 @@ pub struct BlockProducer {
     pub validator_url: Url,
     /// The address of the batch prover component.
     pub batch_prover_url: Option<Url>,
-    /// The address of the block prover component.
-    pub block_prover_url: Option<Url>,
     /// The interval at which to produce batches.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
@@ -123,8 +124,7 @@ impl BlockProducer {
 
         info!(target: COMPONENT, "Server initialized");
 
-        let block_builder =
-            BlockBuilder::new(store.clone(), validator, self.block_prover_url, self.block_interval);
+        let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
             store.clone(),
             SERVER_NUM_BATCH_BUILDERS,

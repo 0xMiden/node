@@ -19,6 +19,7 @@ use miden_node_utils::limiter::{
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
+    Account,
     AccountBuilder,
     AccountDelta,
     AccountId,
@@ -28,7 +29,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
-use miden_protocol::transaction::ProvenTransactionBuilder;
+use miden_protocol::transaction::{ProvenTransaction, ProvenTransactionBuilder};
 use miden_protocol::utils::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
@@ -39,6 +40,53 @@ use tokio::task;
 use url::Url;
 
 use crate::Rpc;
+
+/// Byte offset of the account delta commitment in serialized `ProvenTransaction`.
+/// Layout: `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
+const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
+
+/// Creates a minimal account and its delta for testing proven transaction building.
+fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
+    let account = AccountBuilder::new(seed)
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_assets(vec![])
+        .with_component(BasicWallet)
+        .with_auth_component(NoopAuthComponent)
+        .build_existing()
+        .unwrap();
+
+    let delta: AccountDelta = account.clone().try_into().unwrap();
+    (account, delta)
+}
+
+/// Creates a minimal proven transaction for testing.
+///
+/// This uses `ExecutionProof::new_dummy()` and is intended for tests that
+/// need to test validation logic.
+fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransaction {
+    let account_id = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version0,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Public,
+    );
+
+    ProvenTransactionBuilder::new(
+        account_id,
+        [8; 32].try_into().unwrap(),
+        account.commitment(),
+        delta.to_commitment(),
+        0.into(),
+        Word::default(),
+        test_fee(),
+        u32::MAX.into(),
+        ExecutionProof::new_dummy(),
+    )
+    .account_update_details(AccountUpdateDetails::Delta(delta.clone()))
+    .build()
+    .unwrap()
+}
 
 #[tokio::test]
 async fn rpc_server_accepts_requests_without_accept_header() {
@@ -199,6 +247,9 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     let (_, rpc_addr, store_addr) = start_rpc().await;
     let (store_runtime, _data_directory, genesis) = start_store(store_addr).await;
 
+    // Wait for the store to be ready before sending requests.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
         miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())
@@ -209,54 +260,19 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
             .without_otel_context_injection()
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
-    let account_id = AccountId::dummy(
-        [0; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    // Build a valid proven transaction
+    let (account, account_delta) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_delta);
 
-    let account = AccountBuilder::new([0; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
-        .with_assets(vec![])
-        .with_component(BasicWallet)
-        .with_auth_component(NoopAuthComponent)
-        .build_existing()
-        .unwrap();
+    // Create an incorrect delta commitment from a different account
+    let (other_account, _) = build_test_account([1; 32]);
+    let incorrect_delta: AccountDelta = other_account.try_into().unwrap();
+    let incorrect_commitment_bytes = incorrect_delta.to_commitment().as_bytes();
 
-    let other_account = AccountBuilder::new([1; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Private)
-        .with_assets(vec![])
-        .with_component(BasicWallet)
-        .with_auth_component(NoopAuthComponent)
-        .build_existing()
-        .unwrap();
-    let incorrect_commitment_delta: AccountDelta = other_account.try_into().unwrap();
-    let incorrect_commitment_delta_bytes = incorrect_commitment_delta.to_commitment().as_bytes();
-
-    let account_delta: AccountDelta = account.clone().try_into().unwrap();
-
-    // Send any request to the RPC.
-    let tx = ProvenTransactionBuilder::new(
-        account_id,
-        [8; 32].try_into().unwrap(),
-        account.commitment(),
-        account_delta.clone().to_commitment(), // delta commitment
-        0.into(),
-        Word::default(),
-        test_fee(),
-        u32::MAX.into(),
-        ExecutionProof::new_dummy(),
-    )
-    .account_update_details(AccountUpdateDetails::Delta(account_delta))
-    .build()
-    .unwrap();
-
+    // Corrupt the transaction bytes with the incorrect delta commitment
     let mut tx_bytes = tx.to_bytes();
-    let offset = 15 + 32 + 32;
-    tx_bytes[offset..offset + 32].copy_from_slice(&incorrect_commitment_delta_bytes);
+    tx_bytes[DELTA_COMMITMENT_BYTE_OFFSET..DELTA_COMMITMENT_BYTE_OFFSET + 32]
+        .copy_from_slice(&incorrect_commitment_bytes);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx_bytes,
@@ -295,39 +311,8 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
             .without_otel_context_injection()
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
-    let account_id = AccountId::dummy(
-        [0; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
-
-    let account = AccountBuilder::new([0; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
-        .with_assets(vec![])
-        .with_component(BasicWallet)
-        .with_auth_component(NoopAuthComponent)
-        .build_existing()
-        .unwrap();
-
-    let account_delta: AccountDelta = account.clone().try_into().unwrap();
-
-    // Send any request to the RPC.
-    let tx = ProvenTransactionBuilder::new(
-        account_id,
-        [8; 32].try_into().unwrap(),
-        account.commitment(),
-        account_delta.clone().to_commitment(), // delta commitment
-        0.into(),
-        Word::default(),
-        test_fee(),
-        u32::MAX.into(),
-        ExecutionProof::new_dummy(),
-    )
-    .account_update_details(AccountUpdateDetails::Delta(account_delta))
-    .build()
-    .unwrap();
+    let (account, account_delta) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_delta);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx.to_bytes(),
@@ -439,6 +424,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
@@ -479,6 +465,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
