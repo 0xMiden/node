@@ -10,6 +10,8 @@ use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::{Filter, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
+use crate::tracing::OpenTelemetrySpanExt;
+
 /// Global tracer provider for flushing traces on panic.
 ///
 /// This is necessary because the panic hook needs access to the tracer provider to flush
@@ -90,6 +92,11 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!(panic = true, info = %info, "panic");
+
+        // Mark the current span as failed for OpenTelemetry.
+        let info_str = info.to_string();
+        let wrapped = anyhow::Error::msg(info_str);
+        tracing::Span::current().set_error(wrapped.as_ref());
 
         // Flush traces before the program terminates.
         // This ensures the panic trace is exported even though the OtelGuard won't be dropped.
