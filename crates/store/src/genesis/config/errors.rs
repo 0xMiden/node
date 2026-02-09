@@ -31,7 +31,9 @@ pub enum GenesisConfigError {
     Asset(#[from] AssetError),
     #[error("adding assets to account failed")]
     AccountDelta(#[from] AccountDeltaError),
-    #[error("the defined asset {symbol:?} has no corresponding faucet")]
+    #[error(
+        "the defined asset {symbol:?} has no corresponding faucet, or the faucet was provided as an account file"
+    )]
     MissingFaucetDefinition { symbol: TokenSymbolStr },
     #[error("account with id {account_id} was referenced but is not part of given genesis state")]
     MissingGenesisAccount { account_id: AccountId },
