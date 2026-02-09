@@ -10,6 +10,7 @@ use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
+    QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNullifierLimit,
@@ -498,6 +499,38 @@ async fn get_limits_endpoint() {
         Some(&(QueryParamNullifierLimit::LIMIT as u32)),
         "CheckNullifiers nullifier limit should be {}",
         QueryParamNullifierLimit::LIMIT
+    );
+
+    let sync_transactions =
+        limits.endpoints.get("SyncTransactions").expect("SyncTransactions should exist");
+    assert_eq!(
+        sync_transactions.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
+        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
+        "SyncTransactions {} limit should be {}",
+        QueryParamAccountIdLimit::PARAM_NAME,
+        QueryParamAccountIdLimit::LIMIT
+    );
+
+    let sync_account_vault =
+        limits.endpoints.get("SyncAccountVault").expect("SyncAccountVault should exist");
+    assert_eq!(
+        sync_account_vault.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
+        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
+        "SyncAccountVault {} limit should be {}",
+        QueryParamAccountIdLimit::PARAM_NAME,
+        QueryParamAccountIdLimit::LIMIT
+    );
+
+    let sync_account_storage_maps = limits
+        .endpoints
+        .get("SyncAccountStorageMaps")
+        .expect("SyncAccountStorageMaps should exist");
+    assert_eq!(
+        sync_account_storage_maps.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
+        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
+        "SyncAccountStorageMaps {} limit should be {}",
+        QueryParamAccountIdLimit::PARAM_NAME,
+        QueryParamAccountIdLimit::LIMIT
     );
 
     let sync_chain_mmr = limits.endpoints.get("SyncChainMmr").expect("SyncChainMmr should exist");

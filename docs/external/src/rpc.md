@@ -127,6 +127,9 @@ This endpoint allows clients to discover the maximum number of items that can be
   "endpoints": {
     "CheckNullifiers": { "parameters": { "nullifier": 1000 } },
     "SyncNullifiers": { "parameters": { "nullifier": 1000 } },
+    "SyncTransactions": { "parameters": { "account_id": 1000 } },
+    "SyncAccountVault": { "parameters": { "account_id": 1000 } },
+    "SyncAccountStorageMaps": { "parameters": { "account_id": 1000 } },
     "SyncNotes": { "parameters": { "note_tag": 1000 } },
     "GetNotesById": { "parameters": { "note_id": 100 } }
   }

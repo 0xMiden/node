@@ -10,6 +10,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
+    QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
@@ -516,6 +517,7 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use {
+        QueryParamAccountIdLimit as AccountId,
         QueryParamNoteIdLimit as NoteId,
         QueryParamNoteTagLimit as NoteTag,
         QueryParamNullifierLimit as Nullifier,
@@ -531,6 +533,18 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
             (
                 "SyncNullifiers".into(),
                 endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
+            ),
+            (
+                "SyncTransactions".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
+            ),
+            (
+                "SyncAccountVault".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
+            ),
+            (
+                "SyncAccountStorageMaps".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncChainMmr".into(), endpoint_limits(&[])),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
