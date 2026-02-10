@@ -3,6 +3,7 @@
 ## v0.13.5 (TBD)
 
 - OpenTelemetry traces are now flushed before program termination on panic ([#1643](https://github.com/0xMiden/miden-node/pull/1643)).
+- Added support for the note transport layer in the network monitor ([#1660](https://github.com/0xMiden/miden-node/pull/1660)).
 
 ## v0.13.4 (2026-02-04)
 
