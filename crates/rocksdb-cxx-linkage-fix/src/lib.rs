@@ -17,7 +17,7 @@ pub fn configure() {
 
 fn should_compile() -> bool {
     // in sync with <https://github.com/rust-rocksdb/rust-rocksdb/blob/master/librocksdb-sys/build.rs#L348-L352>
-    if let Ok(v) = env::var(format!("ROCKSDB_COMPILE")) {
+    if let Ok(v) = env::var("ROCKSDB_COMPILE") {
         if v.to_lowercase() == "true" || v == "1" {
             return true;
         }
