@@ -433,8 +433,9 @@ pub struct SyncNotesResponse {
 pub struct SyncChainMmrRequest {
     /// Block range from which to synchronize the chain MMR.
     ///
-    /// The response will contain MMR delta from `block_range.block_from + 1` up to
-    /// `block_range.block_to` or the chain tip (whichever is lower).
+    /// The response will contain MMR delta starting after `block_range.block_from` up to
+    /// `block_range.block_to` or the chain tip (whichever is lower). Set `block_from` to the last
+    /// block already present in the caller's MMR so the delta begins at the next block.
     #[prost(message, optional, tag = "1")]
     pub block_range: ::core::option::Option<BlockRange>,
 }
@@ -444,7 +445,7 @@ pub struct SyncChainMmrResponse {
     /// Pagination information.
     #[prost(message, optional, tag = "1")]
     pub pagination_info: ::core::option::Option<PaginationInfo>,
-    /// Data needed to update the partial MMR from `request.block_num + 1` to
+    /// Data needed to update the partial MMR from `request.block_range.block_from + 1` to
     /// `pagination_info.block_num`.
     #[prost(message, optional, tag = "2")]
     pub mmr_delta: ::core::option::Option<super::primitives::MmrDelta>,
