@@ -5,7 +5,6 @@ use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
-    QueryParamBlockRangeLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
@@ -158,6 +157,8 @@ impl rpc_server::Rpc for StoreApi {
         &self,
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
+        const MAX_BLOCKS: u32 = 1000;
+
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
 
@@ -167,26 +168,36 @@ impl rpc_server::Rpc for StoreApi {
             .map_err(SyncChainMmrError::DeserializationFailed)?;
 
         let block_from = BlockNumber::from(block_range.block_from);
+        if block_from > chain_tip {
+            Err(SyncChainMmrError::FutureBlock { chain_tip, block_from })?;
+        }
+
         let block_to = block_range.block_to.map_or(chain_tip, BlockNumber::from).min(chain_tip);
 
         if block_from > block_to {
-            return Err(SyncChainMmrError::InvalidBlockRange(
-                InvalidBlockRange::StartGreaterThanEnd { start: block_from, end: block_to },
-            )
-            .into());
+            Err(SyncChainMmrError::InvalidBlockRange(InvalidBlockRange::StartGreaterThanEnd {
+                start: block_from,
+                end: block_to,
+            }))?;
         }
+        let block_range = block_from..=block_to;
 
-        let block_range_size = block_to.as_usize().saturating_sub(block_from.as_usize()) + 1;
-        check::<QueryParamBlockRangeLimit>(block_range_size)?;
-
-        let last_block_included = block_to;
-        let mmr_delta =
-            self.state.sync_chain_mmr(block_from..=block_to).await.map_err(internal_error)?;
+        let len = 1 + block_range.end().as_u32() - block_range.start().as_u32();
+        let trimmed_block_range = if len > MAX_BLOCKS {
+            block_from..=BlockNumber::from(block_from.as_u32() + MAX_BLOCKS)
+        } else {
+            block_range
+        };
+        let mmr_delta = self
+            .state
+            .sync_chain_mmr(trimmed_block_range.clone())
+            .await
+            .map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+                block_num: trimmed_block_range.end().as_u32(),
             }),
             mmr_delta: Some(mmr_delta.into()),
         }))

@@ -363,6 +363,11 @@ pub enum StateSyncError {
 pub enum SyncChainMmrError {
     #[error("invalid block range")]
     InvalidBlockRange(#[source] InvalidBlockRange),
+    #[error("start block is not known")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_from: BlockNumber,
+    },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),
 }
