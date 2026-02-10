@@ -16,7 +16,8 @@ mod actor;
 mod block_producer;
 mod builder;
 mod coordinator;
-pub mod db;
+#[expect(dead_code, reason = "will be used as part of follow-up work")]
+pub(crate) mod db;
 mod store;
 
 pub use builder::NetworkTransactionBuilder;
