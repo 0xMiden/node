@@ -85,8 +85,11 @@ deadpool-diesel    = { features = ["sqlite"], version = "0.6" }
 deadpool-sync      = { default-features = false, features = ["tracing"], version = "0.1" }
 diesel             = { features = ["numeric", "sqlite"], version = "2.3" }
 diesel_migrations  = { features = ["sqlite"], version = "2.3" }
-prost              = { default-features = false, version = "=0.14.1" }
-protox             = { version = "=0.9.0" }
+# prost and protox are from different authors and are _not_ released in
+# lockstep, nor are they adhering to semver semantics. We keep this
+# to avoid future breakage.
+prost              = { default-features = false, version = "=0.14.3" }
+protox             = { version = "=0.9.1" }
 rand               = { version = "0.9" }
 rand_chacha        = { version = "0.9" }
 rstest             = { version = "0.26" }

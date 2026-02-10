@@ -15,16 +15,29 @@ pub fn configure() {
     }
 }
 
-fn should_link_cpp_stdlib() -> bool {
-    let rocksdb_compile = env::var("ROCKSDB_COMPILE").unwrap_or_default();
-    let rocksdb_compile_disabled = matches!(rocksdb_compile.as_str(), "0" | "false" | "FALSE");
-    let rocksdb_static = env::var("ROCKSDB_STATIC").is_ok();
-    let rocksdb_lib_dir_set = env::var("ROCKSDB_LIB_DIR").is_ok();
+fn should_compile() -> bool {
+    // in sync with <https://github.com/rust-rocksdb/rust-rocksdb/blob/master/librocksdb-sys/build.rs#L348-L352>
+    if let Ok(v) = env::var("ROCKSDB_COMPILE") {
+        if v.to_lowercase() == "true" || v == "1" {
+            return true;
+        }
+    }
+    false
+}
 
-    rocksdb_lib_dir_set || (rocksdb_static && rocksdb_compile_disabled)
+fn should_link_cpp_stdlib() -> bool {
+    if should_compile() {
+        return false;
+    }
+    // the value doesn't matter
+    // <https://github.com/rust-rocksdb/rust-rocksdb/blob/master/librocksdb-sys/build.rs#L359>
+    env::var("ROCKSDB_STATIC").is_ok()
+    // `ROCKSDB_LIB_DIR` is not really discriminative, it only adds extra lookup dirs for the linker
 }
 
 fn link_cpp_stdlib(target: &str) {
+    // aligned with
+    // <https://github.com/rust-rocksdb/rust-rocksdb/blob/master/librocksdb-sys/build.rs#L399-L411>
     if let Ok(stdlib) = env::var("CXXSTDLIB") {
         println!("cargo:rustc-link-lib=dylib={stdlib}");
     } else if target.contains("apple") || target.contains("freebsd") || target.contains("openbsd") {

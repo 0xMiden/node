@@ -176,7 +176,13 @@ where
 }
 
 #[allow(clippy::result_large_err)]
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    fields(nullifiers = nullifiers.len()),
+    err
+)]
 pub fn validate_nullifiers<E>(nullifiers: &[proto::primitives::Digest]) -> Result<Vec<Nullifier>, E>
 where
     E: From<ConversionError> + std::fmt::Display,
@@ -190,7 +196,13 @@ where
 }
 
 #[allow(clippy::result_large_err)]
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    fields(notes = notes.len()),
+    err
+)]
 pub fn validate_note_commitments(notes: &[proto::primitives::Digest]) -> Result<Vec<Word>, Status> {
     notes
         .iter()
@@ -199,7 +211,12 @@ pub fn validate_note_commitments(notes: &[proto::primitives::Digest]) -> Result<
         .map_err(|_| invalid_argument("Digest field is not in the modulus range"))
 }
 
-#[instrument(level = "debug",target = COMPONENT, skip_all)]
+#[instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    fields(block_numbers = block_numbers.len())
+)]
 pub fn read_block_numbers(block_numbers: &[u32]) -> BTreeSet<BlockNumber> {
     BTreeSet::from_iter(block_numbers.iter().map(|raw_number| BlockNumber::from(*raw_number)))
 }

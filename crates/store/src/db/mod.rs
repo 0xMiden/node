@@ -349,7 +349,14 @@ impl Db {
     }
 
     /// Loads the nullifiers that match the prefixes from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(
+        level = "debug",
+        target = COMPONENT,
+        skip_all,
+        fields(prefix_len, prefixes = nullifier_prefixes.len()),
+        ret(level = "debug"),
+        err
+    )]
     pub async fn select_nullifiers_by_prefix(
         &self,
         prefix_len: u32,
