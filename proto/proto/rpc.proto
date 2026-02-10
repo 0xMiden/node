@@ -486,8 +486,9 @@ message SyncNotesResponse {
 message SyncChainMmrRequest {
     // Block range from which to synchronize the chain MMR.
     //
-    // The response will contain MMR delta from `block_range.block_from + 1` up to
-    // `block_range.block_to` or the chain tip (whichever is lower).
+    // The response will contain MMR delta starting after `block_range.block_from` up to
+    // `block_range.block_to` or the chain tip (whichever is lower). Set `block_from` to the last
+    // block already present in the caller's MMR so the delta begins at the next block.
     BlockRange block_range = 1;
 }
 
@@ -496,7 +497,7 @@ message SyncChainMmrResponse {
     // Pagination information.
     PaginationInfo pagination_info = 1;
 
-    // Data needed to update the partial MMR from `request.block_num + 1` to
+    // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
     // `pagination_info.block_num`.
     primitives.MmrDelta mmr_delta = 2;
 }

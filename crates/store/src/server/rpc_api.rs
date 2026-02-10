@@ -5,6 +5,7 @@ use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
+    QueryParamBlockRangeLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
@@ -174,6 +175,9 @@ impl rpc_server::Rpc for StoreApi {
             )
             .into());
         }
+
+        let block_range_size = block_to.as_usize().saturating_sub(block_from.as_usize()) + 1;
+        check::<QueryParamBlockRangeLimit>(block_range_size)?;
 
         let last_block_included = block_to;
         let mmr_delta =

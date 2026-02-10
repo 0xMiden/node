@@ -49,8 +49,9 @@ impl State {
         //   contained in the block header always lag behind by one block, this is because the Mmr
         //   leaves are hashes of block headers, and we can't have self-referential hashes. These
         //   two points cancel out and don't require adjusting.
-        // - Mmr::get_delta is inclusive, whereas the sync request block_from is defined to be
-        //   exclusive, so the from_forest has to be adjusted with a +1.
+        // - Mmr::get_delta is inclusive, whereas the sync request block_from is defined to be the
+        //   last block already present in the caller's MMR. The delta should therefore start at the
+        //   next block, so the from_forest has to be adjusted with a +1.
         let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 

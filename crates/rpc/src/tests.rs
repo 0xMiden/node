@@ -11,6 +11,7 @@ use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
+    QueryParamBlockRangeLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNullifierLimit,
@@ -534,7 +535,13 @@ async fn get_limits_endpoint() {
     );
 
     let sync_chain_mmr = limits.endpoints.get("SyncChainMmr").expect("SyncChainMmr should exist");
-    assert!(sync_chain_mmr.parameters.is_empty(), "SyncChainMmr parameters should be empty");
+    assert_eq!(
+        sync_chain_mmr.parameters.get(QueryParamBlockRangeLimit::PARAM_NAME),
+        Some(&(QueryParamBlockRangeLimit::LIMIT as u32)),
+        "SyncChainMmr {} limit should be {}",
+        QueryParamBlockRangeLimit::PARAM_NAME,
+        QueryParamBlockRangeLimit::LIMIT
+    );
 
     // Verify GetNotesById endpoint
     let get_notes_by_id = limits.endpoints.get("GetNotesById").expect("GetNotesById should exist");
