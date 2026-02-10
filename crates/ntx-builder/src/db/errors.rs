@@ -15,8 +15,8 @@ pub enum DatabaseError {
     InteractError(String),
     #[error("schema verification failed")]
     SchemaVerification(#[from] SchemaVerificationError),
-    #[error(transparent)]
-    ConnectionManager(#[from] ConnectionManagerError),
+    #[error("connection manager error")]
+    ConnectionManager(#[source] ConnectionManagerError),
 }
 
 impl DatabaseError {
@@ -41,7 +41,7 @@ pub enum DatabaseSetupError {
     #[error("database error")]
     Database(#[from] DatabaseError),
     #[error("pool build error")]
-    PoolBuild(#[from] deadpool::managed::BuildError),
+    PoolBuild(#[source] deadpool::managed::BuildError),
 }
 
 // SCHEMA VERIFICATION ERRORS
