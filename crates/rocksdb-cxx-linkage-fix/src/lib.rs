@@ -17,7 +17,8 @@ pub fn configure() {
 
 fn should_link_cpp_stdlib() -> bool {
     let rocksdb_compile = env::var("ROCKSDB_COMPILE").unwrap_or_default();
-    let rocksdb_compile_disabled = matches!(rocksdb_compile.as_str(), "0" | "false" | "FALSE");
+    let rocksdb_compile_disabled =
+        rocksdb_compile.is_empty() || matches!(rocksdb_compile.as_str(), "0" | "false" | "FALSE");
     let rocksdb_static = env::var("ROCKSDB_STATIC").is_ok();
     let rocksdb_lib_dir_set = env::var("ROCKSDB_LIB_DIR").is_ok();
 
