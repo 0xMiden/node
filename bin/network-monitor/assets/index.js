@@ -474,26 +474,22 @@ function updateDisplay() {
                         ` : ''}
                     ` : ''}
                     ${details.RemoteProverStatus ? `
-                        <div class="nested-status">
-                            <strong>Prover Status (${details.RemoteProverStatus.url}):</strong>${renderCopyButton(details.RemoteProverStatus.url, 'URL')}
-                            <div class="detail-item"><strong>Version:</strong> ${details.RemoteProverStatus.version}</div>
+                        <div class="detail-item"><strong>URL:</strong> ${details.RemoteProverStatus.url}${renderCopyButton(details.RemoteProverStatus.url, 'URL')}</div>
+                        <div class="detail-item"><strong>Version:</strong> ${details.RemoteProverStatus.version}</div>
+                        <div class="detail-item"><strong>Proof Type:</strong> ${details.RemoteProverStatus.supported_proof_type}</div>
+                        ${renderGrpcWebProbeSection(details.RemoteProverStatus.url)}
+                        ${details.RemoteProverStatus.workers && details.RemoteProverStatus.workers.length > 0 ? `
                             <div class="nested-status">
-                                <strong>Supported Proof Type:</strong> ${details.RemoteProverStatus.supported_proof_type}
+                                <strong>Workers (${details.RemoteProverStatus.workers.length}):</strong>
+                                ${details.RemoteProverStatus.workers.map(worker => `
+                                    <div class="worker-status">
+                                        <span class="worker-name">${worker.name}</span> -
+                                        <span class="worker-version">${worker.version}</span> -
+                                        <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
+                                    </div>
+                                `).join('')}
                             </div>
-                            ${details.RemoteProverStatus.workers && details.RemoteProverStatus.workers.length > 0 ? `
-                                <div class="nested-status">
-                                    <strong>Workers (${details.RemoteProverStatus.workers.length}):</strong>
-                                    ${details.RemoteProverStatus.workers.map(worker => `
-                                        <div class="worker-status">
-                                            <span class="worker-name">${worker.name}</span> -
-                                            <span class="worker-version">${worker.version}</span> -
-                                            <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            ` : ''}
-                            ${renderGrpcWebProbeSection(details.RemoteProverStatus.url)}
-                        </div>
+                        ` : ''}
                     ` : ''}
                     ${details.FaucetTest ? `
                         <div class="nested-status">
