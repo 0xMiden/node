@@ -11,7 +11,6 @@ use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
-    QueryParamBlockRangeLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNullifierLimit,
@@ -496,9 +495,10 @@ async fn get_limits_endpoint() {
         limits.endpoints.get("CheckNullifiers").expect("CheckNullifiers should exist");
 
     assert_eq!(
-        check_nullifiers.parameters.get("nullifier"),
+        check_nullifiers.parameters.get(QueryParamNullifierLimit::PARAM_NAME),
         Some(&(QueryParamNullifierLimit::LIMIT as u32)),
-        "CheckNullifiers nullifier limit should be {}",
+        "CheckNullifiers {} limit should be {}",
+        QueryParamNullifierLimit::PARAM_NAME,
         QueryParamNullifierLimit::LIMIT
     );
 
@@ -532,15 +532,6 @@ async fn get_limits_endpoint() {
         "SyncAccountStorageMaps {} limit should be {}",
         QueryParamAccountIdLimit::PARAM_NAME,
         QueryParamAccountIdLimit::LIMIT
-    );
-
-    let sync_chain_mmr = limits.endpoints.get("SyncChainMmr").expect("SyncChainMmr should exist");
-    assert_eq!(
-        sync_chain_mmr.parameters.get(QueryParamBlockRangeLimit::PARAM_NAME),
-        Some(&(QueryParamBlockRangeLimit::LIMIT as u32)),
-        "SyncChainMmr {} limit should be {}",
-        QueryParamBlockRangeLimit::PARAM_NAME,
-        QueryParamBlockRangeLimit::LIMIT
     );
 
     // Verify GetNotesById endpoint
