@@ -69,6 +69,11 @@ anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
 clap              = { features = ["derive"], version = "4.5" }
+deadpool          = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
+deadpool-diesel   = { features = ["sqlite"], version = "0.6" }
+deadpool-sync     = { default-features = false, features = ["tracing"], version = "0.1" }
+diesel            = { features = ["numeric", "sqlite"], version = "2.3" }
+diesel_migrations = { features = ["sqlite"], version = "2.3" }
 fs-err            = { version = "3" }
 futures           = { version = "0.3" }
 hex               = { version = "0.4" }
@@ -78,13 +83,6 @@ indexmap          = { version = "2.12" }
 itertools         = { version = "0.14" }
 lru               = { default-features = false, version = "0.16" }
 pretty_assertions = { version = "1.4" }
-# breaking change `DecodeError::new` is not exposed anymore
-# but is assumed public by some internal dependency
-deadpool           = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
-deadpool-diesel    = { features = ["sqlite"], version = "0.6" }
-deadpool-sync      = { default-features = false, features = ["tracing"], version = "0.1" }
-diesel             = { features = ["numeric", "sqlite"], version = "2.3" }
-diesel_migrations  = { features = ["sqlite"], version = "2.3" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
