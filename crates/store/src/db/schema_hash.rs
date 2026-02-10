@@ -107,10 +107,20 @@ pub fn verify_schema(conn: &mut SqliteConnection) -> Result<(), SchemaVerificati
 
         // Log specific differences at debug level
         for obj in &missing {
-            tracing::debug!(target: COMPONENT, name = %obj.name, "Missing or modified: {}", obj.sql);
+            tracing::debug!(
+                target: COMPONENT,
+                name = %obj.name,
+                sql = %obj.sql,
+                "Missing or modified"
+            );
         }
         for obj in &extra {
-            tracing::debug!(target: COMPONENT, name = %obj.name, "Extra or modified: {}", obj.sql);
+            tracing::debug!(
+                target: COMPONENT,
+                name = %obj.name,
+                sql = %obj.sql,
+                "Extra or modified"
+            );
         }
 
         return Err(SchemaVerificationError::Mismatch {

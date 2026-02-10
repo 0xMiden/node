@@ -1,0 +1,68 @@
+# Checks that run once per day.
+#
+# These are generally expensive jobs that don't provide enough utility to run on _every_ PR.
+name: nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *" # Everyday at 06:00am UTC
+
+permissions:
+  contents: read
+
+jobs:
+  # Run tests on the beta channel to provide feedback for Rust team.
+  beta-test:
+    name: test on beta channel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 'next'
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Rustup
+        run: rustup install beta && rustup default beta
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.122
+      - name: Run tests
+        run: make test
+
+  # Check all feature combinations work individually.
+  #
+  # This check is too expensive to run on every PR, both in terms of CPU and cache size.
+  check-features:
+    name: feature combinations
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 'next'
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install RocksDB
+        uses: ./.github/actions/install-rocksdb
+      - name: Install rust
+        run: rustup update --no-self-update
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+      - name: Check all feature combinations
+        run: make check-features
+
+  # Check that our MSRV complies with our specified rust version.
+  msrv:
+    name: msrv check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 'next'
+      - name: check
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          ./scripts/check-msrv.sh
