@@ -162,9 +162,7 @@ mod tests {
         let mut conn = SqliteConnection::establish(":memory:").unwrap();
         conn.run_pending_migrations(MIGRATIONS).unwrap();
 
-        diesel::sql_query("DROP TABLE inflight_transactions")
-            .execute(&mut conn)
-            .unwrap();
+        diesel::sql_query("DROP TABLE notes").execute(&mut conn).unwrap();
 
         assert!(matches!(
             verify_schema(&mut conn),

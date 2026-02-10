@@ -16,7 +16,6 @@ mod migrations;
 mod schema_hash;
 
 /// [diesel](https://diesel.rs) generated schema.
-#[allow(unused)]
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
@@ -26,7 +25,10 @@ pub struct Db {
 }
 
 impl Db {
-    /// Creates a new database, configures it, and applies migrations.
+    /// Creates a new database file, configures it, and applies migrations.
+    ///
+    /// This is a synchronous one-shot setup used during node initialization.
+    /// For runtime access with a connection pool, use [`Db::load`].
     #[instrument(
         target = COMPONENT,
         name = "ntx_builder.database.bootstrap",
@@ -95,11 +97,16 @@ impl Db {
         .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 
-    /// Open a connection to the DB and apply any pending migrations.
+    /// Opens a connection pool to an existing database and re-applies pending migrations.
+    ///
+    /// Use [`Db::bootstrap`] first to create and initialize the database file.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseSetupError> {
         let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
+        let pool = deadpool_diesel::Pool::builder(manager)
+            .max_size(16)
+            .build()
+            .map_err(DatabaseSetupError::PoolBuild)?;
 
         info!(
             target: COMPONENT,
