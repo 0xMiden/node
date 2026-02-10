@@ -3,14 +3,14 @@ FROM rust:1.90-slim-bullseye AS chef
 RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y \
-    llvm \
-    clang \
-    libclang-dev \
-    cmake \
-    pkg-config \
-    libssl-dev \
-    libsqlite3-dev \
-    ca-certificates && \
+        llvm \
+        clang \
+        libclang-dev \
+        cmake \
+        pkg-config \
+        libssl-dev \
+        libsqlite3-dev \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
 WORKDIR /app
