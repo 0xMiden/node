@@ -2407,6 +2407,15 @@ dependencies = [
 
 [[package]]
 name = "lru"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "lru"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f8cc7106155f10bdf99a6f379688f543ad6596a415375b36a59a054ceda1198"
@@ -2910,6 +2919,7 @@ dependencies = [
  "hex",
  "indexmap 2.13.0",
  "libsqlite3-sys",
+ "lru 0.12.5",
  "miden-crypto",
  "miden-node-proto",
  "miden-node-proto-build",

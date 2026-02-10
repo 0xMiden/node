@@ -607,6 +607,45 @@ impl Db {
         .await
     }
 
+    /// Reconstructs storage map details from the database for a specific slot at a block.
+    ///
+    /// Used as fallback when `InnerForest` cache misses (historical or evicted queries).
+    /// Rebuilds all entries by querying the DB and filtering to the specific slot.
+    pub(crate) async fn reconstruct_storage_map_from_db(
+        &self,
+        account_id: AccountId,
+        slot_name: miden_protocol::account::StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<miden_node_proto::domain::account::AccountStorageMapDetails> {
+        use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
+        use miden_protocol::EMPTY_WORD;
+
+        let values = self
+            .select_storage_map_sync_values(account_id, BlockNumber::GENESIS..=block_num)
+            .await?;
+
+        // Filter to the specific slot and collect latest values per key
+        let mut latest_values: BTreeMap<Word, Word> = BTreeMap::new();
+        for value in values.values {
+            if value.slot_name == slot_name {
+                latest_values.insert(value.key, value.value);
+            }
+        }
+
+        // Remove EMPTY_WORD entries (deletions)
+        latest_values.retain(|_, v| *v != EMPTY_WORD);
+
+        if latest_values.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+            return Ok(AccountStorageMapDetails {
+                slot_name,
+                entries: StorageMapEntries::LimitExceeded,
+            });
+        }
+
+        let entries = Vec::from_iter(latest_values.into_iter());
+        Ok(AccountStorageMapDetails::from_forest_entries(slot_name, entries))
+    }
+
     /// Emits size metrics for each table in the database, and the entire database.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn analyze_table_sizes(&self) -> Result<(), DatabaseError> {

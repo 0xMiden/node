@@ -4,6 +4,7 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
+use assert_matches::assert_matches;
 use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::AccountSummary;
 use miden_node_utils::fee::{test_fee, test_fee_params};
@@ -36,6 +37,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
+use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::crypto::rand::RpoRandomCoin;
 use miden_protocol::note::{
     Note,
@@ -2244,7 +2246,7 @@ fn db_roundtrip_account_storage_with_maps() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn test_note_metadata_with_attachment_roundtrip() {
+fn db_roundtrip_note_metadata_attachment() {
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
@@ -2294,4 +2296,907 @@ fn test_note_metadata_with_attachment_roundtrip() {
         account_id,
         "NetworkAccountTarget should have the correct target account ID"
     );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_matches_db_storage_map_roots_across_updates() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::crypto::merkle::smt::Smt;
+
+    use crate::inner_forest::InnerForest;
+
+    /// Reconstructs storage map root from DB entries at a specific block.
+    fn reconstruct_storage_map_root_from_db(
+        conn: &mut SqliteConnection,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Option<Word> {
+        let storage_values = queries::select_account_storage_map_values(
+            conn,
+            account_id,
+            BlockNumber::GENESIS..=block_num,
+        )
+        .unwrap();
+
+        // Filter to the specific slot and get most recent value for each key
+        let mut latest_values: BTreeMap<Word, Word> = BTreeMap::new();
+        for value in storage_values.values {
+            if value.slot_name == *slot_name {
+                latest_values.insert(value.key, value.value);
+            }
+        }
+
+        if latest_values.is_empty() {
+            return None;
+        }
+
+        // Build SMT from entries
+        let entries: Vec<(Word, Word)> = latest_values
+            .into_iter()
+            .filter_map(|(key, value)| {
+                if value == EMPTY_WORD {
+                    None
+                } else {
+                    // Keys are stored unhashed in DB, match InnerForest behavior
+                    Some((key, value))
+                }
+            })
+            .collect();
+
+        if entries.is_empty() {
+            use miden_protocol::crypto::merkle::EmptySubtreeRoots;
+            use miden_protocol::crypto::merkle::smt::SMT_DEPTH;
+            return Some(*EmptySubtreeRoots::entry(SMT_DEPTH, 0));
+        }
+
+        let mut smt = Smt::default();
+        for (key, value) in entries {
+            smt.insert(key, value).unwrap();
+        }
+
+        Some(smt.root())
+    }
+
+    let mut conn = create_db();
+    let mut forest = InnerForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    let slot_map = StorageSlotName::mock(1);
+    let slot_value = StorageSlotName::mock(2);
+
+    let key1 = num_to_word(100);
+    let key2 = num_to_word(200);
+    let value1 = num_to_word(1000);
+    let value2 = num_to_word(2000);
+    let value3 = num_to_word(3000);
+
+    // Block 1: Add storage map entries and a storage value
+    let mut map_delta_1 = StorageMapDelta::default();
+    map_delta_1.insert(key1, value1);
+    map_delta_1.insert(key2, value2);
+
+    let raw_1 = BTreeMap::from_iter([
+        (slot_map.clone(), StorageSlotDelta::Map(map_delta_1)),
+        (slot_value.clone(), StorageSlotDelta::Value(value1)),
+    ]);
+    let storage_1 = AccountStorageDelta::from_raw(raw_1);
+    let delta_1 =
+        AccountDelta::new(account_id, storage_1.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+
+    insert_account_delta(&mut conn, account_id, block1, &delta_1);
+    forest.update_account(block1, &delta_1).unwrap();
+
+    // Verify forest matches DB for block 1
+    let forest_root_1 = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
+    let db_root_1 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block1)
+        .expect("DB should have storage map root");
+
+    assert_eq!(
+        forest_root_1, db_root_1,
+        "Storage map root at block 1 should match between InnerForest and DB"
+    );
+
+    // Block 2: Delete storage map entry (set to EMPTY_WORD) and delete storage value
+    let mut map_delta_2 = StorageMapDelta::default();
+    map_delta_2.insert(key1, EMPTY_WORD);
+
+    let raw_2 = BTreeMap::from_iter([
+        (slot_map.clone(), StorageSlotDelta::Map(map_delta_2)),
+        (slot_value.clone(), StorageSlotDelta::Value(EMPTY_WORD)),
+    ]);
+    let storage_2 = AccountStorageDelta::from_raw(raw_2);
+    let delta_2 = AccountDelta::new(
+        account_id,
+        storage_2.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(2),
+    )
+    .unwrap();
+
+    insert_account_delta(&mut conn, account_id, block2, &delta_2);
+    forest.update_account(block2, &delta_2).unwrap();
+
+    // Verify forest matches DB for block 2
+    let forest_root_2 = forest.get_storage_map_root(account_id, &slot_map, block2).unwrap();
+    let db_root_2 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block2)
+        .expect("DB should have storage map root");
+
+    assert_eq!(
+        forest_root_2, db_root_2,
+        "Storage map root at block 2 should match between InnerForest and DB"
+    );
+
+    // Block 3: Re-add same value as block 1 and add different map entry
+    let mut map_delta_3 = StorageMapDelta::default();
+    map_delta_3.insert(key2, value3); // Update existing key
+
+    let raw_3 = BTreeMap::from_iter([
+        (slot_map.clone(), StorageSlotDelta::Map(map_delta_3)),
+        (slot_value.clone(), StorageSlotDelta::Value(value1)), // Same as block 1
+    ]);
+    let storage_3 = AccountStorageDelta::from_raw(raw_3);
+    let delta_3 = AccountDelta::new(
+        account_id,
+        storage_3.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(3),
+    )
+    .unwrap();
+
+    insert_account_delta(&mut conn, account_id, block3, &delta_3);
+    forest.update_account(block3, &delta_3).unwrap();
+
+    // Verify forest matches DB for block 3
+    let forest_root_3 = forest.get_storage_map_root(account_id, &slot_map, block3).unwrap();
+    let db_root_3 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block3)
+        .expect("DB should have storage map root");
+
+    assert_eq!(
+        forest_root_3, db_root_3,
+        "Storage map root at block 3 should match between InnerForest and DB"
+    );
+
+    // Verify we can query historical roots
+    let forest_root_1_check = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
+    let db_root_1_check =
+        reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block1)
+            .expect("DB should have storage map root");
+    assert_eq!(
+        forest_root_1_check, db_root_1_check,
+        "Historical query for block 1 should match"
+    );
+
+    // Verify roots are different across blocks (since we modified the map)
+    assert_ne!(forest_root_1, forest_root_2, "Roots should differ after deletion");
+    assert_ne!(forest_root_2, forest_root_3, "Roots should differ after modification");
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_shared_roots_not_deleted_prematurely() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
+        ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
+    };
+
+    use crate::inner_forest::InnerForest;
+
+    let mut forest = InnerForest::new();
+    let account1 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let account2 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
+    let account3 = AccountId::try_from(ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE).unwrap();
+
+    let block1 = BlockNumber::from(1);
+    let slot_name = StorageSlotName::mock(1);
+
+    let key1 = num_to_word(100);
+    let key2 = num_to_word(200);
+    let value1 = num_to_word(1000);
+    let value2 = num_to_word(2000);
+
+    // All three accounts add identical storage maps at block 1
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key1, value1);
+    map_delta.insert(key2, value2);
+
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta.clone()))]);
+    let storage = AccountStorageDelta::from_raw(raw);
+
+    // Account 1
+    let delta1 =
+        AccountDelta::new(account1, storage.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+    forest.update_account(block1, &delta1).unwrap();
+
+    // Account 2 (same storage)
+    let delta2 =
+        AccountDelta::new(account2, storage.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+    forest.update_account(block1, &delta2).unwrap();
+
+    // Account 3 (same storage)
+    let delta3 =
+        AccountDelta::new(account3, storage.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+    forest.update_account(block1, &delta3).unwrap();
+
+    // All three accounts should have the same root (structural sharing in SmtForest)
+    let root1 = forest.get_storage_map_root(account1, &slot_name, block1).unwrap();
+    let root2 = forest.get_storage_map_root(account2, &slot_name, block1).unwrap();
+    let root3 = forest.get_storage_map_root(account3, &slot_name, block1).unwrap();
+
+    assert_eq!(root1, root2, "Identical maps should have same root");
+    assert_eq!(root2, root3, "Identical maps should have same root");
+
+    // Verify we can get witnesses for all three accounts and verify them against roots
+    let witness1 = forest
+        .get_storage_map_witness(account1, &slot_name, block1, key1)
+        .expect("Account1 should have accessible storage map");
+    let witness2 = forest
+        .get_storage_map_witness(account2, &slot_name, block1, key1)
+        .expect("Account2 should have accessible storage map");
+    let witness3 = forest
+        .get_storage_map_witness(account3, &slot_name, block1, key1)
+        .expect("Account3 should have accessible storage map");
+
+    // Verify witnesses against storage map roots using SmtProof::compute_root
+    let proof1: SmtProof = witness1.into();
+    assert_eq!(proof1.compute_root(), root1, "Witness1 must verify against root1");
+
+    let proof2: SmtProof = witness2.into();
+    assert_eq!(proof2.compute_root(), root2, "Witness2 must verify against root2");
+
+    let proof3: SmtProof = witness3.into();
+    assert_eq!(proof3.compute_root(), root3, "Witness3 must verify against root3");
+
+    // Now prune account1's storage (simulate it being old enough to prune)
+    // This should NOT affect account2 and account3
+    let block_to_prune = block1;
+    let (_, storage_roots_removed, _) = forest.prune(block_to_prune);
+
+    // No roots should be removed since block1 is at the chain tip
+    assert_eq!(storage_roots_removed, 0, "No roots should be pruned at chain tip");
+
+    // Advance chain and create a scenario where only account1 is old
+    let block51 = BlockNumber::from(51);
+    let block52 = BlockNumber::from(52);
+
+    // Update account2 at block 51 (keeps it recent)
+    let mut map_delta_update = StorageMapDelta::default();
+    map_delta_update.insert(key1, num_to_word(1001)); // Slight change
+    let raw_update =
+        BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_update))]);
+    let storage_update = AccountStorageDelta::from_raw(raw_update);
+    let delta2_update = AccountDelta::new(
+        account2,
+        storage_update.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(2),
+    )
+    .unwrap();
+    forest.update_account(block51, &delta2_update).unwrap();
+
+    // Update account3 at block 52 (keeps it recent)
+    let delta3_update =
+        AccountDelta::new(account3, storage_update, AccountVaultDelta::default(), Felt::new(2))
+            .unwrap();
+    forest.update_account(block52, &delta3_update).unwrap();
+
+    // Prune at block 52
+    // - Account1: block 1 is most recent, should NOT be pruned
+    // - Account2: block 1 is old (block 51 is newer), should be pruned
+    // - Account3: block 1 is old (block 52 is newer), should be pruned
+    let (_, storage_roots_removed, storage_entries_removed) = forest.prune(block52);
+
+    assert_eq!(
+        storage_roots_removed, 2,
+        "Should prune accounts 2 and 3's old storage roots from block 1 (account1's block 1 is most recent)"
+    );
+    assert_eq!(
+        storage_entries_removed, 0,
+        "Storage entries are LRU-cached, not counted in prune results"
+    );
+
+    // Account1 at block1 should STILL be accessible (it's the most recent for account1)
+    let account1_root_after_prune = forest.get_storage_map_root(account1, &slot_name, block1);
+    assert!(
+        account1_root_after_prune.is_some(),
+        "Account1's block 1 root should NOT be pruned (it's the most recent for account1)"
+    );
+
+    // Account2 and Account3 should still be accessible at their recent blocks
+    let account2_root = forest.get_storage_map_root(account2, &slot_name, block51).unwrap();
+    let account3_root = forest.get_storage_map_root(account3, &slot_name, block52).unwrap();
+
+    // Verify we can still get witnesses for account2 and account3 and verify against roots
+    let witness2_after = forest
+        .get_storage_map_witness(account2, &slot_name, block51, key1)
+        .expect("Account2 should still have accessible storage map after pruning account1");
+    let witness3_after = forest
+        .get_storage_map_witness(account3, &slot_name, block52, key1)
+        .expect("Account3 should still have accessible storage map after pruning account1");
+
+    // Verify witnesses against storage map roots
+    let proof2: SmtProof = witness2_after.into();
+    assert_eq!(
+        proof2.compute_root(),
+        account2_root,
+        "Witness2 must verify against account2_root"
+    );
+
+    let proof3: SmtProof = witness3_after.into();
+    assert_eq!(
+        proof3.compute_root(),
+        account3_root,
+        "Witness3 must verify against account3_root"
+    );
+
+    // The shared root should still be usable for account2 and account3
+    // Even though account1's reference was removed, the SMT in the forest is preserved
+    // by the references from account2 and account3
+    assert_ne!(account2_root, root1, "Account2's root should be different after update");
+    assert_ne!(account3_root, root1, "Account3's root should be different after update");
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
+    use std::collections::BTreeMap;
+
+    use miden_node_proto::domain::account::StorageMapEntries;
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    use crate::inner_forest::{HISTORICAL_BLOCK_RETENTION, InnerForest};
+
+    let mut forest = InnerForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    let slot_map = StorageSlotName::mock(1);
+
+    let key1 = num_to_word(100);
+    let key2 = num_to_word(200);
+    let value1 = num_to_word(1000);
+    let value2 = num_to_word(2000);
+
+    // Block 1: Apply initial update with vault and storage
+    let block_1 = BlockNumber::from(1);
+
+    // Create storage map with two entries
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key1, value1);
+    map_delta.insert(key2, value2);
+
+    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    // Create vault with one asset
+    let asset = FungibleAsset::new(faucet_id, 100).unwrap();
+    let mut vault_delta = AccountVaultDelta::default();
+    vault_delta.add_asset(asset.into()).unwrap();
+
+    let delta_1 = AccountDelta::new(account_id, storage_delta, vault_delta, Felt::ONE).unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    // Capture the roots from block 1
+    let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
+    let initial_storage_map_root =
+        forest.get_storage_map_root(account_id, &slot_map, block_1).unwrap();
+
+    // Blocks 2-100: Do nothing (no updates to this account)
+    // Simulate other activity by just advancing to block 100
+
+    let block_100 = BlockNumber::from(100);
+
+    // Before pruning, verify we can still query block 1's data at block 100
+    // (range query finds most recent at or before block 100)
+    let vault_root_before_prune = forest.get_vault_root(account_id, block_100);
+    assert_eq!(
+        vault_root_before_prune,
+        Some(initial_vault_root),
+        "Before pruning, should find block 1's vault root when querying at block 100"
+    );
+
+    let storage_root_before_prune = forest.get_storage_map_root(account_id, &slot_map, block_100);
+    assert_eq!(
+        storage_root_before_prune,
+        Some(initial_storage_map_root),
+        "Before pruning, should find block 1's storage root when querying at block 100"
+    );
+
+    // Prune at block 100
+    // Block 1 is 99 blocks old, BUT it's the most recent entry for this account
+    // so it should NOT be pruned
+    let (vault_roots_removed, storage_roots_removed, storage_entries_removed) =
+        forest.prune(block_100);
+
+    let cutoff_block = 100 - HISTORICAL_BLOCK_RETENTION;
+    assert_eq!(cutoff_block, 50, "Cutoff should be block 50 (100 - HISTORICAL_BLOCK_RETENTION)");
+    assert_eq!(
+        vault_roots_removed, 0,
+        "Should NOT prune block 1 vault root (it's the most recent for this account)"
+    );
+    assert_eq!(
+        storage_roots_removed, 0,
+        "Should NOT prune block 1 storage root (it's the most recent for this account/slot)"
+    );
+    assert_eq!(
+        storage_entries_removed, 0,
+        "Should NOT prune block 1 storage entries (it's the most recent for this account/slot)"
+    );
+
+    // After pruning, we should STILL be able to access block 1's data
+    // because it's the most recent entry for this account
+    let vault_root_after_prune = forest.get_vault_root(account_id, block_100);
+    assert_eq!(
+        vault_root_after_prune,
+        Some(initial_vault_root),
+        "After pruning, should still find vault root (block 1 preserved as most recent)"
+    );
+
+    let storage_root_after_prune = forest.get_storage_map_root(account_id, &slot_map, block_100);
+    assert_eq!(
+        storage_root_after_prune,
+        Some(initial_storage_map_root),
+        "After pruning, should still find storage root (block 1 preserved as most recent)"
+    );
+
+    // Verify we can still get witnesses and entries and verify against root
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_map, block_100, key1)
+        .expect("Should be able to get witness for key1 after pruning");
+
+    let storage_root = forest.get_storage_map_root(account_id, &slot_map, block_100).unwrap();
+    let proof: SmtProof = witness.into();
+    assert_eq!(proof.compute_root(), storage_root, "Witness must verify against storage root");
+
+    let entries = forest
+        .storage_map_entries(account_id, slot_map.clone(), block_1)
+        .expect("Should have storage map entries after pruning");
+    assert_matches!(&entries.entries, StorageMapEntries::AllEntries(entries) => {
+        assert_eq!(entries.len(), 2, "Should have 2 entries (key1 and key2)");
+        assert!(entries.contains(&(key1, value1)), "Should contain key1 with value1");
+        assert!(entries.contains(&(key2, value2)), "Should contain key2 with value2");
+    });
+
+    // Now add an update at block 51 (within retention window) to test that old entries
+    // get pruned when newer entries exist
+    let block_51 = BlockNumber::from(51);
+
+    // Update with new values
+    let value1_new = num_to_word(3000);
+    let mut map_delta_51 = StorageMapDelta::default();
+    map_delta_51.insert(key1, value1_new);
+
+    let raw_51 = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta_51))]);
+    let storage_delta_51 = AccountStorageDelta::from_raw(raw_51);
+
+    let asset_51 = FungibleAsset::new(faucet_id, 200).unwrap();
+    let mut vault_delta_51 = AccountVaultDelta::default();
+    vault_delta_51.add_asset(asset_51.into()).unwrap();
+
+    let delta_51 =
+        AccountDelta::new(account_id, storage_delta_51, vault_delta_51, Felt::new(51)).unwrap();
+
+    forest.update_account(block_51, &delta_51).unwrap();
+
+    // Prune again at block 100
+    let (vault_roots_removed_2, storage_roots_removed_2, storage_entries_removed_2) =
+        forest.prune(block_100);
+
+    // Now block 1 should be pruned because there's a newer entry at block 51
+    assert_eq!(vault_roots_removed_2, 1, "Should prune block 1 vault root (block 51 is newer)");
+    assert_eq!(
+        storage_roots_removed_2, 1,
+        "Should prune block 1 storage root (block 51 is newer)"
+    );
+    assert_eq!(
+        storage_entries_removed_2, 0,
+        "Storage entries are LRU-cached, not counted in prune results"
+    );
+
+    // Now verify we can access the account state at block 100
+    // (should find block 51's entry via range query)
+    let vault_root_at_100 = forest
+        .get_vault_root(account_id, block_100)
+        .expect("Should find vault root at block 100 (from block 51 entry)");
+
+    let _storage_root_at_100 = forest
+        .get_storage_map_root(account_id, &slot_map, block_100)
+        .expect("Should find storage root at block 100 (from block 51 entry)");
+
+    // The roots should be different from initial (state changed at block 51)
+    assert_ne!(
+        vault_root_at_100, initial_vault_root,
+        "Vault root should differ from initial (updated at block 51)"
+    );
+
+    // Verify we can get witnesses and entries for the updated state and verify against root
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_map, block_100, key1)
+        .expect("Should be able to get witness for key1");
+
+    let storage_root = forest.get_storage_map_root(account_id, &slot_map, block_100).unwrap();
+    let proof: SmtProof = witness.into();
+    assert_eq!(proof.compute_root(), storage_root, "Witness must verify against storage root");
+
+    let entries = forest
+        .storage_map_entries(account_id, slot_map.clone(), block_51)
+        .expect("Should have storage map entries");
+
+    match &entries.entries {
+        StorageMapEntries::AllEntries(entries) => {
+            assert_eq!(entries.len(), 2, "Should have 2 entries (key1 updated, key2 from block 1)");
+            assert!(
+                entries.contains(&(key1, value1_new)),
+                "Should contain key1 with updated value"
+            );
+            assert!(
+                entries.contains(&(key2, value2)),
+                "Should contain key2 with original value from block 1"
+            );
+        },
+        _ => panic!("Expected AllEntries"),
+    }
+
+    // Verify querying at block 51 still works
+    let vault_root_at_51 = forest
+        .get_vault_root(account_id, block_51)
+        .expect("Should have vault root at block 51");
+    assert_eq!(vault_root_at_51, vault_root_at_100);
+
+    // Verify block 1 is no longer accessible
+    let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
+    assert!(
+        vault_root_at_1.is_none(),
+        "Block 1 should not be accessible after pruning (block 51 is newer)"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_preserves_most_recent_vault_only() {
+    use crate::inner_forest::InnerForest;
+
+    let mut forest = InnerForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    // Block 1: Create vault with asset
+    let block_1 = BlockNumber::from(1);
+    let asset = FungibleAsset::new(faucet_id, 500).unwrap();
+    let mut vault_delta = AccountVaultDelta::default();
+    vault_delta.add_asset(asset.into()).unwrap();
+
+    let delta_1 =
+        AccountDelta::new(account_id, AccountStorageDelta::default(), vault_delta, Felt::ONE)
+            .unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
+
+    // Advance 100 blocks without any updates
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let (vault_roots_removed, storage_roots_removed, storage_entries_removed) =
+        forest.prune(block_100);
+
+    // Vault from block 1 should NOT be pruned (it's the most recent)
+    assert_eq!(
+        vault_roots_removed, 0,
+        "Should NOT prune vault root (it's the most recent for this account)"
+    );
+    assert_eq!(storage_roots_removed, 0, "No storage roots to prune");
+    assert_eq!(storage_entries_removed, 0, "No storage entries to prune");
+
+    // Verify vault is still accessible at block 100
+    let vault_root_at_100 = forest
+        .get_vault_root(account_id, block_100)
+        .expect("Should still have vault root at block 100");
+    assert_eq!(vault_root_at_100, initial_vault_root, "Vault root should be preserved");
+
+    // Verify we can get witnesses for the vault and verify against vault root
+    let witnesses = forest
+        .get_vault_asset_witnesses(
+            account_id,
+            block_100,
+            [AssetVaultKey::new_unchecked(asset.vault_key().into())].into(),
+        )
+        .expect("Should be able to get vault witness after pruning");
+
+    assert_eq!(witnesses.len(), 1, "Should have one witness");
+    let witness = &witnesses[0];
+    let proof: SmtProof = witness.clone().into();
+    assert_eq!(
+        proof.compute_root(),
+        vault_root_at_100,
+        "Vault witness must verify against vault root"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_preserves_most_recent_storage_map_only() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    use crate::inner_forest::InnerForest;
+
+    let mut forest = InnerForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+
+    let slot_map = StorageSlotName::mock(1);
+    let key1 = num_to_word(100);
+    let value1 = num_to_word(1000);
+
+    // Block 1: Create storage map
+    let block_1 = BlockNumber::from(1);
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key1, value1);
+
+    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    let delta_1 =
+        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let initial_storage_root = forest.get_storage_map_root(account_id, &slot_map, block_1).unwrap();
+
+    // Advance 100 blocks without any updates
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let (vault_roots_removed, storage_roots_removed, storage_entries_removed) =
+        forest.prune(block_100);
+
+    // Storage map from block 1 should NOT be pruned (it's the most recent)
+    assert_eq!(vault_roots_removed, 0, "No vault roots to prune");
+    assert_eq!(
+        storage_roots_removed, 0,
+        "Should NOT prune storage map root (it's the most recent for this account/slot)"
+    );
+    assert_eq!(
+        storage_entries_removed, 0,
+        "Should NOT prune storage entries (it's the most recent for this account/slot)"
+    );
+
+    // Verify storage map is still accessible at block 100
+    let storage_root_at_100 = forest
+        .get_storage_map_root(account_id, &slot_map, block_100)
+        .expect("Should still have storage root at block 100");
+    assert_eq!(storage_root_at_100, initial_storage_root, "Storage root should be preserved");
+
+    // Verify we can get witnesses for the storage map and verify against storage root
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_map, block_100, key1)
+        .expect("Should be able to get storage witness after pruning");
+
+    let proof: SmtProof = witness.into();
+    assert_eq!(
+        proof.compute_root(),
+        storage_root_at_100,
+        "Storage witness must verify against storage root"
+    );
+
+    // Verify we can get all entries
+    let entries = forest
+        .storage_map_entries(account_id, slot_map.clone(), block_1)
+        .expect("Should have storage entries after pruning");
+
+    match &entries.entries {
+        miden_node_proto::domain::account::StorageMapEntries::AllEntries(entries) => {
+            assert_eq!(entries.len(), 1, "Should have 1 entry");
+            assert_eq!(entries[0], (key1, value1), "Entry should match");
+        },
+        _ => panic!("Expected AllEntries"),
+    }
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_preserves_most_recent_storage_value_slot() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::StorageSlotDelta;
+
+    use crate::inner_forest::InnerForest;
+
+    let mut forest = InnerForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+
+    let slot_value = StorageSlotName::mock(1);
+    let value1 = num_to_word(5000);
+
+    // Block 1: Create storage value slot
+    let block_1 = BlockNumber::from(1);
+
+    let raw = BTreeMap::from_iter([(slot_value.clone(), StorageSlotDelta::Value(value1))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    let delta_1 =
+        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    // Note: Value slots don't have roots in InnerForest - they're just part of the
+    // account storage header. The InnerForest only tracks map slots.
+    // So there's nothing to verify for value slots in the forest.
+
+    // This test documents that value slots are NOT tracked in InnerForest
+    // (they don't need to be, since their digest is 1:1 with the value)
+
+    // Advance 100 blocks without any updates
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let (vault_roots_removed, storage_roots_removed, storage_entries_removed) =
+        forest.prune(block_100);
+
+    // No roots should be pruned because there are no map slots
+    assert_eq!(vault_roots_removed, 0, "No vault roots in this test");
+    assert_eq!(
+        storage_roots_removed, 0,
+        "Value slots don't create storage roots in InnerForest"
+    );
+    assert_eq!(
+        storage_entries_removed, 0,
+        "Value slots don't create storage entries in InnerForest"
+    );
+
+    // Verify no storage map roots exist for this account
+    let storage_root = forest.get_storage_map_root(account_id, &slot_value, block_100);
+    assert!(
+        storage_root.is_none(),
+        "Value slots don't have storage map roots in InnerForest"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn inner_forest_preserves_mixed_slots_independently() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    use crate::inner_forest::InnerForest;
+
+    let mut forest = InnerForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    let slot_map_a = StorageSlotName::mock(1);
+    let slot_map_b = StorageSlotName::mock(2);
+    let slot_value = StorageSlotName::mock(3);
+
+    let key1 = num_to_word(100);
+    let value1 = num_to_word(1000);
+    let value_slot_data = num_to_word(5000);
+
+    // Block 1: Create vault + two map slots + one value slot
+    let block_1 = BlockNumber::from(1);
+
+    let asset = FungibleAsset::new(faucet_id, 100).unwrap();
+    let mut vault_delta = AccountVaultDelta::default();
+    vault_delta.add_asset(asset.into()).unwrap();
+
+    let mut map_delta_a = StorageMapDelta::default();
+    map_delta_a.insert(key1, value1);
+
+    let mut map_delta_b = StorageMapDelta::default();
+    map_delta_b.insert(key1, value1);
+
+    let raw = BTreeMap::from_iter([
+        (slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a)),
+        (slot_map_b.clone(), StorageSlotDelta::Map(map_delta_b)),
+        (slot_value.clone(), StorageSlotDelta::Value(value_slot_data)),
+    ]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    let delta_1 = AccountDelta::new(account_id, storage_delta, vault_delta, Felt::ONE).unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
+    let initial_map_a_root = forest.get_storage_map_root(account_id, &slot_map_a, block_1).unwrap();
+    let initial_map_b_root = forest.get_storage_map_root(account_id, &slot_map_b, block_1).unwrap();
+
+    // Block 51: Update only map_a (within retention window)
+    let block_51 = BlockNumber::from(51);
+    let value2 = num_to_word(2000);
+
+    let mut map_delta_a_update = StorageMapDelta::default();
+    map_delta_a_update.insert(key1, value2);
+
+    let raw_51 =
+        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a_update))]);
+    let storage_delta_51 = AccountStorageDelta::from_raw(raw_51);
+
+    let delta_51 = AccountDelta::new(
+        account_id,
+        storage_delta_51,
+        AccountVaultDelta::default(),
+        Felt::new(51),
+    )
+    .unwrap();
+
+    forest.update_account(block_51, &delta_51).unwrap();
+
+    // Advance to block 100
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let (vault_roots_removed, storage_roots_removed, storage_entries_removed) =
+        forest.prune(block_100);
+
+    // Vault: block 1 is most recent, should NOT be pruned
+    // Map A: block 1 is old (block 51 is newer), SHOULD be pruned
+    // Map B: block 1 is most recent, should NOT be pruned
+    assert_eq!(
+        vault_roots_removed, 0,
+        "Vault root from block 1 should NOT be pruned (most recent)"
+    );
+    assert_eq!(
+        storage_roots_removed, 1,
+        "Map A from block 1 should be pruned (block 51 is newer); Map B should NOT"
+    );
+    assert_eq!(
+        storage_entries_removed, 0,
+        "Storage entries are LRU-cached, not counted in prune results"
+    );
+
+    // Verify vault is still accessible
+    let vault_root_at_100 = forest
+        .get_vault_root(account_id, block_100)
+        .expect("Vault should be accessible");
+    assert_eq!(vault_root_at_100, initial_vault_root, "Vault should be from block 1");
+
+    // Verify map_a is accessible (from block 51)
+    let map_a_root_at_100 = forest
+        .get_storage_map_root(account_id, &slot_map_a, block_100)
+        .expect("Map A should be accessible");
+    assert_ne!(
+        map_a_root_at_100, initial_map_a_root,
+        "Map A should be from block 51, not block 1"
+    );
+
+    // Verify map_b is still accessible (from block 1)
+    let map_b_root_at_100 = forest
+        .get_storage_map_root(account_id, &slot_map_b, block_100)
+        .expect("Map B should be accessible");
+    assert_eq!(
+        map_b_root_at_100, initial_map_b_root,
+        "Map B should still be from block 1 (most recent)"
+    );
+
+    // Verify map_a block 1 is no longer accessible
+    let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
+    assert!(map_a_root_at_1.is_none(), "Map A block 1 should be pruned");
+
+    // Verify map_b block 1 IS still accessible
+    let map_b_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_b, block_1);
+    assert!(map_b_root_at_1.is_some(), "Map B block 1 should NOT be pruned (most recent)");
 }

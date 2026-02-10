@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::num::NonZeroUsize;
 
+use lru::LruCache;
 use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
@@ -16,9 +18,23 @@ use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
+use tracing::instrument;
+
+use crate::COMPONENT;
 
 #[cfg(test)]
 mod tests;
+
+// CONSTANTS
+// ================================================================================================
+
+/// Number of historical blocks to retain in the in-memory forest.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be pruned.
+pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
+
+/// Default size for the LRU cache of latest storage map entries.
+/// Used to serve `SlotData::All` queries for the most recent block.
+const DEFAULT_STORAGE_CACHE_ENTRIES_SIZE: usize = 10_000;
 
 // ERRORS
 // ================================================================================================
@@ -52,6 +68,12 @@ pub enum WitnessError {
 // INNER FOREST
 // ================================================================================================
 
+/// Snapshot of storage map entries at a specific block.
+struct StorageSnapshot {
+    block_num: BlockNumber,
+    entries: BTreeMap<Word, Word>,
+}
+
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct InnerForest {
     /// `SmtForest` for efficient account storage reconstruction.
@@ -60,15 +82,34 @@ pub(crate) struct InnerForest {
 
     /// Maps (`account_id`, `slot_name`, `block_num`) to SMT root.
     /// Populated during block import for all storage map slots.
+    ///
+    /// Used for `SlotData::MapKeys` queries (SMT proof generation).
+    /// Works for all historical blocks within retention window.
+    ///
+    /// Attention: Must be a `BTreeMap`, since not every block contains a value here, so we need to
+    /// be able to query the previous blocks cheaply.
     storage_map_roots: BTreeMap<(AccountId, StorageSlotName, BlockNumber), Word>,
 
-    /// Maps (`account_id`, `slot_name`, `block_num`) to all key-value entries in that storage map.
-    /// Accumulated from deltas - each block's entries include all entries up to that point.
-    storage_entries: BTreeMap<(AccountId, StorageSlotName, BlockNumber), BTreeMap<Word, Word>>,
+    /// LRU cache of latest storage map entries for `SlotData::All` queries.
+    /// Only stores the most recent snapshot per (account, slot).
+    /// Historical queries fall back to DB.
+    storage_entries_per_user_block_slot: LruCache<(AccountId, StorageSlotName), StorageSnapshot>,
+
+    vault_refcount: HashMap<Word, u64>,
+    storage_slots_refcount: HashMap<Word, u64>,
 
     /// Maps (`account_id`, `block_num`) to vault SMT root.
     /// Tracks asset vault versions across all blocks with structural sharing.
+    ///
+    /// Attention: Must be a `BTreeMap`, since not every block contains a value here, so we need to
+    /// be able to query the previous blocks cheaply.
     vault_roots: BTreeMap<(AccountId, BlockNumber), Word>,
+
+    /// Tracks vault roots by block number for pruning.
+    vault_roots_by_block: BTreeMap<BlockNumber, Vec<AccountId>>,
+
+    /// Tracks storage map roots by block number for pruning.
+    storage_slots_by_block: BTreeMap<BlockNumber, Vec<(AccountId, StorageSlotName)>>,
 }
 
 impl InnerForest {
@@ -76,8 +117,14 @@ impl InnerForest {
         Self {
             forest: SmtForest::new(),
             storage_map_roots: BTreeMap::new(),
-            storage_entries: BTreeMap::new(),
+            storage_entries_per_user_block_slot: LruCache::new(
+                NonZeroUsize::new(DEFAULT_STORAGE_CACHE_ENTRIES_SIZE).unwrap(),
+            ),
+            vault_refcount: HashMap::new(),
+            storage_slots_refcount: HashMap::new(),
             vault_roots: BTreeMap::new(),
+            vault_roots_by_block: BTreeMap::new(),
+            storage_slots_by_block: BTreeMap::new(),
         }
     }
 
@@ -87,6 +134,24 @@ impl InnerForest {
     /// Returns the root of an empty SMT.
     const fn empty_smt_root() -> Word {
         *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
+    }
+
+    fn increment_refcount(map: &mut HashMap<Word, u64>, root: Word) {
+        let entry = map.entry(root).or_insert(0);
+        *entry += 1;
+    }
+
+    fn decrement_refcount(map: &mut HashMap<Word, u64>, root: Word) -> bool {
+        let Some(count) = map.get_mut(&root) else {
+            return false;
+        };
+        if *count == 1 {
+            map.remove(&root);
+            true
+        } else {
+            *count -= 1;
+            false
+        }
     }
 
     /// Retrieves a vault root for the specified account at or before the specified block.
@@ -181,35 +246,37 @@ impl InnerForest {
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
     }
 
-    /// Returns all key-value entries for a specific account storage slot at or before a block.
+    /// Returns all key-value entries for a specific account storage slot at the latest cached
+    /// block. Historical queries fall back to DB reconstruction.
     ///
-    /// Uses range query semantics: finds the most recent entries at or before `block_num`.
-    /// Returns `None` if no entries exist for this account/slot up to the given block.
+    /// Returns `None` if:
+    /// - No entries exist for this account/slot
+    /// - Query is for a historical block (not the most recent)
+    ///
     /// Returns `LimitExceeded` if there are too many entries to return.
     pub(crate) fn storage_map_entries(
-        &self,
+        &mut self,
         account_id: AccountId,
         slot_name: StorageSlotName,
         block_num: BlockNumber,
     ) -> Option<AccountStorageMapDetails> {
-        // Find the most recent entries at or before block_num
-        let entries = self
-            .storage_entries
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), block_num),
-            )
-            .next_back()
-            .map(|(_, entries)| entries)?;
+        // Get cached snapshot
+        let snapshot =
+            self.storage_entries_per_user_block_slot.get(&(account_id, slot_name.clone()))?;
 
-        if entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+        // Only serve queries for the latest block
+        if snapshot.block_num != block_num {
+            return None; // Historical query - caller should use DB
+        }
+
+        if snapshot.entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             return Some(AccountStorageMapDetails {
                 slot_name,
                 entries: StorageMapEntries::LimitExceeded,
             });
         }
-        let entries = Vec::from_iter(entries.iter().map(|(k, v)| (*k, *v)));
 
+        let entries = Vec::from_iter(snapshot.entries.iter().map(|(k, v)| (*k, *v)));
         Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries))
     }
 
@@ -229,6 +296,7 @@ impl InnerForest {
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
+    #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,
@@ -245,6 +313,9 @@ impl InnerForest {
                 "Updated forest with account delta"
             );
         }
+
+        let _ = self.prune(block_num);
+
         Ok(())
     }
 
@@ -312,6 +383,8 @@ impl InnerForest {
         // anything into the forest)
         if delta.is_empty() {
             self.vault_roots.insert((account_id, block_num), prev_root);
+            self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
+            Self::increment_refcount(&mut self.vault_refcount, prev_root);
             return;
         }
 
@@ -340,6 +413,8 @@ impl InnerForest {
             .expect("forest insertion should succeed");
 
         self.vault_roots.insert((account_id, block_num), new_root);
+        self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
+        Self::increment_refcount(&mut self.vault_refcount, new_root);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -425,6 +500,8 @@ impl InnerForest {
             .expect("forest insertion should succeed");
 
         self.vault_roots.insert((account_id, block_num), new_root);
+        self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
+        Self::increment_refcount(&mut self.vault_refcount, new_root);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -453,23 +530,6 @@ impl InnerForest {
             )
             .next_back()
             .map_or_else(Self::empty_smt_root, |(_, root)| *root)
-    }
-
-    /// Retrieves the most recent entries in the specified storage map. If no storage map exists
-    /// returns an empty map.
-    fn get_latest_storage_map_entries(
-        &self,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-    ) -> BTreeMap<Word, Word> {
-        self.storage_entries
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..(account_id, slot_name.clone(), BlockNumber::from(u32::MAX)),
-            )
-            .next_back()
-            .map(|(_, entries)| entries.clone())
-            .unwrap_or_default()
     }
 
     /// Inserts all storage maps from the provided storage delta into the forest.
@@ -501,12 +561,21 @@ impl InnerForest {
                 .collect();
 
             // if the delta is empty, make sure we create an entry in the storage map roots map
-            // and storage entries map (so storage_map_entries() queries work)
+            // and update the cache
             if map_entries.is_empty() {
                 self.storage_map_roots
                     .insert((account_id, slot_name.clone(), block_num), prev_root);
-                self.storage_entries
-                    .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
+                self.storage_slots_by_block
+                    .entry(block_num)
+                    .or_default()
+                    .push((account_id, slot_name.clone()));
+                Self::increment_refcount(&mut self.storage_slots_refcount, prev_root);
+
+                // Update cache with empty map
+                self.storage_entries_per_user_block_slot.put(
+                    (account_id, slot_name.clone()),
+                    StorageSnapshot { block_num, entries: BTreeMap::new() },
+                );
 
                 continue;
             }
@@ -519,16 +588,19 @@ impl InnerForest {
 
             self.storage_map_roots
                 .insert((account_id, slot_name.clone(), block_num), new_root);
+            self.storage_slots_by_block
+                .entry(block_num)
+                .or_default()
+                .push((account_id, slot_name.clone()));
+            Self::increment_refcount(&mut self.storage_slots_refcount, new_root);
 
             assert!(!map_entries.is_empty(), "a non-empty delta should have entries");
             let num_entries = map_entries.len();
 
-            // keep track of the state of storage map entries
-            // TODO: this is a temporary solution until the LargeSmtForest is implemented as
-            // tracking multiple versions of all storage maps will be prohibitively expensive
-            let map_entries = BTreeMap::from_iter(map_entries);
-            self.storage_entries
-                .insert((account_id, slot_name.clone(), block_num), map_entries);
+            // Update cache with the entries from this insertion
+            let entries = BTreeMap::from_iter(map_entries);
+            self.storage_entries_per_user_block_slot
+                .put((account_id, slot_name.clone()), StorageSnapshot { block_num, entries });
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -571,21 +643,30 @@ impl InnerForest {
 
             self.storage_map_roots
                 .insert((account_id, slot_name.clone(), block_num), new_root);
+            self.storage_slots_by_block
+                .entry(block_num)
+                .or_default()
+                .push((account_id, slot_name.clone()));
+            Self::increment_refcount(&mut self.storage_slots_refcount, new_root);
 
-            // merge the delta with the latest entries in the map
-            // TODO: this is a temporary solution until the LargeSmtForest is implemented as
-            // tracking multiple versions of all storage maps will be prohibitively expensive
-            let mut latest_entries = self.get_latest_storage_map_entries(account_id, slot_name);
-            for (key, value) in &delta_entries {
-                if *value == EMPTY_WORD {
-                    latest_entries.remove(key);
+            // Update cache by merging delta with latest entries
+            let key = (account_id, slot_name.clone());
+            let mut latest_entries = self
+                .storage_entries_per_user_block_slot
+                .get(&key)
+                .map(|s| s.entries.clone())
+                .unwrap_or_default();
+
+            for (k, v) in &delta_entries {
+                if *v == EMPTY_WORD {
+                    latest_entries.remove(k);
                 } else {
-                    latest_entries.insert(*key, *value);
+                    latest_entries.insert(*k, *v);
                 }
             }
 
-            self.storage_entries
-                .insert((account_id, slot_name.clone(), block_num), latest_entries);
+            self.storage_entries_per_user_block_slot
+                .put(key, StorageSnapshot { block_num, entries: latest_entries });
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -596,5 +677,136 @@ impl InnerForest {
                 "Updated storage map in forest"
             );
         }
+    }
+
+    // PRUNING
+    // --------------------------------------------------------------------------------------------
+
+    /// Prunes old entries from the in-memory forest data structures.
+    ///
+    /// Only iterates over blocks in the pruning window (before cutoff). For each affected account
+    /// or slot, checks if there's a newer entry before pruning - preserving the most recent state.
+    ///
+    /// The `SmtForest` itself is not pruned directly as it uses structural sharing and old roots
+    /// are naturally garbage-collected when they become unreachable.
+    ///
+    /// Note: Returns (`vault_roots_removed`, `storage_roots_removed`). Storage entries count is
+    /// no longer tracked since we use an LRU cache.
+    #[instrument(target = COMPONENT, skip_all, fields(block.number = %chain_tip), ret)]
+    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize, usize) {
+        let cutoff_block =
+            BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+
+        let vault_roots_removed = self.prune_vault_roots(cutoff_block);
+        let storage_roots_removed = self.prune_storage_roots(cutoff_block);
+
+        // Cache is self-pruning via LRU eviction
+        (vault_roots_removed, storage_roots_removed, 0)
+    }
+
+    /// Prunes vault roots beyond the cutoff block.
+    ///
+    /// Only iterates over blocks in the pruning window, then for each affected account checks
+    /// if there's a newer entry before pruning.
+    fn prune_vault_roots(&mut self, cutoff_block: BlockNumber) -> usize {
+        // Get blocks to prune (only blocks before cutoff)
+        let blocks_to_check: Vec<BlockNumber> = self
+            .vault_roots_by_block
+            .range(..cutoff_block)
+            .map(|(block, _)| *block)
+            .collect();
+
+        let mut roots_to_prune = HashSet::new();
+        let mut roots_removed = 0usize;
+
+        for block in blocks_to_check {
+            let Some(accounts) = self.vault_roots_by_block.remove(&block) else {
+                continue;
+            };
+
+            let mut accounts_to_keep = Vec::new();
+
+            for account_id in accounts {
+                // Check if there's a newer entry for this account
+                let has_newer_entry = self
+                    .vault_roots
+                    .range((account_id, block.child())..=(account_id, BlockNumber::from(u32::MAX)))
+                    .next()
+                    .is_some();
+
+                if has_newer_entry {
+                    if let Some(root) = self.vault_roots.remove(&(account_id, block)) {
+                        roots_removed += 1;
+                        if Self::decrement_refcount(&mut self.vault_refcount, root) {
+                            roots_to_prune.insert(root);
+                        }
+                    }
+                } else {
+                    accounts_to_keep.push(account_id);
+                }
+            }
+
+            if !accounts_to_keep.is_empty() {
+                self.vault_roots_by_block.insert(block, accounts_to_keep);
+            }
+        }
+
+        self.forest.pop_smts(roots_to_prune);
+        roots_removed
+    }
+
+    /// Prunes storage map roots older than/before the cutoff block.
+    ///
+    /// Only iterates over blocks in the pruning window, then for each affected slot checks
+    /// if there's a newer entry before pruning.
+    fn prune_storage_roots(&mut self, cutoff_block: BlockNumber) -> usize {
+        // Get blocks to prune (only blocks before cutoff)
+        let blocks_to_check: Vec<BlockNumber> = self
+            .storage_slots_by_block
+            .range(..cutoff_block)
+            .map(|(block, _)| *block)
+            .collect();
+
+        let mut roots_to_prune = HashSet::new();
+        let mut roots_removed = 0usize;
+
+        for block in blocks_to_check {
+            let Some(slots) = self.storage_slots_by_block.remove(&block) else {
+                continue;
+            };
+
+            let mut slots_to_keep = Vec::new();
+
+            for (account_id, slot_name) in slots {
+                // Check if there's a newer entry for this account/slot
+                let has_newer_entry = self
+                    .storage_map_roots
+                    .range(
+                        (account_id, slot_name.clone(), block.child())
+                            ..=(account_id, slot_name.clone(), BlockNumber::from(u32::MAX)),
+                    )
+                    .next()
+                    .is_some();
+
+                if has_newer_entry {
+                    let key = (account_id, slot_name.clone(), block);
+                    if let Some(root) = self.storage_map_roots.remove(&key) {
+                        roots_removed += 1;
+                        if Self::decrement_refcount(&mut self.storage_slots_refcount, root) {
+                            roots_to_prune.insert(root);
+                        }
+                    }
+                } else {
+                    slots_to_keep.push((account_id, slot_name));
+                }
+            }
+
+            if !slots_to_keep.is_empty() {
+                self.storage_slots_by_block.insert(block, slots_to_keep);
+            }
+        }
+
+        self.forest.pop_smts(roots_to_prune);
+        roots_removed
     }
 }
