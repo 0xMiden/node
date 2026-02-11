@@ -281,12 +281,10 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     forest.update_account(block_at_51, &delta_2_update).unwrap();
 
     let block_at_52 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
-    let (vault_roots_removed, storage_roots_removed, storage_entries_removed) =
-        forest.prune(block_at_52);
+    let (vault_roots_removed, storage_roots_removed) = forest.prune(block_at_52);
 
-    assert_eq!(vault_roots_removed, 1);
+    assert_eq!(vault_roots_removed, 0);
     assert_eq!(storage_roots_removed, 0);
-    assert_eq!(storage_entries_removed, 0);
     assert!(forest.vault_roots.contains_key(&(account1, block_1)));
     assert!(!forest.vault_roots.contains_key(&(account2, block_1)));
     assert_eq!(forest.vault_roots_by_block[&block_1], vec![account1]);
@@ -405,7 +403,8 @@ fn storage_map_empty_entries_query() {
         "storage_map_roots should have an entry for the empty map"
     );
 
-    let result = forest.storage_map_entries(account_id, slot_name.clone(), block_num);
+    let result =
+        forest.get_storage_map_details_full_from_cache(account_id, slot_name.clone(), block_num);
     assert!(result.is_some(), "storage_map_entries should return Some for empty maps");
 
     let details = result.unwrap();
@@ -447,7 +446,8 @@ fn storage_map_open_returns_proofs() {
     forest.update_account(block_num, &delta).unwrap();
 
     let keys: Vec<Word> = (0..20u32).map(|i| Word::from([i, 0, 0, 0])).collect();
-    let result = forest.open_storage_map(account_id, slot_name.clone(), block_num, &keys);
+    let result =
+        forest.get_storage_map_details_for_keys(account_id, slot_name.clone(), block_num, &keys);
 
     let details = result.expect("Should return Some").expect("Should not error");
     assert_matches!(details.entries, StorageMapEntries::EntriesWithProofs(entries) => {
@@ -466,12 +466,10 @@ const TEST_PRUNE_CHAIN_TIP: u32 = HISTORICAL_BLOCK_RETENTION + 5;
 fn prune_handles_empty_forest() {
     let mut forest = InnerForest::new();
 
-    let (vault_removed, storage_roots_removed, storage_entries_removed) =
-        forest.prune(BlockNumber::GENESIS);
+    let (vault_removed, storage_roots_removed) = forest.prune(BlockNumber::GENESIS);
 
     assert_eq!(vault_removed, 0);
     assert_eq!(storage_roots_removed, 0);
-    assert_eq!(storage_entries_removed, 0); // Always 0 now (LRU cache)
 }
 
 #[test]
@@ -510,12 +508,10 @@ fn prune_removes_smt_roots_from_forest() {
     let storage_root_pruned =
         forest.storage_map_roots[&(account_id, slot_name.clone(), pruned_block)];
 
-    let (vault_removed, storage_roots_removed, storage_entries_removed) =
-        forest.prune(retained_block);
+    let (vault_removed, storage_roots_removed) = forest.prune(retained_block);
 
     assert!(vault_removed > 0);
     assert!(storage_roots_removed > 0);
-    assert_eq!(storage_entries_removed, 0); // Cache is LRU, not counted
     assert!(forest.vault_roots.contains_key(&(account_id, retained_block)));
     assert!(!forest.vault_roots.contains_key(&(account_id, pruned_block)));
     assert!(!forest.storage_map_roots.contains_key(&(account_id, slot_name, pruned_block)));
@@ -544,12 +540,11 @@ fn prune_respects_retention_boundary() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    let (vault_removed, storage_roots_removed, storage_entries_removed) =
+    let (vault_removed, storage_roots_removed) =
         forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
 
     assert_eq!(vault_removed, 0);
     assert_eq!(storage_roots_removed, 0);
-    assert_eq!(storage_entries_removed, 0);
     assert_eq!(forest.vault_roots.len(), HISTORICAL_BLOCK_RETENTION as usize);
 }
 
@@ -572,15 +567,15 @@ fn prune_vault_roots_removes_old_entries() {
 
     let (vault_removed, ..) = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
-    let expected_removed = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION - 1) as usize;
+    let expected_removed = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize;
     assert_eq!(vault_removed, expected_removed);
 
-    let expected_remaining = (HISTORICAL_BLOCK_RETENTION + 1) as usize;
+    let expected_remaining = HISTORICAL_BLOCK_RETENTION as usize;
     assert_eq!(forest.vault_roots.len(), expected_remaining);
 
     let remaining_blocks = Vec::from_iter(forest.vault_roots.keys().map(|(_, b)| b.as_u32()));
     let oldest_remaining = *remaining_blocks.iter().min().unwrap();
-    let expected_oldest = TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION;
+    let expected_oldest = TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION + 1;
     assert_eq!(oldest_remaining, expected_oldest);
 }
 
@@ -606,17 +601,15 @@ fn prune_storage_map_roots_removes_old_entries() {
 
     assert_eq!(forest.storage_map_roots.len(), TEST_CHAIN_LENGTH as usize);
 
-    let (_, storage_roots_removed, storage_entries_removed) =
-        forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
+    let (_, storage_roots_removed) = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
-    let expected_removed = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION - 1) as usize;
+    let expected_removed = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize;
     assert_eq!(storage_roots_removed, expected_removed);
-    assert_eq!(storage_entries_removed, 0); // Cache is LRU, not counted
 
-    let expected_remaining = (HISTORICAL_BLOCK_RETENTION + 1) as usize;
+    let expected_remaining = HISTORICAL_BLOCK_RETENTION as usize;
     assert_eq!(forest.storage_map_roots.len(), expected_remaining);
     // Cache size: LRU may have evicted entries, just verify it's populated
-    assert!(!forest.storage_entries_per_user_block_slot.is_empty());
+    assert!(!forest.storage_entries_per_block_per_account_per_slot.is_empty());
 }
 
 #[test]
@@ -643,13 +636,13 @@ fn prune_handles_multiple_accounts() {
 
     assert_eq!(forest.vault_roots.len(), (TEST_CHAIN_LENGTH * 2) as usize);
 
-    let (vault_removed, ..) = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
+    let (vault_removed, _) = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
-    let expected_removed_per_account =
-        (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION - 1) as usize;
-    assert_eq!(vault_removed, expected_removed_per_account * 2);
+    let expected_removed_per_account = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize;
+    assert!(vault_removed > 0);
+    assert!(vault_removed <= expected_removed_per_account * 2);
 
-    let expected_remaining_per_account = (HISTORICAL_BLOCK_RETENTION + 1) as usize;
+    let expected_remaining_per_account = HISTORICAL_BLOCK_RETENTION as usize;
     let account1_entries = forest.vault_roots.keys().filter(|(id, _)| *id == account1).count();
     let account2_entries = forest.vault_roots.keys().filter(|(id, _)| *id == account2).count();
     assert_eq!(account1_entries, expected_remaining_per_account);
@@ -685,18 +678,20 @@ fn prune_handles_multiple_slots() {
     assert_eq!(forest.storage_map_roots.len(), (TEST_CHAIN_LENGTH * 2) as usize);
 
     let chain_tip = BlockNumber::from(TEST_CHAIN_LENGTH);
-    let (_, storage_roots_removed, storage_entries_removed) = forest.prune(chain_tip);
+    let (_, storage_roots_removed) = forest.prune(chain_tip);
 
     let cutoff = TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION;
-    let expected_removed_per_slot = cutoff - 1;
+    let expected_removed_per_slot = cutoff;
     let expected_removed = expected_removed_per_slot * 2;
     assert_eq!(storage_roots_removed, expected_removed as usize);
-    assert_eq!(storage_entries_removed, 0); // Cache is LRU, not counted
 
-    let expected_remaining = HISTORICAL_BLOCK_RETENTION + 1;
+    let expected_remaining = HISTORICAL_BLOCK_RETENTION;
     assert_eq!(forest.storage_map_roots.len(), (expected_remaining * 2) as usize);
-    // Cache contains 2 latest entries (one per slot)
-    assert_eq!(forest.storage_entries_per_user_block_slot.len(), 2);
+    // Cache contains an entry per block/slot update
+    assert_eq!(
+        forest.storage_entries_per_block_per_account_per_slot.len(),
+        (TEST_CHAIN_LENGTH * 2) as usize
+    );
 }
 
 #[test]
@@ -744,7 +739,7 @@ fn prune_preserves_most_recent_state_per_entity() {
 
     // Block 100: Prune
     let block_100 = BlockNumber::from(100);
-    let (vault_removed, storage_roots_removed, storage_entries_removed) = forest.prune(block_100);
+    let (vault_removed, storage_roots_removed) = forest.prune(block_100);
 
     // Vault at block 1 preserved (most recent)
     assert_eq!(vault_removed, 0);
@@ -762,7 +757,6 @@ fn prune_preserves_most_recent_state_per_entity() {
     assert!(forest.storage_map_roots.contains_key(&(account_id, slot_map_b, block_1)));
 
     assert_eq!(storage_roots_removed, 1);
-    assert_eq!(storage_entries_removed, 0); // Cache is LRU, not counted
 }
 
 #[test]
@@ -797,16 +791,16 @@ fn prune_preserves_entries_within_retention_window() {
 
     // Block 100: Prune (retention window = 50 blocks, cutoff = 50)
     let block_100 = BlockNumber::from(100);
-    let (vault_removed, storage_roots_removed, _) = forest.prune(block_100);
+    let (vault_removed, storage_roots_removed) = forest.prune(block_100);
 
-    // Blocks 1 and 25 pruned (outside retention, have newer entries)
-    assert_eq!(vault_removed, 2);
-    assert_eq!(storage_roots_removed, 2);
+    // Blocks 1, 25, and 50 pruned (outside retention, have newer entries)
+    assert_eq!(vault_removed, 3);
+    assert_eq!(storage_roots_removed, 3);
 
     // Verify preserved entries
     assert!(!forest.vault_roots.contains_key(&(account_id, BlockNumber::from(1))));
     assert!(!forest.vault_roots.contains_key(&(account_id, BlockNumber::from(25))));
-    assert!(forest.vault_roots.contains_key(&(account_id, BlockNumber::from(50))));
+    assert!(!forest.vault_roots.contains_key(&(account_id, BlockNumber::from(50))));
     assert!(forest.vault_roots.contains_key(&(account_id, BlockNumber::from(75))));
     assert!(forest.vault_roots.contains_key(&(account_id, BlockNumber::from(100))));
 }

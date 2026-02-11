@@ -653,18 +653,13 @@ impl StorageMapValue {
 ///
 /// * Response payload size: 0 <= size <= 2MB
 /// * Storage map values per response: 0 <= count <= (2MB / (2*Word + u32 + u8)) + 1
-pub(crate) fn select_account_storage_map_values(
+pub(crate) fn select_account_storage_map_values_paged(
     conn: &mut SqliteConnection,
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
+    limit: usize,
 ) -> Result<StorageMapValuesPage, DatabaseError> {
     use schema::account_storage_map_values as t;
-
-    // TODO: These limits should be given by the protocol.
-    // See miden-base/issues/1770 for more details
-    pub const ROW_OVERHEAD_BYTES: usize =
-        2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>(); // key + value + block_num + slot_idx
-    pub const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
     if !account_id.is_public() {
         return Err(DatabaseError::AccountNotPublic(account_id));
@@ -686,13 +681,13 @@ pub(crate) fn select_account_storage_map_values(
                     .and(t::block_num.le(block_range.end().to_raw_sql())),
             )
             .order(t::block_num.asc())
-            .limit(i64::try_from(MAX_ROWS + 1).expect("limit fits within i64"))
+            .limit(i64::try_from(limit + 1).expect("limit fits within i64"))
             .load(conn)?;
 
     // Discard the last block in the response (assumes more than one block may be present)
 
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
-        && raw.len() > MAX_ROWS
+        && raw.len() > limit
     {
         // NOTE: If the query contains at least one more row than the amount of storage map updates
         // allowed in a single block for an account, then the response is guaranteed to have at

@@ -70,7 +70,6 @@ pub enum WitnessError {
 
 /// Snapshot of storage map entries at a specific block.
 struct StorageSnapshot {
-    block_num: BlockNumber,
     entries: BTreeMap<Word, Word>,
 }
 
@@ -93,7 +92,8 @@ pub(crate) struct InnerForest {
     /// LRU cache of latest storage map entries for `SlotData::All` queries.
     /// Only stores the most recent snapshot per (account, slot).
     /// Historical queries fall back to DB.
-    storage_entries_per_user_block_slot: LruCache<(AccountId, StorageSlotName), StorageSnapshot>,
+    storage_entries_per_block_per_account_per_slot:
+        LruCache<(BlockNumber, AccountId, StorageSlotName), StorageSnapshot>,
 
     vault_refcount: HashMap<Word, u64>,
     storage_slots_refcount: HashMap<Word, u64>,
@@ -117,7 +117,7 @@ impl InnerForest {
         Self {
             forest: SmtForest::new(),
             storage_map_roots: BTreeMap::new(),
-            storage_entries_per_user_block_slot: LruCache::new(
+            storage_entries_per_block_per_account_per_slot: LruCache::new(
                 NonZeroUsize::new(DEFAULT_STORAGE_CACHE_ENTRIES_SIZE).unwrap(),
             ),
             vault_refcount: HashMap::new(),
@@ -136,11 +136,9 @@ impl InnerForest {
         *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
     }
 
-    fn increment_refcount(map: &mut HashMap<Word, u64>, root: Word) {
-        let entry = map.entry(root).or_insert(0);
-        *entry += 1;
-    }
-
+    /// Decrement the reference count in the given map.
+    ///
+    /// Returns `true` if the refcount reached zero.
     fn decrement_refcount(map: &mut HashMap<Word, u64>, root: Word) -> bool {
         let Some(count) = map.get_mut(&root) else {
             return false;
@@ -153,6 +151,9 @@ impl InnerForest {
             false
         }
     }
+
+    // ACCESSORS
+    // --------------------------------------------------------------------------------------------
 
     /// Retrieves a vault root for the specified account at or before the specified block.
     pub(crate) fn get_vault_root(
@@ -181,6 +182,9 @@ impl InnerForest {
             .next_back()
             .map(|(_, root)| *root)
     }
+
+    // WITNESSES and PROOFS
+    // --------------------------------------------------------------------------------------------
 
     /// Retrieves a storage map witness for the specified account and storage slot.
     ///
@@ -228,7 +232,7 @@ impl InnerForest {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
-    pub(crate) fn open_storage_map(
+    pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
         slot_name: StorageSlotName,
@@ -237,7 +241,6 @@ impl InnerForest {
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
         let root = self.get_storage_map_root(account_id, &slot_name, block_num)?;
 
-        // Collect SMT proofs for each key
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
             let key = StorageMap::hash_key(*raw_key);
             self.forest.open(root, key)
@@ -254,20 +257,18 @@ impl InnerForest {
     /// - Query is for a historical block (not the most recent)
     ///
     /// Returns `LimitExceeded` if there are too many entries to return.
-    pub(crate) fn storage_map_entries(
+    pub(crate) fn get_storage_map_details_full_from_cache(
         &mut self,
         account_id: AccountId,
         slot_name: StorageSlotName,
         block_num: BlockNumber,
     ) -> Option<AccountStorageMapDetails> {
         // Get cached snapshot
-        let snapshot =
-            self.storage_entries_per_user_block_slot.get(&(account_id, slot_name.clone()))?;
-
-        // Only serve queries for the latest block
-        if snapshot.block_num != block_num {
-            return None; // Historical query - caller should use DB
-        }
+        let snapshot = self.storage_entries_per_block_per_account_per_slot.get(&(
+            block_num,
+            account_id,
+            slot_name.clone(),
+        ))?;
 
         if snapshot.entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             return Some(AccountStorageMapDetails {
@@ -382,9 +383,7 @@ impl InnerForest {
         // so that the map has entries for all accounts, and then return (i.e., no need to insert
         // anything into the forest)
         if delta.is_empty() {
-            self.vault_roots.insert((account_id, block_num), prev_root);
-            self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
-            Self::increment_refcount(&mut self.vault_refcount, prev_root);
+            self.track_vault_root(block_num, account_id, prev_root);
             return;
         }
 
@@ -412,9 +411,7 @@ impl InnerForest {
             .batch_insert(prev_root, entries)
             .expect("forest insertion should succeed");
 
-        self.vault_roots.insert((account_id, block_num), new_root);
-        self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
-        Self::increment_refcount(&mut self.vault_refcount, new_root);
+        self.track_vault_root(block_num, account_id, new_root);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -423,6 +420,12 @@ impl InnerForest {
             vault_entries = num_entries,
             "Inserted vault into forest"
         );
+    }
+
+    fn track_vault_root(&mut self, block_num: BlockNumber, account_id: AccountId, new_root: Word) {
+        self.vault_roots.insert((account_id, block_num), new_root);
+        self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
+        *self.vault_refcount.entry(new_root).or_insert(0) += 1;
     }
 
     /// Updates the forest with vault changes from a delta. The vault delta is assumed to be
@@ -491,7 +494,6 @@ impl InnerForest {
             entries.push((asset.vault_key().into(), value));
         }
 
-        assert!(!entries.is_empty(), "non-empty delta should contain entries");
         let num_entries = entries.len();
 
         let new_root = self
@@ -499,9 +501,7 @@ impl InnerForest {
             .batch_insert(prev_root, entries)
             .expect("forest insertion should succeed");
 
-        self.vault_roots.insert((account_id, block_num), new_root);
-        self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
-        Self::increment_refcount(&mut self.vault_refcount, new_root);
+        self.track_vault_root(block_num, account_id, new_root);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -563,18 +563,12 @@ impl InnerForest {
             // if the delta is empty, make sure we create an entry in the storage map roots map
             // and update the cache
             if map_entries.is_empty() {
-                self.storage_map_roots
-                    .insert((account_id, slot_name.clone(), block_num), prev_root);
-                self.storage_slots_by_block
-                    .entry(block_num)
-                    .or_default()
-                    .push((account_id, slot_name.clone()));
-                Self::increment_refcount(&mut self.storage_slots_refcount, prev_root);
+                self.track_storage_map_slot_root(block_num, account_id, slot_name, prev_root);
 
                 // Update cache with empty map
-                self.storage_entries_per_user_block_slot.put(
-                    (account_id, slot_name.clone()),
-                    StorageSnapshot { block_num, entries: BTreeMap::new() },
+                self.storage_entries_per_block_per_account_per_slot.put(
+                    (block_num, account_id, slot_name.clone()),
+                    StorageSnapshot { entries: BTreeMap::new() },
                 );
 
                 continue;
@@ -586,21 +580,14 @@ impl InnerForest {
                 .batch_insert(prev_root, map_entries.iter().copied())
                 .expect("forest insertion should succeed");
 
-            self.storage_map_roots
-                .insert((account_id, slot_name.clone(), block_num), new_root);
-            self.storage_slots_by_block
-                .entry(block_num)
-                .or_default()
-                .push((account_id, slot_name.clone()));
-            Self::increment_refcount(&mut self.storage_slots_refcount, new_root);
+            self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
 
-            assert!(!map_entries.is_empty(), "a non-empty delta should have entries");
             let num_entries = map_entries.len();
 
             // Update cache with the entries from this insertion
             let entries = BTreeMap::from_iter(map_entries);
-            self.storage_entries_per_user_block_slot
-                .put((account_id, slot_name.clone()), StorageSnapshot { block_num, entries });
+            self.storage_entries_per_block_per_account_per_slot
+                .put((block_num, account_id, slot_name.clone()), StorageSnapshot { entries });
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -613,6 +600,22 @@ impl InnerForest {
         }
     }
 
+    fn track_storage_map_slot_root(
+        &mut self,
+        block_num: BlockNumber,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        new_root: Word,
+    ) {
+        self.storage_map_roots
+            .insert((account_id, slot_name.clone(), block_num), new_root);
+        self.storage_slots_by_block
+            .entry(block_num)
+            .or_default()
+            .push((account_id, slot_name.clone()));
+        *self.storage_slots_refcount.entry(new_root).or_insert(0) += 1;
+    }
+
     /// Updates the forest with storage map changes from a delta.
     ///
     /// Processes storage map slot deltas, building SMTs for each modified slot and tracking the
@@ -623,8 +626,6 @@ impl InnerForest {
         account_id: AccountId,
         delta: &AccountStorageDelta,
     ) {
-        assert!(!delta.is_empty(), "expected the delta not to be empty");
-
         for (slot_name, map_delta) in delta.maps() {
             // map delta shouldn't be empty, but if it is for some reason, there is nothing to do
             if map_delta.is_empty() {
@@ -641,32 +642,14 @@ impl InnerForest {
                 .batch_insert(prev_root, delta_entries.iter().copied())
                 .expect("forest insertion should succeed");
 
-            self.storage_map_roots
-                .insert((account_id, slot_name.clone(), block_num), new_root);
-            self.storage_slots_by_block
-                .entry(block_num)
-                .or_default()
-                .push((account_id, slot_name.clone()));
-            Self::increment_refcount(&mut self.storage_slots_refcount, new_root);
+            self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
 
-            // Update cache by merging delta with latest entries
-            let key = (account_id, slot_name.clone());
-            let mut latest_entries = self
-                .storage_entries_per_user_block_slot
-                .get(&key)
-                .map(|s| s.entries.clone())
-                .unwrap_or_default();
-
-            for (k, v) in &delta_entries {
-                if *v == EMPTY_WORD {
-                    latest_entries.remove(k);
-                } else {
-                    latest_entries.insert(*k, *v);
-                }
-            }
-
-            self.storage_entries_per_user_block_slot
-                .put(key, StorageSnapshot { block_num, entries: latest_entries });
+            self.update_storage_map_slot_cache_entry(
+                block_num,
+                account_id,
+                slot_name,
+                &delta_entries,
+            );
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -677,6 +660,39 @@ impl InnerForest {
                 "Updated storage map in forest"
             );
         }
+    }
+
+    /// Update the storage map using the given set of key-value-entries.
+    fn update_storage_map_slot_cache_entry(
+        &mut self,
+        block_num: BlockNumber,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        delta_entries: &Vec<(Word, Word)>,
+    ) {
+        // Update cache by merging delta with latest entries
+        let key = (block_num, account_id, slot_name.clone());
+        let mut latest_entries = self
+            .storage_entries_per_block_per_account_per_slot
+            .iter()
+            .filter(|((_, cached_account_id, cached_slot_name), _)| {
+                *cached_account_id == account_id && cached_slot_name == slot_name
+            })
+            .map(|((cached_block, ..), snapshot)| (*cached_block, snapshot))
+            .max_by_key(|(cached_block, _)| cached_block.as_u32())
+            .map(|(_, snapshot)| snapshot.entries.clone())
+            .unwrap_or_default();
+
+        for (k, v) in delta_entries {
+            if *v == EMPTY_WORD {
+                latest_entries.remove(k);
+            } else {
+                latest_entries.insert(*k, *v);
+            }
+        }
+
+        self.storage_entries_per_block_per_account_per_slot
+            .put(key, StorageSnapshot { entries: latest_entries });
     }
 
     // PRUNING
@@ -693,7 +709,7 @@ impl InnerForest {
     /// Note: Returns (`vault_roots_removed`, `storage_roots_removed`). Storage entries count is
     /// no longer tracked since we use an LRU cache.
     #[instrument(target = COMPONENT, skip_all, fields(block.number = %chain_tip), ret)]
-    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize, usize) {
+    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize) {
         let cutoff_block =
             BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
 
@@ -701,7 +717,7 @@ impl InnerForest {
         let storage_roots_removed = self.prune_storage_roots(cutoff_block);
 
         // Cache is self-pruning via LRU eviction
-        (vault_roots_removed, storage_roots_removed, 0)
+        (vault_roots_removed, storage_roots_removed)
     }
 
     /// Prunes vault roots beyond the cutoff block.
@@ -712,12 +728,11 @@ impl InnerForest {
         // Get blocks to prune (only blocks before cutoff)
         let blocks_to_check: Vec<BlockNumber> = self
             .vault_roots_by_block
-            .range(..cutoff_block)
+            .range(..=cutoff_block)
             .map(|(block, _)| *block)
             .collect();
 
         let mut roots_to_prune = HashSet::new();
-        let mut roots_removed = 0usize;
 
         for block in blocks_to_check {
             let Some(accounts) = self.vault_roots_by_block.remove(&block) else {
@@ -736,7 +751,6 @@ impl InnerForest {
 
                 if has_newer_entry {
                     if let Some(root) = self.vault_roots.remove(&(account_id, block)) {
-                        roots_removed += 1;
                         if Self::decrement_refcount(&mut self.vault_refcount, root) {
                             roots_to_prune.insert(root);
                         }
@@ -751,6 +765,7 @@ impl InnerForest {
             }
         }
 
+        let roots_removed = roots_to_prune.len();
         self.forest.pop_smts(roots_to_prune);
         roots_removed
     }
@@ -763,12 +778,11 @@ impl InnerForest {
         // Get blocks to prune (only blocks before cutoff)
         let blocks_to_check: Vec<BlockNumber> = self
             .storage_slots_by_block
-            .range(..cutoff_block)
+            .range(..=cutoff_block)
             .map(|(block, _)| *block)
             .collect();
 
         let mut roots_to_prune = HashSet::new();
-        let mut roots_removed = 0usize;
 
         for block in blocks_to_check {
             let Some(slots) = self.storage_slots_by_block.remove(&block) else {
@@ -791,7 +805,6 @@ impl InnerForest {
                 if has_newer_entry {
                     let key = (account_id, slot_name.clone(), block);
                     if let Some(root) = self.storage_map_roots.remove(&key) {
-                        roots_removed += 1;
                         if Self::decrement_refcount(&mut self.storage_slots_refcount, root) {
                             roots_to_prune.insert(root);
                         }
@@ -806,6 +819,7 @@ impl InnerForest {
             }
         }
 
+        let roots_removed = roots_to_prune.len();
         self.forest.pop_smts(roots_to_prune);
         roots_removed
     }

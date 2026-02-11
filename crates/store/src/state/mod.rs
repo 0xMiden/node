@@ -23,6 +23,7 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::formatting::format_array;
+use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{AccountId, StorageMapWitness, StorageSlotName};
@@ -1049,7 +1050,7 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to return all entries.
+    /// All-entries queries (`SlotData::All`) use the forest to request;;.
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,
@@ -1107,7 +1108,12 @@ impl State {
         for StorageMapRequest { slot_name, slot_data } in storage_requests {
             let details = match &slot_data {
                 SlotData::MapKeys(keys) => forest_guard
-                    .open_storage_map(account_id, slot_name.clone(), block_num, keys)
+                    .get_storage_map_details_for_keys(
+                        account_id,
+                        slot_name.clone(),
+                        block_num,
+                        keys,
+                    )
                     .ok_or_else(|| DatabaseError::StorageRootNotFound {
                         account_id,
                         slot_name: slot_name.to_string(),
@@ -1116,20 +1122,29 @@ impl State {
                     .map_err(DatabaseError::MerkleError)?,
                 SlotData::All => {
                     // Try cache first (latest block only)
-                    if let Some(details) =
-                        forest_guard.storage_map_entries(account_id, slot_name.clone(), block_num)
-                    {
+                    if let Some(details) = forest_guard.get_storage_map_details_full_from_cache(
+                        account_id,
+                        slot_name.clone(),
+                        block_num,
+                    ) {
                         details
                     } else {
                         // we don't want to hold the forest guard for a prolonged time
                         drop(forest_guard);
-                        // TODO we collect all storage items
+                        // we collect all storage items, if the account is small enough or
+                        // return `AccountStorageMapDetails::LimitExceeded`
                         let details = self
                             .db
                             .reconstruct_storage_map_from_db(
                                 account_id,
                                 slot_name.clone(),
                                 block_num,
+                                Some(
+                                    // TODO unify this with
+                                    // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
+                                    // and accumulated the limits
+                                    <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
+                                ),
                             )
                             .await?;
                         forest_guard = self.forest.write().await;
@@ -1158,7 +1173,7 @@ impl State {
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<StorageMapValuesPage, DatabaseError> {
-        self.db.select_storage_map_sync_values(account_id, block_range).await
+        self.db.select_storage_map_sync_values(account_id, block_range, None).await
     }
 
     /// Loads a block from the block store. Return `Ok(None)` if the block is not found.

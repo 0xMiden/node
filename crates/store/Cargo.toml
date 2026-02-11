@@ -25,7 +25,7 @@ fs-err                 = { workspace = true }
 hex                    = { version = "0.4" }
 indexmap               = { workspace = true }
 libsqlite3-sys         = { workspace = true }
-lru                    = { version = "0.12" }
+lru                    = { workspace = true }
 miden-crypto           = { features = ["concurrent", "hashmaps"], workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
