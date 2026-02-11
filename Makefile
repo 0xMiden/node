@@ -109,7 +109,7 @@ install-node: ## Installs node
 install-remote-prover: ## Install remote prover's CLI
 	$(BUILD_PROTO) cargo install --path bin/remote-prover --bin miden-remote-prover --features concurrent --locked
 
-.PHONY: stress-test
+.PHONY: stress-test-smoke
 stress-test: ## Runs stress-test benchmarks
 	${BUILD_PROTO} cargo build --release --locked -p miden-node-stress-test
 	@mkdir -p $(STRESS_TEST_DATA_DIR)
