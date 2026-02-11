@@ -23,6 +23,7 @@ The endpoints that you can test are:
 - `sync_notes`
 - `sync_nullifiers`
 - `sync_transactions`
+- `sync-chain-mmr`
 
 Most benchmarks accept options to control the number of iterations and concurrency level. The `load_state` endpoint is different - it simply measures the one-time startup cost of loading the state from disk.
 
@@ -156,6 +157,22 @@ Pagination statistics:
   Runs triggering pagination: 9971
   Pagination rate: 99.71%
   Average pages per run: 2.00
+```
+
+- sync-chain-mmr
+``` bash
+$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-chain-mmr --block-range 1000
+
+Average request latency: 1.021ms
+P50 request latency: 0.981ms
+P95 request latency: 1.412ms
+P99 request latency: 1.822ms
+P99.9 request latency: 3.174ms
+Pagination statistics:
+  Total runs: 10000
+  Runs triggering pagination: 1
+  Pagination rate: 0.01%
+  Average pages per run: 1.00
 ```
 
 ## License

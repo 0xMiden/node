@@ -6,7 +6,9 @@ use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::crypto::merkle::mmr::{MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::note::{NoteDetails, NoteTag};
 use miden_protocol::utils::{Deserializable, Serializable};
 use rand::Rng;
@@ -412,6 +414,148 @@ async fn sync_transactions_paginated(
         },
         pages,
     }
+}
+
+// SYNC CHAIN MMR
+// ================================================================================================
+
+/// Sends multiple `sync_chain_mmr` requests to the store and prints the performance.
+///
+/// Arguments:
+/// - `data_directory`: directory that contains the database dump file.
+/// - `iterations`: number of requests to send.
+/// - `concurrency`: number of requests to send in parallel.
+/// - `block_range_size`: number of blocks to include per request.
+pub async fn bench_sync_chain_mmr(
+    data_directory: PathBuf,
+    iterations: usize,
+    concurrency: usize,
+    block_range_size: u32,
+) {
+    let (store_client, _) = start_store(data_directory).await;
+
+    wait_for_store(&store_client).await.unwrap();
+
+    let chain_tip = store_client.clone().status(()).await.unwrap().into_inner().chain_tip;
+    let block_range_size = block_range_size.max(1);
+
+    let request = |_| {
+        let mut client = store_client.clone();
+        tokio::spawn(async move {
+            sync_chain_mmr_paginated(&mut client, chain_tip, block_range_size).await
+        })
+    };
+
+    let results = stream::iter(0..iterations)
+        .map(request)
+        .buffer_unordered(concurrency)
+        .map(|res| res.unwrap())
+        .collect::<Vec<_>>()
+        .await;
+
+    let timers_accumulator: Vec<Duration> = results.iter().map(|r| r.duration).collect();
+
+    print_summary(&timers_accumulator);
+
+    let total_runs = results.len();
+    let paginated_runs = results.iter().filter(|r| r.pages > 1).count();
+    #[allow(clippy::cast_precision_loss)]
+    let pagination_rate = if total_runs > 0 {
+        (paginated_runs as f64 / total_runs as f64) * 100.0
+    } else {
+        0.0
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let avg_pages = if total_runs > 0 {
+        results.iter().map(|r| r.pages as f64).sum::<f64>() / total_runs as f64
+    } else {
+        0.0
+    };
+
+    println!("Pagination statistics:");
+    println!("  Total runs: {total_runs}");
+    println!("  Runs triggering pagination: {paginated_runs}");
+    println!("  Pagination rate: {pagination_rate:.2}%");
+    println!("  Average pages per run: {avg_pages:.2}");
+}
+
+/// Sends a single `sync_chain_mmr` request to the store and returns a tuple with:
+/// - the elapsed time.
+/// - the response.
+pub async fn sync_chain_mmr(
+    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    block_from: u32,
+    block_to: u32,
+) -> (Duration, proto::rpc::SyncChainMmrResponse) {
+    let sync_request = proto::rpc::SyncChainMmrRequest {
+        block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
+    };
+
+    let start = Instant::now();
+    let response = api_client.sync_chain_mmr(sync_request).await.unwrap();
+    (start.elapsed(), response.into_inner())
+}
+
+#[derive(Clone)]
+struct SyncChainMmrRun {
+    duration: Duration,
+    pages: usize,
+}
+
+async fn sync_chain_mmr_paginated(
+    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    chain_tip: u32,
+    block_range_size: u32,
+) -> SyncChainMmrRun {
+    let mut total_duration = Duration::default();
+    let mut pages = 0usize;
+    let mut partial_mmr = PartialMmr::default();
+    let mut next_block_from = 0u32;
+
+    loop {
+        let target_block_to = next_block_from.saturating_add(block_range_size).min(chain_tip);
+        let (elapsed, response) =
+            sync_chain_mmr(api_client, next_block_from, target_block_to).await;
+        total_duration += elapsed;
+        pages += 1;
+
+        let pagination_info = response.pagination_info.expect("pagination_info should exist");
+        let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
+        let mmr_delta = MmrDelta::try_from(mmr_delta).expect("mmr_delta conversion should succeed");
+
+        partial_mmr.apply(mmr_delta).expect("mmr delta should apply");
+
+        let block_num = pagination_info.block_num;
+        let chain_commitment = fetch_chain_commitment(api_client, block_num).await;
+        let peaks = MmrPeaks::from(&partial_mmr);
+        if peaks.hash_peaks() != chain_commitment {
+            panic!("chain commitment mismatch at block {block_num}");
+        }
+
+        if pagination_info.block_num >= pagination_info.chain_tip {
+            break;
+        }
+
+        next_block_from = pagination_info.block_num;
+    }
+
+    SyncChainMmrRun { duration: total_duration, pages }
+}
+
+async fn fetch_chain_commitment(
+    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    block_num: u32,
+) -> Word {
+    let request = proto::rpc::BlockHeaderByNumberRequest {
+        block_num: Some(block_num),
+        include_mmr_proof: Some(false),
+    };
+
+    let response = api_client.get_block_header_by_number(request).await.unwrap().into_inner();
+    let block_header = response.block_header.expect("block_header should exist");
+    let block_header = miden_protocol::block::BlockHeader::try_from(block_header)
+        .expect("block_header should deserialize");
+    block_header.chain_commitment()
 }
 
 // LOAD STATE
