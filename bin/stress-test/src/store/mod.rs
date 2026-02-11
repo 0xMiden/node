@@ -528,9 +528,7 @@ async fn sync_chain_mmr_paginated(
         let block_num = pagination_info.block_num;
         let chain_commitment = fetch_chain_commitment(api_client, block_num).await;
         let peaks = MmrPeaks::from(&partial_mmr);
-        if peaks.hash_peaks() != chain_commitment {
-            panic!("chain commitment mismatch at block {block_num}");
-        }
+        assert_eq!(peaks.hash_peaks(), chain_commitment);
 
         if pagination_info.block_num >= pagination_info.chain_tip {
             break;
