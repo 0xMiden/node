@@ -118,6 +118,10 @@ stress-test: ## Runs stress-test benchmarks
 	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-notes
 	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
+.PHONY: install-stress-test
+install-stress-test: ## Installs stress-test binary
+	cargo install --path bin/stress-test --locked
+
 .PHONY: install-network-monitor
 install-network-monitor: ## Installs network monitor binary
 	cargo install --path bin/network-monitor --locked
