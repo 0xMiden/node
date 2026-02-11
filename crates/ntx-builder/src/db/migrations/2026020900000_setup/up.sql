@@ -27,6 +27,9 @@ CREATE TABLE accounts (
 
 -- At most one committed row per account.
 CREATE UNIQUE INDEX idx_accounts_committed ON accounts(account_id) WHERE transaction_id IS NULL;
+-- At most one inflight row per (account, transaction) pair.
+CREATE UNIQUE INDEX idx_accounts_inflight ON accounts(account_id, transaction_id)
+    WHERE transaction_id IS NOT NULL;
 CREATE INDEX idx_accounts_account ON accounts(account_id);
 CREATE INDEX idx_accounts_tx ON accounts(transaction_id) WHERE transaction_id IS NOT NULL;
 

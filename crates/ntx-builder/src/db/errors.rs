@@ -1,7 +1,5 @@
 use deadpool_sync::InteractError;
 
-use crate::db::manager::ConnectionManagerError;
-
 // DATABASE ERRORS
 // ================================================================================================
 
@@ -13,13 +11,25 @@ pub enum DatabaseError {
     Diesel(#[from] diesel::result::Error),
     #[error("SQLite pool interaction failed: {0}")]
     InteractError(String),
+    #[error("deserialization failed: {context}")]
+    Deserialization {
+        context: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("schema verification failed")]
     SchemaVerification(#[from] SchemaVerificationError),
-    #[error("connection manager error")]
-    ConnectionManager(#[source] ConnectionManagerError),
 }
 
 impl DatabaseError {
+    /// Creates a `Deserialization` error with a static context string and the original error.
+    pub fn deserialization(
+        context: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Deserialization { context, source: Box::new(source) }
+    }
+
     /// Converts from `InteractError`.
     ///
     /// Required since `InteractError` has at least one enum variant that is _not_ `Send +
