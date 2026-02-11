@@ -42,6 +42,7 @@ use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
     ApplyBlockError,
     DatabaseError,
+    GetAccountError,
     GetBatchInputsError,
     GetBlockHeaderError,
     GetBlockInputsError,
@@ -609,11 +610,11 @@ impl State {
     pub async fn get_account(
         &self,
         account_request: AccountRequest,
-    ) -> Result<AccountResponse, DatabaseError> {
+    ) -> Result<AccountResponse, GetAccountError> {
         let AccountRequest { block_num, account_id, details } = account_request;
 
         if details.is_some() && !account_id.has_public_state() {
-            return Err(DatabaseError::AccountNotPublic(account_id));
+            return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
         let (block_num, witness) = self.get_account_witness(block_num, account_id).await?;
@@ -635,19 +636,20 @@ impl State {
         &self,
         block_num: Option<BlockNumber>,
         account_id: AccountId,
-    ) -> Result<(BlockNumber, AccountWitness), DatabaseError> {
+    ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
         let inner_state = self.inner.read().await;
 
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
             // Historical query: use the account tree with history
-            let witness = inner_state
-                .account_tree
-                .open_at(account_id, requested_block)
-                .ok_or_else(|| DatabaseError::HistoricalBlockNotAvailable {
-                    block_num: requested_block,
-                    reason: "Block is either in the future or has been pruned from history"
-                        .to_string(),
+            let witness =
+                inner_state.account_tree.open_at(account_id, requested_block).ok_or_else(|| {
+                    let latest_block = inner_state.account_tree.block_number_latest();
+                    if requested_block > latest_block {
+                        GetAccountError::UnknownBlock(requested_block)
+                    } else {
+                        GetAccountError::BlockPruned(requested_block)
+                    }
                 })?;
             (requested_block, witness)
         } else {
@@ -674,7 +676,7 @@ impl State {
         account_id: AccountId,
         block_num: BlockNumber,
         detail_request: AccountDetailRequest,
-    ) -> Result<AccountDetails, DatabaseError> {
+    ) -> Result<AccountDetails, GetAccountError> {
         let AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
@@ -682,18 +684,25 @@ impl State {
         } = detail_request;
 
         if !account_id.has_public_state() {
-            return Err(DatabaseError::AccountNotPublic(account_id));
+            return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
         // Validate block exists in the blockchain before querying the database
-        self.validate_block_exists(block_num).await?;
+        {
+            let inner = self.inner.read().await;
+            let latest_block_num = inner.latest_block_num();
+
+            if block_num > latest_block_num {
+                return Err(GetAccountError::UnknownBlock(block_num));
+            }
+        }
 
         // Query account header and storage header together in a single DB call
         let (account_header, storage_header) = self
             .db
             .select_account_header_with_storage_header_at_block(account_id, block_num)
             .await?
-            .ok_or(DatabaseError::AccountAtBlockHeightNotFoundInDb(account_id, block_num))?;
+            .ok_or(GetAccountError::AccountNotFound(account_id, block_num))?;
 
         let account_code = match code_commitment {
             Some(commitment) if commitment == account_header.code_commitment() => None,
@@ -770,26 +779,6 @@ impl State {
     /// Returns the latest block number.
     pub async fn latest_block_num(&self) -> BlockNumber {
         self.inner.read().await.latest_block_num()
-    }
-
-    /// Validates that a block exists in the blockchain
-    ///
-    /// # Attention
-    ///
-    /// Acquires a *read lock** on `self.inner`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DatabaseError::BlockNotFound` if the block doesn't exist in the blockchain.
-    async fn validate_block_exists(&self, block_num: BlockNumber) -> Result<(), DatabaseError> {
-        let inner = self.inner.read().await;
-        let latest_block_num = inner.latest_block_num();
-
-        if block_num > latest_block_num {
-            return Err(DatabaseError::BlockNotFound(block_num));
-        }
-
-        Ok(())
     }
 
     /// Emits metrics for each database table's size.

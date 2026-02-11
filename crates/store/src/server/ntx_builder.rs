@@ -16,7 +16,12 @@ use tracing::debug;
 
 use crate::COMPONENT;
 use crate::db::models::Page;
-use crate::errors::{GetNetworkAccountIdsError, GetNoteScriptByRootError, GetWitnessesError};
+use crate::errors::{
+    GetAccountError,
+    GetNetworkAccountIdsError,
+    GetNoteScriptByRootError,
+    GetWitnessesError,
+};
 use crate::server::api::{
     StoreApi,
     internal_error,
@@ -167,7 +172,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         debug!(target: COMPONENT, ?request);
         let request = request.into_inner();
-        let account_request = request.try_into()?;
+        let account_request = request.try_into().map_err(GetAccountError::DeserializationFailed)?;
 
         let proof = self.state.get_account(account_request).await?;
 
