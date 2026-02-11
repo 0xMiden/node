@@ -31,7 +31,9 @@ RUN cargo build --release --locked --bin miden-node
 FROM debian:bullseye-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
-    apt-get install -y --no-install-recommends sqlite3 \
+    apt-get install -y --no-install-recommends \
+        sqlite3 \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS runtime
