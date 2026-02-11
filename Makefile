@@ -9,6 +9,7 @@ help:
 WARNINGS=RUSTDOCFLAGS="-D warnings"
 BUILD_PROTO=BUILD_PROTO=1
 CONTAINER_RUNTIME ?= docker
+STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 
 # -- linting --------------------------------------------------------------------------------------
 
@@ -107,6 +108,15 @@ install-node: ## Installs node
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
 	$(BUILD_PROTO) cargo install --path bin/remote-prover --bin miden-remote-prover --features concurrent --locked
+
+.PHONY: stress-test-smoke
+stress-test: ## Runs stress-test benchmarks
+	${BUILD_PROTO} cargo build --release --locked -p miden-node-stress-test
+	@mkdir -p $(STRESS_TEST_DATA_DIR)
+	./target/release/miden-node-stress-test seed-store --data-directory $(STRESS_TEST_DATA_DIR) --num-accounts 500 --public-accounts-percentage 50
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-state
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-notes
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
 .PHONY: install-stress-test
 install-stress-test: ## Installs stress-test binary

@@ -107,6 +107,19 @@ The witness proves the account's state commitment in the account tree. If detail
 
 If `block_num` is provided, returns the state at that historical block; otherwise, returns the latest state.
 
+#### Error Codes
+
+When the request fails, detailed error information is provided through gRPC status details. The following error codes may be returned:
+
+| Error Code                | Value | gRPC Status        | Description                                          |
+|---------------------------|-------|--------------------|------------------------------------------------------|
+| `INTERNAL_ERROR`          | 0     | `INTERNAL`         | Internal server error occurred                       |
+| `DESERIALIZATION_FAILED`  | 1     | `INVALID_ARGUMENT` | Request could not be deserialized                    |
+| `ACCOUNT_NOT_FOUND`       | 2     | `INVALID_ARGUMENT` | Account not found at the requested block             |
+| `ACCOUNT_NOT_PUBLIC`      | 3     | `INVALID_ARGUMENT` | Account details requested for a non-public account   |
+| `UNKNOWN_BLOCK`           | 4     | `INVALID_ARGUMENT` | Requested block number is unknown                    |
+| `BLOCK_PRUNED`            | 5     | `INVALID_ARGUMENT` | Requested block has been pruned                      |
+
 ### GetBlockByNumber
 
 Request the raw data for a specific block.

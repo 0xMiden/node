@@ -16,11 +16,11 @@ workspace = true
 
 [dependencies]
 anyhow                             = { workspace = true }
-deadpool                           = { workspace = true }
-deadpool-diesel                    = { workspace = true }
-deadpool-sync                      = { workspace = true }
-diesel                             = { workspace = true }
-diesel_migrations                  = { workspace = true }
+deadpool                           = { features = ["managed", "rt_tokio_1"], workspace = true }
+deadpool-diesel                    = { features = ["sqlite"], workspace = true }
+deadpool-sync                      = { features = ["tracing"], workspace = true }
+diesel                             = { features = ["numeric", "sqlite"], workspace = true }
+diesel_migrations                  = { features = ["sqlite"], workspace = true }
 fs-err                             = { workspace = true }
 futures                            = { workspace = true }
 hex                                = { version = "0.4" }

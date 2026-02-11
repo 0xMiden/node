@@ -69,11 +69,11 @@ anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
 clap              = { features = ["derive"], version = "4.5" }
-deadpool          = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
-deadpool-diesel   = { features = ["sqlite"], version = "0.6" }
-deadpool-sync     = { default-features = false, features = ["tracing"], version = "0.1" }
-diesel            = { features = ["numeric", "sqlite"], version = "2.3" }
-diesel_migrations = { features = ["sqlite"], version = "2.3" }
+deadpool          = { default-features = false, version = "0.12" }
+deadpool-diesel   = { version = "0.6" }
+deadpool-sync     = { default-features = false, version = "0.1" }
+diesel            = { version = "2.3" }
+diesel_migrations = { version = "2.3" }
 fs-err            = { version = "3" }
 futures           = { version = "0.3" }
 hex               = { version = "0.4" }
@@ -95,6 +95,7 @@ serde              = { features = ["derive"], version = "1" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
+tokio-util         = { version = "0.7" }
 toml               = { version = "0.9" }
 tonic              = { default-features = false, version = "0.14" }
 tonic-prost        = { version = "0.14" }
