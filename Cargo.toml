@@ -69,6 +69,11 @@ anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
 clap              = { features = ["derive"], version = "4.5" }
+deadpool          = { default-features = false, version = "0.12" }
+deadpool-diesel   = { version = "0.6" }
+deadpool-sync     = { default-features = false, version = "0.1" }
+diesel            = { version = "2.3" }
+diesel_migrations = { version = "2.3" }
 fs-err            = { version = "3" }
 futures           = { version = "0.3" }
 hex               = { version = "0.4" }
@@ -78,10 +83,11 @@ indexmap          = { version = "2.12" }
 itertools         = { version = "0.14" }
 lru               = { default-features = false, version = "0.16" }
 pretty_assertions = { version = "1.4" }
-# breaking change `DecodeError::new` is not exposed anymore
-# but is assumed public by some internal dependency
-prost              = { default-features = false, version = "=0.14.1" }
-protox             = { version = "=0.9.0" }
+# prost and protox are from different authors and are _not_ released in
+# lockstep, nor are they adhering to semver semantics. We keep this
+# to avoid future breakage.
+prost              = { default-features = false, version = "=0.14.3" }
+protox             = { version = "=0.9.1" }
 rand               = { version = "0.9" }
 rand_chacha        = { version = "0.9" }
 rstest             = { version = "0.26" }
@@ -89,6 +95,7 @@ serde              = { features = ["derive"], version = "1" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
+tokio-util         = { version = "0.7" }
 toml               = { version = "0.9" }
 tonic              = { default-features = false, version = "0.14" }
 tonic-prost        = { version = "0.14" }
