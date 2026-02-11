@@ -2618,7 +2618,7 @@ fn inner_forest_shared_roots_not_deleted_prematurely() {
     // should be pruned
     assert_eq!(storage_roots_removed, 0);
 
-    // ensure the root is stil accessible
+    // ensure the root is still accessible
     let account1_root_after_prune = forest.get_storage_map_root(account1, &slot_name, block01);
     assert!(account1_root_after_prune.is_some());
 
