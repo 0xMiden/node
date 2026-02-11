@@ -136,7 +136,7 @@ miden-node bundled start --enable-otel
 ```
 
 The exporter can be configured using environment variables as specified in the official
-[documents](httpthes://opentelemetry.io/docs/specs/otel/protocol/exporter/).
+[documents](https://opentelemetry.io/docs/specs/otel/protocol/exporter/).
 
 <div class="warning">
 Not all options are fully supported. We are limited to what the Rust OpenTelemetry implementation supports. If you have any problems please open an issue and we'll do our best to resolve it.
