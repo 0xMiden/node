@@ -423,3 +423,34 @@ fn has_backoff_passed(
     // Check if the backoff period has passed.
     blocks_passed.as_usize() > backoff_threshold
 }
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::block::BlockNumber;
+
+    use super::has_backoff_passed;
+
+    #[rstest::rstest]
+    #[test]
+    #[case::all_zero(Some(BlockNumber::GENESIS), BlockNumber::GENESIS, 0, true)]
+    #[case::no_attempts(None, BlockNumber::GENESIS, 0, true)]
+    #[case::one_attempt(Some(BlockNumber::GENESIS), BlockNumber::from(2), 1, true)]
+    #[case::three_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(3), 3, true)]
+    #[case::ten_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(13), 10, true)]
+    #[case::twenty_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(149), 20, true)]
+    #[case::one_attempt_false(Some(BlockNumber::GENESIS), BlockNumber::from(1), 1, false)]
+    #[case::three_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(2), 3, false)]
+    #[case::ten_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(12), 10, false)]
+    #[case::twenty_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(148), 20, false)]
+    fn backoff_has_passed(
+        #[case] last_attempt_block_num: Option<BlockNumber>,
+        #[case] current_block_num: BlockNumber,
+        #[case] attempt_count: usize,
+        #[case] backoff_should_have_passed: bool,
+    ) {
+        assert_eq!(
+            backoff_should_have_passed,
+            has_backoff_passed(current_block_num, last_attempt_block_num, attempt_count)
+        );
+    }
+}
