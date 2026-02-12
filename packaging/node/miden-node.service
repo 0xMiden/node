@@ -14,3 +14,4 @@ WorkingDirectory=/opt/miden-node
 User=miden-node
 RestartSec=5
 Restart=always
+LimitCORE=infinity
