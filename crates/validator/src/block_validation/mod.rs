@@ -15,9 +15,9 @@ pub enum BlockValidationError {
     #[error("block contains unvalidated transactions {0:?}")]
     UnvalidatedTransactions(Vec<TransactionId>),
     #[error("failed to build block")]
-    BlockBuildingFailed(#[from] ProposedBlockError),
+    BlockBuildingFailed(#[source] ProposedBlockError),
     #[error("failed to select transactions")]
-    DatabaseError(#[from] DatabaseError),
+    DatabaseError(#[source] DatabaseError),
 }
 
 // BLOCK VALIDATION
@@ -37,7 +37,8 @@ pub async fn validate_block<S: BlockSigner>(
         .transact("find_unvalidated_transactions", move |conn| {
             find_unvalidated_transactions(conn, &proposed_tx_ids)
         })
-        .await?;
+        .await
+        .map_err(BlockValidationError::DatabaseError)?;
 
     // All proposed transactions must have been validated.
     if !unvalidated_txs.is_empty() {
@@ -45,7 +46,9 @@ pub async fn validate_block<S: BlockSigner>(
     }
 
     // Build the block header.
-    let (header, _) = proposed_block.into_header_and_body()?;
+    let (header, _) = proposed_block
+        .into_header_and_body()
+        .map_err(BlockValidationError::BlockBuildingFailed)?;
 
     // Sign the header.
     let signature = info_span!("sign_block").in_scope(|| signer.sign(&header));
