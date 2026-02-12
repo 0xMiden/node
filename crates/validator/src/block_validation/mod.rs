@@ -3,8 +3,9 @@ use miden_protocol::block::{BlockSigner, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
-use tracing::info_span;
+use tracing::{info_span, instrument};
 
+use crate::COMPONENT;
 use crate::db::find_unvalidated_transactions;
 
 // BLOCK VALIDATION ERROR
@@ -25,6 +26,7 @@ pub enum BlockValidationError {
 
 /// Validates a block by checking that all transactions in the proposed block have been processed by
 /// the validator in the past.
+#[instrument(target = COMPONENT, skip_all, err)]
 pub async fn validate_block<S: BlockSigner>(
     proposed_block: ProposedBlock,
     signer: &S,

@@ -36,6 +36,7 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
 }
 
 /// Inserts a new validated transaction into the database.
+#[instrument(target = COMPONENT, skip_all, fields(tx_id = %tx_info.tx_id()), err)]
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
     tx_info: &ValidatedTransaction,
@@ -64,6 +65,7 @@ pub(crate) fn insert_transaction(
 /// ORDER BY
 ///     id ASC
 /// ```
+#[instrument(target = COMPONENT, skip(conn), err)]
 pub(crate) fn find_unvalidated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
