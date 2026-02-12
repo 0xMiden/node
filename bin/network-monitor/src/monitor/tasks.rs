@@ -23,6 +23,7 @@ use crate::deploy::ensure_accounts_exist;
 use crate::explorer::{initial_explorer_status, run_explorer_status_task};
 use crate::faucet::run_faucet_test_task;
 use crate::frontend::{ServerState, serve};
+use crate::note_transport::{initial_note_transport_status, run_note_transport_status_task};
 use crate::remote_prover::{ProofType, generate_prover_test_payload, run_remote_prover_test_task};
 use crate::status::{
     ServiceStatus,
@@ -140,6 +141,39 @@ impl Tasks {
         println!("Spawned explorer status checker task");
 
         Ok(explorer_status_rx)
+    }
+
+    /// Spawn the note transport status checker task.
+    #[instrument(target = COMPONENT, name = "tasks.spawn-note-transport-checker", skip_all)]
+    pub async fn spawn_note_transport_checker(
+        &mut self,
+        config: &MonitorConfig,
+    ) -> Result<Receiver<ServiceStatus>> {
+        let note_transport_url =
+            config.note_transport_url.clone().expect("Note transport URL exists");
+        let name = "Note Transport".to_string();
+        let status_check_interval = config.status_check_interval;
+        let request_timeout = config.request_timeout;
+        let (tx, rx) = watch::channel(initial_note_transport_status());
+
+        let id = self
+            .handles
+            .spawn(async move {
+                run_note_transport_status_task(
+                    note_transport_url,
+                    name,
+                    tx,
+                    status_check_interval,
+                    request_timeout,
+                )
+                .await;
+            })
+            .id();
+        self.names.insert(id, "note-transport-checker".to_string());
+
+        println!("Spawned note transport status checker task");
+
+        Ok(rx)
     }
 
     /// Spawn prover status and test tasks for all configured provers.
@@ -287,6 +321,7 @@ impl Tasks {
             last_checked: current_time,
             error: None,
             details: crate::status::ServiceDetails::FaucetTest(crate::faucet::FaucetTestDetails {
+                url: config.faucet_url.as_ref().expect("faucet URL exists").to_string(),
                 test_duration_ms: 0,
                 success_count: 0,
                 failure_count: 0,

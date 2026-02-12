@@ -87,6 +87,7 @@ tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
 toml               = { version = "0.9" }
 tonic              = { default-features = false, version = "0.14" }
+tonic-health       = { version = "0.14" }
 tonic-prost        = { version = "0.14" }
 tonic-prost-build  = { version = "0.14" }
 tonic-reflection   = { version = "0.14" }

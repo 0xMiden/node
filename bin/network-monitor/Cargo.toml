@@ -34,5 +34,6 @@ serde_json       = { version = "1.0" }
 sha2             = { version = "0.10" }
 tokio            = { features = ["full"], workspace = true }
 tonic            = { features = ["codegen", "tls-native-roots", "transport"], workspace = true }
+tonic-health     = { workspace = true }
 tracing          = { workspace = true }
 url              = { features = ["serde"], workspace = true }
