@@ -36,13 +36,14 @@ pub struct AccountRow {
 
 /// Inserts or replaces the committed account state (`transaction_id = NULL`).
 ///
-/// Uses `INSERT OR REPLACE` which triggers on the partial unique index
-/// `idx_accounts_committed(account_id) WHERE transaction_id IS NULL`.
+/// Deletes any existing committed row first, then inserts a fresh one.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// INSERT OR REPLACE INTO accounts (account_id, account_data, transaction_id)
+/// DELETE FROM accounts WHERE account_id = ?1 AND transaction_id IS NULL
+///
+/// INSERT INTO accounts (account_id, account_data, transaction_id)
 /// VALUES (?1, ?2, NULL)
 /// ```
 pub fn upsert_committed_account(
@@ -50,12 +51,23 @@ pub fn upsert_committed_account(
     account_id: NetworkAccountId,
     account: &Account,
 ) -> Result<(), DatabaseError> {
+    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
+
+    // Delete the existing committed row (if any).
+    diesel::delete(
+        schema::accounts::table
+            .filter(schema::accounts::account_id.eq(&account_id_bytes))
+            .filter(schema::accounts::transaction_id.is_null()),
+    )
+    .execute(conn)?;
+
+    // Insert the new committed row.
     let row = AccountInsert {
-        account_id: conversions::network_account_id_to_bytes(account_id),
+        account_id: account_id_bytes,
         account_data: conversions::account_to_bytes(account),
         transaction_id: None,
     };
-    diesel::replace_into(schema::accounts::table).values(&row).execute(conn)?;
+    diesel::insert_into(schema::accounts::table).values(&row).execute(conn)?;
     Ok(())
 }
 
