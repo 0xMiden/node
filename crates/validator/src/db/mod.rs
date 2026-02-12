@@ -14,8 +14,8 @@ use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
-use crate::db::models::ValidatedTransactionInfoRowInsert;
-use crate::tx_validation::ValidatedTransactionInfo;
+use crate::db::models::ValidatedTransactionRowInsert;
+use crate::tx_validation::ValidatedTransaction;
 
 /// Open a connection to the DB and apply any pending migrations.
 #[instrument(target = COMPONENT, skip_all)]
@@ -37,9 +37,9 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
 /// Inserts a new validated transaction into the database.
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
-    tx_info: &ValidatedTransactionInfo,
+    tx_info: &ValidatedTransaction,
 ) -> Result<usize, DatabaseError> {
-    let row = ValidatedTransactionInfoRowInsert::new(tx_info);
+    let row = ValidatedTransactionRowInsert::new(tx_info);
     let count = diesel::insert_into(schema::validated_transactions::table)
         .values(row)
         .execute(conn)?;

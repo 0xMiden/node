@@ -1,8 +1,8 @@
 CREATE TABLE validated_transactions (
-    id         BLOB NOT NULL,
-    block_num  INTEGER NOT NULL,
-    account_id BLOB NOT NULL,
-    info       BLOB NOT NULL, -- Binary encoded ValidatedTransactionInfoBlob.
+    id            BLOB NOT NULL,
+    block_num     INTEGER NOT NULL,
+    account_id    BLOB NOT NULL,
+    "transaction" BLOB NOT NULL, -- Binary encoded ExecutedTransaction.
     PRIMARY KEY (id)
 ) WITHOUT ROWID;
 

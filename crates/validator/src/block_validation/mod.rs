@@ -33,15 +33,15 @@ pub async fn validate_block<S: BlockSigner>(
     // Search for any proposed transactions that have not previously been validated.
     let proposed_tx_ids =
         proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
-    let unvalidated_transactions = db
+    let unvalidated_txs = db
         .transact("find_unvalidated_transactions", move |conn| {
             find_unvalidated_transactions(conn, &proposed_tx_ids)
         })
         .await?;
 
     // All proposed transactions must have been validated.
-    if !unvalidated_transactions.is_empty() {
-        return Err(BlockValidationError::UnvalidatedTransactions(unvalidated_transactions));
+    if !unvalidated_txs.is_empty() {
+        return Err(BlockValidationError::UnvalidatedTransactions(unvalidated_txs));
     }
 
     // Build the block header.
