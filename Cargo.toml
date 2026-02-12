@@ -35,6 +35,9 @@ version      = "0.14.0"
 [profile.test.package.miden-crypto]
 opt-level = 2
 
+[profile.release]
+debug = true
+
 [workspace.dependencies]
 # Workspace crates.
 miden-node-block-producer   = { path = "crates/block-producer", version = "0.14" }
@@ -98,6 +101,7 @@ tokio-stream       = { version = "0.1" }
 tokio-util         = { version = "0.7" }
 toml               = { version = "0.9" }
 tonic              = { default-features = false, version = "0.14" }
+tonic-health       = { version = "0.14" }
 tonic-prost        = { version = "0.14" }
 tonic-prost-build  = { version = "0.14" }
 tonic-reflection   = { version = "0.14" }

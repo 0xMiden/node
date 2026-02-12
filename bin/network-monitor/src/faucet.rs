@@ -34,6 +34,7 @@ const MINT_AMOUNT: u64 = 1_000_000; // 1 token with 6 decimals
 /// Details of a faucet test.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaucetTestDetails {
+    pub url: String,
     pub test_duration_ms: u64,
     pub success_count: u64,
     pub failure_count: u64,
@@ -129,6 +130,7 @@ pub async fn run_faucet_test_task(
         let test_duration_ms = start_time.elapsed().as_millis() as u64;
 
         let test_details = FaucetTestDetails {
+            url: faucet_url.to_string(),
             test_duration_ms,
             success_count,
             failure_count,
