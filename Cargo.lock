@@ -2731,6 +2731,7 @@ dependencies = [
  "sha2",
  "tokio",
  "tonic",
+ "tonic-health",
  "tracing",
  "url",
 ]
