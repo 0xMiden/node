@@ -13,3 +13,4 @@ WorkingDirectory=/opt/miden-network-monitor
 User=miden-network-monitor
 RestartSec=5
 Restart=always
+LimitCORE=infinity

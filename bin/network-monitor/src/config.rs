@@ -166,6 +166,14 @@ pub struct MonitorConfig {
     )]
     pub explorer_url: Option<Url>,
 
+    /// The URL of the note transport service.
+    #[arg(
+        long = "note-transport-url",
+        env = "MIDEN_MONITOR_NOTE_TRANSPORT_URL",
+        help = "The URL of the note transport service"
+    )]
+    pub note_transport_url: Option<Url>,
+
     /// Maximum time without a chain tip update before marking RPC as unhealthy.
     ///
     /// If the chain tip does not increment within this duration, the RPC service will be
