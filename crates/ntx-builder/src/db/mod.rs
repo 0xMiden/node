@@ -36,26 +36,51 @@ pub struct Db {
 }
 
 impl Db {
-    /// Creates a new database file, configures it, and applies migrations.
-    ///
-    /// This is a synchronous one-shot setup used during node initialization.
-    /// For runtime access with a connection pool, use [`Db::load`].
+    /// Creates and initializes the database, then opens an async connection pool.
     #[instrument(
         target = COMPONENT,
-        name = "ntx_builder.database.bootstrap",
+        name = "ntx_builder.database.setup",
         skip_all,
         fields(path=%database_filepath.display()),
         err,
     )]
-    pub fn bootstrap(database_filepath: PathBuf) -> anyhow::Result<()> {
+    pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
+        // Run sync bootstrap (create file, configure, migrate) on a blocking thread.
+        let path = database_filepath.clone();
+        tokio::task::spawn_blocking(move || Self::bootstrap_sync(&path))
+            .await
+            .context("bootstrap task panicked")?
+            .context("failed to bootstrap ntx-builder database")?;
+
+        // Open async connection pool.
+        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
+        let pool = deadpool_diesel::Pool::builder(manager)
+            .max_size(16)
+            .build()
+            .map_err(DatabaseSetupError::PoolBuild)
+            .context("failed to build connection pool")?;
+
+        info!(
+            target: COMPONENT,
+            sqlite = %database_filepath.display(),
+            "Connected to the database"
+        );
+
+        let me = Db { pool };
+        me.query("migrations", apply_migrations)
+            .await
+            .context("failed to apply migrations on pool connection")?;
+        Ok(me)
+    }
+
+    /// Opens a connection to the database, then configures it, and applies migrations.
+    fn bootstrap_sync(database_filepath: &std::path::Path) -> anyhow::Result<()> {
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
         )
         .context("failed to open a database connection")?;
 
         configure_connection_on_creation(&mut conn)?;
-
-        // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
         Ok(())
@@ -109,28 +134,6 @@ impl Db {
         .in_current_span()
         .await
         .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
-    }
-
-    /// Opens a connection pool to an existing database and re-applies pending migrations.
-    ///
-    /// Use [`Db::bootstrap`] first to create and initialize the database file.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseSetupError> {
-        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager)
-            .max_size(16)
-            .build()
-            .map_err(DatabaseSetupError::PoolBuild)?;
-
-        info!(
-            target: COMPONENT,
-            sqlite = %database_filepath.display(),
-            "Connected to the database"
-        );
-
-        let me = Db { pool };
-        me.query("migrations", apply_migrations).await?;
-        Ok(me)
     }
 
     // PUBLIC QUERY METHODS

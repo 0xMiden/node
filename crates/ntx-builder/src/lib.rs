@@ -205,12 +205,8 @@ impl NtxBuilderConfig {
     /// - The mempool subscription fails (after retries)
     /// - The store contains no blocks (not bootstrapped)
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
-        // Bootstrap and load the database.
-        Db::bootstrap(self.database_filepath.clone())
-            .context("failed to bootstrap ntx-builder database")?;
-        let db = Db::load(self.database_filepath.clone())
-            .await
-            .context("failed to load ntx-builder database")?;
+        // Set up the database (bootstrap + connection pool).
+        let db = Db::setup(self.database_filepath.clone()).await?;
 
         // Purge inflight state from previous run.
         db.purge_inflight().await.context("failed to purge inflight state")?;
