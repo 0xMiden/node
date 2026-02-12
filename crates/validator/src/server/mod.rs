@@ -19,7 +19,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
-use tracing::info_span;
+use tracing::{info_span, instrument};
 
 use crate::COMPONENT;
 use crate::block_validation::validate_block;
@@ -123,6 +123,7 @@ impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer
     }
 
     /// Receives a proven transaction, then validates and stores it.
+    #[instrument(target = COMPONENT, skip_all, err)]
     async fn submit_proven_transaction(
         &self,
         request: tonic::Request<proto::transaction::ProvenTransaction>,

@@ -31,6 +31,7 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
 
     let db = miden_node_store::Db::new(pool);
     db.query("migrations", apply_migrations).await?;
+    db.query("configure_connection", configure_connection).await?;
     Ok(db)
 }
 
@@ -42,6 +43,7 @@ pub(crate) fn insert_transaction(
     let row = ValidatedTransactionRowInsert::new(tx_info);
     let count = diesel::insert_into(schema::validated_transactions::table)
         .values(row)
+        .on_conflict_do_nothing()
         .execute(conn)?;
     Ok(count)
 }
@@ -93,4 +95,16 @@ pub(crate) fn find_unvalidated_transactions(
         }
     }
     Ok(unvalidated_tx_ids)
+}
+
+pub(crate) fn configure_connection(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
+    // Enable the WAL mode. This allows concurrent reads while a write is in progress.
+    diesel::sql_query("PRAGMA journal_mode=WAL").execute(conn)?;
+
+    // Wait up to 5 seconds for writer locks before erroring.
+    diesel::sql_query("PRAGMA busy_timeout=5000").execute(conn)?;
+
+    // Enable foreign key checks.
+    diesel::sql_query("PRAGMA foreign_keys=ON").execute(conn)?;
+    Ok(())
 }

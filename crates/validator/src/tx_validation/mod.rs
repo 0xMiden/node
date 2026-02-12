@@ -6,8 +6,10 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError, TransactionVerifier};
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, info_span, instrument};
 pub use validated_tx::ValidatedTransaction;
+
+use crate::COMPONENT;
 
 // TRANSACTION VALIDATION ERROR
 // ================================================================================================
@@ -32,6 +34,7 @@ pub enum TransactionValidationError {
 /// provided proven transaction.
 ///
 /// Returns the header of the executed transaction if successful.
+#[instrument(target = COMPONENT, skip_all, err)]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
