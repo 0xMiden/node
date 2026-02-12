@@ -14,11 +14,8 @@ use crate::db::schema;
 #[diesel(table_name = schema::chain_state)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ChainStateInsert {
-    /// Singleton row ID. Always `Some(0)` to satisfy the `CHECK (id = 0)` constraint.
-    ///
-    /// Mapped as `Option<i32>` because SQLite's `INTEGER PRIMARY KEY` maps to `Nullable<Integer>`
-    /// in diesel's generated schema.
-    pub id: Option<i32>,
+    /// Singleton row ID. Always `0` to satisfy the `CHECK (id = 0)` constraint.
+    pub id: i32,
     pub block_num: i32,
     pub block_header: Vec<u8>,
 }
@@ -40,7 +37,7 @@ pub fn upsert_chain_state(
     block_header: &BlockHeader,
 ) -> Result<(), DatabaseError> {
     let row = ChainStateInsert {
-        id: Some(0),
+        id: 0,
         block_num: conversions::block_num_to_i32(block_num),
         block_header: conversions::block_header_to_bytes(block_header),
     };
