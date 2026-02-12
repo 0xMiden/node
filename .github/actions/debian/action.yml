@@ -127,7 +127,7 @@ runs:
       env:
         repo-url: ${{ github.server_url }}/${{ github.repository }}
       run: |
-        cargo install ${{ inputs.crate }} --root . --locked --git ${{ env.repo-url }} --rev ${{ steps.git-sha.outputs.sha }} --profile release-with-debug
+        cargo install ${{ inputs.crate }} --root . --locked --git ${{ env.repo-url }} --rev ${{ steps.git-sha.outputs.sha }}
 
     - name: Copy binary files
       shell: bash
