@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -100,12 +101,12 @@ impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
 /// Implements the gRPC API for the validator.
 struct ValidatorServer<S> {
     signer: S,
-    db: Db,
+    db: Arc<Db>,
 }
 
 impl<S> ValidatorServer<S> {
     fn new(signer: S, db: Db) -> Self {
-        Self { signer, db }
+        Self { signer, db: db.into() }
     }
 }
 
