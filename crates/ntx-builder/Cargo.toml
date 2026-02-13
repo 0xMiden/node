@@ -21,8 +21,8 @@ deadpool-sync              = { features = ["tracing"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
-libsqlite3-sys             = { workspace = true }
 indexmap                   = { workspace = true }
+libsqlite3-sys             = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-utils           = { workspace = true }
 miden-protocol             = { default-features = true, workspace = true }

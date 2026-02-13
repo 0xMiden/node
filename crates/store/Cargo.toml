@@ -22,10 +22,10 @@ deadpool-sync                      = { features = ["tracing"], workspace = true 
 diesel                             = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations                  = { features = ["sqlite"], workspace = true }
 fs-err                             = { workspace = true }
-libsqlite3-sys                     = { workspace = true }
 futures                            = { workspace = true }
 hex                                = { version = "0.4" }
 indexmap                           = { workspace = true }
+libsqlite3-sys                     = { workspace = true }
 miden-block-prover                 = { workspace = true }
 miden-crypto                       = { features = ["concurrent", "hashmaps"], workspace = true }
 miden-node-proto                   = { workspace = true }
