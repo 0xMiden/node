@@ -649,7 +649,11 @@ fn test_select_account_vault_at_block_historical_with_updates() {
         account.commitment(),
         AccountUpdateDetails::Delta(delta),
     );
-    upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
+
+    for block in [block_1, block_2, block_3] {
+        upsert_accounts(&mut conn, &[account_update.clone()], block)
+            .expect("upsert_accounts failed");
+    }
 
     upsert_accounts(
         &mut conn,
@@ -773,7 +777,11 @@ fn test_select_account_vault_at_block_with_deletion() {
         account.commitment(),
         AccountUpdateDetails::Delta(delta),
     );
-    upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
+
+    for block in [block_1, block_2, block_3] {
+        upsert_accounts(&mut conn, &[account_update.clone()], block)
+            .expect("upsert_accounts failed");
+    }
 
     upsert_accounts(
         &mut conn,
