@@ -7,15 +7,13 @@ use miden_remote_prover::api::ProofType;
 use tracing::info;
 
 pub(crate) mod commands;
-pub(crate) mod proxy;
-pub(crate) mod utils;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _otel_guard = setup_tracing(OpenTelemetry::Enabled)?;
     info!(target: COMPONENT, "Tracing initialized");
 
-    let cli = CliConfig::parse();
+    let cli = CliArgs::parse();
 
     let cli = commands::worker::StartWorker {
         localhost: false,
@@ -29,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 #[derive(clap::Parser)]
-struct CliConfig {
+struct CliArgs {
     /// The port the gRPC server will be hosted on.
     #[arg(long, default_value = "50051", env = "MIDEN_PROVER_PORT")]
     port: u16,
