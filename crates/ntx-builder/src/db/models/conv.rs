@@ -39,7 +39,7 @@ pub fn block_num_to_i64(block_num: BlockNumber) -> i64 {
     i64::from(block_num.as_u32())
 }
 
-#[allow(clippy::cast_sign_loss)]
+#[expect(clippy::cast_sign_loss)]
 pub fn block_num_from_i64(val: i64) -> BlockNumber {
     BlockNumber::from(val as u32)
 }

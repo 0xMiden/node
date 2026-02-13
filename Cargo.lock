@@ -2282,6 +2282,7 @@ version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "133c182a6a2c87864fe97778797e46c7e999672690dc9fa3ee8e241aa4a9c13f"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2813,6 +2814,7 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "futures",
+ "libsqlite3-sys",
  "miden-node-proto",
  "miden-node-test-macro",
  "miden-node-utils",
@@ -2920,6 +2922,7 @@ dependencies = [
  "futures",
  "hex",
  "indexmap 2.13.0",
+ "libsqlite3-sys",
  "miden-block-prover",
  "miden-crypto",
  "miden-node-proto",

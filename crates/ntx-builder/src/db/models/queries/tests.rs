@@ -382,7 +382,6 @@ fn transactions_reverted_reports_reverted_account_creations() {
 // ================================================================================================
 
 #[test]
-#[allow(clippy::similar_names)]
 fn available_notes_filters_consumed_and_exceeded_attempts() {
     let (conn, _dir) = &mut test_conn();
 

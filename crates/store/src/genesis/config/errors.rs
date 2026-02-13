@@ -12,7 +12,6 @@ use miden_standards::account::wallets::BasicWalletError;
 
 use crate::genesis::config::TokenSymbolStr;
 
-#[allow(missing_docs, reason = "Error variants must be descriptive by themselves")]
 #[derive(Debug, thiserror::Error)]
 pub enum GenesisConfigError {
     #[error(transparent)]

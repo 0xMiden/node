@@ -145,7 +145,7 @@ async fn generate_blocks(
     let mut consume_notes_txs = vec![];
 
     let consumes_per_block = TRANSACTIONS_PER_BATCH * BATCHES_PER_BLOCK - 1;
-    #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[expect(clippy::cast_sign_loss, clippy::cast_precision_loss)]
     let num_public_accounts = (consumes_per_block as f64
         * (f64::from(public_accounts_percentage) / 100.0))
         .round() as usize;

@@ -25,6 +25,7 @@ fs-err                             = { workspace = true }
 futures                            = { workspace = true }
 hex                                = { version = "0.4" }
 indexmap                           = { workspace = true }
+libsqlite3-sys                     = { workspace = true }
 miden-block-prover                 = { workspace = true }
 miden-crypto                       = { features = ["concurrent", "hashmaps"], workspace = true }
 miden-node-proto                   = { workspace = true }
@@ -74,7 +75,7 @@ name              = "account_tree"
 required-features = ["rocksdb"]
 
 [package.metadata.cargo-machete]
-# This is an indirect dependency for which we need to enable optimisations
+# This is an indirect dependency for which we need to enable optimisations/features
 # via feature flags. Because we don't use it directly in code, machete
 # identifies it as unused.
-ignored = ["miden-crypto", "miden-node-rocksdb-cxx-linkage-fix"]
+ignored = ["libsqlite3-sys", "miden-crypto", "miden-node-rocksdb-cxx-linkage-fix"]

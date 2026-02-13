@@ -87,7 +87,7 @@ pub fn insert_committed_notes(
 ///     AND consumed_by IS NULL
 ///     AND attempt_count < ?2
 /// ```
-#[allow(clippy::cast_possible_wrap)]
+#[expect(clippy::cast_possible_wrap)]
 pub fn available_notes(
     conn: &mut SqliteConnection,
     account_id: NetworkAccountId,
@@ -106,7 +106,7 @@ pub fn available_notes(
 
     let mut result = Vec::new();
     for row in rows {
-        #[allow(clippy::cast_sign_loss)]
+        #[expect(clippy::cast_sign_loss)]
         let attempt_count = row.attempt_count as usize;
         let note = note_row_to_inflight(
             &row.note_data,
@@ -160,7 +160,7 @@ pub fn notes_failed(
 /// DELETE FROM notes
 /// WHERE account_id = ?1 AND attempt_count >= ?2
 /// ```
-#[allow(clippy::cast_possible_wrap)]
+#[expect(clippy::cast_possible_wrap)]
 pub fn drop_failing_notes(
     conn: &mut SqliteConnection,
     account_id: NetworkAccountId,

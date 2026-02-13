@@ -21,6 +21,7 @@ deadpool-sync              = { features = ["tracing"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
+libsqlite3-sys             = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-utils           = { workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
@@ -43,3 +44,6 @@ miden-standards       = { features = ["testing"], workspace = true }
 rand_chacha           = { workspace = true }
 rstest                = { workspace = true }
 tempfile              = { version = "3.20" }
+
+[package.metadata.cargo-machete]
+ignored = ["libsqlite3-sys"]

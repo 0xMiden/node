@@ -403,7 +403,7 @@ impl AccountActor {
 /// - After 10 attempts, the backoff period is 12 blocks.
 /// - After 20 attempts, the backoff period is 148 blocks.
 /// - etc...
-#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn has_backoff_passed(
     chain_tip: BlockNumber,
     last_attempt: Option<BlockNumber>,
