@@ -86,6 +86,7 @@ indexmap          = { version = "2.12" }
 itertools         = { version = "0.14" }
 lru               = { default-features = false, version = "0.16" }
 pretty_assertions = { version = "1.4" }
+libsqlite3-sys    = { features = ["bundled"], version = "0.35" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.

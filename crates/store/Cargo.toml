@@ -22,6 +22,7 @@ deadpool-sync                      = { features = ["tracing"], workspace = true 
 diesel                             = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations                  = { features = ["sqlite"], workspace = true }
 fs-err                             = { workspace = true }
+libsqlite3-sys                     = { workspace = true }
 futures                            = { workspace = true }
 hex                                = { version = "0.4" }
 indexmap                           = { workspace = true }
@@ -74,7 +75,7 @@ name              = "account_tree"
 required-features = ["rocksdb"]
 
 [package.metadata.cargo-machete]
-# This is an indirect dependency for which we need to enable optimisations
+# This is an indirect dependency for which we need to enable optimisations/features
 # via feature flags. Because we don't use it directly in code, machete
 # identifies it as unused.
-ignored = ["miden-crypto", "miden-node-rocksdb-cxx-linkage-fix"]
+ignored = ["libsqlite3-sys", "miden-crypto", "miden-node-rocksdb-cxx-linkage-fix"]
