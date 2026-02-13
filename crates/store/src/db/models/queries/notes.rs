@@ -417,14 +417,7 @@ pub(crate) fn select_note_script_by_root(
 /// ORDER BY notes.rowid ASC
 /// LIMIT ?4
 /// ```
-#[expect(
-    clippy::cast_sign_loss,
-    reason = "We need custom SQL statements which has given types that we need to convert"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "Lines will be reduced when schema is updated to simplify logic"
-)]
+#[expect(clippy::cast_sign_loss, reason = "row_id is a positive integer")]
 pub(crate) fn select_unconsumed_network_notes_by_account_id(
     conn: &mut SqliteConnection,
     account_id: AccountId,
@@ -526,7 +519,6 @@ pub struct NoteSyncRecordRawRow {
     pub inclusion_path: Vec<u8>, // SparseMerklePath
 }
 
-#[expect(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
 impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<NoteSyncRecord, Self::Error> {
@@ -767,7 +759,6 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -798,7 +789,6 @@ pub(crate) fn insert_notes(
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

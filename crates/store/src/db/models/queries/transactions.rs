@@ -142,7 +142,6 @@ impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

@@ -1,5 +1,3 @@
-#![expect(clippy::similar_names, reason = "naming dummy test values is hard")]
-#![expect(clippy::too_many_lines, reason = "test code can be long")]
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

@@ -175,7 +175,6 @@ where
     .map_err(Into::into)
 }
 
-#[expect(clippy::result_large_err)]
 #[instrument(
     level = "debug",
     target = COMPONENT,
@@ -195,7 +194,6 @@ where
         .map_err(Into::into)
 }
 
-#[expect(clippy::result_large_err)]
 #[instrument(
     level = "debug",
     target = COMPONENT,

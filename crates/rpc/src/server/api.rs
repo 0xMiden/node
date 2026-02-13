@@ -500,7 +500,6 @@ fn out_of_range_error<E: core::fmt::Display>(err: E) -> Status {
 }
 
 /// Check, but don't repeat ourselves mapping the error
-#[expect(clippy::result_large_err)]
 fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }

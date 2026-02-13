@@ -218,7 +218,6 @@ pub(crate) fn select_nullifiers_paged(
 /// INSERT INTO nullifiers (nullifier, nullifier_prefix, block_num)
 /// VALUES (?1, ?2, ?3)
 /// ```
-#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

@@ -88,7 +88,6 @@ impl ProverRpcApi {
         Self { prover }
     }
 
-    #[expect(clippy::result_large_err)]
     #[instrument(
         target = COMPONENT,
         name = "remote_prover.prove_tx",
@@ -123,7 +122,6 @@ impl ProverRpcApi {
         Ok(Response::new(proto::remote_prover::Proof { payload: proof.to_bytes() }))
     }
 
-    #[expect(clippy::result_large_err)]
     #[instrument(
         target = COMPONENT,
         name = "remote_prover.prove_batch",
@@ -154,7 +152,6 @@ impl ProverRpcApi {
         Ok(Response::new(proto::remote_prover::Proof { payload: proven_batch.to_bytes() }))
     }
 
-    #[expect(clippy::result_large_err)]
     #[instrument(
         target = COMPONENT,
         name = "remote_prover.prove_block",

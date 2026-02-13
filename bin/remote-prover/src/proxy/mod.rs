@@ -242,14 +242,12 @@ pub struct RequestQueue {
 
 impl RequestQueue {
     /// Create a new empty request queue
-    #[expect(clippy::new_without_default)]
     pub fn new() -> Self {
         QUEUE_SIZE.set(0);
         Self { queue: RwLock::new(VecDeque::new()) }
     }
 
     /// Get the length of the queue
-    #[expect(clippy::len_without_is_empty)]
     pub async fn len(&self) -> usize {
         self.queue.read().await.len()
     }
