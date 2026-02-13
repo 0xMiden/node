@@ -1,2 +1,18 @@
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[target.aarch64-unknown-linux-gnu]
+linker = "/usr/bin/aarch64-linux-gnu-gcc"
+runner = "qemu-aarch64 -L /usr/aarch64-redhat-linux/sys-root/fc42"
+rustflags = ["-C", "link-arg=--sysroot=/usr/aarch64-redhat-linux/sys-root/fc42"]
+
+
+
+[env]
+CFLAGS_aarch64_unknown_linux_gnu = "--sysroot=/usr/aarch64-redhat-linux/sys-root/fc42 -I/usr/aarch64-redhat-linux/sys-root/fc42/usr/include"
+CXXFLAGS_aarch64_unknown_linux_gnu = "--sysroot=/usr/aarch64-redhat-linux/sys-root/fc42 -I/usr/aarch64-redhat-linux/sys-root/fc42/usr/include -I/usr/aarch64-redhat-linux/sys-root/fc42/usr/include/c++/15 -I/usr/aarch64-redhat-linux/sys-root/fc42/usr/include/c++ -I/usr/aarch64-redhat-linux/sys-root/fc42/usr/include/c++/15/aarch64-redhat-linux"
+LDFLAGS_aarch64_unknown_linux_gnu = "--sysroot=/usr/aarch64-redhat-linux/sys-root/fc42"
+CMAKE_EXE_LINKER_FLAGS_aarch64_unknown_linux_gnu = "--sysroot=/usr/aarch64-redhat-linux/sys-root/fc42"
+PKG_CONFIG_SYSROOT_DIR = "/usr/aarch64-redhat-linux/sys-root/fc42"
+PKG_CONFIG_PATH = "/usr/aarch64-redhat-linux/sys-root/fc42/usr/lib64/pkgconfig:/usr/aarch64-redhat-linux/sys-root/fc42/usr/share/pkgconfig"
+PKG_CONFIG_ALLOW_CROSS = "1"
