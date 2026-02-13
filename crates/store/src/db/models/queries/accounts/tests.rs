@@ -651,6 +651,28 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     );
     upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
 
+    upsert_accounts(
+        &mut conn,
+        &[BlockAccountUpdate::new(
+            account_id,
+            account.commitment(),
+            AccountUpdateDetails::Private,
+        )],
+        block_2,
+    )
+    .expect("upsert_accounts block 2 failed");
+
+    upsert_accounts(
+        &mut conn,
+        &[BlockAccountUpdate::new(
+            account_id,
+            account.commitment(),
+            AccountUpdateDetails::Private,
+        )],
+        block_3,
+    )
+    .expect("upsert_accounts block 3 failed");
+
     // Insert vault asset at block 1: vault_key_1 = 1000 tokens
     let vault_key_1 = AssetVaultKey::new_unchecked(Word::from([
         Felt::new(1),
@@ -752,6 +774,28 @@ fn test_select_account_vault_at_block_with_deletion() {
         AccountUpdateDetails::Delta(delta),
     );
     upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
+
+    upsert_accounts(
+        &mut conn,
+        &[BlockAccountUpdate::new(
+            account_id,
+            account.commitment(),
+            AccountUpdateDetails::Private,
+        )],
+        block_2,
+    )
+    .expect("upsert_accounts block 2 failed");
+
+    upsert_accounts(
+        &mut conn,
+        &[BlockAccountUpdate::new(
+            account_id,
+            account.commitment(),
+            AccountUpdateDetails::Private,
+        )],
+        block_3,
+    )
+    .expect("upsert_accounts block 3 failed");
 
     // Insert vault asset at block 1
     let vault_key = AssetVaultKey::new_unchecked(Word::from([

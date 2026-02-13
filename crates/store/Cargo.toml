@@ -15,20 +15,24 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-anyhow                 = { workspace = true }
+anyhow                             = { workspace = true }
 deadpool               = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
 deadpool-diesel        = { features = ["sqlite"], version = "0.6" }
 deadpool-sync          = { default-features = false, features = ["tracing"], version = "0.1" }
 diesel                 = { features = ["numeric", "sqlite"], version = "2.3" }
 diesel_migrations      = { features = ["sqlite"], version = "2.3" }
-fs-err                 = { workspace = true }
-hex                    = { version = "0.4" }
-indexmap               = { workspace = true }
-miden-crypto           = { features = ["concurrent", "hashmaps"], workspace = true }
-miden-node-proto       = { workspace = true }
-miden-node-proto-build = { features = ["internal"], workspace = true }
-miden-node-utils       = { workspace = true }
-miden-standards        = { workspace = true }
+fs-err                             = { workspace = true }
+libsqlite3-sys                     = { workspace = true }
+futures                            = { workspace = true }
+hex                                = { version = "0.4" }
+indexmap                           = { workspace = true }
+miden-block-prover                 = { workspace = true }
+miden-crypto                       = { features = ["concurrent", "hashmaps"], workspace = true }
+miden-node-proto                   = { workspace = true }
+miden-node-proto-build             = { features = ["internal"], workspace = true }
+miden-node-utils                   = { workspace = true }
+miden-remote-prover-client         = { features = ["block-prover"], workspace = true }
+miden-standards                    = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -66,7 +70,7 @@ name              = "account_tree"
 required-features = ["rocksdb"]
 
 [package.metadata.cargo-machete]
-# This is an indirect dependency for which we need to enable optimisations
+# This is an indirect dependency for which we need to enable optimisations/features
 # via feature flags. Because we don't use it directly in code, machete
 # identifies it as unused.
-ignored = ["miden-crypto"]
+ignored = ["libsqlite3-sys", "miden-crypto"]
