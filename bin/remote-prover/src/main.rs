@@ -2,28 +2,22 @@ use std::num::NonZeroUsize;
 
 use clap::Parser;
 use miden_node_utils::logging::{OpenTelemetry, setup_tracing};
-use miden_remote_prover::COMPONENT;
-use miden_remote_prover::api::ProofType;
 use tracing::info;
 
-pub(crate) mod commands;
+use crate::server::prover::ProofKind;
+
+mod error;
+mod generated;
+mod server;
+
+const COMPONENT: &str = "miden-prover";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _otel_guard = setup_tracing(OpenTelemetry::Enabled)?;
     info!(target: COMPONENT, "Tracing initialized");
 
-    let cli = CliArgs::parse();
-
-    let cli = commands::worker::StartWorker {
-        localhost: false,
-        port: cli.port,
-        proof_type: cli.kind,
-        timeout: cli.timeout,
-    };
-
-    // execute cli action
-    cli.execute().await
+    CliArgs::parse().serve().await
 }
 
 #[derive(clap::Parser)]
@@ -33,7 +27,7 @@ struct CliArgs {
     port: u16,
     /// The proof type that the prover will be handling.
     #[arg(long, env = "MIDEN_PROVER_KIND")]
-    kind: ProofType,
+    kind: ProofKind,
     /// Maximum time allowed for a proof request to complete. Once exceeded, the request is
     /// aborted.
     #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT", value_parser = humantime::parse_duration)]
