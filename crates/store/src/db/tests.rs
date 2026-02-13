@@ -2102,12 +2102,8 @@ fn db_roundtrip_storage_map_values() {
     let key = num_to_word(12345);
     let value = num_to_word(67890);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block_num,
-    )
-    .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
+        .unwrap();
 
     // Insert
     queries::insert_account_storage_map_value(
