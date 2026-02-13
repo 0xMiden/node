@@ -3,19 +3,11 @@ use std::ops::RangeInclusive;
 
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{
-    ExpressionMethods,
-    QueryDsl,
-    Queryable,
-    QueryableByName,
-    RunQueryDsl,
-    Selectable,
-    SelectableHelper,
-    SqliteConnection,
+    ExpressionMethods, QueryDsl, Queryable, QueryableByName, RunQueryDsl, Selectable,
+    SelectableHelper, SqliteConnection,
 };
 use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES,
-    QueryParamLimiter,
-    QueryParamNullifierLimit,
+    MAX_RESPONSE_PAYLOAD_BYTES, QueryParamLimiter, QueryParamNullifierLimit,
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::block::BlockNumber;
@@ -173,7 +165,7 @@ pub(crate) fn select_nullifiers_paged(
     after_nullifier: Option<Nullifier>,
 ) -> Result<NullifiersPage, DatabaseError> {
     // Fetch one extra to determine if there are more results
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query =
@@ -226,7 +218,7 @@ pub(crate) fn select_nullifiers_paged(
 /// INSERT INTO nullifiers (nullifier, nullifier_prefix, block_num)
 /// VALUES (?1, ?2, ?3)
 /// ```
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

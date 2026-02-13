@@ -10,22 +10,15 @@ use miden_protocol::utils::Deserializable;
 use url::Url;
 
 use super::{
-    ENV_DATA_DIRECTORY,
-    ENV_STORE_BLOCK_PRODUCER_URL,
-    ENV_STORE_NTX_BUILDER_URL,
-    ENV_STORE_RPC_URL,
+    ENV_DATA_DIRECTORY, ENV_STORE_BLOCK_PRODUCER_URL, ENV_STORE_NTX_BUILDER_URL, ENV_STORE_RPC_URL,
 };
 use crate::commands::{
-    DEFAULT_TIMEOUT,
-    ENV_BLOCK_PROVER_URL,
-    ENV_ENABLE_OTEL,
-    ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_INSECURE_SECRET_KEY,
-    INSECURE_VALIDATOR_KEY_HEX,
+    DEFAULT_TIMEOUT, ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL, ENV_GENESIS_CONFIG_FILE,
+    ENV_VALIDATOR_INSECURE_SECRET_KEY, INSECURE_VALIDATOR_KEY_HEX,
     duration_to_human_readable_string,
 };
 
-#[allow(clippy::large_enum_variant, reason = "single use enum")]
+#[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
     /// Bootstraps the blockchain database with the genesis block.

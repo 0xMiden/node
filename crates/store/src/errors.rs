@@ -14,15 +14,8 @@ use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::mmr::MmrError;
 use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{
-    AccountDeltaError,
-    AccountError,
-    AccountTreeError,
-    AssetError,
-    AssetVaultError,
-    FeeError,
-    NoteError,
-    NullifierTreeError,
-    StorageMapError,
+    AccountDeltaError, AccountError, AccountTreeError, AssetError, AssetVaultError, FeeError,
+    NoteError, NullifierTreeError, StorageMapError,
 };
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::OutputNote;
@@ -685,21 +678,13 @@ mod compile_tests {
     use std::marker::PhantomData;
 
     use super::{
-        AccountDeltaError,
-        AccountError,
-        DatabaseError,
-        DatabaseSetupError,
-        DeserializationError,
-        GenesisError,
-        NetworkAccountError,
-        NoteError,
-        RecvError,
-        StateInitializationError,
+        AccountDeltaError, AccountError, DatabaseError, DatabaseSetupError, DeserializationError,
+        GenesisError, NetworkAccountError, NoteError, RecvError, StateInitializationError,
     };
 
     /// Ensure all enum variants remain compat with the desired
     /// trait bounds. Otherwise one gets very unwieldy errors.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn assumed_trait_bounds_upheld() {
         fn ensure_is_error<E>(_phony: PhantomData<E>)
         where

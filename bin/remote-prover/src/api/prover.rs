@@ -88,7 +88,7 @@ impl ProverRpcApi {
         Self { prover }
     }
 
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err)]
     #[instrument(
         target = COMPONENT,
         name = "remote_prover.prove_tx",
@@ -123,7 +123,7 @@ impl ProverRpcApi {
         Ok(Response::new(proto::remote_prover::Proof { payload: proof.to_bytes() }))
     }
 
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err)]
     #[instrument(
         target = COMPONENT,
         name = "remote_prover.prove_batch",
@@ -154,7 +154,7 @@ impl ProverRpcApi {
         Ok(Response::new(proto::remote_prover::Proof { payload: proven_batch.to_bytes() }))
     }
 
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err)]
     #[instrument(
         target = COMPONENT,
         name = "remote_prover.prove_block",
@@ -255,8 +255,7 @@ mod test {
     use miden_protocol::asset::{Asset, FungibleAsset};
     use miden_protocol::note::NoteType;
     use miden_protocol::testing::account_id::{
-        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
-        ACCOUNT_ID_SENDER,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER,
     };
     use miden_protocol::transaction::ProvenTransaction;
     use miden_testing::{Auth, MockChainBuilder};

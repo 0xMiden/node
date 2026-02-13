@@ -159,7 +159,7 @@ impl Worker {
     /// Returns `Ok(())` if the worker is healthy and compatible, or `Err(reason)` if there's an
     /// issue. The caller should use `update_status` to apply the result to the worker's health
     /// status.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     #[tracing::instrument(target = COMPONENT, name = "worker.check_status")]
     pub async fn check_status(&mut self, supported_proof_type: ProofType) -> Result<(), String> {
         if !self.should_do_health_check() {

@@ -1,15 +1,8 @@
 use diesel::prelude::Insertable;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{
-    ExpressionMethods,
-    OptionalExtension,
-    QueryDsl,
-    Queryable,
-    QueryableByName,
-    RunQueryDsl,
-    Selectable,
-    SelectableHelper,
-    SqliteConnection,
+    ExpressionMethods, OptionalExtension, QueryDsl, Queryable, QueryableByName, RunQueryDsl,
+    Selectable, SelectableHelper, SqliteConnection,
 };
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
@@ -129,7 +122,7 @@ pub fn select_all_block_headers(
 #[diesel(table_name = schema::block_headers)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct BlockHeaderRawRow {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub block_num: i64,
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,

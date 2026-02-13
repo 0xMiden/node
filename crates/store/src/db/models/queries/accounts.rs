@@ -6,37 +6,18 @@ use diesel::prelude::{Queryable, QueryableByName};
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sqlite::Sqlite;
 use diesel::{
-    AsChangeset,
-    BoolExpressionMethods,
-    ExpressionMethods,
-    Insertable,
-    OptionalExtension,
-    QueryDsl,
-    RunQueryDsl,
-    Selectable,
-    SelectableHelper,
-    SqliteConnection,
+    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl,
+    RunQueryDsl, Selectable, SelectableHelper, SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES,
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
+    MAX_RESPONSE_PAYLOAD_BYTES, QueryParamAccountIdLimit, QueryParamLimiter,
 };
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
-    Account,
-    AccountCode,
-    AccountDelta,
-    AccountId,
-    AccountStorage,
-    AccountStorageHeader,
-    NonFungibleDeltaAction,
-    StorageMap,
-    StorageSlot,
-    StorageSlotContent,
-    StorageSlotName,
+    Account, AccountCode, AccountDelta, AccountId, AccountStorage, AccountStorageHeader,
+    NonFungibleDeltaAction, StorageMap, StorageSlot, StorageSlotContent, StorageSlotName,
     StorageSlotType,
 };
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
@@ -51,8 +32,7 @@ use crate::errors::DatabaseError;
 
 mod at_block;
 pub(crate) use at_block::{
-    select_account_header_with_storage_header_at_block,
-    select_account_vault_at_block,
+    select_account_header_with_storage_header_at_block, select_account_vault_at_block,
 };
 
 #[cfg(test)]
@@ -292,7 +272,7 @@ pub(crate) fn select_account_commitments_paged(
     use miden_protocol::utils::Serializable;
 
     // Fetch one extra to determine if there are more results
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query = SelectDsl::select(
@@ -367,7 +347,7 @@ pub(crate) fn select_public_account_ids_paged(
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
     use miden_protocol::utils::Serializable;
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query = SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
@@ -985,7 +965,7 @@ pub(crate) fn insert_account_storage_map_value(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

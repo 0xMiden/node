@@ -12,24 +12,13 @@ use miden_node_store::{DataDirectory, GenesisState, Store};
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
-    Account,
-    AccountBuilder,
-    AccountDelta,
-    AccountId,
-    AccountStorage,
-    AccountStorageMode,
+    Account, AccountBuilder, AccountDelta, AccountId, AccountStorage, AccountStorageMode,
     AccountType,
 };
 use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
-    BlockHeader,
-    BlockInputs,
-    BlockNumber,
-    FeeParameters,
-    ProposedBlock,
-    ProvenBlock,
-    SignedBlock,
+    BlockHeader, BlockInputs, BlockNumber, FeeParameters, ProposedBlock, ProvenBlock, SignedBlock,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_rpo::{PublicKey, SecretKey};
@@ -37,13 +26,8 @@ use miden_protocol::crypto::rand::RpoRandomCoin;
 use miden_protocol::errors::AssetError;
 use miden_protocol::note::{Note, NoteHeader, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
-    InputNote,
-    InputNotes,
-    OrderedTransactionHeaders,
-    OutputNote,
-    ProvenTransaction,
-    ProvenTransactionBuilder,
-    TransactionHeader,
+    InputNote, InputNotes, OrderedTransactionHeaders, OutputNote, ProvenTransaction,
+    ProvenTransactionBuilder, TransactionHeader,
 };
 use miden_protocol::utils::Serializable;
 use miden_protocol::{Felt, ONE, Word};
@@ -145,7 +129,7 @@ async fn generate_blocks(
     let mut consume_notes_txs = vec![];
 
     let consumes_per_block = TRANSACTIONS_PER_BATCH * BATCHES_PER_BLOCK - 1;
-    #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[expect(clippy::cast_sign_loss, clippy::cast_precision_loss)]
     let num_public_accounts = (consumes_per_block as f64
         * (f64::from(public_accounts_percentage) / 100.0))
         .round() as usize;

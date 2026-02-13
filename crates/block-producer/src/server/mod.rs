@@ -29,11 +29,7 @@ use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{
-    AddTransactionError,
-    BlockProducerError,
-    StoreError,
-    SubmitProvenBatchError,
-    VerifyTxError,
+    AddTransactionError, BlockProducerError, StoreError, SubmitProvenBatchError, VerifyTxError,
 };
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;
@@ -83,7 +79,7 @@ impl BlockProducer {
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub async fn serve(self) -> anyhow::Result<()> {
         info!(target: COMPONENT, endpoint=?self.block_producer_address, store=%self.store_url, "Initializing server");
         let store = StoreClient::new(self.store_url.clone());

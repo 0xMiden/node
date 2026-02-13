@@ -18,16 +18,8 @@ use miden_protocol::assembly::Library;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey;
 use miden_protocol::note::{
-    Note,
-    NoteAssets,
-    NoteAttachment,
-    NoteExecutionHint,
-    NoteMetadata,
-    NoteRecipient,
-    NoteScript,
-    NoteStorage,
-    NoteTag,
-    NoteType,
+    Note, NoteAssets, NoteAttachment, NoteExecutionHint, NoteMetadata, NoteRecipient, NoteScript,
+    NoteStorage, NoteTag, NoteType,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
 use miden_protocol::utils::Deserializable;
@@ -48,11 +40,7 @@ use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
 use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client, get_counter_library};
 use crate::status::{
-    CounterTrackingDetails,
-    IncrementDetails,
-    PendingLatencyDetails,
-    ServiceDetails,
-    ServiceStatus,
+    CounterTrackingDetails, IncrementDetails, PendingLatencyDetails, ServiceDetails, ServiceStatus,
     Status,
 };
 
@@ -751,7 +739,7 @@ fn load_counter_account(file_path: &Path) -> Result<Account> {
 }
 
 /// Create and submit a network note that targets the counter account.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[instrument(
     parent = None,
     target = COMPONENT,

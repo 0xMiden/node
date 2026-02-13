@@ -17,15 +17,9 @@ use url::Url;
 
 use super::{ENV_DATA_DIRECTORY, ENV_RPC_URL};
 use crate::commands::{
-    BlockProducerConfig,
-    DEFAULT_TIMEOUT,
-    ENV_BLOCK_PROVER_URL,
-    ENV_ENABLE_OTEL,
-    ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_INSECURE_SECRET_KEY,
-    INSECURE_VALIDATOR_KEY_HEX,
-    NtxBuilderConfig,
-    duration_to_human_readable_string,
+    BlockProducerConfig, DEFAULT_TIMEOUT, ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL,
+    ENV_GENESIS_CONFIG_FILE, ENV_VALIDATOR_INSECURE_SECRET_KEY, INSECURE_VALIDATOR_KEY_HEX,
+    NtxBuilderConfig, duration_to_human_readable_string,
 };
 
 #[derive(clap::Subcommand)]
@@ -157,7 +151,7 @@ impl BundledCommand {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     async fn start(
         rpc_url: Url,
         block_prover_url: Option<Url>,

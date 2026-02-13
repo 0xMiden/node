@@ -5,16 +5,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use bytes::Bytes;
 use metrics::{
-    QUEUE_LATENCY,
-    QUEUE_SIZE,
-    RATE_LIMIT_VIOLATIONS,
-    RATE_LIMITED_REQUESTS,
-    REQUEST_COUNT,
-    REQUEST_FAILURE_COUNT,
-    REQUEST_LATENCY,
-    REQUEST_RETRIES,
-    WORKER_BUSY,
-    WORKER_COUNT,
+    QUEUE_LATENCY, QUEUE_SIZE, RATE_LIMIT_VIOLATIONS, RATE_LIMITED_REQUESTS, REQUEST_COUNT,
+    REQUEST_FAILURE_COUNT, REQUEST_LATENCY, REQUEST_RETRIES, WORKER_BUSY, WORKER_COUNT,
     WORKER_REQUEST_COUNT,
 };
 use miden_remote_prover::COMPONENT;
@@ -37,10 +29,8 @@ use worker::Worker;
 use crate::commands::ProxyConfig;
 use crate::commands::update_workers::{Action, UpdateWorkers};
 use crate::utils::{
-    create_queue_full_response,
-    create_response_with_error_message,
-    create_too_many_requests_response,
-    write_grpc_response_to_session,
+    create_queue_full_response, create_response_with_error_message,
+    create_too_many_requests_response, write_grpc_response_to_session,
 };
 
 mod health_check;
@@ -252,14 +242,14 @@ pub struct RequestQueue {
 
 impl RequestQueue {
     /// Create a new empty request queue
-    #[allow(clippy::new_without_default)]
+    #[expect(clippy::new_without_default)]
     pub fn new() -> Self {
         QUEUE_SIZE.set(0);
         Self { queue: RwLock::new(VecDeque::new()) }
     }
 
     /// Get the length of the queue
-    #[allow(clippy::len_without_is_empty)]
+    #[expect(clippy::len_without_is_empty)]
     pub async fn len(&self) -> usize {
         self.queue.read().await.len()
     }

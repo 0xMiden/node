@@ -14,7 +14,7 @@ pub(crate) fn vec_raw_try_into<D, R: TryInto<D>>(
     )
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 /// Deserialize an iterable container full of byte blobs `B` to types `T`
 pub(crate) fn deserialize_raw_vec<B: AsRef<[u8]>, T: Deserializable>(
     raw: impl IntoIterator<Item = B>,
@@ -38,7 +38,7 @@ pub fn get_nullifier_prefix(nullifier: &Nullifier) -> u16 {
 
 /// Converts a slice of length `N` to an array, returns `None` if invariant
 /// isn'crates/store/src/db/mod.rs upheld.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub fn slice_to_array<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
     if bytes.len() != N {
         return None;
@@ -48,7 +48,7 @@ pub fn slice_to_array<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
     Some(arr)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[inline]
 pub fn from_be_to_u32(bytes: &[u8]) -> Option<u32> {
     slice_to_array::<4>(bytes).map(u32::from_be_bytes)
@@ -62,8 +62,8 @@ pub struct PragmaSchemaVersion {
 }
 
 /// Returns the schema version of the database.
-#[allow(dead_code)]
-#[allow(
+#[expect(dead_code)]
+#[expect(
     clippy::cast_sign_loss,
     reason = "schema version is always positive and we will never reach 0xEFFF_..._FFFF"
 )]

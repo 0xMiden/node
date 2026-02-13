@@ -1,10 +1,6 @@
 use miden_protocol::account::AccountId;
 use miden_protocol::errors::{
-    AccountDeltaError,
-    AccountError,
-    AssetError,
-    FeeError,
-    TokenSymbolError,
+    AccountDeltaError, AccountError, AssetError, FeeError, TokenSymbolError,
 };
 use miden_protocol::utils::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
@@ -12,7 +8,7 @@ use miden_standards::account::wallets::BasicWalletError;
 
 use crate::genesis::config::TokenSymbolStr;
 
-#[allow(missing_docs, reason = "Error variants must be descriptive by themselves")]
+#[expect(missing_docs, reason = "Error variants must be descriptive by themselves")]
 #[derive(Debug, thiserror::Error)]
 pub enum GenesisConfigError {
     #[error(transparent)]

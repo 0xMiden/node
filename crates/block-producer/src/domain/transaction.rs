@@ -1,4 +1,4 @@
-#![allow(dead_code, reason = "WIP: mempoool refactor")]
+#![expect(dead_code, reason = "WIP: mempoool refactor")]
 
 use std::collections::HashSet;
 use std::sync::Arc;

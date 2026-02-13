@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::cast_possible_wrap,
     reason = "We will not approach the item count where i64 and usize cause issues"
 )]
@@ -7,28 +7,17 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
 use diesel::prelude::{
-    BoolExpressionMethods,
-    ExpressionMethods,
-    Insertable,
-    QueryDsl,
-    Queryable,
-    QueryableByName,
+    BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, QueryableByName,
     Selectable,
 };
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sqlite::Sqlite;
 use diesel::{
-    JoinOnDsl,
-    NullableExpressionMethods,
-    OptionalExtension,
-    RunQueryDsl,
-    SelectableHelper,
+    JoinOnDsl, NullableExpressionMethods, OptionalExtension, RunQueryDsl, SelectableHelper,
     SqliteConnection,
 };
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-    QueryParamNoteCommitmentLimit,
+    QueryParamAccountIdLimit, QueryParamLimiter, QueryParamNoteCommitmentLimit,
     QueryParamNoteTagLimit,
 };
 use miden_protocol::Word;
@@ -36,28 +25,15 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNoteIndex, BlockNumber};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
-    NoteAssets,
-    NoteAttachment,
-    NoteDetails,
-    NoteId,
-    NoteInclusionProof,
-    NoteMetadata,
-    NoteRecipient,
-    NoteScript,
-    NoteStorage,
-    NoteTag,
-    NoteType,
-    Nullifier,
+    NoteAssets, NoteAttachment, NoteDetails, NoteId, NoteInclusionProof, NoteMetadata,
+    NoteRecipient, NoteScript, NoteStorage, NoteTag, NoteType, Nullifier,
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
 use crate::COMPONENT;
 use crate::db::models::conv::{
-    SqlTypeConvert,
-    idx_to_raw_sql,
-    note_type_to_raw_sql,
-    raw_sql_to_idx,
+    SqlTypeConvert, idx_to_raw_sql, note_type_to_raw_sql, raw_sql_to_idx,
 };
 use crate::db::models::queries::select_block_header_by_block_num;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
@@ -441,11 +417,11 @@ pub(crate) fn select_note_script_by_root(
 /// ORDER BY notes.rowid ASC
 /// LIMIT ?4
 /// ```
-#[allow(
+#[expect(
     clippy::cast_sign_loss,
     reason = "We need custom SQL statements which has given types that we need to convert"
 )]
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "Lines will be reduced when schema is updated to simplify logic"
 )]
@@ -460,7 +436,7 @@ pub(crate) fn select_unconsumed_network_notes_by_account_id(
         diesel::dsl::sql::<diesel::sql_types::Bool>("notes.rowid >= ")
             .bind::<diesel::sql_types::BigInt, i64>(page.token.unwrap_or_default() as i64);
 
-    #[allow(
+    #[expect(
         clippy::items_after_statements,
         reason = "It's only relevant for a single call function"
     )]
@@ -470,7 +446,7 @@ pub(crate) fn select_unconsumed_network_notes_by_account_id(
         i64,             // rowid (from sql::<BigInt>("notes.rowid"))
     );
 
-    #[allow(
+    #[expect(
         clippy::items_after_statements,
         reason = "It's only relevant for a single call function"
     )]
@@ -550,7 +526,7 @@ pub struct NoteSyncRecordRawRow {
     pub inclusion_path: Vec<u8>, // SparseMerklePath
 }
 
-#[allow(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
+#[expect(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
 impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<NoteSyncRecord, Self::Error> {
@@ -746,7 +722,7 @@ pub struct NoteMetadataRawRow {
     attachment: Vec<u8>,
 }
 
-#[allow(clippy::cast_sign_loss)]
+#[expect(clippy::cast_sign_loss)]
 impl TryInto<NoteMetadata> for NoteMetadataRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<NoteMetadata, Self::Error> {
@@ -767,7 +743,7 @@ pub struct BlockNoteIndexRawRow {
     pub note_index: i32, // index within batch
 }
 
-#[allow(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
+#[expect(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
 impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<BlockNoteIndex, Self::Error> {
@@ -791,7 +767,7 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -822,7 +798,7 @@ pub(crate) fn insert_notes(
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

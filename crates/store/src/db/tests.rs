@@ -1,5 +1,5 @@
-#![allow(clippy::similar_names, reason = "naming dummy test values is hard")]
-#![allow(clippy::too_many_lines, reason = "test code can be long")]
+#![expect(clippy::similar_names, reason = "naming dummy test values is hard")]
+#![expect(clippy::too_many_lines, reason = "test code can be long")]
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -10,59 +10,30 @@ use miden_node_utils::fee::{test_fee, test_fee_params};
 use miden_protocol::account::auth::PublicKeyCommitment;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
-    Account,
-    AccountBuilder,
-    AccountCode,
-    AccountComponent,
-    AccountDelta,
-    AccountId,
-    AccountIdVersion,
-    AccountStorageDelta,
-    AccountStorageMode,
-    AccountType,
-    AccountVaultDelta,
-    StorageSlot,
-    StorageSlotContent,
-    StorageSlotDelta,
-    StorageSlotName,
+    Account, AccountBuilder, AccountCode, AccountComponent, AccountDelta, AccountId,
+    AccountIdVersion, AccountStorageDelta, AccountStorageMode, AccountType, AccountVaultDelta,
+    StorageSlot, StorageSlotContent, StorageSlotDelta, StorageSlotName,
 };
 use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{
-    BlockAccountUpdate,
-    BlockHeader,
-    BlockNoteIndex,
-    BlockNoteTree,
-    BlockNumber,
+    BlockAccountUpdate, BlockHeader, BlockNoteIndex, BlockNoteTree, BlockNumber,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::rand::RpoRandomCoin;
 use miden_protocol::note::{
-    Note,
-    NoteAttachment,
-    NoteDetails,
-    NoteExecutionHint,
-    NoteHeader,
-    NoteId,
-    NoteMetadata,
-    NoteTag,
-    NoteType,
-    Nullifier,
+    Note, NoteAttachment, NoteDetails, NoteExecutionHint, NoteHeader, NoteId, NoteMetadata,
+    NoteTag, NoteType, Nullifier,
 };
 use miden_protocol::testing::account_id::{
-    ACCOUNT_ID_PRIVATE_SENDER,
-    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    ACCOUNT_ID_PRIVATE_SENDER, ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
 use miden_protocol::testing::random_signer::RandomBlockSigner;
 use miden_protocol::transaction::{
-    InputNoteCommitment,
-    InputNotes,
-    OrderedTransactionHeaders,
-    TransactionHeader,
-    TransactionId,
+    InputNoteCommitment, InputNotes, OrderedTransactionHeaders, TransactionHeader, TransactionId,
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
