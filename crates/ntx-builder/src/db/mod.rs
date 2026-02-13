@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use diesel::{Connection, SqliteConnection};
+use diesel::SqliteConnection;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::account::Account;
@@ -14,7 +14,7 @@ use tracing::{Instrument, info, instrument};
 use crate::COMPONENT;
 use crate::actor::inflight_note::InflightNetworkNote;
 use crate::db::errors::{DatabaseError, DatabaseSetupError};
-use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
+use crate::db::manager::ConnectionManager;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
 
@@ -45,14 +45,6 @@ impl Db {
         err,
     )]
     pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
-        // Run sync bootstrap (create file, configure, migrate) on a blocking thread.
-        let path = database_filepath.clone();
-        tokio::task::spawn_blocking(move || Self::bootstrap_sync(&path))
-            .await
-            .context("bootstrap task panicked")?
-            .context("failed to bootstrap ntx-builder database")?;
-
-        // Open async connection pool.
         let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
         let pool = deadpool_diesel::Pool::builder(manager)
             .max_size(16)
@@ -71,19 +63,6 @@ impl Db {
             .await
             .context("failed to apply migrations on pool connection")?;
         Ok(me)
-    }
-
-    /// Opens a connection to the database, then configures it, and applies migrations.
-    fn bootstrap_sync(database_filepath: &std::path::Path) -> anyhow::Result<()> {
-        let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
-            database_filepath.to_str().context("database filepath is invalid")?,
-        )
-        .context("failed to open a database connection")?;
-
-        configure_connection_on_creation(&mut conn)?;
-        apply_migrations(&mut conn).context("failed to apply database migrations")?;
-
-        Ok(())
     }
 
     /// Create and commit a transaction with the queries added in the provided closure.
@@ -275,6 +254,8 @@ impl Db {
     /// This bypasses the async connection pool entirely, matching the store crate's test pattern.
     #[cfg(test)]
     pub fn test_conn() -> SqliteConnection {
+        use diesel::Connection;
+
         use crate::db::manager::configure_connection_on_creation;
 
         let mut conn =
