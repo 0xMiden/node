@@ -7,8 +7,17 @@ use indexmap::IndexMap;
 use miden_node_utils::crypto::get_rpo_random_coin;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
-    Account, AccountBuilder, AccountDelta, AccountFile, AccountId, AccountStorage,
-    AccountStorageDelta, AccountStorageMode, AccountType, AccountVaultDelta, FungibleAssetDelta,
+    Account,
+    AccountBuilder,
+    AccountDelta,
+    AccountFile,
+    AccountId,
+    AccountStorage,
+    AccountStorageDelta,
+    AccountStorageMode,
+    AccountType,
+    AccountVaultDelta,
+    FungibleAssetDelta,
     NonFungibleAssetDelta,
 };
 use miden_protocol::asset::{FungibleAsset, TokenSymbol};

@@ -29,7 +29,11 @@ use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{
-    AddTransactionError, BlockProducerError, StoreError, SubmitProvenBatchError, VerifyTxError,
+    AddTransactionError,
+    BlockProducerError,
+    StoreError,
+    SubmitProvenBatchError,
+    VerifyTxError,
 };
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;

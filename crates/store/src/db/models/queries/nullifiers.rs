@@ -3,11 +3,19 @@ use std::ops::RangeInclusive;
 
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{
-    ExpressionMethods, QueryDsl, Queryable, QueryableByName, RunQueryDsl, Selectable,
-    SelectableHelper, SqliteConnection,
+    ExpressionMethods,
+    QueryDsl,
+    Queryable,
+    QueryableByName,
+    RunQueryDsl,
+    Selectable,
+    SelectableHelper,
+    SqliteConnection,
 };
 use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES, QueryParamLimiter, QueryParamNullifierLimit,
+    MAX_RESPONSE_PAYLOAD_BYTES,
+    QueryParamLimiter,
+    QueryParamNullifierLimit,
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::block::BlockNumber;

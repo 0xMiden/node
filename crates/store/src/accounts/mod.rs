@@ -6,10 +6,20 @@ use miden_protocol::account::{AccountId, AccountIdPrefix};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::{AccountMutationSet, AccountTree, AccountWitness};
 use miden_protocol::crypto::merkle::smt::{
-    LargeSmt, LeafIndex, MemoryStorage, NodeMutation, SMT_DEPTH, SmtLeaf, SmtStorage,
+    LargeSmt,
+    LeafIndex,
+    MemoryStorage,
+    NodeMutation,
+    SMT_DEPTH,
+    SmtLeaf,
+    SmtStorage,
 };
 use miden_protocol::crypto::merkle::{
-    EmptySubtreeRoots, MerkleError, MerklePath, NodeIndex, SparseMerklePath,
+    EmptySubtreeRoots,
+    MerkleError,
+    MerklePath,
+    NodeIndex,
+    SparseMerklePath,
 };
 use miden_protocol::errors::AccountTreeError;
 use miden_protocol::{EMPTY_WORD, Word};

@@ -3,9 +3,13 @@ use std::path::{Path, PathBuf};
 
 use fs_err as fs;
 use miden_node_proto_build::{
-    block_producer_api_descriptor, remote_prover_api_descriptor, rpc_api_descriptor,
-    store_block_producer_api_descriptor, store_ntx_builder_api_descriptor,
-    store_rpc_api_descriptor, validator_api_descriptor,
+    block_producer_api_descriptor,
+    remote_prover_api_descriptor,
+    rpc_api_descriptor,
+    store_block_producer_api_descriptor,
+    store_ntx_builder_api_descriptor,
+    store_rpc_api_descriptor,
+    validator_api_descriptor,
 };
 use miette::{Context, IntoDiagnostic};
 use tonic_prost_build::FileDescriptorSet;

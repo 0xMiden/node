@@ -7,17 +7,28 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
 use diesel::prelude::{
-    BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, QueryableByName,
+    BoolExpressionMethods,
+    ExpressionMethods,
+    Insertable,
+    QueryDsl,
+    Queryable,
+    QueryableByName,
     Selectable,
 };
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sqlite::Sqlite;
 use diesel::{
-    JoinOnDsl, NullableExpressionMethods, OptionalExtension, RunQueryDsl, SelectableHelper,
+    JoinOnDsl,
+    NullableExpressionMethods,
+    OptionalExtension,
+    RunQueryDsl,
+    SelectableHelper,
     SqliteConnection,
 };
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit, QueryParamLimiter, QueryParamNoteCommitmentLimit,
+    QueryParamAccountIdLimit,
+    QueryParamLimiter,
+    QueryParamNoteCommitmentLimit,
     QueryParamNoteTagLimit,
 };
 use miden_protocol::Word;
@@ -25,15 +36,28 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNoteIndex, BlockNumber};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
-    NoteAssets, NoteAttachment, NoteDetails, NoteId, NoteInclusionProof, NoteMetadata,
-    NoteRecipient, NoteScript, NoteStorage, NoteTag, NoteType, Nullifier,
+    NoteAssets,
+    NoteAttachment,
+    NoteDetails,
+    NoteId,
+    NoteInclusionProof,
+    NoteMetadata,
+    NoteRecipient,
+    NoteScript,
+    NoteStorage,
+    NoteTag,
+    NoteType,
+    Nullifier,
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
 use crate::COMPONENT;
 use crate::db::models::conv::{
-    SqlTypeConvert, idx_to_raw_sql, note_type_to_raw_sql, raw_sql_to_idx,
+    SqlTypeConvert,
+    idx_to_raw_sql,
+    note_type_to_raw_sql,
+    raw_sql_to_idx,
 };
 use crate::db::models::queries::select_block_header_by_block_num;
 use crate::db::models::{serialize_vec, vec_raw_try_into};

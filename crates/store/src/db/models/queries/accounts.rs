@@ -6,18 +6,37 @@ use diesel::prelude::{Queryable, QueryableByName};
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sqlite::Sqlite;
 use diesel::{
-    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl,
-    RunQueryDsl, Selectable, SelectableHelper, SqliteConnection,
+    AsChangeset,
+    BoolExpressionMethods,
+    ExpressionMethods,
+    Insertable,
+    OptionalExtension,
+    QueryDsl,
+    RunQueryDsl,
+    Selectable,
+    SelectableHelper,
+    SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES, QueryParamAccountIdLimit, QueryParamLimiter,
+    MAX_RESPONSE_PAYLOAD_BYTES,
+    QueryParamAccountIdLimit,
+    QueryParamLimiter,
 };
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
-    Account, AccountCode, AccountDelta, AccountId, AccountStorage, AccountStorageHeader,
-    NonFungibleDeltaAction, StorageMap, StorageSlot, StorageSlotContent, StorageSlotName,
+    Account,
+    AccountCode,
+    AccountDelta,
+    AccountId,
+    AccountStorage,
+    AccountStorageHeader,
+    NonFungibleDeltaAction,
+    StorageMap,
+    StorageSlot,
+    StorageSlotContent,
+    StorageSlotName,
     StorageSlotType,
 };
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
@@ -32,7 +51,8 @@ use crate::errors::DatabaseError;
 
 mod at_block;
 pub(crate) use at_block::{
-    select_account_header_with_storage_header_at_block, select_account_vault_at_block,
+    select_account_header_with_storage_header_at_block,
+    select_account_vault_at_block,
 };
 
 #[cfg(test)]

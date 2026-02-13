@@ -10,8 +10,12 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit, QueryParamLimiter, QueryParamNoteIdLimit, QueryParamNoteTagLimit,
-    QueryParamNullifierLimit, QueryParamStorageMapKeyTotalLimit,
+    QueryParamAccountIdLimit,
+    QueryParamLimiter,
+    QueryParamNoteIdLimit,
+    QueryParamNoteTagLimit,
+    QueryParamNullifierLimit,
+    QueryParamStorageMapKeyTotalLimit,
 };
 use miden_protocol::batch::ProvenBatch;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -514,8 +518,10 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use {
-        QueryParamAccountIdLimit as AccountId, QueryParamNoteIdLimit as NoteId,
-        QueryParamNoteTagLimit as NoteTag, QueryParamNullifierLimit as Nullifier,
+        QueryParamAccountIdLimit as AccountId,
+        QueryParamNoteIdLimit as NoteId,
+        QueryParamNoteTagLimit as NoteTag,
+        QueryParamNullifierLimit as Nullifier,
         QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal,
     };
 

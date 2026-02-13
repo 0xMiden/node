@@ -1,8 +1,15 @@
 use diesel::prelude::Insertable;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{
-    ExpressionMethods, OptionalExtension, QueryDsl, Queryable, QueryableByName, RunQueryDsl,
-    Selectable, SelectableHelper, SqliteConnection,
+    ExpressionMethods,
+    OptionalExtension,
+    QueryDsl,
+    Queryable,
+    QueryableByName,
+    RunQueryDsl,
+    Selectable,
+    SelectableHelper,
+    SqliteConnection,
 };
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
