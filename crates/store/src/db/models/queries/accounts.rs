@@ -917,11 +917,13 @@ pub(crate) fn insert_account_vault_asset(
         // First, update any existing rows with the same (account_id, vault_key) to set
         // is_latest=false
         let vault_key: Word = vault_key.into();
+        let vault_key_bytes = vault_key.to_bytes();
+        let account_id_bytes = account_id.to_bytes();
         let update_count = diesel::update(schema::account_vault_assets::table)
             .filter(
                 schema::account_vault_assets::account_id
-                    .eq(&account_id.to_bytes())
-                    .and(schema::account_vault_assets::vault_key.eq(&vault_key.to_bytes()))
+                    .eq(account_id_bytes)
+                    .and(schema::account_vault_assets::vault_key.eq(vault_key_bytes))
                     .and(schema::account_vault_assets::is_latest.eq(true)),
             )
             .set(schema::account_vault_assets::is_latest.eq(false))
