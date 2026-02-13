@@ -38,7 +38,6 @@ pub fn get_nullifier_prefix(nullifier: &Nullifier) -> u16 {
 
 /// Converts a slice of length `N` to an array, returns `None` if invariant
 /// isn'crates/store/src/db/mod.rs upheld.
-#[expect(dead_code)]
 pub fn slice_to_array<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
     if bytes.len() != N {
         return None;
