@@ -21,7 +21,7 @@ use crate::db::schema;
 pub struct NoteRow {
     pub note_data: Vec<u8>,
     pub attempt_count: i32,
-    pub last_attempt: Option<i32>,
+    pub last_attempt: Option<i64>,
 }
 
 /// Row for inserting into the unified `notes` table.
@@ -33,7 +33,7 @@ pub struct NoteInsert {
     pub account_id: Vec<u8>,
     pub note_data: Vec<u8>,
     pub attempt_count: i32,
-    pub last_attempt: Option<i32>,
+    pub last_attempt: Option<i64>,
     pub created_by: Option<Vec<u8>>,
     pub consumed_by: Option<Vec<u8>>,
 }
@@ -111,7 +111,7 @@ pub fn available_notes(
         let note = note_row_to_inflight(
             &row.note_data,
             attempt_count,
-            row.last_attempt.map(conversions::block_num_from_i32),
+            row.last_attempt.map(conversions::block_num_from_i64),
         )?;
         if note.is_available(block_num) {
             result.push(note);
@@ -137,7 +137,7 @@ pub fn notes_failed(
     nullifiers: &[Nullifier],
     block_num: BlockNumber,
 ) -> Result<(), DatabaseError> {
-    let block_num_val = conversions::block_num_to_i32(block_num);
+    let block_num_val = conversions::block_num_to_i64(block_num);
 
     for nullifier in nullifiers {
         let nullifier_bytes = conversions::nullifier_to_bytes(nullifier);

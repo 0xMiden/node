@@ -482,14 +482,14 @@ fn notes_failed_increments_attempt_count() {
     notes_failed(conn, &[note.nullifier()], block_num).unwrap();
     notes_failed(conn, &[note.nullifier()], block_num).unwrap();
 
-    let (attempt_count, last_attempt): (i32, Option<i32>) = schema::notes::table
+    let (attempt_count, last_attempt): (i32, Option<i64>) = schema::notes::table
         .find(conversions::nullifier_to_bytes(&note.nullifier()))
         .select((schema::notes::attempt_count, schema::notes::last_attempt))
         .first(conn)
         .unwrap();
 
     assert_eq!(attempt_count, 2);
-    assert_eq!(last_attempt, Some(conversions::block_num_to_i32(block_num)));
+    assert_eq!(last_attempt, Some(conversions::block_num_to_i64(block_num)));
 }
 
 // CHAIN STATE TESTS
@@ -513,11 +513,11 @@ fn upsert_chain_state_updates_singleton() {
     assert_eq!(row_count, 1);
 
     // Should have the latest block number.
-    let stored_block_num: i32 = schema::chain_state::table
+    let stored_block_num: i64 = schema::chain_state::table
         .select(schema::chain_state::block_num)
         .first(conn)
         .unwrap();
-    assert_eq!(stored_block_num, conversions::block_num_to_i32(block_num_2));
+    assert_eq!(stored_block_num, conversions::block_num_to_i64(block_num_2));
 }
 
 // HELPERS (domain type construction)

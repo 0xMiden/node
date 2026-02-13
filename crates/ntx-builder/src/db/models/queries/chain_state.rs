@@ -16,7 +16,7 @@ use crate::db::schema;
 pub struct ChainStateInsert {
     /// Singleton row ID. Always `0` to satisfy the `CHECK (id = 0)` constraint.
     pub id: i32,
-    pub block_num: i32,
+    pub block_num: i64,
     pub block_header: Vec<u8>,
 }
 
@@ -38,7 +38,7 @@ pub fn upsert_chain_state(
 ) -> Result<(), DatabaseError> {
     let row = ChainStateInsert {
         id: 0,
-        block_num: conversions::block_num_to_i32(block_num),
+        block_num: conversions::block_num_to_i64(block_num),
         block_header: conversions::block_header_to_bytes(block_header),
     };
     diesel::replace_into(schema::chain_state::table).values(&row).execute(conn)?;

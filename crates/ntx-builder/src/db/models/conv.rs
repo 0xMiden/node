@@ -35,13 +35,12 @@ pub fn nullifier_to_bytes(nullifier: &Nullifier) -> Vec<u8> {
     nullifier.to_bytes()
 }
 
-#[allow(clippy::cast_possible_wrap)]
-pub fn block_num_to_i32(block_num: BlockNumber) -> i32 {
-    block_num.as_u32() as i32
+pub fn block_num_to_i64(block_num: BlockNumber) -> i64 {
+    i64::from(block_num.as_u32())
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn block_num_from_i32(val: i32) -> BlockNumber {
+pub fn block_num_from_i64(val: i64) -> BlockNumber {
     BlockNumber::from(val as u32)
 }
 

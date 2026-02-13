@@ -12,7 +12,7 @@ diesel::table! {
 diesel::table! {
     chain_state (id) {
         id -> Integer,
-        block_num -> Integer,
+        block_num -> BigInt,
         block_header -> Binary,
     }
 }
@@ -23,7 +23,7 @@ diesel::table! {
         account_id -> Binary,
         note_data -> Binary,
         attempt_count -> Integer,
-        last_attempt -> Nullable<Integer>,
+        last_attempt -> Nullable<BigInt>,
         created_by -> Nullable<Binary>,
         consumed_by -> Nullable<Binary>,
     }
