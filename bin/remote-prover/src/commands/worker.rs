@@ -19,13 +19,13 @@ use tracing::{info, instrument};
 pub struct StartWorker {
     /// Use localhost (127.0.0.1) instead of 0.0.0.0
     #[arg(long, env = "MRP_WORKER_LOCALHOST")]
-    localhost: bool,
+    pub localhost: bool,
     /// The port of the worker
     #[arg(long, default_value = "50051", env = "MRP_WORKER_PORT")]
-    port: u16,
+    pub port: u16,
     /// The type of proof that the worker will be handling
     #[arg(long, env = "MRP_WORKER_PROOF_TYPE")]
-    proof_type: ProofType,
+    pub proof_type: ProofType,
     /// Maximum time allowed for a request to complete. Once exceeded, the request is
     /// aborted.
     #[arg(long, default_value = "60s", env = "MRP_TIMEOUT", value_parser = humantime::parse_duration)]
