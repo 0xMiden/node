@@ -2823,6 +2823,7 @@ dependencies = [
  "prost",
  "rand_chacha 0.9.0",
  "rstest",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",

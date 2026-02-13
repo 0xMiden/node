@@ -249,19 +249,19 @@ impl Db {
         .await
     }
 
-    /// Creates an in-memory SQLite connection for testing with migrations applied.
-    ///
-    /// This bypasses the async connection pool entirely, matching the store crate's test pattern.
+    /// Creates a file-backed SQLite test connection with migrations applied.
     #[cfg(test)]
-    pub fn test_conn() -> SqliteConnection {
+    pub fn test_conn() -> (SqliteConnection, tempfile::TempDir) {
         use diesel::Connection;
 
         use crate::db::manager::configure_connection_on_creation;
 
-        let mut conn =
-            SqliteConnection::establish(":memory:").expect("in-memory sqlite should always work");
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("test.sqlite3");
+        let mut conn = SqliteConnection::establish(db_path.to_str().unwrap())
+            .expect("temp file sqlite should always work");
         configure_connection_on_creation(&mut conn).expect("connection configuration should work");
         apply_migrations(&mut conn).expect("migrations should apply on empty database");
-        conn
+        (conn, dir)
     }
 }

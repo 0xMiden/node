@@ -24,8 +24,8 @@ use crate::db::{Db, schema};
 // TEST HELPERS
 // ================================================================================================
 
-/// Creates an in-memory SQLite connection with migrations applied.
-fn test_conn() -> SqliteConnection {
+/// Creates a file-backed SQLite connection with migrations applied.
+fn test_conn() -> (SqliteConnection, tempfile::TempDir) {
     Db::test_conn()
 }
 
@@ -103,7 +103,7 @@ fn count_committed_accounts(conn: &mut SqliteConnection) -> i64 {
 
 #[test]
 fn purge_inflight_clears_all_inflight_state() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let tx_id = mock_tx_id(1);
@@ -146,7 +146,7 @@ fn purge_inflight_clears_all_inflight_state() {
 
 #[test]
 fn transaction_added_inserts_notes_and_marks_consumed() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let tx_id = mock_tx_id(1);
@@ -189,7 +189,7 @@ fn transaction_added_inserts_notes_and_marks_consumed() {
 
 #[test]
 fn transaction_added_is_idempotent_for_notes() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let tx_id = mock_tx_id(1);
@@ -208,7 +208,7 @@ fn transaction_added_is_idempotent_for_notes() {
 
 #[test]
 fn block_committed_promotes_inflight_notes_to_committed() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let tx_id = mock_tx_id(1);
@@ -241,7 +241,7 @@ fn block_committed_promotes_inflight_notes_to_committed() {
 
 #[test]
 fn block_committed_deletes_consumed_notes() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 10);
@@ -265,7 +265,7 @@ fn block_committed_deletes_consumed_notes() {
 
 #[test]
 fn block_committed_promotes_inflight_account_to_committed() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let account = mock_account(account_id);
@@ -301,7 +301,7 @@ fn block_committed_promotes_inflight_account_to_committed() {
 
 #[test]
 fn transactions_reverted_restores_consumed_notes() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 10);
@@ -336,7 +336,7 @@ fn transactions_reverted_restores_consumed_notes() {
 
 #[test]
 fn transactions_reverted_deletes_inflight_created_notes() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let tx_id = mock_tx_id(1);
@@ -355,7 +355,7 @@ fn transactions_reverted_deletes_inflight_created_notes() {
 
 #[test]
 fn transactions_reverted_reports_reverted_account_creations() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let account = mock_account(account_id);
@@ -384,7 +384,7 @@ fn transactions_reverted_reports_reverted_account_creations() {
 #[test]
 #[allow(clippy::similar_names)]
 fn available_notes_filters_consumed_and_exceeded_attempts() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let note_good = mock_single_target_note(account_id, 10);
@@ -416,7 +416,7 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
 
 #[test]
 fn available_notes_only_returns_notes_for_specified_account() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id_1 = mock_network_account_id();
     let account_id_2 = mock_network_account_id_seeded(42);
@@ -438,7 +438,7 @@ fn available_notes_only_returns_notes_for_specified_account() {
 
 #[test]
 fn drop_failing_notes_scoped_to_account() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id_1 = mock_network_account_id();
     let account_id_2 = mock_network_account_id_seeded(42);
@@ -471,7 +471,7 @@ fn drop_failing_notes_scoped_to_account() {
 
 #[test]
 fn notes_failed_increments_attempt_count() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 10);
@@ -497,7 +497,7 @@ fn notes_failed_increments_attempt_count() {
 
 #[test]
 fn upsert_chain_state_updates_singleton() {
-    let conn = &mut test_conn();
+    let (conn, _dir) = &mut test_conn();
 
     let block_num_1 = BlockNumber::from(1u32);
     let header_1 = mock_block_header(block_num_1);

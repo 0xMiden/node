@@ -42,3 +42,4 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 rand_chacha           = { workspace = true }
 rstest                = { workspace = true }
+tempfile              = { version = "3.20" }
