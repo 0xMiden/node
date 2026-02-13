@@ -84,6 +84,7 @@ http              = { version = "1.3" }
 humantime         = { version = "2.2" }
 indexmap          = { version = "2.12" }
 itertools         = { version = "0.14" }
+libsqlite3-sys    = { features = ["bundled"], version = "0.35" }
 lru               = { default-features = false, version = "0.16" }
 pretty_assertions = { version = "1.4" }
 # prost and protox are from different authors and are _not_ released in

@@ -22,6 +22,7 @@ diesel                     = { features = ["numeric", "sqlite"], workspace = tru
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
 indexmap                   = { workspace = true }
+libsqlite3-sys             = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-utils           = { workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
@@ -41,3 +42,6 @@ miden-node-utils      = { features = ["testing"], workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { workspace = true }
 rstest                = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["libsqlite3-sys"]
