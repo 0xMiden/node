@@ -15,7 +15,7 @@ pub const DEFAULT_FAUCET_SERVER_PORT: u16 = 8080;
 /// relative, searches in parent directories all the way to the root as well.
 ///
 /// The above configuration options are indented to support easy of packaging and deployment.
-#[allow(clippy::result_large_err, reason = "This error crashes the node")]
+#[expect(clippy::result_large_err, reason = "This error crashes the node")]
 pub fn load_config<T: for<'a> Deserialize<'a>>(
     config_file: impl AsRef<Path>,
 ) -> figment::Result<T> {

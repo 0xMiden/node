@@ -25,7 +25,7 @@
 //! transaction, any nesting of further `transaction(conn, || {})` has no effect and should be
 //! considered unnecessary boilerplate by default.
 
-#![allow(
+#![expect(
     clippy::needless_pass_by_value,
     reason = "The parent scope does own it, passing by value avoids additional boilerplate"
 )]

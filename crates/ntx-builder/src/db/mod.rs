@@ -51,7 +51,7 @@ impl Db {
     }
 
     /// Create and commit a transaction with the queries added in the provided closure.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send

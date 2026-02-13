@@ -60,7 +60,7 @@ pub const DEFAULT_BATCH_INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// The value is selected such that all transactions should approximately be processed within one
 /// minutes with a block time of 5s.
-#[allow(clippy::cast_sign_loss, reason = "Both durations are positive")]
+#[expect(clippy::cast_sign_loss, reason = "Both durations are positive")]
 pub const DEFAULT_MEMPOOL_TX_CAPACITY: NonZeroUsize = NonZeroUsize::new(
     DEFAULT_MAX_BATCHES_PER_BLOCK
         * DEFAULT_MAX_TXS_PER_BATCH

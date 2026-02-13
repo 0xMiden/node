@@ -76,7 +76,7 @@ pub async fn bench_sync_state(data_directory: PathBuf, iterations: usize, concur
 
     print_summary(&timers_accumulator);
 
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let average_notes_per_response =
         responses.iter().map(|r| r.notes.len()).sum::<usize>() as f64 / responses.len() as f64;
     println!("Average notes per response: {average_notes_per_response}");
@@ -270,7 +270,7 @@ pub async fn bench_sync_nullifiers(
 
     print_summary(&timers_accumulator);
 
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let average_nullifiers_per_response =
         responses.iter().map(|r| r.nullifiers.len()).sum::<usize>() as f64 / responses.len() as f64;
     println!("Average nullifiers per response: {average_nullifiers_per_response}");
@@ -364,7 +364,7 @@ pub async fn bench_sync_transactions(
 
     print_summary(&timers_accumulator);
 
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let average_transactions_per_response = if responses.is_empty() {
         0.0
     } else {
@@ -376,13 +376,13 @@ pub async fn bench_sync_transactions(
     // Calculate pagination statistics
     let total_runs = results.len();
     let paginated_runs = results.iter().filter(|r| r.pages > 1).count();
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let pagination_rate = if total_runs > 0 {
         (paginated_runs as f64 / total_runs as f64) * 100.0
     } else {
         0.0
     };
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let avg_pages = if total_runs > 0 {
         results.iter().map(|r| r.pages as f64).sum::<f64>() / total_runs as f64
     } else {
