@@ -168,6 +168,15 @@ impl From<VerifyTxError> for AddTransactionError {
 pub enum SubmitProvenBatchError {
     #[error("batch deserialization failed")]
     Deserialization(#[source] miden_protocol::utils::DeserializationError),
+
+    #[error("batch expired at block height {expired_at} but the block height limit was {limit}")]
+    Expired {
+        expired_at: BlockNumber,
+        limit: BlockNumber,
+    },
+
+    #[error("{error_msg}")]
+    Other { error_msg: Box<str> },
 }
 
 // Batch building errors
