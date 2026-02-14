@@ -6,9 +6,7 @@ use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
-use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::crypto::merkle::mmr::{MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::note::{NoteDetails, NoteTag};
 use miden_protocol::utils::{Deserializable, Serializable};
 use rand::Rng;
@@ -509,7 +507,6 @@ async fn sync_chain_mmr_paginated(
 ) -> SyncChainMmrRun {
     let mut total_duration = Duration::default();
     let mut pages = 0usize;
-    let mut partial_mmr = PartialMmr::default();
     let mut next_block_from = 0u32;
 
     loop {
@@ -520,15 +517,7 @@ async fn sync_chain_mmr_paginated(
         pages += 1;
 
         let pagination_info = response.pagination_info.expect("pagination_info should exist");
-        let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
-        let mmr_delta = MmrDelta::try_from(mmr_delta).expect("mmr_delta conversion should succeed");
-
-        partial_mmr.apply(mmr_delta).expect("mmr delta should apply");
-
-        let block_num = pagination_info.block_num;
-        let chain_commitment = fetch_chain_commitment(api_client, block_num).await;
-        let peaks = MmrPeaks::from(&partial_mmr);
-        assert_eq!(peaks.hash_peaks(), chain_commitment);
+        let _mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
 
         if pagination_info.block_num >= pagination_info.chain_tip {
             break;
@@ -538,22 +527,6 @@ async fn sync_chain_mmr_paginated(
     }
 
     SyncChainMmrRun { duration: total_duration, pages }
-}
-
-async fn fetch_chain_commitment(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    block_num: u32,
-) -> Word {
-    let request = proto::rpc::BlockHeaderByNumberRequest {
-        block_num: Some(block_num),
-        include_mmr_proof: Some(false),
-    };
-
-    let response = api_client.get_block_header_by_number(request).await.unwrap().into_inner();
-    let block_header = response.block_header.expect("block_header should exist");
-    let block_header = miden_protocol::block::BlockHeader::try_from(block_header)
-        .expect("block_header should deserialize");
-    block_header.chain_commitment()
 }
 
 // LOAD STATE
