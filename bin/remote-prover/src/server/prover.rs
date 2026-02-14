@@ -1,16 +1,19 @@
+use std::num::NonZeroUsize;
+
 use miden_block_prover::LocalBlockProver;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
-use miden_protocol::batch::ProposedBatch;
-use miden_protocol::transaction::TransactionInputs;
-use miden_protocol::utils::Serializable;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
+use miden_protocol::block::BlockProof;
+use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-use tonic::{Request, Response, Status};
-use tracing::{info, instrument};
+use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
+use tonic::{Request, Response};
+use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::generated::api_server::Api as ProverApi;
@@ -24,6 +27,16 @@ pub enum ProofKind {
     Block,
 }
 
+impl From<proto::ProofType> for ProofKind {
+    fn from(value: proto::ProofType) -> Self {
+        match value {
+            proto::ProofType::Transaction => ProofKind::Transaction,
+            proto::ProofType::Batch => ProofKind::Batch,
+            proto::ProofType::Block => ProofKind::Block,
+        }
+    }
+}
+
 impl std::fmt::Display for ProofKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -31,6 +44,12 @@ impl std::fmt::Display for ProofKind {
             ProofKind::Batch => write!(f, "batch"),
             ProofKind::Block => write!(f, "block"),
         }
+    }
+}
+
+impl miden_node_utils::tracing::ToValue for ProofKind {
+    fn to_value(&self) -> opentelemetry::Value {
+        self.to_string().into()
     }
 }
 
@@ -52,192 +71,167 @@ impl std::str::FromStr for ProofKind {
 /// This enum is used to store the prover for the remote prover.
 /// Only one prover is enabled at a time.
 enum Prover {
-    Transaction(Mutex<LocalTransactionProver>),
-    Batch(Mutex<LocalBatchProver>),
-    Block(Mutex<LocalBlockProver>),
+    Transaction(LocalTransactionProver),
+    Batch(LocalBatchProver),
+    Block(LocalBlockProver),
 }
 
 impl Prover {
     fn new(proof_type: ProofKind) -> Self {
         match proof_type {
-            ProofKind::Transaction => {
-                info!(target: COMPONENT, proof_type = ?proof_type, "Transaction prover initialized");
-                Self::Transaction(Mutex::new(LocalTransactionProver::default()))
-            },
-            ProofKind::Batch => {
-                info!(target: COMPONENT, proof_type = ?proof_type, security_level = MIN_PROOF_SECURITY_LEVEL, "Batch prover initialized");
-                Self::Batch(Mutex::new(LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)))
-            },
-            ProofKind::Block => {
-                info!(target: COMPONENT, proof_type = ?proof_type, security_level = MIN_PROOF_SECURITY_LEVEL, "Block prover initialized");
-                Self::Block(Mutex::new(LocalBlockProver::new(MIN_PROOF_SECURITY_LEVEL)))
-            },
+            ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
+            ProofKind::Batch => Self::Batch(LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)),
+            ProofKind::Block => Self::Block(LocalBlockProver::new(MIN_PROOF_SECURITY_LEVEL)),
+        }
+    }
+
+    fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
+        match self {
+            Prover::Transaction(prover) => prover.prove_request(request),
+            Prover::Batch(prover) => prover.prove_request(request),
+            Prover::Block(prover) => prover.prove_request(request),
         }
     }
 }
 
 pub struct ProverService {
-    prover: Prover,
+    permits: tokio::sync::Semaphore,
+    prover: tokio::sync::Mutex<Prover>,
+    kind: ProofKind,
 }
 
 impl ProverService {
-    pub fn new(proof_type: ProofKind) -> proto::api_server::ApiServer<Self> {
-        let prover = Prover::new(proof_type);
-
-        proto::api_server::ApiServer::new(Self { prover })
+    pub fn with_capacity(kind: ProofKind, capacity: NonZeroUsize) -> Self {
+        let permits = tokio::sync::Semaphore::new(capacity.get());
+        let prover = Mutex::new(Prover::new(kind));
+        Self { permits, prover, kind }
     }
 
-    #[instrument(
-        target = COMPONENT,
-        name = "remote_prover.prove_tx",
-        skip_all,
-        ret(level = "debug"),
-        fields(request_id = %request_id, transaction_id = tracing::field::Empty),
-        err
-    )]
-    pub async fn prove_tx(
-        &self,
-        tx_inputs: TransactionInputs,
-        request_id: &str,
-    ) -> Result<Response<proto::remote_prover::Proof>, tonic::Status> {
-        let Prover::Transaction(prover) = &self.prover else {
-            return Err(Status::unimplemented("Transaction prover is not enabled"));
-        };
-
-        let locked_prover = prover
-            .try_lock()
-            .map_err(|_| Status::resource_exhausted("Server is busy handling another request"))?;
-
-        // Add a small delay to simulate longer proving time for testing
-        #[cfg(test)]
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let proof = locked_prover.prove(tx_inputs).map_err(internal_error)?;
-
-        // Record the transaction_id in the current tracing span
-        let transaction_id = proof.id();
-        tracing::Span::current().record("transaction_id", tracing::field::display(&transaction_id));
-
-        Ok(Response::new(proto::remote_prover::Proof { payload: proof.to_bytes() }))
+    fn is_supported(&self, kind: ProofKind) -> bool {
+        self.kind == kind
     }
 
-    #[instrument(
-        target = COMPONENT,
-        name = "remote_prover.prove_batch",
-        skip_all,
-        ret(level = "debug"),
-        fields(request_id = %request_id, batch_id = tracing::field::Empty),
-        err
-    )]
-    pub fn prove_batch(
-        &self,
-        proposed_batch: ProposedBatch,
-        request_id: &str,
-    ) -> Result<Response<proto::remote_prover::Proof>, tonic::Status> {
-        let Prover::Batch(prover) = &self.prover else {
-            return Err(Status::unimplemented("Batch prover is not enabled"));
-        };
-
-        let proven_batch = prover
-            .try_lock()
-            .map_err(|_| Status::resource_exhausted("Server is busy handling another request"))?
-            .prove(proposed_batch)
-            .map_err(internal_error)?;
-
-        // Record the batch_id in the current tracing span
-        let batch_id = proven_batch.id();
-        tracing::Span::current().record("batch_id", tracing::field::display(&batch_id));
-
-        Ok(Response::new(proto::remote_prover::Proof { payload: proven_batch.to_bytes() }))
+    #[instrument(target=COMPONENT, skip_all, err)]
+    fn acquire_permit(&self) -> Result<SemaphorePermit<'_>, tonic::Status> {
+        self.permits
+            .try_acquire()
+            .map_err(|_| tonic::Status::resource_exhausted("proof queue is full"))
     }
 
-    #[instrument(
-        target = COMPONENT,
-        name = "remote_prover.prove_block",
-        skip_all,
-        ret(level = "debug"),
-        fields(request_id = %request_id, block_id = tracing::field::Empty),
-        err
-    )]
-    pub fn prove_block(
-        &self,
-        proof_request: BlockProofRequest,
-        request_id: &str,
-    ) -> Result<Response<proto::remote_prover::Proof>, tonic::Status> {
-        let Prover::Block(prover) = &self.prover else {
-            return Err(Status::unimplemented("Block prover is not enabled"));
-        };
-        let BlockProofRequest { tx_batches, block_header, block_inputs } = proof_request;
-
-        // Record the commitment of the block in the current tracing span.
-        let block_id = block_header.commitment();
-        tracing::Span::current().record("block_id", tracing::field::display(&block_id));
-
-        let block_proof = prover
-            .try_lock()
-            .map_err(|_| Status::resource_exhausted("Server is busy handling another request"))?
-            .prove(tx_batches, &block_header, block_inputs)
-            .map_err(internal_error)?;
-
-        Ok(Response::new(proto::remote_prover::Proof { payload: block_proof.to_bytes() }))
+    #[instrument(target=COMPONENT, skip_all)]
+    async fn acquire_prover_lock(&self) -> MutexGuard<'_, Prover> {
+        self.prover.lock().await
     }
 }
 
 #[async_trait::async_trait]
 impl ProverApi for ProverService {
-    #[instrument(
-        target = COMPONENT,
-        name = "remote_prover.prove",
-        skip_all,
-        ret(level = "debug"),
-        fields(request_id = tracing::field::Empty),
-        err
-    )]
     async fn prove(
         &self,
-        request: Request<proto::remote_prover::ProofRequest>,
-    ) -> Result<Response<proto::remote_prover::Proof>, tonic::Status> {
-        // Extract X-Request-ID header for trace correlation
+        request: Request<proto::ProofRequest>,
+    ) -> Result<Response<proto::Proof>, tonic::Status> {
+        // Record X-Request-ID header for trace correlation
         let request_id = request
             .metadata()
             .get("x-request-id")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .to_string(); // Convert to owned string to avoid lifetime issues
+            .unwrap_or("unknown");
+        tracing::Span::current().set_attribute("request.id", request_id);
 
-        // Record the request_id in the current tracing span
-        tracing::Span::current().record("request_id", &request_id);
-
-        // Extract the proof type and payload
-        let proof_request = request.into_inner();
-        let proof_type = proof_request.proof_type();
-
-        match proof_type {
-            proto::remote_prover::ProofType::Transaction => {
-                let tx_inputs = proof_request.try_into().map_err(invalid_argument)?;
-                self.prove_tx(tx_inputs, &request_id).await
-            },
-            proto::remote_prover::ProofType::Batch => {
-                let proposed_batch = proof_request.try_into().map_err(invalid_argument)?;
-                self.prove_batch(proposed_batch, &request_id)
-            },
-            proto::remote_prover::ProofType::Block => {
-                let proof_request = proof_request.try_into().map_err(invalid_argument)?;
-                self.prove_block(proof_request, &request_id)
-            },
+        // Check that the proof type is supported.
+        let request = request.into_inner();
+        // Protobuf enums return a default value if the enum is set to an unknown value.
+        // This round trip checks that the value is valid.
+        if request.proof_type() as i32 != request.proof_type {
+            return Err(tonic::Status::invalid_argument("unknown proof_type value"));
         }
+        let proof_kind = ProofKind::from(request.proof_type());
+        tracing::Span::current().set_attribute("request.kind", proof_kind);
+
+        // Reject unsupported proof types early so they don't clog the queue.
+        if !self.is_supported(proof_kind) {
+            return Err(tonic::Status::invalid_argument("unsupported proof type"));
+        }
+
+        // This semaphore acts like a queue, but with a fixed capacity.
+        //
+        // We need to hold this until our request is processed to ensure that the queue capacity is
+        // not exceeded.
+        let _permit = self.acquire_permit()?;
+
+        // This mutex is fair and uses FIFO ordering.
+        let prover = self.acquire_prover_lock().await;
+
+        // Blocking in place is fairly safe since we guarantee that only a single request is
+        // processed at a time.
+        tokio::task::block_in_place(|| prover.prove(request)).map(tonic::Response::new)
     }
 }
 
-// UTILITIES
-// ================================================================================================
+trait ProveRequest {
+    type Input: miden_protocol::utils::Deserializable;
+    type Output: miden_protocol::utils::Serializable;
 
-fn internal_error<E: ErrorReport>(err: E) -> Status {
-    Status::internal(err.as_report())
+    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status>;
+
+    fn prove_request(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
+        Self::decode_request(request)
+            .and_then(|input| {
+                // We cannot #[instrument] the trait's prove method so we do it manually.
+                tracing::info_span!("prove", target = COMPONENT).in_scope(|| {
+                    self.prove(input).inspect_err(|e| tracing::Span::current().set_error(e))
+                })
+            })
+            .map(|output| Self::encode_response(output))
+    }
+
+    #[instrument(target=COMPONENT, skip_all, err)]
+    fn decode_request(request: proto::ProofRequest) -> Result<Self::Input, tonic::Status> {
+        use miden_protocol::utils::Deserializable;
+
+        Self::Input::read_from_bytes(&request.payload).map_err(|e| {
+            tonic::Status::invalid_argument(e.as_report_context("failed to decode request"))
+        })
+    }
+
+    #[instrument(target=COMPONENT, skip_all)]
+    fn encode_response(output: Self::Output) -> proto::Proof {
+        use miden_protocol::utils::Serializable;
+
+        proto::Proof { payload: output.to_bytes() }
+    }
 }
 
-fn invalid_argument<E: ErrorReport>(err: E) -> Status {
-    Status::invalid_argument(err.as_report())
+impl ProveRequest for LocalTransactionProver {
+    type Input = TransactionInputs;
+    type Output = ProvenTransaction;
+
+    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
+        self.prove(input).map_err(|e| {
+            tonic::Status::internal(e.as_report_context("failed to prove transaction"))
+        })
+    }
+}
+
+impl ProveRequest for LocalBatchProver {
+    type Input = ProposedBatch;
+    type Output = ProvenBatch;
+
+    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
+        self.prove(input)
+            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
+    }
+}
+
+impl ProveRequest for LocalBlockProver {
+    type Input = BlockProofRequest;
+    type Output = BlockProof;
+
+    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
+        let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
+        self.prove(tx_batches, &block_header, block_inputs)
+            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
+    }
 }
 
 // TESTS

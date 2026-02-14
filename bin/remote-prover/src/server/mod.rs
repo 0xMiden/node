@@ -22,7 +22,8 @@ impl CliArgs {
             .context("failed to bind to gRPC port")?;
 
         let status_service = status::StatusService::new(self.kind);
-        let prover_service = ProverService::new(self.kind);
+        let prover_service = ProverService::with_capacity(self.kind, self.capacity);
+        let prover_service = ApiServer::new(prover_service);
 
         // Create a gRPC health reporter.
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
