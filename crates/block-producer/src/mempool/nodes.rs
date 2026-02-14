@@ -80,8 +80,8 @@ pub(super) struct ProvenBatchNode {
     /// We need to store this in addition to the proven batch because [`ProvenBatch`] erases the
     /// transaction information. We need the original information if we want to rollback the batch
     /// but retain the transactions.
-    txs: Vec<Arc<AuthenticatedTransaction>>,
-    inner: Arc<ProvenBatch>,
+    pub(super) txs: Vec<Arc<AuthenticatedTransaction>>,
+    pub(super) inner: Arc<ProvenBatch>,
 }
 
 impl ProvenBatchNode {
