@@ -13,8 +13,9 @@ generates the RPC component bindings and writes them into the `src/generated` di
 ```rust
 use std::{fs, path::PathBuf, env};
 use miden_node_proto_build::rpc_api_descriptor;
+use anyhow::{Context, Result};
 
-fn main() {
+fn main() -> Result<()> {
     let crate_root: PathBuf = env::var("CARGO_MANIFEST_DIR").unwrap().into();
     let dst_dir = crate_root.join("src").join("generated");
 
@@ -31,6 +32,8 @@ fn main() {
         .build_server(false) // this setting generates only the client side of the rpc api
         .compile_fds_with_config(prost_config, file_descriptors)
         .context("compiling protobufs")?;
+
+    Ok(())
 }
 ```
 
