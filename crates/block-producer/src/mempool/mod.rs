@@ -394,6 +394,59 @@ impl Mempool {
         self.inject_telemetry();
     }
 
+    /// Adds a user-submitted proven batch to the mempool.
+    ///
+    /// This is used for batches that were proven externally and submitted directly,
+    /// bypassing the internal proposed batch stage.
+    ///
+    /// # Returns
+    ///
+    /// Returns the current block height.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the batch has expired.
+    #[instrument(target = COMPONENT, name = "mempool.add_proven_batch", skip_all)]
+    pub fn add_proven_batch(
+        &mut self,
+        batch: Arc<ProvenBatch>,
+    ) -> Result<BlockNumber, AddTransactionError> {
+        // Check if batch has expired
+        self.expiration_check(batch.batch_expiration_block_num())?;
+
+        // Check if batch already exists
+        if self.nodes.proven_batches.contains_key(&batch.id()) {
+            // Batch already exists, return current chain tip
+            return Ok(self.chain_tip);
+        }
+
+        // Try to find transactions in mempool by their IDs from batch headers
+        let mut txs = Vec::new();
+        for tx_header in batch.transactions().as_slice() {
+            let tx_id = tx_header.id();
+            if let Some(tx_node) = self.nodes.txs.get(&tx_id) {
+                txs.push(Arc::clone(tx_node.inner()));
+            }
+        }
+
+        // Create ProvenBatchNode
+        // Note: If transactions are not found in mempool, we create the node with empty list.
+        // This is acceptable per the proto documentation which states transactions may not be
+        // in the mempool yet or at all.
+        use crate::mempool::nodes::ProvenBatchNode;
+        let proven_node = ProvenBatchNode { txs, inner: batch };
+
+        let batch_id = proven_node.id();
+
+        // Insert into state and nodes
+        self.state.insert(NodeId::ProvenBatch(batch_id), &proven_node);
+        self.nodes.proven_batches.insert(batch_id, proven_node);
+
+        self.inject_telemetry();
+
+        Ok(self.chain_tip)
+    }
+
     /// Select batches for the next block.
     ///
     /// Note that the set of batches
