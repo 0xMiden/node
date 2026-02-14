@@ -360,10 +360,36 @@ impl BlockProducerRpcServer {
         &self,
         request: proto::transaction::ProvenTransactionBatch,
     ) -> Result<proto::blockchain::BlockNumber, SubmitProvenBatchError> {
-        let _batch = ProvenBatch::read_from_bytes(&request.encoded)
+        let batch = ProvenBatch::read_from_bytes(&request.encoded)
             .map_err(SubmitProvenBatchError::Deserialization)?;
 
-        todo!();
+        let batch_id = batch.id();
+        debug!(
+            target: COMPONENT,
+            batch_id = %batch_id.to_hex(),
+            "Deserialized proven batch"
+        );
+
+        // Add the proven batch to mempool
+        let block_height = self
+            .mempool
+            .lock()
+            .await
+            .lock()
+            .await
+            .add_proven_batch(Arc::new(batch))
+            .map_err(|e| {
+                // Convert AddTransactionError to SubmitProvenBatchError
+                // For now, we only handle expiration errors
+                match e {
+                    AddTransactionError::Expired { expired_at, limit } => {
+                        SubmitProvenBatchError::Expired { expired_at, limit }
+                    },
+                    _ => SubmitProvenBatchError::Other { error_msg: e.to_string().into() },
+                }
+            })?;
+
+        Ok(proto::blockchain::BlockNumber { block_num: block_height.as_u32() })
     }
 }
 
