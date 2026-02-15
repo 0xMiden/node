@@ -2,14 +2,14 @@ mod migrations;
 mod models;
 mod schema;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use diesel::SqliteConnection;
+use diesel::dsl::exists;
 use diesel::prelude::*;
 use miden_node_store::{ConnectionManager, DatabaseError, DatabaseSetupError};
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Serializable;
 use tracing::instrument;
 
 use crate::COMPONENT;
@@ -55,43 +55,27 @@ pub(crate) fn insert_transaction(
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT
-///     id
-/// FROM
-///     validated_transactions
-/// WHERE
-///     id IN (?, ...)
-/// ORDER BY
-///     id ASC
+/// SELECT EXISTS(
+///   SELECT 1
+///   FROM validated_transactions
+///   WHERE id = ?
+/// );
 /// ```
 #[instrument(target = COMPONENT, skip(conn), err)]
 pub(crate) fn find_unvalidated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
 ) -> Result<Vec<TransactionId>, DatabaseError> {
-    if tx_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Convert TransactionIds to bytes for query.
-    let tx_id_bytes: Vec<Vec<u8>> = tx_ids.iter().map(TransactionId::to_bytes).collect();
-
-    // Query the database for matching transactions ids.
-    let raw_transaction_ids = schema::validated_transactions::table
-        .select(schema::validated_transactions::id)
-        .filter(schema::validated_transactions::id.eq_any(tx_id_bytes))
-        .order(schema::validated_transactions::id.asc())
-        .load::<Vec<u8>>(conn)
-        .map_err(DatabaseError::from)?;
-
-    // Find any requested ids that the database does not contain.
-    let validated_tx_ids = raw_transaction_ids
-        .into_iter()
-        .map(|raw_id| TransactionId::read_from_bytes(&raw_id))
-        .collect::<Result<HashSet<TransactionId>, _>>()?;
     let mut unvalidated_tx_ids = Vec::new();
     for tx_id in tx_ids {
-        if !validated_tx_ids.contains(tx_id) {
+        // Check whether each transaction id exists in the database.
+        let exists = diesel::select(exists(
+            schema::validated_transactions::table
+                .filter(schema::validated_transactions::id.eq(tx_id.to_bytes())),
+        ))
+        .get_result::<bool>(conn)?;
+        // Record any transaction ids that do not exist.
+        if !exists {
             unvalidated_tx_ids.push(*tx_id);
         }
     }
