@@ -1,5 +1,3 @@
-#![allow(dead_code, reason = "WIP: mempoool refactor")]
-
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -127,10 +125,6 @@ impl AuthenticatedTransaction {
         Arc::clone(&self.inner)
     }
 
-    pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
-        &self.inner
-    }
-
     pub fn expires_at(&self) -> BlockNumber {
         self.inner.expiration_block_num()
     }
@@ -176,5 +170,9 @@ impl AuthenticatedTransaction {
     pub fn with_empty_store_state(mut self) -> Self {
         self.store_account_state = None;
         self
+    }
+
+    pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
+        &self.inner
     }
 }

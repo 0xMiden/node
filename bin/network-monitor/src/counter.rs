@@ -751,7 +751,7 @@ fn load_counter_account(file_path: &Path) -> Result<Account> {
 }
 
 /// Create and submit a network note that targets the counter account.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[instrument(
     parent = None,
     target = COMPONENT,

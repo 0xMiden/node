@@ -25,7 +25,7 @@ use crate::commands::{
     duration_to_human_readable_string,
 };
 
-#[allow(clippy::large_enum_variant, reason = "single use enum")]
+#[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
     /// Bootstraps the blockchain database with the genesis block.
