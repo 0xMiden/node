@@ -107,81 +107,27 @@ jobs:
           WORKFLOWS: ${{ steps.deleted.outputs.workflows }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.repository }}
+        shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          set -euo pipefail
-
           if [ -z "$WORKFLOWS" ]; then
             echo "No workflows to delete."
             exit 0
           fi
 
-          TOTAL_AFFECTED=0
-          SUMMARY=()
-          CURRENT_INDEX=0
+          # ================================================================================================
+          # Utility functions
+          # ================================================================================================
 
-          # Column widths
-          INDEX_WIDTH=9
-          MAX_WF_LENGTH=30
-          WORKFLOW_COUNT_WIDTH=14
-          GLOBAL_TOTAL_WIDTH=12
-          TOTAL_WIDTH=$(( INDEX_WIDTH + 3 + MAX_WF_LENGTH + 3 + WORKFLOW_COUNT_WIDTH + 3 + GLOBAL_TOTAL_WIDTH ))
+          # Fetches a page of workflow runs for a given workflow ID and cursor.
+          #
+          # We use github's graphql API here which allows us to paginate over workflow runs.
+          # Unfortunately `gh run list` does not support pagination, so we use the graphql API instead.
+          gh_workflow_run_page() {
+            local id="$1"
+            local cursor="$2"
 
-          # Count total workflows for progress display
-          TOTAL_WORKFLOWS=$(echo "$WORKFLOWS" | jq -r '. | length')
-
-          # Function to print dynamic table headers padded with '=' and spaces
-          print_header() {
-            local name="$1"
-            local name_len=${#name}
-            local pad=$(( (TOTAL_WIDTH - name_len - 2) / 2 ))
-            local left_pad=$pad
-            local right_pad=$(( TOTAL_WIDTH - name_len - 2 - left_pad ))
-            left_str=$(printf '=%0.s' $(seq 1 $left_pad))
-            right_str=$(printf '=%0.s' $(seq 1 $right_pad))
-            printf "\n%s %s %s\n" "$left_str" "$name" "$right_str"
-          }
-
-          # === Progress Header ===
-          print_header "Workflow Cleanup Progress"
-          printf "%*s | %-*s | %-*s | %-*s\n" \
-            "$INDEX_WIDTH" "Index" \
-            "$MAX_WF_LENGTH" "Workflow" \
-            "$WORKFLOW_COUNT_WIDTH" "Workflow Count" \
-            "$GLOBAL_TOTAL_WIDTH" "Global Total"
-          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
-            "$INDEX_WIDTH" "---------" \
-            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
-            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
-            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
-
-          # Loop over deleted workflows JSON
-          mapfile -t WF_ARRAY < <(echo "$WORKFLOWS" | jq -c '.[]')
-          for wf in "${WF_ARRAY[@]}"; do
-            CURRENT_INDEX=$((CURRENT_INDEX + 1))
-            WORKFLOW_NAME=$(echo "$wf" | jq -r '.name')
-            WORKFLOW_ID=$(echo "$wf" | jq -r '.node_id')
-            WORKFLOW_PATH=$(echo "$wf" | jq -r '.path')
-
-            # Safety checks
-            if [ -z "$WORKFLOW_NAME" ]; then
-              echo "::error title=Workflow name empty::Resolved workflow name is empty at index $CURRENT_INDEX"
-              exit 1
-            fi
-            if [ -z "$WORKFLOW_ID" ]; then
-              echo "::error title=Workflow ID missing::Workflow '$WORKFLOW_NAME' (path: $WORKFLOW_PATH) has no ID"
-              exit 1
-            fi
-
-            WORKFLOW_COUNT=0
-            AFTER_CURSOR=""
-
-            # Paginate over workflow runs
-            while true; do
-              # We use github's graphql API here which allows us to paginate over workflow runs.
-              #
-              # Unfortunately `gh run list` does not support pagination, so we use the graphql API instead.
-              RESPONSE=$(gh api graphql -F workflowId="$WORKFLOW_ID" -F after="$AFTER_CURSOR" \
-                -f query='query($workflowId: ID!, $after: String) {
+            gh api graphql -F workflowId="$id" -F after="$cursor" \
+              -f query='query($workflowId: ID!, $after: String) {
                   node(id: $workflowId) {
                     ... on Workflow {
                       runs(first: 100, after: $after) {
@@ -190,76 +136,148 @@ jobs:
                       }
                     }
                   }
-                }')
+                }'
+          }
 
-              RUN_IDS=$(echo "$RESPONSE" | jq -r '.data.node.runs.nodes[].databaseId')
-              HAS_NEXT=$(echo "$RESPONSE" | jq -r '.data.node.runs.pageInfo.hasNextPage')
-              AFTER_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.runs.pageInfo.endCursor')
+          # ================================================================================================
+          # Print helpers for nice progress and table display
+          # ================================================================================================
 
-              [ -z "$RUN_IDS" ] && break
+          # Column widths (table includes three spacers for ' | ' between columns)
+          widths_index=9
+          widths_name=30
+          widths_count=14
+          widths_total=12
+          widths_table=$(( $widths_index + 3 + $widths_name + 3 + $widths_count + 3 + $widths_total ))
 
-              BATCH_COUNT=$(echo "$RUN_IDS" | wc -l | tr -d ' ')
-              WORKFLOW_COUNT=$((WORKFLOW_COUNT + BATCH_COUNT))
-              TOTAL_AFFECTED=$((TOTAL_AFFECTED + BATCH_COUNT))
+          # Repeats a character a given number of times.
+          repeat_char() {
+            local char=$1
+            local count=$2
+            printf "%0.s$char" $(seq 1 $count)
+          }
+
+          # Prints the given header as `==== <header> ====` to match the table layout.
+          print_table_header() {
+            local header="$1"
+            local header_len=${#header}
+            local left_pad=$(( ( $widths_table - header_len - 2) / 2 ))
+            local right_pad=$(( $widths_table - header_len - 2 - left_pad ))
+            printf " \n%s %s %s\n" $(repeat_char = $left_pad) "$header" $(repeat_char = $right_pad)
+          }
+
+          # Prints |---+---+---+---| with appropriate widths to accomodate the table headers.
+          print_table_separator() {
+            printf "%s+%s+%s+%s\n"                     \
+              "$(repeat_char - $((widths_index + 1)))" \
+              "$(repeat_char - $((widths_name + 2)))"  \
+              "$(repeat_char - $((widths_count + 2)))" \
+              "$(repeat_char - $((widths_total + 1)))"
+          }
+
+          # Prints a row of the table (index, workflow name, workflow count, global total)
+          print_table_row() {
+            local index=$1
+            local name=$2
+            local count=$3
+            local total=$4
+            printf "%*s | %-*s | %*s | %*s\n"  \
+              "$widths_index" "$index"          \
+              "$widths_name" "$name"            \
+              "$widths_count" "$count"          \
+              "$widths_total" "$total"
+          }
+
+          # Alias for print_table_row() with empty index and total columns.
+          print_summary_row() {
+            local name=$1
+            local count=$2
+            print_table_row "" "$name" "$count" ""
+          }
+
+          # ================================================================================================
+          # Print progress table header
+          # ================================================================================================
+          print_table_header "Workflow Cleanup Progress"
+          print_table_row "Index" "Workflow" "Workflow Count" "Global Total"
+          print_table_separator
+
+          # ================================================================================================
+          # Core workflow loop, iterate over workflows
+          # ================================================================================================
+
+          n_workflows=$(echo "$WORKFLOWS" | jq -r '. | length')
+          total=0
+          summary=()
+          index=0
+
+          mapfile -t WF_ARRAY < <(echo "$WORKFLOWS" | jq -c '.[]')
+          for wf in "${WF_ARRAY[@]}"; do
+            index=$((index + 1))
+            name=$(echo "$wf" | jq -r '.name')
+            count=0
+            id=$(echo "$wf" | jq -r '.node_id')
+
+            # Safety checks
+            if [ -z "$name" ]; then
+              echo "::error title=Workflow name empty::Resolved workflow name is empty at index $index"
+              exit 1
+            fi
+            if [ -z "$id" ]; then
+              echo "::error title=Workflow ID missing::Workflow '$name' has no ID"
+              exit 1
+            fi
+
+            cursor=""
+
+            # Paginate over workflow runs
+            while true; do
+              response=$(gh_workflow_run_page "$id" "$cursor")
+
+              run_ids=$(echo "$response" | jq -r '.data.node.runs.nodes[].databaseId')
+              has_next=$(echo "$response" | jq -r '.data.node.runs.pageInfo.hasNextPage')
+              cursor=$(echo "$response" | jq -r '.data.node.runs.pageInfo.endCursor')
+
+              [ -z "$run_ids" ] && break
+
+              deleted=$(echo "$run_ids" | wc -l | tr -d ' ')
+              count=$((count + deleted))
+              total=$((total + deleted))
 
               # Print progress
-              printf "%*s | %-*s | %*s | %*s\n" \
-                "$INDEX_WIDTH" "[$CURRENT_INDEX/$TOTAL_WORKFLOWS]" \
-                "$MAX_WF_LENGTH" "$WORKFLOW_NAME" \
-                "$WORKFLOW_COUNT_WIDTH" "$WORKFLOW_COUNT" \
-                "$GLOBAL_TOTAL_WIDTH" "$TOTAL_AFFECTED"
+              print_table_row "[$index/$n_workflows]" "$name" "$count" "$total"
 
               if [ "$MODE" = "execute" ]; then
-                for RUN_ID in $RUN_IDS; do
-                  gh run delete "$RUN_ID" >/dev/null
+                for run_id in $run_ids; do
+                  gh run delete "$run_id" >/dev/null
                 done
               fi
 
-              [ "$HAS_NEXT" != "true" ] && break
+              [ "$has_next" != "true" ] && break
             done
 
-            SUMMARY+=("$WORKFLOW_NAME|$WORKFLOW_COUNT")
+            summary+=("$name|$count")
           done
 
-          # === Summary Header ===
-          print_header "Workflow Cleanup Summary"
-          printf "%*s | %-*s | %-*s | %-*s\n" \
-            "$INDEX_WIDTH" "" \
-            "$MAX_WF_LENGTH" "Workflow" \
-            "$WORKFLOW_COUNT_WIDTH" "Runs" \
-            "$GLOBAL_TOTAL_WIDTH" ""
-          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
-            "$INDEX_WIDTH" "$(printf '%.0s-' $(seq 1 $INDEX_WIDTH))" \
-            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
-            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
-            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
-
-          # Print summary rows
-          for entry in "${SUMMARY[@]}"; do
+          # ================================================================================================
+          # Print a summary table
+          # ================================================================================================
+          print_table_header "Workflow Cleanup Summary"
+          print_summary_row "Workflow" "Runs"
+          print_table_separator
+          for entry in "${summary[@]}"; do
             wf="${entry%%|*}"
             count="${entry##*|}"
-            printf "%*s | %-*s | %*s | %-*s\n" \
-              "$INDEX_WIDTH" "" \
-              "$MAX_WF_LENGTH" "$wf" \
-              "$WORKFLOW_COUNT_WIDTH" "$count" \
-              "$GLOBAL_TOTAL_WIDTH" ""
+            print_summary_row "$wf" "$count"
           done
 
-          # Footer separator
-          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
-            "$INDEX_WIDTH" "$(printf '%.0s-' $(seq 1 $INDEX_WIDTH))" \
-            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
-            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
-            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
+          # ================================================================================================
+          # Print totals as a footer
+          # ================================================================================================
+          print_table_separator
+          print_summary_row "TOTAL" "$total"
 
-          # TOTAL row
-          printf "%*s | %-*s | %*s | %-*s\n" \
-            "$INDEX_WIDTH" "" \
-            "$MAX_WF_LENGTH" "TOTAL" \
-            "$WORKFLOW_COUNT_WIDTH" "$TOTAL_AFFECTED" \
-            "$GLOBAL_TOTAL_WIDTH" ""
-
-          if [ "$MODE" = "dry run" ]; then
+          if [ "$MODE" != "execute" ]; then
             echo "Dry run complete. No runs were deleted."
           else
             echo "Cleanup complete."
