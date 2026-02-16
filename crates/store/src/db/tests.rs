@@ -2506,6 +2506,13 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
     create_block(&mut conn, block2);
     create_block(&mut conn, block3);
 
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block1)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block2)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 2)], block3)
+        .unwrap();
+
     let slot_map = StorageSlotName::mock(1);
     let slot_value = StorageSlotName::mock(2);
 
