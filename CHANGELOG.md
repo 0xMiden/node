@@ -26,6 +26,7 @@
 - Added support for the note transport layer in the network monitor ([#1660](https://github.com/0xMiden/miden-node/pull/1660)).
 - Debian packages now include debug symbols ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
 - Debian packages now have coredumps enabled ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
+- Fixed storage map keys not being hashed before insertion into the store's SMT forest ([#1681](https://github.com/0xMiden/miden-node/pull/1681)).
 
 ## v0.13.4 (2026-02-04)
 
