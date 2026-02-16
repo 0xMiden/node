@@ -486,9 +486,10 @@ impl InnerForest {
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
 
-            // build a vector of entries and filter out any empty values; such values shouldn't
-            // be present in full-state deltas, but it is good to exclude them explicitly
-            let map_entries: Vec<(Word, Word)> = map_delta
+            // build a vector of raw entries and filter out any empty values; such values
+            // shouldn't be present in full-state deltas, but it is good to exclude them
+            // explicitly
+            let raw_entries: Vec<(Word, Word)> = map_delta
                 .entries()
                 .iter()
                 .filter_map(|(&key, &value)| {
@@ -502,7 +503,7 @@ impl InnerForest {
 
             // if the delta is empty, make sure we create an entry in the storage map roots map
             // and storage entries map (so storage_map_entries() queries work)
-            if map_entries.is_empty() {
+            if raw_entries.is_empty() {
                 self.storage_map_roots
                     .insert((account_id, slot_name.clone(), block_num), prev_root);
                 self.storage_entries
@@ -511,22 +512,29 @@ impl InnerForest {
                 continue;
             }
 
+            // hash the keys before inserting into the forest, matching how `StorageMap`
+            // hashes keys before inserting into the SMT.
+            let hashed_entries: Vec<(Word, Word)> = raw_entries
+                .iter()
+                .map(|(key, value)| (StorageMap::hash_key(*key), *value))
+                .collect();
+
             // insert the updates into the forest and update storage map roots map
             let new_root = self
                 .forest
-                .batch_insert(prev_root, map_entries.iter().copied())
+                .batch_insert(prev_root, hashed_entries.iter().copied())
                 .expect("forest insertion should succeed");
 
             self.storage_map_roots
                 .insert((account_id, slot_name.clone(), block_num), new_root);
 
-            assert!(!map_entries.is_empty(), "a non-empty delta should have entries");
-            let num_entries = map_entries.len();
+            assert!(!raw_entries.is_empty(), "a non-empty delta should have entries");
+            let num_entries = raw_entries.len();
 
-            // keep track of the state of storage map entries
+            // keep track of the state of storage map entries (using raw keys for delta merging)
             // TODO: this is a temporary solution until the LargeSmtForest is implemented as
             // tracking multiple versions of all storage maps will be prohibitively expensive
-            let map_entries = BTreeMap::from_iter(map_entries);
+            let map_entries = BTreeMap::from_iter(raw_entries);
             self.storage_entries
                 .insert((account_id, slot_name.clone(), block_num), map_entries);
 
@@ -564,15 +572,22 @@ impl InnerForest {
             let delta_entries: Vec<(Word, Word)> =
                 map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)).collect();
 
+            // Hash the keys before inserting into the forest, matching how StorageMap
+            // hashes keys before inserting into the SMT.
+            let hashed_entries: Vec<(Word, Word)> = delta_entries
+                .iter()
+                .map(|(key, value)| (StorageMap::hash_key(*key), *value))
+                .collect();
+
             let new_root = self
                 .forest
-                .batch_insert(prev_root, delta_entries.iter().copied())
+                .batch_insert(prev_root, hashed_entries.iter().copied())
                 .expect("forest insertion should succeed");
 
             self.storage_map_roots
                 .insert((account_id, slot_name.clone(), block_num), new_root);
 
-            // merge the delta with the latest entries in the map
+            // merge the delta with the latest entries in the map (using raw keys)
             // TODO: this is a temporary solution until the LargeSmtForest is implemented as
             // tracking multiple versions of all storage maps will be prohibitively expensive
             let mut latest_entries = self.get_latest_storage_map_entries(account_id, slot_name);
