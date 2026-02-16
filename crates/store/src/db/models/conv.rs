@@ -14,19 +14,19 @@
 //! Notice: Changing any of these are _backwards-incompatible_ changes that are not caught/covered
 //! by migrations!
 
-#![allow(
+#![expect(
     clippy::inline_always,
     reason = "Just unification helpers of 1-2 lines of casting types"
 )]
-#![allow(
+#![expect(
     dead_code,
     reason = "Not all converters are used bidirectionally, however, keeping them is a good thing"
 )]
-#![allow(
+#![expect(
     clippy::cast_sign_loss,
     reason = "This is the one file where we map the signed database types to the working types"
 )]
-#![allow(
+#![expect(
     clippy::cast_possible_wrap,
     reason = "We will not approach the item count where i64 and usize casting will cause issues
     on relevant platforms"
@@ -107,7 +107,7 @@ impl SqlTypeConvert for NoteTag {
 
     #[inline(always)]
     fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
-        #[allow(clippy::cast_sign_loss)]
+        #[expect(clippy::cast_sign_loss)]
         Ok(NoteTag::new(raw as u32))
     }
 
@@ -189,7 +189,7 @@ pub(crate) fn fungible_delta_to_raw_sql(delta: i64) -> i64 {
 }
 
 #[inline(always)]
-#[allow(clippy::cast_sign_loss)]
+#[expect(clippy::cast_sign_loss)]
 pub(crate) fn raw_sql_to_note_type(raw: i32) -> u8 {
     raw as u8
 }

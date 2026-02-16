@@ -129,7 +129,7 @@ pub fn select_all_block_headers(
 #[diesel(table_name = schema::block_headers)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct BlockHeaderRawRow {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub block_num: i64,
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,

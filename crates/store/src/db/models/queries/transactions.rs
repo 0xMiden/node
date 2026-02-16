@@ -79,7 +79,6 @@ impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -90,7 +89,7 @@ pub(crate) fn insert_transactions(
     block_num: BlockNumber,
     transactions: &OrderedTransactionHeaders,
 ) -> Result<usize, DatabaseError> {
-    #[allow(clippy::into_iter_on_ref)] // false positive
+    #[expect(clippy::into_iter_on_ref)] // false positive
     let rows: Vec<_> = transactions
         .as_slice()
         .into_iter()
@@ -116,7 +115,7 @@ pub struct TransactionSummaryRowInsert {
 }
 
 impl TransactionSummaryRowInsert {
-    #[allow(
+    #[expect(
         clippy::cast_possible_wrap,
         reason = "We will not approach the item count where i64 and usize cause issues"
     )]

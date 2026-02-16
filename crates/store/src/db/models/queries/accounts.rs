@@ -289,7 +289,7 @@ pub(crate) fn select_account_commitments_paged(
     use miden_protocol::utils::Serializable;
 
     // Fetch one extra to determine if there are more results
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query = SelectDsl::select(
@@ -364,7 +364,7 @@ pub(crate) fn select_public_account_ids_paged(
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
     use miden_protocol::utils::Serializable;
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query = SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
@@ -939,7 +939,7 @@ pub(crate) fn insert_account_storage_map_value(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

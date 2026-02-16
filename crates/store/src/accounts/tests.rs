@@ -1,10 +1,10 @@
 //! Tests for `AccountTreeWithHistory`
 
 #[cfg(test)]
-#[allow(clippy::similar_names)]
-#[allow(clippy::needless_range_loop)]
-#[allow(clippy::uninlined_format_args)]
-#[allow(clippy::cast_sign_loss)]
+#[expect(clippy::similar_names)]
+#[expect(clippy::needless_range_loop)]
+#[expect(clippy::uninlined_format_args)]
+#[expect(clippy::cast_sign_loss)]
 mod account_tree_with_history_tests {
     use miden_protocol::Word;
     use miden_protocol::account::AccountId;

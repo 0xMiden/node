@@ -18,7 +18,7 @@ pub fn print_summary(timers_accumulator: &[Duration]) {
 }
 
 /// Computes a percentile from a list of durations.
-#[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
+#[expect(clippy::cast_sign_loss, clippy::cast_precision_loss)]
 fn compute_percentile(times: &[Duration], percentile: f64) -> Duration {
     if times.is_empty() {
         return Duration::ZERO;

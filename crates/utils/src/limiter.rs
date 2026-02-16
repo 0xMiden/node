@@ -13,7 +13,7 @@
 /// Basic request limit.
 pub const GENERAL_REQUEST_LIMIT: usize = 1000;
 
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 #[derive(Debug, thiserror::Error)]
 #[error("parameter {which} exceeded limit {limit}: {size}")]
 pub struct QueryLimitError {

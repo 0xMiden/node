@@ -1,6 +1,3 @@
-#![allow(clippy::similar_names, reason = "naming dummy test values is hard")]
-#![allow(clippy::too_many_lines, reason = "test code can be long")]
-
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -473,9 +470,10 @@ fn sync_account_vault_basic_validation() {
     create_block(conn, block_mid);
     create_block(conn, block_to);
 
-    // Create accounts - one public for vault assets, one private for testing
-    queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block_from)
-        .unwrap();
+    for block in [block_from, block_mid, block_to] {
+        queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block)
+            .unwrap();
+    }
 
     // Create some test vault assets
     let vault_key_1 = AssetVaultKey::new_unchecked(num_to_word(100));
@@ -948,6 +946,9 @@ fn sql_account_storage_map_values_insertion() {
     let account_id =
         AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
 
+    queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block1).unwrap();
+    queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block2).unwrap();
+
     let slot_name = StorageSlotName::mock(3);
     let key1 = Word::from([1u32, 2, 3, 4]);
     let key2 = Word::from([5u32, 6, 7, 8]);
@@ -1018,6 +1019,11 @@ fn select_storage_map_sync_values() {
     let block1 = BlockNumber::from(1);
     let block2 = BlockNumber::from(2);
     let block3 = BlockNumber::from(3);
+
+    for block in [block1, block2, block3] {
+        queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block)
+            .unwrap();
+    }
 
     // Insert data across multiple blocks using individual inserts
     // Block 1: key1 -> value1, key2 -> value2
@@ -1947,6 +1953,8 @@ fn db_roundtrip_storage_map_values() {
     create_block(&mut conn, block_num);
 
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
+        .unwrap();
     let slot_name = StorageSlotName::mock(5);
     let key = num_to_word(12345);
     let value = num_to_word(67890);

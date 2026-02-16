@@ -26,6 +26,7 @@ pub struct ServerState {
     pub ntx_increment: Option<watch::Receiver<ServiceStatus>>,
     pub ntx_tracking: Option<watch::Receiver<ServiceStatus>>,
     pub explorer: Option<watch::Receiver<ServiceStatus>>,
+    pub note_transport: Option<watch::Receiver<ServiceStatus>>,
 }
 
 /// Runs the frontend server.
@@ -77,9 +78,9 @@ async fn get_status(
     // Collect RPC status
     services.push(server_state.rpc.borrow().clone());
 
-    // Collect explorer status if available
-    if let Some(explorer_rx) = &server_state.explorer {
-        services.push(explorer_rx.borrow().clone());
+    // Collect faucet status if available
+    if let Some(faucet_rx) = &server_state.faucet {
+        services.push(faucet_rx.borrow().clone());
     }
 
     // Collect all remote prover statuses
@@ -88,9 +89,9 @@ async fn get_status(
         services.push(prover_test_rx.borrow().clone());
     }
 
-    // Collect faucet status if available
-    if let Some(faucet_rx) = &server_state.faucet {
-        services.push(faucet_rx.borrow().clone());
+    // Collect explorer status if available
+    if let Some(explorer_rx) = &server_state.explorer {
+        services.push(explorer_rx.borrow().clone());
     }
 
     // Collect counter increment status if enabled
@@ -101,6 +102,11 @@ async fn get_status(
     // Collect counter tracking status if enabled
     if let Some(ntx_tracking_rx) = &server_state.ntx_tracking {
         services.push(ntx_tracking_rx.borrow().clone());
+    }
+
+    // Collect note transport status if available
+    if let Some(note_transport_rx) = &server_state.note_transport {
+        services.push(note_transport_rx.borrow().clone());
     }
 
     let network_status = NetworkStatus { services, last_updated: current_time };

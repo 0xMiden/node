@@ -1,0 +1,142 @@
+# Manual workflow to cleanup deleted workflows runs.
+#
+# Github keeps workflows runs around even if the workflow is deleted.
+# This has the side effect that these still display in the UI which gets cluttered.
+# Once the runs of a workflow are deleted, they also get removed from the UI.
+name: Cleanup Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose 'dry run' to preview or 'execute' to delete runs"
+        required: true
+        default: "dry run"
+        type: choice
+        options:
+          - "dry run"
+          - "execute"
+
+jobs:
+  cleanup:
+    name: Cleanup deleted workflows
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # required for deleting workflow runs
+      contents: read
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Workflows on main
+        id: main
+        run: |
+          git fetch origin main
+          WORKFLOWS=$(git ls-tree -r origin/main --name-only | grep '^.github/workflows/')
+          echo $WORKFLOWS
+          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+
+      - name: Workflows on next
+        id: next
+        run: |
+          git fetch origin next
+          WORKFLOWS=$(git ls-tree -r origin/next --name-only | grep '^.github/workflows/')
+          echo $WORKFLOWS
+          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+
+      - name: Workflows on github
+        id: github
+        run: |
+          # Note that we filter by `.github` path prefix to ensure we only get locally defined workflows.
+          #
+          # Examples of non-local workflows are `dependabot` and `copilot` which have paths:
+          # - dynamic/dependabot/dependabot-updates
+          # - dynamic/copilot-pull-request-reviewer/copilot-pull-request-reviewer
+          WORKFLOWS=$(gh workflow list \
+            --all \
+            --json path \
+            --jq '.[] | select(.path | startswith(".github")) | .path' \
+          )
+          echo $WORKFLOWS
+          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+
+      - name: Filter for deleted workflows
+        id: deleted
+        run: |
+          # Union of `main` and `next` workflows.
+          EXISTING_FILES=$(                       \
+            printf "%s\n%s\n"                     \
+            "${{ steps.main.outputs.workflows }}" \
+            "${{ steps.next.outputs.workflows }}" \
+          )
+          EXISTING_FILES=$(echo "$EXISTING_FILES" | sort -u)
+          echo $EXISTING_FILES
+
+          # Find deleted workflows as the items in `WORKFLOWS` but not in the union of main and next.
+          # This assumes that _all_ items in main and next are present in `WORKFLOWS`.
+          DELETED_FILES=$(                          \
+            printf "%s\n%s\n"                       \
+            "$EXISTING_FILES"                       \
+            "${{ steps.github.outputs.workflows }}" \
+          )
+          DELETED_FILES=$(echo "$DELETED_FILES" | sort | uniq -u)
+          echo $DELETED_FILES
+          echo "workflows=$DELETED_FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Delete runs from deleted workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ inputs.mode }}
+          DELETED_WORKFLOWS: ${{ steps.deleted.outputs.workflows }}
+        run: |
+          set -euo pipefail
+
+          TOTAL_AFFECTED=0
+
+          echo ""
+          echo "=== Workflow Cleanup Summary ==="
+          echo ""
+
+          while IFS= read -r workflow; do
+            [ -z "$workflow" ] && continue
+
+            WF_COUNT=0
+
+            while true; do
+              RUN_IDS=$(gh run list \
+                --workflow "$workflow" \
+                --limit 100 \
+                --json databaseId \
+                --jq '.[].databaseId')
+
+              if [ -z "$RUN_IDS" ]; then
+                break
+              fi
+
+              BATCH_COUNT=$(echo "$RUN_IDS" | wc -l | tr -d ' ')
+              WF_COUNT=$((WF_COUNT + BATCH_COUNT))
+
+              if [ "$MODE" = "execute" ]; then
+                for RUN_ID in $RUN_IDS; do
+                  gh run delete "$RUN_ID" --yes >/dev/null
+                done
+              fi
+            done
+
+            echo "$workflow → $WF_COUNT runs"
+            TOTAL_AFFECTED=$((TOTAL_AFFECTED + WF_COUNT))
+
+          done <<< "$DELETED_WORKFLOWS"
+
+          echo ""
+          echo "--------------------------------------"
+          echo "Total runs affected: $TOTAL_AFFECTED"
+
+          if [ "$MODE" = "dry run" ]; then
+            echo "Dry run complete. No runs were deleted."
+          else
+            echo "Cleanup complete."
+          fi

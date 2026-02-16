@@ -404,8 +404,7 @@ impl api_server::Api for RpcService {
         request: Request<proto::rpc::AccountRequest>,
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
-            SlotData::MapKeys as ProtoMapKeys,
-            SlotData::AllEntries as ProtoMapAllEntries
+            SlotData::AllEntries as ProtoMapAllEntries, SlotData::MapKeys as ProtoMapKeys,
         };
 
         let request = request.into_inner();
@@ -502,7 +501,6 @@ fn out_of_range_error<E: core::fmt::Display>(err: E) -> Status {
 }
 
 /// Check, but don't repeat ourselves mapping the error
-#[allow(clippy::result_large_err)]
 fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
