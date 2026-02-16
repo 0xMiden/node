@@ -48,7 +48,7 @@ struct AccountStateDeltaRow {
 /// Data needed for applying a delta update to an existing account.
 /// Fetches only the minimal data required, avoiding loading full code and storage.
 #[derive(Debug, Clone)]
-pub(super) struct AccountStateForDelta {
+pub(super) struct AccountStateHeadersForDelta {
     pub nonce: Felt,
     pub code_commitment: Word,
     pub storage_header: AccountStorageHeader,
@@ -94,10 +94,10 @@ pub(super) enum AccountStateForInsert {
 /// FROM accounts
 /// WHERE account_id = ?1 AND is_latest = 1
 /// ```
-pub(super) fn select_account_state_for_delta(
+pub(super) fn select_minimal_account_state_headers(
     conn: &mut SqliteConnection,
     account_id: AccountId,
-) -> Result<AccountStateForDelta, DatabaseError> {
+) -> Result<AccountStateHeadersForDelta, DatabaseError> {
     let row: AccountStateDeltaRow = SelectDsl::select(
         schema::accounts::table,
         (
@@ -138,7 +138,7 @@ pub(super) fn select_account_state_for_delta(
         .transpose()?
         .unwrap_or(Word::default());
 
-    Ok(AccountStateForDelta {
+    Ok(AccountStateHeadersForDelta {
         nonce,
         code_commitment,
         storage_header,
@@ -236,7 +236,7 @@ pub(super) fn apply_storage_delta_with_precomputed_roots(
         map_updates.insert(slot_name, new_root);
     }
 
-    let new_slots = Vec::from_iter(header.slots().map(|slot| {
+    let slots = Vec::from_iter(header.slots().map(|slot| {
         let slot_name = slot.name();
         if let Some(&new_value) = value_updates.get(slot_name) {
             StorageSlotHeader::new(slot_name.clone(), slot.slot_type(), new_value)
@@ -247,7 +247,7 @@ pub(super) fn apply_storage_delta_with_precomputed_roots(
         }
     }));
 
-    AccountStorageHeader::new(new_slots).map_err(|e| {
+    AccountStorageHeader::new(slots).map_err(|e| {
         DatabaseError::DataCorrupted(format!("Failed to create storage header: {e:?}"))
     })
 }

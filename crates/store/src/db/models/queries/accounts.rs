@@ -56,7 +56,7 @@ use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta_with_precomputed_roots,
-    select_account_state_for_delta,
+    select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
 
@@ -1040,16 +1040,7 @@ pub(crate) fn upsert_accounts(
                 // entries that will receive updates.
                 // The next line fetches the header, which will always change with the exception of
                 // an empty delta.
-                let state = select_account_state_for_delta(conn, account_id)?;
-
-                // --- collect storage map updates ----------------------------
-
-                let mut storage = Vec::new();
-                for (slot_name, map_delta) in delta.storage().maps() {
-                    for (key, value) in map_delta.entries() {
-                        storage.push((account_id, slot_name.clone(), (*key).into(), *value));
-                    }
-                }
+                let state_headers = select_minimal_account_state_headers(conn, account_id)?;
 
                 // --- process asset updates ----------------------------------
                 // Only query balances for faucet_ids that are being updated
@@ -1084,26 +1075,36 @@ pub(crate) fn upsert_accounts(
                     assets.push((account_id, asset.vault_key(), asset_update));
                 }
 
-                // --- compute updated account state for the accounts row ---
-                // Apply nonce delta
-                let new_nonce = Felt::new(state.nonce.as_int() + delta.nonce_delta().as_int());
+                // --- collect storage map updates ----------------------------
 
-                let account_roots = precomputed_roots.get(&account_id);
+                let mut storage = Vec::new();
+                for (slot_name, map_delta) in delta.storage().maps() {
+                    for (key, value) in map_delta.entries() {
+                        storage.push((account_id, slot_name.clone(), (*key).into(), *value));
+                    }
+                }
+
+                let roots = precomputed_roots.get(&account_id);
 
                 // Apply storage map value updates to header
                 let new_storage_header = apply_storage_delta_with_precomputed_roots(
-                    &state.storage_header,
+                    &state_headers.storage_header,
                     delta.storage(),
-                    account_roots.map(|roots| &roots.storage_map_roots),
+                    roots.map(|roots| &roots.storage_map_roots),
                 )?;
 
                 let new_vault_root =
-                    account_roots.and_then(|roots| roots.vault_root).unwrap_or(state.vault_root);
+                    roots.and_then(|roots| roots.vault_root).unwrap_or(state_headers.vault_root);
+
+                // --- compute updated account state for the accounts row ---
+                // Apply nonce delta
+                let new_nonce =
+                    Felt::new(state_headers.nonce.as_int() + delta.nonce_delta().as_int());
 
                 // Create minimal account state data for the row insert
                 let account_state = PartialAccountState {
                     nonce: new_nonce,
-                    code_commitment: state.code_commitment,
+                    code_commitment: state_headers.code_commitment,
                     storage_header: new_storage_header,
                     vault_root: new_vault_root,
                 };
