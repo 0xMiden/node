@@ -87,7 +87,7 @@ jobs:
             "${{ steps.next.outputs.workflows }}" \
           )
           EXISTING_FILES=$(echo "$EXISTING_FILES" | sort -u)
-          echo $EXISTING_FILES
+          printf "%s\n" $EXISTING_FILES
 
           # Find deleted workflows as the items in `WORKFLOWS` but not in the union of main and next.
           # This assumes that _all_ items in main and next are present in `WORKFLOWS`.
@@ -113,48 +113,91 @@ jobs:
           set -euo pipefail
 
           TOTAL_AFFECTED=0
+          SUMMARY=()
 
-          echo ""
-          echo "=== Workflow Cleanup Summary ==="
-          echo ""
+          # Read workflows into an array for indexing
+          mapfile -t WORKFLOWS_ARRAY <<< "$DELETED_WORKFLOWS"
+          TOTAL_WORKFLOWS=${#WORKFLOWS_ARRAY[@]}
 
-          while IFS= read -r workflow; do
+          # Determine max workflow name length for alignment
+          MAX_WF_LENGTH=0
+          for wf in "${WORKFLOWS_ARRAY[@]}"; do
+            len=${#wf}
+            (( len > MAX_WF_LENGTH )) && MAX_WF_LENGTH=$len
+          done
+          (( MAX_WF_LENGTH < 40 )) && MAX_WF_LENGTH=40  # minimum width
+
+          # Index column width: enough for [100/100] → 9 chars including brackets
+          INDEX_WIDTH=9
+
+          printf " \n"
+          printf "=== Workflow Cleanup Progress ===\n"
+          printf "%*s | %-*s | %-14s | %-12s\n" "$INDEX_WIDTH" "Index" "$MAX_WF_LENGTH" "Workflow" "Workflow Count" "Global Total"
+          printf "%*s-+-%-*s-+-%-14s-+-%-12s\n" "$INDEX_WIDTH" "---------" "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" "--------------" "------------"
+
+          for i in "${!WORKFLOWS_ARRAY[@]}"; do
+            workflow=${WORKFLOWS_ARRAY[$i]}
             [ -z "$workflow" ] && continue
-
-            WF_COUNT=0
+            CURRENT_INDEX=$((i + 1))
+            WORKFLOW_COUNT=0
 
             while true; do
+              # List workflow runs.
+              #
+              # Note that github will return 404 once all runs are deleted.
+              # We use `|| true` to ignore this error since it is expected when all runs are deleted.
               RUN_IDS=$(gh run list \
                 --workflow "$workflow" \
                 --limit 100 \
                 --json databaseId \
-                --jq '.[].databaseId')
+                --jq '.[].databaseId' 2>/dev/null || true)
 
-              if [ -z "$RUN_IDS" ]; then
-                break
-              fi
+              [ -z "$RUN_IDS" ] && break  # stop when no runs remain
 
               BATCH_COUNT=$(echo "$RUN_IDS" | wc -l | tr -d ' ')
-              WF_COUNT=$((WF_COUNT + BATCH_COUNT))
+              WORKFLOW_COUNT=$((WORKFLOW_COUNT + BATCH_COUNT))
+              TOTAL_AFFECTED=$((TOTAL_AFFECTED + BATCH_COUNT))
+
+              # Print aligned progress per batch
+              printf "%*s | %-*s | %14s | %12s\n" \
+                "$INDEX_WIDTH" "[$CURRENT_INDEX/$TOTAL_WORKFLOWS]" \
+                "$MAX_WF_LENGTH" "$workflow" \
+                "$WORKFLOW_COUNT" "$TOTAL_AFFECTED"
 
               if [ "$MODE" = "execute" ]; then
                 for RUN_ID in $RUN_IDS; do
-                  gh run delete "$RUN_ID" --yes >/dev/null
+                  gh run delete "$RUN_ID" >/dev/null
                 done
+              fi
+
+              # TEMPORARY BREAK for testing: stop if workflow count > 20
+              if [ "$WORKFLOW_COUNT" -gt 20 ]; then
+                echo "⚠️  Temporary break: workflow count exceeded 20, stopping early for safety."
+                break
               fi
             done
 
-            echo "$workflow → $WF_COUNT runs"
-            TOTAL_AFFECTED=$((TOTAL_AFFECTED + WF_COUNT))
+            # Save summary
+            SUMMARY+=("$workflow|$WORKFLOW_COUNT")
+          done
 
-          done <<< "$DELETED_WORKFLOWS"
+          # Print final aligned summary table
+          printf " \n"
+          printf "=== Workflow Cleanup Summary ===\n"
+          printf "%-*s | %14s\n" "$MAX_WF_LENGTH" "Workflow" "Runs"
+          printf "%-*s-+-%14s\n" "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" "--------------"
 
-          echo ""
-          echo "--------------------------------------"
-          echo "Total runs affected: $TOTAL_AFFECTED"
+          for entry in "${SUMMARY[@]}"; do
+            wf="${entry%%|*}"
+            count="${entry##*|}"
+            printf "%-*s | %14s\n" "$MAX_WF_LENGTH" "$wf" "$count"
+          done
+
+          printf "%-*s-+-%14s\n" "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" "--------------"
+          printf "%-*s | %14s\n" "$MAX_WF_LENGTH" "TOTAL" "$TOTAL_AFFECTED"
 
           if [ "$MODE" = "dry run" ]; then
-            echo "Dry run complete. No runs were deleted."
+            printf "Dry run complete. No runs were deleted.\n"
           else
-            echo "Cleanup complete."
+            printf "Cleanup complete.\n"
           fi
