@@ -36,7 +36,7 @@ jobs:
         run: |
           git fetch origin main
           WORKFLOWS=$(git ls-tree -r origin/main --name-only | grep '^.github/workflows/')
-          echo $WORKFLOWS
+          printf "%s\n" $WORKFLOWS
           {
             echo "workflows<<EOF"
             echo "$WORKFLOWS"
@@ -48,7 +48,7 @@ jobs:
         run: |
           git fetch origin next
           WORKFLOWS=$(git ls-tree -r origin/next --name-only | grep '^.github/workflows/')
-          echo $WORKFLOWS
+          printf "%s\n" $WORKFLOWS
           {
             echo "workflows<<EOF"
             echo "$WORKFLOWS"
@@ -70,7 +70,7 @@ jobs:
             --json path \
             --jq '.[] | select(.path | startswith(".github")) | .path' \
           )
-          echo $WORKFLOWS
+          printf "%s\n" $WORKFLOWS
           {
             echo "workflows<<EOF"
             echo "$WORKFLOWS"
@@ -97,7 +97,7 @@ jobs:
             "${{ steps.github.outputs.workflows }}" \
           )
           DELETED_FILES=$(echo "$DELETED_FILES" | sort | uniq -u)
-          echo $DELETED_FILES
+          printf "%s\n" $DELETED_FILES
           {
             echo "workflows<<EOF"
             echo "$DELETED_FILES"
