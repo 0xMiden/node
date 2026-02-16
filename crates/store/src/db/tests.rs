@@ -77,6 +77,7 @@ use crate::db::models::queries::{
 };
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
+use crate::inner_forest::BlockAccountRoots;
 
 fn create_db() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").expect("In memory sqlite always works");
@@ -219,7 +220,13 @@ fn sql_select_notes() {
 
     let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
-    queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block_num).unwrap();
+    queries::upsert_accounts(
+        conn,
+        &[mock_block_account_update(account_id, 0)],
+        block_num,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
 
     let new_note = create_note(account_id);
 
@@ -264,7 +271,13 @@ fn sql_select_note_script_by_root() {
 
     let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
-    queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block_num).unwrap();
+    queries::upsert_accounts(
+        conn,
+        &[mock_block_account_update(account_id, 0)],
+        block_num,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
 
     let new_note = create_note(account_id);
 
@@ -316,6 +329,7 @@ fn make_account_and_note(
                 AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
             )],
             block_num,
+            &BlockAccountRoots::new(),
         )
         .unwrap();
 
@@ -448,6 +462,7 @@ fn sql_select_accounts() {
                 AccountUpdateDetails::Private,
             )],
             block_num,
+            &BlockAccountRoots::new(),
         );
         assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
@@ -475,8 +490,13 @@ fn sync_account_vault_basic_validation() {
     create_block(conn, block_to);
 
     for block in [block_from, block_mid, block_to] {
-        queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block)
-            .unwrap();
+        queries::upsert_accounts(
+            conn,
+            &[mock_block_account_update(public_account_id, 0)],
+            block,
+            &BlockAccountRoots::new(),
+        )
+        .unwrap();
     }
 
     // Create some test vault assets
@@ -815,7 +835,13 @@ fn notes() {
 
     // test insertion
 
-    queries::upsert_accounts(conn, &[mock_block_account_update(sender, 0)], block_num_1).unwrap();
+    queries::upsert_accounts(
+        conn,
+        &[mock_block_account_update(sender, 0)],
+        block_num_1,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
 
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 2).unwrap();
@@ -950,8 +976,20 @@ fn sql_account_storage_map_values_insertion() {
     let account_id =
         AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
 
-    queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block1).unwrap();
-    queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block2).unwrap();
+    queries::upsert_accounts(
+        conn,
+        &[mock_block_account_update(account_id, 0)],
+        block1,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
+    queries::upsert_accounts(
+        conn,
+        &[mock_block_account_update(account_id, 0)],
+        block2,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
 
     let slot_name = StorageSlotName::mock(3);
     let key1 = Word::from([1u32, 2, 3, 4]);
@@ -1025,8 +1063,13 @@ fn select_storage_map_sync_values() {
     let block3 = BlockNumber::from(3);
 
     for block in [block1, block2, block3] {
-        queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block)
-            .unwrap();
+        queries::upsert_accounts(
+            &mut conn,
+            &[mock_block_account_update(account_id, 0)],
+            block,
+            &BlockAccountRoots::new(),
+        )
+        .unwrap();
     }
 
     // Insert data across multiple blocks using individual inserts
@@ -1201,7 +1244,8 @@ fn insert_transactions(conn: &mut SqliteConnection) -> usize {
             mock_block_transaction(AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap(), 2);
         let ordered_tx_headers = OrderedTransactionHeaders::new_unchecked(vec![mock_tx1, mock_tx2]);
 
-        queries::upsert_accounts(conn, &account_updates, block_num).unwrap();
+        queries::upsert_accounts(conn, &account_updates, block_num, &BlockAccountRoots::new())
+            .unwrap();
 
         let count = queries::insert_transactions(conn, block_num, &ordered_tx_headers).unwrap();
         Ok::<_, DatabaseError>(count)
@@ -1281,6 +1325,7 @@ fn test_select_account_code_by_commitment() {
             AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
         )],
         block_num_1,
+        &BlockAccountRoots::new(),
     )
     .unwrap();
 
@@ -1329,6 +1374,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v1).unwrap()),
         )],
         block_num_1,
+        &BlockAccountRoots::new(),
     )
     .unwrap();
 
@@ -1362,6 +1408,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v2).unwrap()),
         )],
         block_num_2,
+        &BlockAccountRoots::new(),
     )
     .unwrap();
 
@@ -1617,7 +1664,8 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
         AccountUpdateDetails::Delta(account_delta),
     );
 
-    queries::upsert_accounts(&mut conn, &[block_update], block_num).unwrap();
+    queries::upsert_accounts(&mut conn, &[block_update], block_num, &BlockAccountRoots::new())
+        .unwrap();
 
     let (_, vault_assets) = queries::select_account_vault_assets(
         &mut conn,
@@ -1839,7 +1887,8 @@ fn db_roundtrip_account() {
         account_commitment,
         AccountUpdateDetails::Delta(account_delta),
     );
-    queries::upsert_accounts(&mut conn, &[block_update], block_num).unwrap();
+    queries::upsert_accounts(&mut conn, &[block_update], block_num, &BlockAccountRoots::new())
+        .unwrap();
 
     // Retrieve
     let retrieved = queries::select_all_accounts(&mut conn).unwrap();
@@ -1865,8 +1914,13 @@ fn db_roundtrip_notes() {
     create_block(&mut conn, block_num);
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(sender, 0)], block_num)
-        .unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(sender, 0)],
+        block_num,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
 
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 0).unwrap();
@@ -1913,6 +1967,52 @@ fn db_roundtrip_notes() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 1)],
+        block_num,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
+
+    let tx = mock_block_transaction(account_id, 1);
+    let ordered_tx = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+
+    // Insert
+    queries::insert_transactions(&mut conn, block_num, &ordered_tx).unwrap();
+
+    // Retrieve
+    let (_, retrieved) = queries::select_transactions_records(
+        &mut conn,
+        &[account_id],
+        BlockNumber::from(0)..=BlockNumber::from(2),
+    )
+    .unwrap();
+
+    assert_eq!(retrieved.len(), 1, "Should have one transaction");
+    let retrieved_tx = &retrieved[0];
+
+    assert_eq!(
+        tx.account_id(),
+        retrieved_tx.account_id,
+        "AccountId DB roundtrip must be symmetric"
+    );
+    assert_eq!(
+        tx.id(),
+        retrieved_tx.transaction_id,
+        "TransactionId DB roundtrip must be symmetric"
+    );
+    assert_eq!(block_num, retrieved_tx.block_num, "Block number must match");
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
 fn db_roundtrip_vault_assets() {
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
@@ -1922,8 +2022,13 @@ fn db_roundtrip_vault_assets() {
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     // Create account first
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
-        .unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 0)],
+        block_num,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
 
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
     let asset: Asset = fungible_asset.into();
@@ -1957,8 +2062,13 @@ fn db_roundtrip_storage_map_values() {
     create_block(&mut conn, block_num);
 
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
-        .unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 0)],
+        block_num,
+        &BlockAccountRoots::new(),
+    )
+    .unwrap();
     let slot_name = StorageSlotName::mock(5);
     let key = num_to_word(12345);
     let value = num_to_word(67890);
@@ -2046,7 +2156,8 @@ fn db_roundtrip_account_storage_with_maps() {
         account.commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
-    queries::upsert_accounts(&mut conn, &[block_update], block_num).unwrap();
+    queries::upsert_accounts(&mut conn, &[block_update], block_num, &BlockAccountRoots::new())
+        .unwrap();
 
     // Retrieve the storage using select_latest_account_storage (reconstructs from header + map
     // values)
@@ -2180,8 +2291,13 @@ fn test_prune_history() {
 
     // Create account
     for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
-        queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block)
-            .unwrap();
+        queries::upsert_accounts(
+            conn,
+            &[mock_block_account_update(public_account_id, 0)],
+            block,
+            &BlockAccountRoots::new(),
+        )
+        .unwrap();
     }
 
     // Insert vault assets at different blocks

@@ -38,6 +38,7 @@ pub use crate::db::models::queries::{
 use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError};
 use crate::genesis::GenesisBlock;
+use crate::inner_forest::BlockAccountRoots;
 
 pub(crate) mod manager;
 
@@ -244,6 +245,7 @@ impl Db {
                 &[],
                 genesis.body().updated_accounts(),
                 genesis.body().transactions(),
+                &BlockAccountRoots::new(),
             )
         })
         .context("failed to insert genesis block")?;
@@ -556,6 +558,9 @@ impl Db {
     ///
     /// `allow_acquire` and `acquire_done` are used to synchronize writes to the DB with writes to
     /// the in-memory trees. Further details available on [`super::state::State::apply_block`].
+    ///
+    /// `precomputed_roots` contains vault and storage map roots computed by `InnerForest`. These
+    /// are used directly instead of reloading all entries from disk to recompute roots.
     // TODO: This span is logged in a root span, we should connect it to the parent one.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(
@@ -564,6 +569,7 @@ impl Db {
         acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
+        precomputed_roots: BlockAccountRoots,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
@@ -574,6 +580,7 @@ impl Db {
                 signed_block.body().created_nullifiers(),
                 signed_block.body().updated_accounts(),
                 signed_block.body().transactions(),
+                &precomputed_roots,
             )?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist

@@ -19,12 +19,10 @@ use diesel::{
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
-use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
     AccountCode,
-    AccountDelta,
     AccountId,
     AccountStorage,
     AccountStorageHeader,
@@ -38,6 +36,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::{Felt, Word};
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
@@ -50,6 +49,15 @@ mod at_block;
 pub(crate) use at_block::{
     select_account_header_with_storage_header_at_block,
     select_account_vault_at_block,
+};
+
+mod delta;
+use delta::{
+    AccountStateForInsert,
+    PartialAccountState,
+    apply_storage_delta_with_precomputed_roots,
+    select_account_state_for_delta,
+    select_vault_balances_by_faucet_ids,
 };
 
 #[cfg(test)]
@@ -162,7 +170,7 @@ pub(crate) fn select_account(
 /// `State` which contains an `SmtForest` to serve the latest and most recent
 /// historical data.
 // TODO: remove eventually once refactoring is complete
-fn select_full_account(
+pub(crate) fn select_full_account(
     conn: &mut SqliteConnection,
     account_id: AccountId,
 ) -> Result<Account, DatabaseError> {
@@ -951,6 +959,7 @@ pub(crate) fn upsert_accounts(
     conn: &mut SqliteConnection,
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
+    precomputed_roots: &crate::inner_forest::BlockAccountRoots,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     for update in accounts {
@@ -965,7 +974,7 @@ pub(crate) fn upsert_accounts(
         };
 
         // Preserve the original creation block when updating existing accounts.
-        let created_at_block = QueryDsl::select(
+        let created_at_block_raw = QueryDsl::select(
             schema::accounts::table.filter(
                 schema::accounts::account_id
                     .eq(&account_id_bytes)
@@ -977,15 +986,17 @@ pub(crate) fn upsert_accounts(
         .optional()
         .map_err(DatabaseError::Diesel)?
         .unwrap_or(block_num_raw);
+        let created_at_block = BlockNumber::from_raw_sql(created_at_block_raw)?;
 
         // NOTE: we collect storage / asset inserts to apply them only after the  account row is
         // written. The storage and vault tables have FKs pointing to `accounts (account_id,
         // block_num)`, so inserting them earlier would violate those constraints when inserting a
         // brand-new account.
-        let (full_account, pending_storage_inserts, pending_asset_inserts) = match update.details()
+        let (account_state, pending_storage_inserts, pending_asset_inserts) = match update.details()
         {
-            AccountUpdateDetails::Private => (None, vec![], vec![]),
+            AccountUpdateDetails::Private => (AccountStateForInsert::Private, vec![], vec![]),
 
+            // New account is always a full account, but also comes as an update
             AccountUpdateDetails::Delta(delta) if delta.is_full_state() => {
                 let account = Account::try_from(delta)?;
                 debug_assert_eq!(account_id, account.id());
@@ -1020,12 +1031,16 @@ pub(crate) fn upsert_accounts(
                     }
                 }
 
-                (Some(account), storage, assets)
+                (AccountStateForInsert::FullAccount(account), storage, assets)
             },
 
+            // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                // Reconstruct the full account from database tables
-                let account = select_full_account(conn, account_id)?;
+                // Load only the minimal data needed. Only load those storage map entries and vault
+                // entries that will receive updates.
+                // The next line fetches the header, which will always change with the exception of
+                // an empty delta.
+                let state = select_account_state_for_delta(conn, account_id)?;
 
                 // --- collect storage map updates ----------------------------
 
@@ -1036,23 +1051,31 @@ pub(crate) fn upsert_accounts(
                     }
                 }
 
-                // apply delta to the account; we need to do this before we process asset updates
-                // because we currently need to get the current value of fungible assets from the
-                // account
-                let account_after = apply_delta(account, delta, &update.final_state_commitment())?;
-
                 // --- process asset updates ----------------------------------
+                // Only query balances for faucet_ids that are being updated
+                let faucet_ids = Vec::from_iter(delta.vault().fungible().iter().map(|(id, _)| *id));
+                let prev_balances =
+                    select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
 
                 let mut assets = Vec::new();
 
-                for (faucet_id, _) in delta.vault().fungible().iter() {
-                    let current_amount = account_after.vault().get_balance(*faucet_id).unwrap();
-                    let asset: Asset = FungibleAsset::new(*faucet_id, current_amount)?.into();
-                    let update_or_remove = if current_amount == 0 { None } else { Some(asset) };
+                // update fungible assets
+                for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
+                    let prev_balance = prev_balances.get(faucet_id).copied().unwrap_or(0);
+                    let new_balance =
+                        u64::try_from(i128::from(prev_balance) + i128::from(*amount_delta))
+                            .map_err(|_| {
+                                DatabaseError::DataCorrupted(format!(
+                                    "Balance underflow for account {account_id}, faucet {faucet_id}"
+                                ))
+                            })?;
 
+                    let asset: Asset = FungibleAsset::new(*faucet_id, new_balance)?.into();
+                    let update_or_remove = if new_balance == 0 { None } else { Some(asset) };
                     assets.push((account_id, asset.vault_key(), update_or_remove));
                 }
 
+                // update non-fungible assets
                 for (asset, delta_action) in delta.vault().non_fungible().iter() {
                     let asset_update = match delta_action {
                         NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
@@ -1061,11 +1084,37 @@ pub(crate) fn upsert_accounts(
                     assets.push((account_id, asset.vault_key(), asset_update));
                 }
 
-                (Some(account_after), storage, assets)
+                // --- compute updated account state for the accounts row ---
+                // Apply nonce delta
+                let new_nonce = Felt::new(state.nonce.as_int() + delta.nonce_delta().as_int());
+
+                let account_roots = precomputed_roots.get(&account_id);
+
+                // Apply storage map value updates to header
+                let new_storage_header = apply_storage_delta_with_precomputed_roots(
+                    &state.storage_header,
+                    delta.storage(),
+                    account_roots.map(|roots| &roots.storage_map_roots),
+                )?;
+
+                let new_vault_root =
+                    account_roots.and_then(|roots| roots.vault_root).unwrap_or(state.vault_root);
+
+                // Create minimal account state data for the row insert
+                let account_state = PartialAccountState {
+                    nonce: new_nonce,
+                    code_commitment: state.code_commitment,
+                    storage_header: new_storage_header,
+                    vault_root: new_vault_root,
+                };
+
+                (AccountStateForInsert::PartialState(account_state), storage, assets)
             },
         };
 
-        if let Some(code) = full_account.as_ref().map(Account::code) {
+        // Insert account code for full accounts (new account creation)
+        if let AccountStateForInsert::FullAccount(ref account) = account_state {
+            let code = account.code();
             let code_value = AccountCodeRowInsert {
                 code_commitment: code.commitment().to_bytes(),
                 code: code.to_bytes(),
@@ -1087,23 +1136,48 @@ pub(crate) fn upsert_accounts(
             .set(schema::accounts::is_latest.eq(false))
             .execute(conn)?;
 
-        let account_value = AccountRowInsert {
-            account_id: account_id_bytes,
-            network_account_type: network_account_type.to_raw_sql(),
-            account_commitment: update.final_state_commitment().to_bytes(),
-            block_num: block_num_raw,
-            nonce: full_account.as_ref().map(|account| nonce_to_raw_sql(account.nonce())),
-            code_commitment: full_account
-                .as_ref()
-                .map(|account| account.code().commitment().to_bytes()),
-            // Store only the header (slot metadata + map roots), not full storage with map contents
-            storage_header: full_account
-                .as_ref()
-                .map(|account| account.storage().to_header().to_bytes()),
-            vault_root: full_account.as_ref().map(|account| account.vault().root().to_bytes()),
-            is_latest: true,
-            created_at_block,
+        let account_value = match &account_state {
+            AccountStateForInsert::Private => AccountRowInsert::new_private(
+                account_id,
+                network_account_type,
+                update.final_state_commitment(),
+                block_num,
+                created_at_block,
+            ),
+            AccountStateForInsert::FullAccount(account) => AccountRowInsert::new_from_account(
+                account_id,
+                network_account_type,
+                update.final_state_commitment(),
+                block_num,
+                created_at_block,
+                account,
+            ),
+            AccountStateForInsert::PartialState(state) => AccountRowInsert::new_from_partial(
+                account_id,
+                network_account_type,
+                update.final_state_commitment(),
+                block_num,
+                created_at_block,
+                state,
+            ),
         };
+
+        if let AccountStateForInsert::PartialState(state) = &account_state {
+            let account_header = miden_protocol::account::AccountHeader::new(
+                account_id,
+                state.nonce,
+                state.vault_root,
+                state.storage_header.to_commitment(),
+                state.code_commitment,
+            );
+
+            if account_header.commitment() != update.final_state_commitment() {
+                return Err(DatabaseError::AccountCommitmentsMismatch {
+                    calculated: account_header.commitment(),
+                    expected: update.final_state_commitment(),
+                });
+            }
+        }
 
         diesel::insert_into(schema::accounts::table)
             .values(&account_value)
@@ -1122,25 +1196,6 @@ pub(crate) fn upsert_accounts(
     }
 
     Ok(count)
-}
-
-/// Deserializes account and applies account delta.
-pub(crate) fn apply_delta(
-    mut account: Account,
-    delta: &AccountDelta,
-    final_state_commitment: &Word,
-) -> crate::db::Result<Account, DatabaseError> {
-    account.apply_delta(delta)?;
-
-    let actual_commitment = account.commitment();
-    if &actual_commitment != final_state_commitment {
-        return Err(DatabaseError::AccountCommitmentsMismatch {
-            calculated: actual_commitment,
-            expected: *final_state_commitment,
-        });
-    }
-
-    Ok(account)
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -1163,6 +1218,76 @@ pub(crate) struct AccountRowInsert {
     pub(crate) vault_root: Option<Vec<u8>>,
     pub(crate) is_latest: bool,
     pub(crate) created_at_block: i64,
+}
+
+impl AccountRowInsert {
+    /// Creates an insert row for a private account (no public state).
+    fn new_private(
+        account_id: AccountId,
+        network_account_type: NetworkAccountType,
+        account_commitment: Word,
+        block_num: BlockNumber,
+        created_at_block: BlockNumber,
+    ) -> Self {
+        Self {
+            account_id: account_id.to_bytes(),
+            network_account_type: network_account_type.to_raw_sql(),
+            account_commitment: account_commitment.to_bytes(),
+            block_num: block_num.to_raw_sql(),
+            nonce: None,
+            code_commitment: None,
+            storage_header: None,
+            vault_root: None,
+            is_latest: true,
+            created_at_block: created_at_block.to_raw_sql(),
+        }
+    }
+
+    /// Creates an insert row from a full account (new account creation).
+    fn new_from_account(
+        account_id: AccountId,
+        network_account_type: NetworkAccountType,
+        account_commitment: Word,
+        block_num: BlockNumber,
+        created_at_block: BlockNumber,
+        account: &Account,
+    ) -> Self {
+        Self {
+            account_id: account_id.to_bytes(),
+            network_account_type: network_account_type.to_raw_sql(),
+            account_commitment: account_commitment.to_bytes(),
+            block_num: block_num.to_raw_sql(),
+            nonce: Some(nonce_to_raw_sql(account.nonce())),
+            code_commitment: Some(account.code().commitment().to_bytes()),
+            storage_header: Some(account.storage().to_header().to_bytes()),
+            vault_root: Some(account.vault().root().to_bytes()),
+            is_latest: true,
+            created_at_block: created_at_block.to_raw_sql(),
+        }
+    }
+
+    /// Creates an insert row from a partial account state (delta update).
+    fn new_from_partial(
+        account_id: AccountId,
+        network_account_type: NetworkAccountType,
+        account_commitment: Word,
+        block_num: BlockNumber,
+        created_at_block: BlockNumber,
+        state: &PartialAccountState,
+    ) -> Self {
+        Self {
+            account_id: account_id.to_bytes(),
+            network_account_type: network_account_type.to_raw_sql(),
+            account_commitment: account_commitment.to_bytes(),
+            block_num: block_num.to_raw_sql(),
+            nonce: Some(nonce_to_raw_sql(state.nonce)),
+            code_commitment: Some(state.code_commitment.to_bytes()),
+            storage_header: Some(state.storage_header.to_bytes()),
+            vault_root: Some(state.vault_root.to_bytes()),
+            is_latest: true,
+            created_at_block: created_at_block.to_raw_sql(),
+        }
+    }
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]
