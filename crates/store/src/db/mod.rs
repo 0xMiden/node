@@ -582,6 +582,8 @@ impl Db {
                 tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
             }
 
+            models::queries::prune_history(conn, signed_block.header().block_num())?;
+
             acquire_done.blocking_recv()?;
 
             Ok(())

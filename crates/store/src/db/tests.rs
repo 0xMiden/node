@@ -70,7 +70,11 @@ use rand::Rng;
 
 use super::{AccountInfo, NoteRecord, NullifierInfo};
 use crate::db::migrations::apply_migrations;
-use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
+use crate::db::models::queries::{
+    HISTORICAL_BLOCK_RETENTION,
+    StorageMapValue,
+    insert_account_storage_map_value,
+};
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
 
@@ -2098,7 +2102,7 @@ fn db_roundtrip_account_storage_with_maps() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn test_note_metadata_with_attachment_roundtrip() {
+fn db_roundtrip_note_metadata_attachment() {
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
@@ -2147,5 +2151,247 @@ fn test_note_metadata_with_attachment_roundtrip() {
         retrieved_target.target_id(),
         account_id,
         "NetworkAccountTarget should have the correct target account ID"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn test_prune_history() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let public_account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    // Create blocks around the retention window.
+    const GENESIS_BLOCK_NUM: u32 = 0;
+    const OLD_BLOCK_OFFSET: u32 = 1;
+    const CUTOFF_BLOCK_OFFSET: u32 = 2;
+    const UPDATE_BLOCK_OFFSET: u32 = 3;
+
+    let block_0: BlockNumber = GENESIS_BLOCK_NUM.into();
+    let block_old: BlockNumber = OLD_BLOCK_OFFSET.into();
+    let block_cutoff: BlockNumber = CUTOFF_BLOCK_OFFSET.into();
+    let block_update: BlockNumber = UPDATE_BLOCK_OFFSET.into();
+    let block_tip: BlockNumber = (HISTORICAL_BLOCK_RETENTION + CUTOFF_BLOCK_OFFSET).into();
+
+    for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
+        create_block(conn, block);
+    }
+
+    // Create account
+    for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
+        queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block)
+            .unwrap();
+    }
+
+    // Insert vault assets at different blocks
+    let vault_key_old = AssetVaultKey::new_unchecked(num_to_word(100));
+    let vault_key_cutoff = AssetVaultKey::new_unchecked(num_to_word(200));
+    let vault_key_recent = AssetVaultKey::new_unchecked(num_to_word(300));
+    let asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let asset_2 = Asset::Fungible(FungibleAsset::new(public_account_id, 2000).unwrap());
+    let asset_3 = Asset::Fungible(FungibleAsset::new(public_account_id, 3000).unwrap());
+
+    // Old entry at block_old (should be deleted when cutoff is at block_cutoff for
+    // chain_tip=block_tip)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_old,
+        vault_key_old,
+        Some(asset_1),
+    )
+    .unwrap();
+
+    // Entry exactly at cutoff (block_cutoff, should be retained)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_cutoff,
+        vault_key_cutoff,
+        Some(asset_2),
+    )
+    .unwrap();
+
+    // Recent entry (should always be retained)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_tip,
+        vault_key_recent,
+        Some(asset_3),
+    )
+    .unwrap();
+
+    // Update an entry to create a non-latest version
+    let updated_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_update,
+        vault_key_old,
+        Some(updated_asset),
+    )
+    .unwrap();
+
+    // Insert storage map values at different blocks
+    let slot_name = StorageSlotName::mock(5);
+    let map_key_old = num_to_word(10);
+    let map_key_cutoff = num_to_word(20);
+    let map_key_recent = num_to_word(30);
+    let value_1 = num_to_word(111);
+    let value_2 = num_to_word(222);
+    let value_3 = num_to_word(333);
+    let value_updated = num_to_word(444);
+
+    // Old storage map entry at block_old
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_old,
+        slot_name.clone(),
+        map_key_old,
+        value_1,
+    )
+    .unwrap();
+
+    // Storage map entry at cutoff boundary (block_cutoff)
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_cutoff,
+        slot_name.clone(),
+        map_key_cutoff,
+        value_2,
+    )
+    .unwrap();
+
+    // Recent storage map entry
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_tip,
+        slot_name.clone(),
+        map_key_recent,
+        value_3,
+    )
+    .unwrap();
+
+    // Update map_key_old to create a non-latest entry at block_update
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_update,
+        slot_name.clone(),
+        map_key_old,
+        value_updated,
+    )
+    .unwrap();
+
+    // Verify initial state - should have 4 vault assets and 4 storage map values
+    let (_, initial_vault_assets) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert_eq!(initial_vault_assets.len(), 4, "should have 4 vault assets before cleanup");
+
+    let initial_storage_values =
+        queries::select_account_storage_map_values(conn, public_account_id, block_0..=block_tip)
+            .unwrap();
+    assert_eq!(
+        initial_storage_values.values.len(),
+        4,
+        "should have 4 storage map values before cleanup"
+    );
+
+    // Run cleanup with chain_tip = block_tip, cutoff will be block_tip - HISTORICAL_BLOCK_RETENTION
+    // = block_cutoff
+    let (vault_deleted, storage_deleted) = queries::prune_history(conn, block_tip).unwrap();
+
+    // Verify deletions occurred
+    assert_eq!(vault_deleted, 1, "should delete 1 old vault asset");
+    assert_eq!(storage_deleted, 1, "should delete 1 old storage map value");
+
+    // Verify remaining vault assets - should have 3 (cutoff, update, tip)
+    let (_, remaining_vault_assets) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert_eq!(remaining_vault_assets.len(), 3, "should have 3 vault assets after cleanup");
+
+    // Verify no vault asset at block_old remains
+    assert!(
+        !remaining_vault_assets.iter().any(|v| v.block_num == block_old),
+        "block_old vault asset should be deleted"
+    );
+
+    // Verify vault assets at block_cutoff, block_update, block_tip remain
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_cutoff),
+        "block_cutoff vault asset should be retained (at cutoff)"
+    );
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_update),
+        "block_update vault asset should be retained"
+    );
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_tip),
+        "block_tip vault asset should be retained"
+    );
+
+    // Verify remaining storage map values - should have 3 (cutoff, update, tip)
+    let remaining_storage_values =
+        queries::select_account_storage_map_values(conn, public_account_id, block_0..=block_tip)
+            .unwrap();
+    assert_eq!(
+        remaining_storage_values.values.len(),
+        3,
+        "should have 3 storage map values after cleanup"
+    );
+
+    // Verify no storage map value at block_old remains
+    assert!(
+        !remaining_storage_values.values.iter().any(|v| v.block_num == block_old),
+        "block_old storage map value should be deleted"
+    );
+
+    // Verify storage map values at block_cutoff, block_update, block_tip remain
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_cutoff),
+        "block_cutoff storage map value should be retained (at cutoff)"
+    );
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_update),
+        "block_update storage map value should be retained"
+    );
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_tip),
+        "block_tip storage map value should be retained"
+    );
+
+    // Test that is_latest=true entries are never deleted, even if old
+    // Insert an old entry marked as latest
+    let vault_key_old_latest = AssetVaultKey::new_unchecked(num_to_word(999));
+    let asset_old = Asset::Fungible(FungibleAsset::new(public_account_id, 9999).unwrap());
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_0,
+        vault_key_old_latest,
+        Some(asset_old),
+    )
+    .unwrap();
+
+    // This entry at block 0 is marked as is_latest=true by insert_account_vault_asset
+    // Run cleanup again
+    let (vault_deleted_2, _) = queries::prune_history(conn, block_tip).unwrap();
+
+    // The old latest entry should not be deleted (vault_deleted_2 should be 0)
+    assert_eq!(vault_deleted_2, 0, "should not delete any is_latest=true entries");
+
+    // Verify the old latest entry still exists
+    let (_, vault_assets_with_latest) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert!(
+        vault_assets_with_latest
+            .iter()
+            .any(|v| v.block_num == block_0 && v.vault_key == vault_key_old_latest),
+        "is_latest=true entry should be retained even if old"
     );
 }

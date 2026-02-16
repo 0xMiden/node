@@ -871,11 +871,13 @@ pub(crate) fn insert_account_vault_asset(
         // First, update any existing rows with the same (account_id, vault_key) to set
         // is_latest=false
         let vault_key: Word = vault_key.into();
+        let vault_key_bytes = vault_key.to_bytes();
+        let account_id_bytes = account_id.to_bytes();
         let update_count = diesel::update(schema::account_vault_assets::table)
             .filter(
                 schema::account_vault_assets::account_id
-                    .eq(&account_id.to_bytes())
-                    .and(schema::account_vault_assets::vault_key.eq(&vault_key.to_bytes()))
+                    .eq(account_id_bytes)
+                    .and(schema::account_vault_assets::vault_key.eq(vault_key_bytes))
                     .and(schema::account_vault_assets::is_latest.eq(true)),
             )
             .set(schema::account_vault_assets::is_latest.eq(false))
@@ -1205,4 +1207,79 @@ pub(crate) struct AccountStorageMapRowInsert {
     pub(crate) key: Vec<u8>,
     pub(crate) value: Vec<u8>,
     pub(crate) is_latest: bool,
+}
+
+// CLEANUP FUNCTIONS
+// ================================================================================================
+
+/// Number of historical blocks to retain for vault assets and storage map values.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
+/// except for entries marked with `is_latest=true` which are always retained.
+pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
+
+/// Clean up old entries for all accounts, deleting entries older than the retention window.
+///
+/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`.
+/// This is a simple and efficient approach that doesn't require window functions.
+///
+/// # Returns
+/// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+pub(crate) fn prune_history(
+    conn: &mut SqliteConnection,
+    chain_tip: BlockNumber,
+) -> Result<(usize, usize), DatabaseError> {
+    let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+    tracing::Span::current().record("cutoff_block", cutoff_block);
+    let vault_deleted = prune_account_vault_assets(conn, cutoff_block)?;
+    let storage_deleted = prune_account_storage_map_values(conn, cutoff_block)?;
+
+    Ok((vault_deleted, storage_deleted))
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_vault_assets(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
+        schema::account_vault_assets::table.filter(
+            schema::account_vault_assets::block_num
+                .lt(cutoff_block)
+                .and(schema::account_vault_assets::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_storage_map_values(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
+        schema::account_storage_map_values::table.filter(
+            schema::account_storage_map_values::block_num
+                .lt(cutoff_block)
+                .and(schema::account_storage_map_values::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
 }

@@ -597,4 +597,6 @@ impl InnerForest {
             );
         }
     }
+
+    // TODO: tie in-memory forest retention to DB pruning policy once forest queries rely on it.
 }
