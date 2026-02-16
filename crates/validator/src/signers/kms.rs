@@ -1,7 +1,7 @@
 use aws_sdk_kms::types::SigningAlgorithmSpec;
 use miden_protocol::block::{BlockHeader, BlockSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_tx::utils::Serializable;
+use miden_tx::utils::{Deserializable, Serializable};
 
 pub struct KmsSigner {
     key_id: String,
@@ -19,7 +19,7 @@ impl KmsSigner {
 
 impl BlockSigner for KmsSigner {
     fn sign(&self, header: &BlockHeader) -> Signature {
-        let s = tokio::runtime::Handle::current().block_on(async {
+        let sign_output = tokio::runtime::Handle::current().block_on(async {
             self.client
                 .sign()
                 .key_id(&self.key_id)
@@ -27,7 +27,11 @@ impl BlockSigner for KmsSigner {
                 .message(header.commitment().to_bytes().into())
                 .send()
                 .await
+                .expect("todo get updated trait from base next")
         });
+        let sig = sign_output.signature().expect("todo get updated trait from base next");
+        let sig = sig.clone().into_inner(); // todo no clone?
+        Signature::read_from_bytes(&sig).expect("todo get updated trait from base next")
     }
 
     fn public_key(&self) -> PublicKey {
