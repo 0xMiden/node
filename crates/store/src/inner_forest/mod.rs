@@ -663,6 +663,7 @@ impl InnerForest {
                 account_id,
                 slot_name,
                 &delta_entries,
+                prev_root,
             );
 
             tracing::debug!(
@@ -683,14 +684,24 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         delta_entries: &Vec<(Word, Word)>,
+        prev_root: Word,
     ) {
         // Update cache by merging delta with latest entries
         let key = (account_id, slot_name.clone());
-        let mut latest_entries = self
+        let Some(mut latest_entries) = self
             .storage_entries_per_account_per_slot
             .get(&key)
             .map(|snapshot| snapshot.entries.clone())
-            .unwrap_or_default();
+            .or_else(|| {
+                if prev_root == Self::empty_smt_root() {
+                    Some(BTreeMap::new())
+                } else {
+                    None
+                }
+            })
+        else {
+            return;
+        };
 
         for (k, v) in delta_entries {
             if *v == EMPTY_WORD {
