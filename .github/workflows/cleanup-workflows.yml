@@ -127,14 +127,44 @@ jobs:
           done
           (( MAX_WF_LENGTH < 40 )) && MAX_WF_LENGTH=40  # minimum width
 
-          # Index column width: enough for [100/100] → 9 chars including brackets
+          # Column widths
           INDEX_WIDTH=9
+          WORKFLOW_COUNT_WIDTH=14
+          GLOBAL_TOTAL_WIDTH=12
 
-          printf " \n"
-          printf "=== Workflow Cleanup Progress ===\n"
-          printf "%*s | %-*s | %-14s | %-12s\n" "$INDEX_WIDTH" "Index" "$MAX_WF_LENGTH" "Workflow" "Workflow Count" "Global Total"
-          printf "%*s-+-%-*s-+-%-14s-+-%-12s\n" "$INDEX_WIDTH" "---------" "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" "--------------" "------------"
+          # Total table width
+          TOTAL_WIDTH=$(( INDEX_WIDTH + 3 + MAX_WF_LENGTH + 3 + WORKFLOW_COUNT_WIDTH + 3 + GLOBAL_TOTAL_WIDTH ))
 
+          # Function to print dynamic table headers padded with '=' and spaces
+          print_header() {
+            local name="$1"
+            local name_len=${#name}
+            # Add 2 for the spaces around the name
+            local pad=$(( (TOTAL_WIDTH - name_len - 2) / 2 ))
+            local left_pad=$pad
+            local right_pad=$(( TOTAL_WIDTH - name_len - 2 - left_pad ))
+
+            left_str=$(printf '=%0.s' $(seq 1 $left_pad))
+            right_str=$(printf '=%0.s' $(seq 1 $right_pad))
+
+            printf "%s %s %s\n" "$left_str" "$name" "$right_str"
+          }
+
+          # === Progress Header ===
+          print_header "Workflow Cleanup Progress"
+          printf "%*s | %-*s | %-*s | %-*s\n" \
+            "$INDEX_WIDTH" "Index" \
+            "$MAX_WF_LENGTH" "Workflow" \
+            "$WORKFLOW_COUNT_WIDTH" "Workflow Count" \
+            "$GLOBAL_TOTAL_WIDTH" "Global Total"
+
+          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
+            "$INDEX_WIDTH" "---------" \
+            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
+            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
+            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
+
+          # Process each workflow
           for i in "${!WORKFLOWS_ARRAY[@]}"; do
             workflow=${WORKFLOWS_ARRAY[$i]}
             [ -z "$workflow" ] && continue
@@ -158,11 +188,12 @@ jobs:
               WORKFLOW_COUNT=$((WORKFLOW_COUNT + BATCH_COUNT))
               TOTAL_AFFECTED=$((TOTAL_AFFECTED + BATCH_COUNT))
 
-              # Print aligned progress per batch
-              printf "%*s | %-*s | %14s | %12s\n" \
+              # Print progress line for this batch
+              printf "%*s | %-*s | %*s | %*s\n" \
                 "$INDEX_WIDTH" "[$CURRENT_INDEX/$TOTAL_WORKFLOWS]" \
                 "$MAX_WF_LENGTH" "$workflow" \
-                "$WORKFLOW_COUNT" "$TOTAL_AFFECTED"
+                "$WORKFLOW_COUNT_WIDTH" "$WORKFLOW_COUNT" \
+                "$GLOBAL_TOTAL_WIDTH" "$TOTAL_AFFECTED"
 
               if [ "$MODE" = "execute" ]; then
                 for RUN_ID in $RUN_IDS; do
@@ -170,9 +201,9 @@ jobs:
                 done
               fi
 
-              # TEMPORARY BREAK for testing: stop if workflow count > 20
+              # TEMPORARY BREAK for testing
               if [ "$WORKFLOW_COUNT" -gt 20 ]; then
-                echo "⚠️  Temporary break: workflow count exceeded 20, stopping early for safety."
+                echo " ⚠️ Temporary break: workflow count exceeded 20, stopping early for safety."
                 break
               fi
             done
@@ -181,23 +212,52 @@ jobs:
             SUMMARY+=("$workflow|$WORKFLOW_COUNT")
           done
 
-          # Print final aligned summary table
+          # === Summary Header ===
           printf " \n"
-          printf "=== Workflow Cleanup Summary ===\n"
-          printf "%-*s | %14s\n" "$MAX_WF_LENGTH" "Workflow" "Runs"
-          printf "%-*s-+-%14s\n" "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" "--------------"
+          print_header "Workflow Cleanup Summary"
 
+          # Summary table uses the same total width as progress table
+          printf "%*s | %-*s | %-*s | %-*s\n" \
+            "$INDEX_WIDTH" "" \
+            "$MAX_WF_LENGTH" "Workflow" \
+            "$WORKFLOW_COUNT_WIDTH" "Runs" \
+            "$GLOBAL_TOTAL_WIDTH" ""
+
+          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
+            "$INDEX_WIDTH" "$(printf '%.0s-' $(seq 1 $INDEX_WIDTH))" \
+            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
+            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
+            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
+
+          # Print final summary table
           for entry in "${SUMMARY[@]}"; do
             wf="${entry%%|*}"
             count="${entry##*|}"
-            printf "%-*s | %14s\n" "$MAX_WF_LENGTH" "$wf" "$count"
+            printf "%*s | %-*s | %*s | %-*s\n" \
+              "$INDEX_WIDTH" "" \
+              "$MAX_WF_LENGTH" "$wf" \
+              "$WORKFLOW_COUNT_WIDTH" "$count" \
+              "$GLOBAL_TOTAL_WIDTH" ""
           done
 
-          printf "%-*s-+-%14s\n" "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" "--------------"
-          printf "%-*s | %14s\n" "$MAX_WF_LENGTH" "TOTAL" "$TOTAL_AFFECTED"
+          # Footer separator
+          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
+            "$INDEX_WIDTH" "$(printf '%.0s-' $(seq 1 $INDEX_WIDTH))" \
+            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
+            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
+            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
 
+          # TOTAL row
+          printf "%*s | %-*s | %*s | %-*s\n" \
+            "$INDEX_WIDTH" "" \
+            "$MAX_WF_LENGTH" "TOTAL" \
+            "$WORKFLOW_COUNT_WIDTH" "$TOTAL_AFFECTED" \
+            "$GLOBAL_TOTAL_WIDTH" ""
+
+          # Final mode message
+          printf " \n"
           if [ "$MODE" = "dry run" ]; then
-            printf "Dry run complete. No runs were deleted.\n"
+            echo "Dry run complete. No runs were deleted."
           else
-            printf "Cleanup complete.\n"
+            echo "Cleanup complete."
           fi
