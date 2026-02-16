@@ -57,6 +57,8 @@ jobs:
 
       - name: Workflows on github
         id: github
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Note that we filter by `.github` path prefix to ensure we only get locally defined workflows.
           #
