@@ -1,7 +1,6 @@
 //! Tests for `AccountTreeWithHistory`
 
 #[cfg(test)]
-#[expect(clippy::similar_names)]
 #[expect(clippy::needless_range_loop)]
 #[expect(clippy::uninlined_format_args)]
 #[expect(clippy::cast_sign_loss)]

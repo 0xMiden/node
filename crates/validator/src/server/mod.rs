@@ -10,9 +10,10 @@ use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::panic::catch_panic_layer_fn;
+use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::block::{BlockSigner, ProposedBlock};
+use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{
     ProvenTransaction,
     TransactionHeader,

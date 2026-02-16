@@ -1,3 +1,5 @@
+use futures::executor::block_on;
+use miden_node_utils::signer::BlockSigner;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{Account, AccountDelta};
@@ -9,16 +11,14 @@ use miden_protocol::block::{
     BlockNoteTree,
     BlockNumber,
     BlockProof,
-    BlockSigner,
     FeeParameters,
     ProvenBlock,
 };
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
+use miden_protocol::errors::AccountError;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
-
-use crate::errors::GenesisError;
 
 pub mod config;
 
@@ -69,16 +69,13 @@ impl<S> GenesisState<S> {
 
 impl<S: BlockSigner> GenesisState<S> {
     /// Returns the block header and the account SMT
-    pub fn into_block(self) -> Result<GenesisBlock, GenesisError> {
+    pub fn into_block(self) -> anyhow::Result<GenesisBlock> {
         let accounts: Vec<BlockAccountUpdate> = self
             .accounts
             .iter()
             .map(|account| {
                 let account_update_details = if account.id().is_public() {
-                    AccountUpdateDetails::Delta(
-                        AccountDelta::try_from(account.clone())
-                            .map_err(GenesisError::AccountDelta)?,
-                    )
+                    AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone())?)
                 } else {
                     AccountUpdateDetails::Private
                 };
@@ -89,7 +86,7 @@ impl<S: BlockSigner> GenesisState<S> {
                     account_update_details,
                 ))
             })
-            .collect::<Result<Vec<_>, GenesisError>>()?;
+            .collect::<Result<Vec<_>, AccountError>>()?;
 
         // Convert account updates to SMT entries using account_id_to_smt_key
         let smt_entries = accounts.iter().map(|update| {
@@ -134,7 +131,7 @@ impl<S: BlockSigner> GenesisState<S> {
 
         let block_proof = BlockProof::new_dummy();
 
-        let signature = self.block_signer.sign(&header);
+        let signature = block_on(self.block_signer.sign(&header))?;
         // SAFETY: Header and accounts should be valid by construction.
         // No notes or nullifiers are created at genesis, which is consistent with the above empty
         // block note tree root and empty nullifier tree root.

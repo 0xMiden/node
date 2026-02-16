@@ -3485,6 +3485,7 @@ name = "miden-node-utils"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "figment",
  "http 1.4.0",
@@ -3514,6 +3515,7 @@ name = "miden-node-validator"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws-config",
  "aws-sdk-kms",
  "miden-node-proto",

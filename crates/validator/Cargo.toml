@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 anyhow                 = { workspace = true }
+async-trait            = { workspace = true }
 aws-config = { version = "1.8.14" }
 aws-sdk-kms = { version = "1.100" }
 miden-node-proto       = { workspace = true }

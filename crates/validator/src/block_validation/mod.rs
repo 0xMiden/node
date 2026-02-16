@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use miden_protocol::block::{BlockNumber, BlockSigner, ProposedBlock};
+use miden_node_utils::ErrorReport;
+use miden_node_utils::signer::BlockSigner;
+use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::TransactionId;
@@ -17,6 +19,8 @@ pub enum BlockValidationError {
     TransactionNotValidated(TransactionId, BlockNumber),
     #[error("failed to build block")]
     BlockBuildingFailed(#[from] ProposedBlockError),
+    #[error("failed to sign block: {0}")]
+    BlockSigningFailed(String),
 }
 
 // BLOCK VALIDATION
@@ -53,7 +57,10 @@ pub async fn validate_block<S: BlockSigner>(
     let (header, _) = proposed_block.into_header_and_body()?;
 
     // Sign the header.
-    let signature = info_span!("sign_block").in_scope(|| signer.sign(&header));
+    let signature = info_span!("sign_block")
+        .in_scope(async move || signer.sign(&header).await)
+        .await
+        .map_err(|err| BlockValidationError::BlockSigningFailed(err.as_report()))?;
 
     Ok(signature)
 }

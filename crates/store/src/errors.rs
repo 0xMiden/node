@@ -19,7 +19,6 @@ use miden_protocol::errors::{
     AccountTreeError,
     AssetError,
     AssetVaultError,
-    FeeError,
     NoteError,
     NullifierTreeError,
     StorageMapError,
@@ -230,28 +229,10 @@ pub enum DatabaseSetupError {
     Io(#[from] io::Error),
     #[error("database error")]
     Database(#[from] DatabaseError),
-    #[error("genesis block error")]
-    GenesisBlock(#[from] GenesisError),
     #[error("pool build error")]
     PoolBuild(#[from] deadpool::managed::BuildError),
     #[error("Setup deadpool connection pool failed")]
     Pool(#[from] deadpool::managed::PoolError<deadpool_diesel::Error>),
-}
-
-#[derive(Debug, Error)]
-pub enum GenesisError {
-    // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
-    // ---------------------------------------------------------------------------------------------
-    #[error("database error")]
-    Database(#[from] DatabaseError),
-    #[error("failed to build genesis account tree")]
-    AccountTree(#[source] AccountTreeError),
-    #[error("failed to deserialize genesis file")]
-    GenesisFileDeserialization(#[from] DeserializationError),
-    #[error("fee cannot be created")]
-    Fee(#[from] FeeError),
-    #[error("failed to build account delta from account")]
-    AccountDelta(AccountError),
 }
 
 // ENDPOINT ERRORS
@@ -690,7 +671,6 @@ mod compile_tests {
         DatabaseError,
         DatabaseSetupError,
         DeserializationError,
-        GenesisError,
         NetworkAccountError,
         NoteError,
         RecvError,
@@ -722,7 +702,6 @@ mod compile_tests {
         ensure_is_error::<DatabaseError>(PhantomData);
         ensure_is_error::<DatabaseSetupError>(PhantomData);
         ensure_is_error::<diesel::result::Error>(PhantomData);
-        ensure_is_error::<GenesisError>(PhantomData);
         ensure_is_error::<StateInitializationError>(PhantomData);
         ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);
     }
