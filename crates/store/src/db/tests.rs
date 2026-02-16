@@ -1,6 +1,3 @@
-#![allow(clippy::similar_names, reason = "naming dummy test values is hard")]
-#![allow(clippy::too_many_lines, reason = "test code can be long")]
-
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -52,7 +49,6 @@ use miden_protocol::note::{
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
-    ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
@@ -73,7 +69,6 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 
 use super::{AccountInfo, NoteRecord, NullifierInfo};
-use crate::db::TransactionSummary;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{
     HISTORICAL_BLOCK_RETENTION,
@@ -165,33 +160,6 @@ fn sql_insert_transactions() {
     let count = insert_transactions(conn);
 
     assert_eq!(count, 2, "Two elements must have been inserted");
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
-fn sql_select_transactions() {
-    fn query_transactions(conn: &mut SqliteConnection) -> Vec<TransactionSummary> {
-        queries::select_transactions_by_accounts_and_block_range(
-            conn,
-            &[AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap()],
-            BlockNumber::GENESIS..=BlockNumber::from(2),
-        )
-        .unwrap()
-    }
-
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let transactions = query_transactions(conn);
-
-    assert!(transactions.is_empty(), "No elements must be initially in the DB");
-
-    let count = insert_transactions(conn);
-
-    assert_eq!(count, 2, "Two elements must have been inserted");
-
-    let transactions = query_transactions(conn);
-
-    assert_eq!(transactions.len(), 2, "Two elements must be in the DB");
 }
 
 #[test]
@@ -813,80 +781,6 @@ fn db_block_header() {
 
     let res = queries::select_all_block_headers(conn).unwrap();
     assert_eq!(res, [block_header, block_header2]);
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
-fn db_account() {
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let block_num: BlockNumber = 1.into();
-    create_block(conn, block_num);
-
-    // test empty table
-    let account_ids: Vec<AccountId> =
-        [ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE, 1, 2, 3, 4, 5]
-            .iter()
-            .map(|acc_id| (*acc_id).try_into().unwrap())
-            .collect();
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        BlockNumber::GENESIS..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-
-    // test insertion
-    let account_id = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE;
-    let account_commitment = num_to_word(0);
-
-    let row_count = queries::upsert_accounts(
-        conn,
-        &[BlockAccountUpdate::new(
-            account_id.try_into().unwrap(),
-            account_commitment,
-            AccountUpdateDetails::Private,
-        )],
-        block_num,
-    )
-    .unwrap();
-
-    assert_eq!(row_count, 1);
-
-    // test successful query
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        BlockNumber::GENESIS..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert_eq!(
-        res,
-        vec![AccountSummary {
-            account_id: account_id.try_into().unwrap(),
-            account_commitment,
-            block_num,
-        }]
-    );
-
-    // test query for update outside the block range
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        (block_num.as_u32() + 1).into()..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-
-    // test query with unknown accounts
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &[6.try_into().unwrap(), 7.try_into().unwrap(), 8.try_into().unwrap()],
-        (block_num + 1)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
 }
 
 #[test]
@@ -2015,47 +1909,6 @@ fn db_roundtrip_notes() {
         note.details, retrieved_note.details,
         "Note details DB roundtrip must be symmetric"
     );
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
-fn db_roundtrip_transactions() {
-    let mut conn = create_db();
-    let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
-
-    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
-        .unwrap();
-
-    let tx = mock_block_transaction(account_id, 1);
-    let ordered_tx = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
-
-    // Insert
-    queries::insert_transactions(&mut conn, block_num, &ordered_tx).unwrap();
-
-    // Retrieve
-    let retrieved = queries::select_transactions_by_accounts_and_block_range(
-        &mut conn,
-        &[account_id],
-        BlockNumber::GENESIS..=BlockNumber::from(2),
-    )
-    .unwrap();
-
-    assert_eq!(retrieved.len(), 1, "Should have one transaction");
-    let retrieved_tx = &retrieved[0];
-
-    assert_eq!(
-        tx.account_id(),
-        retrieved_tx.account_id,
-        "AccountId DB roundtrip must be symmetric"
-    );
-    assert_eq!(
-        tx.id(),
-        retrieved_tx.transaction_id,
-        "TransactionId DB roundtrip must be symmetric"
-    );
-    assert_eq!(block_num, retrieved_tx.block_num, "Block number must match");
 }
 
 #[test]

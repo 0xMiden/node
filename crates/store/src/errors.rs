@@ -359,6 +359,19 @@ pub enum StateSyncError {
     FailedToBuildMmrDelta(#[from] MmrError),
 }
 
+#[derive(Error, Debug, GrpcError)]
+pub enum SyncChainMmrError {
+    #[error("invalid block range")]
+    InvalidBlockRange(#[source] InvalidBlockRange),
+    #[error("start block is not known")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_from: BlockNumber,
+    },
+    #[error("malformed block number")]
+    DeserializationFailed(#[source] ConversionError),
+}
+
 impl From<diesel::result::Error> for StateSyncError {
     fn from(value: diesel::result::Error) -> Self {
         Self::DatabaseError(DatabaseError::from(value))
@@ -699,7 +712,7 @@ mod compile_tests {
 
     /// Ensure all enum variants remain compat with the desired
     /// trait bounds. Otherwise one gets very unwieldy errors.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn assumed_trait_bounds_upheld() {
         fn ensure_is_error<E>(_phony: PhantomData<E>)
         where

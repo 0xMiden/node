@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
-use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
+use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -36,7 +36,7 @@ pub use crate::db::models::queries::{
     PublicAccountIdsPage,
 };
 use crate::db::models::{Page, queries};
-use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
+use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
 pub(crate) mod manager;
@@ -91,13 +91,6 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
     fn eq(&self, (nullifier, block_num): &(Nullifier, BlockNumber)) -> bool {
         &self.nullifier == nullifier && &self.block_num == block_num
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct TransactionSummary {
-    pub account_id: AccountId,
-    pub block_num: BlockNumber,
-    pub transaction_id: TransactionId,
 }
 
 #[derive(Debug, PartialEq)]
@@ -175,14 +168,6 @@ impl From<NoteRecord> for proto::note::NoteSyncRecord {
             inclusion_path: Some(inclusion_path),
         }
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct StateSyncUpdate {
-    pub notes: Vec<NoteSyncRecord>,
-    pub block_header: BlockHeader,
-    pub account_updates: Vec<AccountSummary>,
-    pub transactions: Vec<TransactionSummary>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -517,19 +502,6 @@ impl Db {
     ) -> Result<Option<(AccountHeader, AccountStorageHeader)>> {
         self.transact("Get account header with storage header at block", move |conn| {
             queries::select_account_header_with_storage_header_at_block(conn, account_id, block_num)
-        })
-        .await
-    }
-
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn get_state_sync(
-        &self,
-        block_number: BlockNumber,
-        account_ids: Vec<AccountId>,
-        note_tags: Vec<u32>,
-    ) -> Result<StateSyncUpdate, StateSyncError> {
-        self.transact::<StateSyncUpdate, StateSyncError, _, _>("state sync", move |conn| {
-            queries::get_state_sync(conn, block_number, account_ids, note_tags)
         })
         .await
     }

@@ -6,9 +6,13 @@
 
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
+- [BREAKING] Remove `SynState` and introduce `SyncChainMmr` ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
+- Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
 
 ### Changes
 
+- [BREAKING] Removed obsolete `SyncState` RPC endpoint; clients should use `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, or `SyncChainMmr` instead ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
+- Added account ID limits for `SyncTransactions`, `SyncAccountVault`, and `SyncAccountStorageMaps` to `GetLimits` responses ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
 - [BREAKING] Added typed `GetAccountError` for `GetAccount` endpoint, splitting `BlockNotAvailable` into `UnknownBlock` and `BlockPruned`. `AccountNotFound` and `AccountNotPublic` now return `InvalidArgument` gRPC status instead of `NotFound`; clients should parse the error details discriminant rather than branching on status codes ([#1646](https://github.com/0xMiden/miden-node/pull/1646)).
 - Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
 - Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
@@ -19,6 +23,9 @@
 ## v0.13.5 (TBD)
 
 - OpenTelemetry traces are now flushed before program termination on panic ([#1643](https://github.com/0xMiden/miden-node/pull/1643)).
+- Added support for the note transport layer in the network monitor ([#1660](https://github.com/0xMiden/miden-node/pull/1660)).
+- Debian packages now include debug symbols ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
+- Debian packages now have coredumps enabled ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
 
 ## v0.13.4 (2026-02-04)
 

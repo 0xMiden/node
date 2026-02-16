@@ -173,7 +173,7 @@ pub(crate) fn select_nullifiers_paged(
     after_nullifier: Option<Nullifier>,
 ) -> Result<NullifiersPage, DatabaseError> {
     // Fetch one extra to determine if there are more results
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query =
@@ -226,7 +226,6 @@ pub(crate) fn select_nullifiers_paged(
 /// INSERT INTO nullifiers (nullifier, nullifier_prefix, block_num)
 /// VALUES (?1, ?2, ?3)
 /// ```
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

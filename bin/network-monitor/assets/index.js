@@ -411,6 +411,9 @@ function updateDisplay() {
             detailsHtml = `
                 <div class="service-details">
                     ${details.RpcStatus ? `
+                        ${details.RpcStatus.url ? `
+                            <div class="detail-item"><strong>URL:</strong> ${details.RpcStatus.url}${renderCopyButton(details.RpcStatus.url, 'URL')}</div>
+                        ` : ''}
                         <div class="detail-item"><strong>Version:</strong> ${details.RpcStatus.version}</div>
                         ${details.RpcStatus.genesis_commitment ? `
                             <div class="detail-item">
@@ -471,31 +474,31 @@ function updateDisplay() {
                         ` : ''}
                     ` : ''}
                     ${details.RemoteProverStatus ? `
-                        <div class="nested-status">
-                            <strong>Prover Status (${details.RemoteProverStatus.url}):</strong>
-                            <div class="detail-item"><strong>Version:</strong> ${details.RemoteProverStatus.version}</div>
+                        <div class="detail-item"><strong>URL:</strong> ${details.RemoteProverStatus.url}${renderCopyButton(details.RemoteProverStatus.url, 'URL')}</div>
+                        <div class="detail-item"><strong>Version:</strong> ${details.RemoteProverStatus.version}</div>
+                        <div class="detail-item"><strong>Proof Type:</strong> ${details.RemoteProverStatus.supported_proof_type}</div>
+                        ${renderGrpcWebProbeSection(details.RemoteProverStatus.url)}
+                        ${details.RemoteProverStatus.workers && details.RemoteProverStatus.workers.length > 0 ? `
                             <div class="nested-status">
-                                <strong>Supported Proof Type:</strong> ${details.RemoteProverStatus.supported_proof_type}
+                                <strong>Workers (${details.RemoteProverStatus.workers.length}):</strong>
+                                ${details.RemoteProverStatus.workers.map(worker => `
+                                    <div class="worker-status">
+                                        <span class="worker-name">${worker.name}</span> -
+                                        <span class="worker-version">${worker.version}</span> -
+                                        <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
+                                    </div>
+                                `).join('')}
                             </div>
-                            ${details.RemoteProverStatus.workers && details.RemoteProverStatus.workers.length > 0 ? `
-                                <div class="nested-status">
-                                    <strong>Workers (${details.RemoteProverStatus.workers.length}):</strong>
-                                    ${details.RemoteProverStatus.workers.map(worker => `
-                                        <div class="worker-status">
-                                            <span class="worker-name">${worker.name}</span> -
-                                            <span class="worker-version">${worker.version}</span> -
-                                            <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            ` : ''}
-                            ${renderGrpcWebProbeSection(details.RemoteProverStatus.url)}
-                        </div>
+                        ` : ''}
                     ` : ''}
                     ${details.FaucetTest ? `
                         <div class="nested-status">
                             <strong>Faucet:</strong>
                             <div class="test-metrics ${service.status === 'Healthy' ? 'healthy' : 'unhealthy'}">
+                                <div class="metric-row">
+                                    <span class="metric-label">URL:</span>
+                                    <span class="metric-value">${details.FaucetTest.url}${renderCopyButton(details.FaucetTest.url, 'URL')}</span>
+                                </div>
                                 <div class="metric-row">
                                     <span class="metric-label">Success Rate:</span>
                                     <span class="metric-value">${formatSuccessRate(details.FaucetTest.success_count, details.FaucetTest.failure_count)}</span>
@@ -613,6 +616,21 @@ function updateDisplay() {
                                         <span class="metric-value">${new Date(details.NtxTracking.last_updated * 1000).toLocaleString()}</span>
                                     </div>
                                 ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${details.NoteTransportStatus ? `
+                        <div class="nested-status">
+                            <strong>Note Transport:</strong>
+                            <div class="test-metrics ${service.status === 'Healthy' ? 'healthy' : 'unhealthy'}">
+                                <div class="metric-row">
+                                    <span class="metric-label">URL:</span>
+                                    <span class="metric-value">${details.NoteTransportStatus.url}${renderCopyButton(details.NoteTransportStatus.url, 'URL')}</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="metric-label">Serving Status:</span>
+                                    <span class="metric-value">${details.NoteTransportStatus.serving_status}</span>
+                                </div>
                             </div>
                         </div>
                     ` : ''}

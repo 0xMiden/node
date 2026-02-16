@@ -96,7 +96,7 @@ impl GenesisConfig {
     /// Convert the in memory representation into the new genesis state
     ///
     /// Also returns the set of secrets for the generated accounts.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub fn into_state<S>(
         self,
         signer: S,

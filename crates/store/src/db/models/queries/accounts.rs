@@ -18,11 +18,7 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
-use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES,
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-};
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -45,7 +41,8 @@ use miden_protocol::utils::{Deserializable, Serializable};
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
-use crate::db::models::{serialize_vec, vec_raw_try_into};
+#[cfg(test)]
+use crate::db::models::vec_raw_try_into;
 use crate::db::{AccountVaultValue, schema};
 use crate::errors::DatabaseError;
 
@@ -292,7 +289,7 @@ pub(crate) fn select_account_commitments_paged(
     use miden_protocol::utils::Serializable;
 
     // Fetch one extra to determine if there are more results
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query = SelectDsl::select(
@@ -367,7 +364,7 @@ pub(crate) fn select_public_account_ids_paged(
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
     use miden_protocol::utils::Serializable;
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
     let mut query = SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
@@ -482,49 +479,6 @@ pub(crate) fn select_account_vault_assets(
     };
 
     Ok((last_block_included, values))
-}
-
-/// Select [`AccountSummary`] from the DB using the given [`SqliteConnection`], given that the
-/// account update was in the given block range (inclusive).
-///
-/// # Returns
-///
-/// The vector of [`AccountSummary`] with the matching accounts.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT
-///     account_id,
-///     account_commitment,
-///     block_num
-/// FROM
-///     accounts
-/// WHERE
-///     block_num > ?1 AND
-///     block_num <= ?2 AND
-///     account_id IN (?3)
-/// ORDER BY
-///     block_num ASC
-/// ```
-pub fn select_accounts_by_block_range(
-    conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<Vec<AccountSummary>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
-
-    let desired_account_ids = serialize_vec(account_ids);
-    let raw: Vec<AccountSummaryRaw> =
-        SelectDsl::select(schema::accounts::table, AccountSummaryRaw::as_select())
-            .filter(schema::accounts::block_num.gt(block_range.start().to_raw_sql()))
-            .filter(schema::accounts::block_num.le(block_range.end().to_raw_sql()))
-            .filter(schema::accounts::account_id.eq_any(desired_account_ids))
-            .order(schema::accounts::block_num.asc())
-            .load::<AccountSummaryRaw>(conn)?;
-    // SAFETY `From` implies `TryFrom<Error=Infallible`, which is the case for `AccountSummaryRaw`
-    // -> `AccountSummary`
-    Ok(vec_raw_try_into(raw).unwrap())
 }
 
 /// Select all accounts from the DB using the given [`SqliteConnection`].
@@ -987,7 +941,7 @@ pub(crate) fn insert_account_storage_map_value(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,

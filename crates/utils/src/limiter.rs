@@ -13,7 +13,7 @@
 /// Basic request limit.
 pub const GENERAL_REQUEST_LIMIT: usize = 1000;
 
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 #[derive(Debug, thiserror::Error)]
 #[error("parameter {which} exceeded limit {limit}: {size}")]
 pub struct QueryLimitError {
@@ -46,21 +46,21 @@ pub trait QueryParamLimiter {
 /// store.
 pub const MAX_RESPONSE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 
-/// Used for the following RPC endpoints
-/// * `state_sync`
+/// Used for the following RPC endpoints:
+/// * `sync_transactions`
 ///
 /// Capped at 1000 account IDs to keep SQL `IN` clauses bounded and response payloads under the
-/// 4 MB budget.
+/// 4 MB budget.
 pub struct QueryParamAccountIdLimit;
 impl QueryParamLimiter for QueryParamAccountIdLimit {
     const PARAM_NAME: &str = "account_id";
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
 
-/// Used for the following RPC endpoints
+/// Used for the following RPC endpoints:
 /// * `select_nullifiers_by_prefix`
 ///
-/// Capped at 1000 prefixes to keep queries and responses comfortably within the 4 MB payload
+/// Capped at 1000 prefixes to keep queries and responses comfortably within the 4 MB payload
 /// budget and to avoid unbounded prefix scans.
 pub struct QueryParamNullifierPrefixLimit;
 impl QueryParamLimiter for QueryParamNullifierPrefixLimit {
@@ -68,12 +68,11 @@ impl QueryParamLimiter for QueryParamNullifierPrefixLimit {
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
 
-/// Used for the following RPC endpoints
+/// Used for the following RPC endpoints:
 /// * `select_nullifiers_by_prefix`
 /// * `sync_nullifiers`
-/// * `sync_state`
 ///
-/// Capped at 1000 nullifiers to bound `IN` clauses and keep response sizes under the 4 MB budget.
+/// Capped at 1000 nullifiers to bound `IN` clauses and keep response sizes under the 4 MB budget.
 pub struct QueryParamNullifierLimit;
 impl QueryParamLimiter for QueryParamNullifierLimit {
     const PARAM_NAME: &str = "nullifier";
@@ -83,7 +82,7 @@ impl QueryParamLimiter for QueryParamNullifierLimit {
 /// Used for the following RPC endpoints
 /// * `get_note_sync`
 ///
-/// Capped at 1000 tags so note sync responses remain within the 4 MB payload budget.
+/// Capped at 1000 tags so note sync responses remain within the 4 MB payload budget.
 pub struct QueryParamNoteTagLimit;
 impl QueryParamLimiter for QueryParamNoteTagLimit {
     const PARAM_NAME: &str = "note_tag";
@@ -103,7 +102,7 @@ impl QueryParamLimiter for QueryParamNoteIdLimit {
 
 /// Used for internal queries retrieving note inclusion proofs by commitment.
 ///
-/// Capped at 1000 commitments to keep internal proof lookups bounded and responses under the 4 MB
+/// Capped at 1000 commitments to keep internal proof lookups bounded and responses under the 4 MB
 /// payload cap.
 pub struct QueryParamNoteCommitmentLimit;
 impl QueryParamLimiter for QueryParamNoteCommitmentLimit {
@@ -114,10 +113,20 @@ impl QueryParamLimiter for QueryParamNoteCommitmentLimit {
 /// Only used internally, not exposed via public RPC.
 ///
 /// Capped at 1000 block headers to bound internal batch operations and keep payloads below the
-/// 4 MB limit.
+/// 4 MB limit.
 pub struct QueryParamBlockLimit;
 impl QueryParamLimiter for QueryParamBlockLimit {
     const PARAM_NAME: &str = "block_header";
+    const LIMIT: usize = GENERAL_REQUEST_LIMIT;
+}
+
+/// Used for the following RPC endpoints:
+/// * `sync_chain_mmr`
+///
+/// Capped at 1000 blocks to keep MMR deltas within the 4 MB payload budget.
+pub struct QueryParamBlockRangeLimit;
+impl QueryParamLimiter for QueryParamBlockRangeLimit {
+    const PARAM_NAME: &str = "block_range";
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
 

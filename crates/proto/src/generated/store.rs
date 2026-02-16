@@ -639,26 +639,12 @@ pub mod rpc_client {
             req.extensions_mut().insert(GrpcMethod::new("store.Rpc", "SyncNotes"));
             self.inner.unary(req, path, codec).await
         }
-        /// Returns info which can be used by the requester to sync up to the latest state of the chain
-        /// for the objects (accounts, notes, nullifiers) the requester is interested in.
-        ///
-        /// This request returns the next block containing requested data. It also returns `chain_tip`
-        /// which is the latest block number in the chain. requester is expected to repeat these requests
-        /// in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-        /// the requester is fully synchronized with the chain.
-        ///
-        /// Each request also returns info about new notes, nullifiers etc. created. It also returns
-        /// Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain
-        /// MMR peaks and chain MMR nodes.
-        ///
-        /// For preserving some degree of privacy, note tags and nullifiers filters contain only high
-        /// part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
-        /// additional filtering of that data on its side.
-        pub async fn sync_state(
+        /// Returns chain MMR updates within a block range.
+        pub async fn sync_chain_mmr(
             &mut self,
-            request: impl tonic::IntoRequest<super::super::rpc::SyncStateRequest>,
+            request: impl tonic::IntoRequest<super::super::rpc::SyncChainMmrRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::super::rpc::SyncStateResponse>,
+            tonic::Response<super::super::rpc::SyncChainMmrResponse>,
             tonic::Status,
         > {
             self.inner
@@ -670,9 +656,9 @@ pub mod rpc_client {
                     )
                 })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/store.Rpc/SyncState");
+            let path = http::uri::PathAndQuery::from_static("/store.Rpc/SyncChainMmr");
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("store.Rpc", "SyncState"));
+            req.extensions_mut().insert(GrpcMethod::new("store.Rpc", "SyncChainMmr"));
             self.inner.unary(req, path, codec).await
         }
         /// Returns account vault updates for specified account within a block range.
@@ -862,26 +848,12 @@ pub mod rpc_server {
             tonic::Response<super::super::rpc::SyncNotesResponse>,
             tonic::Status,
         >;
-        /// Returns info which can be used by the requester to sync up to the latest state of the chain
-        /// for the objects (accounts, notes, nullifiers) the requester is interested in.
-        ///
-        /// This request returns the next block containing requested data. It also returns `chain_tip`
-        /// which is the latest block number in the chain. requester is expected to repeat these requests
-        /// in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-        /// the requester is fully synchronized with the chain.
-        ///
-        /// Each request also returns info about new notes, nullifiers etc. created. It also returns
-        /// Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain
-        /// MMR peaks and chain MMR nodes.
-        ///
-        /// For preserving some degree of privacy, note tags and nullifiers filters contain only high
-        /// part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
-        /// additional filtering of that data on its side.
-        async fn sync_state(
+        /// Returns chain MMR updates within a block range.
+        async fn sync_chain_mmr(
             &self,
-            request: tonic::Request<super::super::rpc::SyncStateRequest>,
+            request: tonic::Request<super::super::rpc::SyncChainMmrRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::super::rpc::SyncStateResponse>,
+            tonic::Response<super::super::rpc::SyncChainMmrResponse>,
             tonic::Status,
         >;
         /// Returns account vault updates for specified account within a block range.
@@ -1394,25 +1366,27 @@ pub mod rpc_server {
                     };
                     Box::pin(fut)
                 }
-                "/store.Rpc/SyncState" => {
+                "/store.Rpc/SyncChainMmr" => {
                     #[allow(non_camel_case_types)]
-                    struct SyncStateSvc<T: Rpc>(pub Arc<T>);
+                    struct SyncChainMmrSvc<T: Rpc>(pub Arc<T>);
                     impl<
                         T: Rpc,
-                    > tonic::server::UnaryService<super::super::rpc::SyncStateRequest>
-                    for SyncStateSvc<T> {
-                        type Response = super::super::rpc::SyncStateResponse;
+                    > tonic::server::UnaryService<super::super::rpc::SyncChainMmrRequest>
+                    for SyncChainMmrSvc<T> {
+                        type Response = super::super::rpc::SyncChainMmrResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::super::rpc::SyncStateRequest>,
+                            request: tonic::Request<
+                                super::super::rpc::SyncChainMmrRequest,
+                            >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as Rpc>::sync_state(&inner, request).await
+                                <T as Rpc>::sync_chain_mmr(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -1423,7 +1397,7 @@ pub mod rpc_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = SyncStateSvc(inner);
+                        let method = SyncChainMmrSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
