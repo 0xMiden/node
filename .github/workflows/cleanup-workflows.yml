@@ -55,52 +55,45 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Workflows on github
-        id: github
+      - name: Filter for deleted workflows
+        id: deleted
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Note that we filter by `.github` path prefix to ensure we only get locally defined workflows.
-          #
-          # Examples of non-local workflows are `dependabot` and `copilot` which have paths:
-          # - dynamic/dependabot/dependabot-updates
-          # - dynamic/copilot-pull-request-reviewer/copilot-pull-request-reviewer
-          WORKFLOWS=$(gh workflow list \
-            --all \
-            --json path \
-            --jq '.[] | select(.path | startswith(".github")) | .path' \
-          )
-          printf "%s\n" $WORKFLOWS
-          {
-            echo "workflows<<EOF"
-            echo "$WORKFLOWS"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-      - name: Filter for deleted workflows
-        id: deleted
-        run: |
-          # Union of `main` and `next` workflows.
-          EXISTING_FILES=$(                       \
-            printf "%s\n%s\n"                     \
+          # Union of `main` and `next` workflows as a JSON array of strings (paths)
+          EXISTING=$(printf "%s\n%s\n" \
             "${{ steps.main.outputs.workflows }}" \
             "${{ steps.next.outputs.workflows }}" \
           )
-          EXISTING_FILES=$(echo "$EXISTING_FILES" | sort -u)
-          printf "%s\n" $EXISTING_FILES
+          EXISTING=$(echo "$EXISTING" | sort -u | jq -R . | jq -s .)
 
-          # Find deleted workflows as the items in `WORKFLOWS` but not in the union of main and next.
-          # This assumes that _all_ items in main and next are present in `WORKFLOWS`.
-          DELETED_FILES=$(                          \
-            printf "%s\n%s\n"                       \
-            "$EXISTING_FILES"                       \
-            "${{ steps.github.outputs.workflows }}" \
+          echo "Existing workflows:"
+          echo "$EXISTING"
+
+          # Get workflows currently on GitHub as JSON array of objects
+          GITHUB=$(gh api repos/{owner}/{repo}/actions/workflows \
+            --jq '.workflows[] | select(.path | startswith(".github")) | { name, node_id, path }' \
+              | jq -s '.')
+
+          echo "Workflows on GitHub:"
+          echo "$GITHUB"
+
+          # Find deleted workflows: present on GitHub but not in main/next
+          DELETED=$(echo "$GITHUB" | jq -c \
+            --argjson existing "$EXISTING" '
+              map(select(.path as $p | $existing | index($p) | not))
+            '
           )
-          DELETED_FILES=$(echo "$DELETED_FILES" | sort | uniq -u)
-          printf "%s\n" $DELETED_FILES
+
+          echo "Deleted workflows:"
+          echo "$DELETED"
+
+          # Output to GitHub Actions
           {
             echo "workflows<<EOF"
-            echo "$DELETED_FILES"
+            echo "$DELETED"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -108,45 +101,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODE: ${{ inputs.mode }}
-          DELETED_WORKFLOWS: ${{ steps.deleted.outputs.workflows }}
+          WORKFLOWS: ${{ steps.deleted.outputs.workflows }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
+          if [ -z "$WORKFLOWS" ]; then
+            echo "No workflows to delete."
+            exit 0
+          fi
+
           TOTAL_AFFECTED=0
           SUMMARY=()
-
-          # Read workflows into an array for indexing
-          mapfile -t WORKFLOWS_ARRAY <<< "$DELETED_WORKFLOWS"
-          TOTAL_WORKFLOWS=${#WORKFLOWS_ARRAY[@]}
-
-          # Convert workflow paths to workflow names
-          WORKFLOW_NAMES_ARRAY=()
-          for wf_path in "${WORKFLOWS_ARRAY[@]}"; do
-            # Extract 'name' from YAML, fallback to filename
-            name=$(yq -r '.name // ""' "$wf_path" 2>/dev/null || true)
-            if [ -z "$name" ]; then
-              name=$(basename "$wf_path")
-            fi
-            WORKFLOW_NAMES_ARRAY+=("$name")
-          done
-
-          # Determine max workflow name length for alignment
-          MAX_WF_LENGTH=0
-          for wf in "${WORKFLOW_NAMES_ARRAY[@]}"; do
-            len=${#wf}
-            (( len > MAX_WF_LENGTH )) && MAX_WF_LENGTH=$len
-          done
-          (( MAX_WF_LENGTH < 30 )) && MAX_WF_LENGTH=30  # minimum width
+          CURRENT_INDEX=0
 
           # Column widths
           INDEX_WIDTH=9
+          MAX_WF_LENGTH=30
           WORKFLOW_COUNT_WIDTH=14
           GLOBAL_TOTAL_WIDTH=12
-
-          # Total table width
           TOTAL_WIDTH=$(( INDEX_WIDTH + 3 + MAX_WF_LENGTH + 3 + WORKFLOW_COUNT_WIDTH + 3 + GLOBAL_TOTAL_WIDTH ))
+
+          # Count total workflows for progress display
+          TOTAL_WORKFLOWS=$(echo "$WORKFLOWS" | jq -r '. | length')
 
           # Function to print dynamic table headers padded with '=' and spaces
           print_header() {
@@ -173,40 +151,44 @@ jobs:
             "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
             "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
 
-          # Process each workflow by name
-          for i in "${!WORKFLOW_NAMES_ARRAY[@]}"; do
+          # Loop over deleted workflows JSON
+          mapfile -t WF_ARRAY < <(echo "$WORKFLOWS" | jq -c '.[]')
+          for wf in "${WF_ARRAY[@]}"; do
+            CURRENT_INDEX=$((CURRENT_INDEX + 1))
+            WORKFLOW_NAME=$(echo "$wf" | jq -r '.name')
+            WORKFLOW_ID=$(echo "$wf" | jq -r '.node_id')
+            WORKFLOW_PATH=$(echo "$wf" | jq -r '.path')
 
-            WORKFLOW_NAME=${WORKFLOW_NAMES_ARRAY[$i]}
-            [ -z "$WORKFLOW_NAME" ] && continue
-            CURRENT_INDEX=$((i + 1))
+            # Safety checks
+            if [ -z "$WORKFLOW_NAME" ]; then
+              echo "::error title=Workflow name empty::Resolved workflow name is empty at index $CURRENT_INDEX"
+              exit 1
+            fi
+            if [ -z "$WORKFLOW_ID" ]; then
+              echo "::error title=Workflow ID missing::Workflow '$WORKFLOW_NAME' (path: $WORKFLOW_PATH) has no ID"
+              exit 1
+            fi
+
             WORKFLOW_COUNT=0
+            AFTER_CURSOR=""
 
-            WORKFLOW_ID=$(gh workflow list --all --json id,name \
-              --jq ".[] | select(.name==\"$WORKFLOW_NAME\") | .id")
-
-            # GraphQL pagination variables
-            AFTER_CURSOR=null
-
+            # Paginate over workflow runs
             while true; do
               RESPONSE=$(gh api graphql -F workflowId="$WORKFLOW_ID" -F after="$AFTER_CURSOR" \
                 -f query='query($workflowId: ID!, $after: String) {
                   node(id: $workflowId) {
                     ... on Workflow {
                       runs(first: 100, after: $after) {
-                        pageInfo {
-                          hasNextPage
-                          endCursor
-                        }
-                        nodes {
-                          databaseId
-                        }
+                        pageInfo { hasNextPage endCursor }
+                        nodes { databaseId }
                       }
                     }
                   }
                 }')
-              RUN_IDS=$(echo "$RESPONSE" | jq -r '.data.repository.workflowRuns.nodes[].databaseId')
-              HAS_NEXT=$(echo "$RESPONSE" | jq -r '.data.repository.workflowRuns.pageInfo.hasNextPage')
-              AFTER_CURSOR=$(echo "$RESPONSE" | jq -r '.data.repository.workflowRuns.pageInfo.endCursor')
+
+              RUN_IDS=$(echo "$RESPONSE" | jq -r '.data.node.runs.nodes[].databaseId')
+              HAS_NEXT=$(echo "$RESPONSE" | jq -r '.data.node.runs.pageInfo.hasNextPage')
+              AFTER_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.runs.pageInfo.endCursor')
 
               [ -z "$RUN_IDS" ] && break
 
@@ -214,7 +196,7 @@ jobs:
               WORKFLOW_COUNT=$((WORKFLOW_COUNT + BATCH_COUNT))
               TOTAL_AFFECTED=$((TOTAL_AFFECTED + BATCH_COUNT))
 
-              # Print progress line
+              # Print progress
               printf "%*s | %-*s | %*s | %*s\n" \
                 "$INDEX_WIDTH" "[$CURRENT_INDEX/$TOTAL_WORKFLOWS]" \
                 "$MAX_WF_LENGTH" "$WORKFLOW_NAME" \
@@ -223,13 +205,13 @@ jobs:
 
               if [ "$MODE" = "execute" ]; then
                 for RUN_ID in $RUN_IDS; do
-                  echo | gh run delete "$RUN_ID" >/dev/null
+                  gh run delete "$RUN_ID" >/dev/null
                 done
               fi
 
               [ "$HAS_NEXT" != "true" ] && break
 
-              # TEMPORARY break for testing large workflows
+              # TEMPORARY safety break
               if [ "$WORKFLOW_COUNT" -gt 200 ]; then
                 echo " ⚠️ Temporary break: workflow count exceeded 200, stopping early."
                 break
@@ -249,4 +231,36 @@ jobs:
           printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
             "$INDEX_WIDTH" "$(printf '%.0s-' $(seq 1 $INDEX_WIDTH))" \
             "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
-            "$WORKFLOW_COUNT_WIDT
+            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
+            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
+
+          # Print summary rows
+          for entry in "${SUMMARY[@]}"; do
+            wf="${entry%%|*}"
+            count="${entry##*|}"
+            printf "%*s | %-*s | %*s | %-*s\n" \
+              "$INDEX_WIDTH" "" \
+              "$MAX_WF_LENGTH" "$wf" \
+              "$WORKFLOW_COUNT_WIDTH" "$count" \
+              "$GLOBAL_TOTAL_WIDTH" ""
+          done
+
+          # Footer separator
+          printf "%*s-+-%-*s-+-%-*s-+-%-*s\n" \
+            "$INDEX_WIDTH" "$(printf '%.0s-' $(seq 1 $INDEX_WIDTH))" \
+            "$MAX_WF_LENGTH" "$(printf '%.0s-' $(seq 1 $MAX_WF_LENGTH))" \
+            "$WORKFLOW_COUNT_WIDTH" "$(printf '%.0s-' $(seq 1 $WORKFLOW_COUNT_WIDTH))" \
+            "$GLOBAL_TOTAL_WIDTH" "$(printf '%.0s-' $(seq 1 $GLOBAL_TOTAL_WIDTH))"
+
+          # TOTAL row
+          printf "%*s | %-*s | %*s | %-*s\n" \
+            "$INDEX_WIDTH" "" \
+            "$MAX_WF_LENGTH" "TOTAL" \
+            "$WORKFLOW_COUNT_WIDTH" "$TOTAL_AFFECTED" \
+            "$GLOBAL_TOTAL_WIDTH" ""
+
+          if [ "$MODE" = "dry run" ]; then
+            echo "Dry run complete. No runs were deleted."
+          else
+            echo "Cleanup complete."
+          fi
