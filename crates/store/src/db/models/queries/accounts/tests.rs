@@ -654,7 +654,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     );
 
     for block in [block_1, block_2, block_3] {
-        upsert_accounts(&mut conn, &[account_update.clone()], block)
+        upsert_accounts(&mut conn, std::slice::from_ref(&account_update), block)
             .expect("upsert_accounts failed");
     }
 
@@ -760,7 +760,7 @@ fn test_select_account_vault_at_block_with_deletion() {
     );
 
     for block in [block_1, block_2, block_3] {
-        upsert_accounts(&mut conn, &[account_update.clone()], block)
+        upsert_accounts(&mut conn, std::slice::from_ref(&account_update), block)
             .expect("upsert_accounts failed");
     }
 
