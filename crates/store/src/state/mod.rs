@@ -1051,7 +1051,8 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to request;;.
+    /// All-entries queries (`SlotData::All`) use the forest to request all entries from cache or
+    /// fall back to database reconstruction.
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,

@@ -638,9 +638,8 @@ impl Db {
         block_num: BlockNumber,
         entries_limit: Option<usize>,
     ) -> Result<miden_node_proto::domain::account::AccountStorageMapDetails> {
-        use miden_node_proto::domain::account::AccountStorageMapDetails;
+        use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
         use miden_protocol::EMPTY_WORD;
-        use miden_protocol::account::StorageSlotName;
 
         // TODO this remains expensive with a large history until we implement pruning for DB
         // columns
@@ -683,14 +682,15 @@ impl Db {
         }
 
         if page.last_block_included != block_num {
-            return Ok(AccountStorageMapDetails::limit_exceeded(StorageSlotName::mock(0)));
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
         }
 
         // Filter to the specific slot and collect latest values per key
         let mut latest_values = BTreeMap::<Word, Word>::new();
         for value in values {
             if value.slot_name == slot_name {
-                latest_values.insert(value.key, value.value);
+                let raw_key = value.key;
+                latest_values.insert(raw_key, value.value);
             }
         }
 
@@ -698,11 +698,14 @@ impl Db {
         latest_values.retain(|_, v| *v != EMPTY_WORD);
 
         if latest_values.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
-            return Ok(AccountStorageMapDetails::limit_exceeded(StorageSlotName::mock(0)));
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
         }
 
         let entries = Vec::from_iter(latest_values.into_iter());
-        Ok(AccountStorageMapDetails::from_forest_entries(slot_name, entries))
+        Ok(AccountStorageMapDetails {
+            slot_name,
+            entries: StorageMapEntries::AllEntries(entries),
+        })
     }
 
     /// Emits size metrics for each table in the database, and the entire database.

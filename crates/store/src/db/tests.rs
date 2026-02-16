@@ -1241,6 +1241,13 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     create_block(&mut conn, block2);
     create_block(&mut conn, block3);
 
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block1)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block2)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 2)], block3)
+        .unwrap();
+
     queries::insert_account_storage_map_value(
         &mut conn,
         account_id,
@@ -2488,7 +2495,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
 
         let mut smt = Smt::default();
         for (key, value) in entries {
-            smt.insert(key, value).unwrap();
+            smt.insert(miden_protocol::account::StorageMap::hash_key(key), value).unwrap();
         }
 
         Some(smt.root())

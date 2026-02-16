@@ -588,10 +588,18 @@ impl InnerForest {
                 continue;
             }
 
+            let hashed_entries = map_entries
+                .iter()
+                .map(|(raw_key, value)| {
+                    let hashed_key = StorageMap::hash_key(*raw_key);
+                    (hashed_key, *value)
+                })
+                .collect::<Vec<_>>();
+
             // insert the updates into the forest and update storage map roots map
             let new_root = self
                 .forest
-                .batch_insert(prev_root, map_entries.iter().copied())
+                .batch_insert(prev_root, hashed_entries.iter().copied())
                 .expect("forest insertion should succeed");
 
             self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
@@ -651,9 +659,17 @@ impl InnerForest {
             let delta_entries: Vec<(Word, Word)> =
                 map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)).collect();
 
+            let hashed_entries = delta_entries
+                .iter()
+                .map(|(raw_key, value)| {
+                    let hashed_key = StorageMap::hash_key(*raw_key);
+                    (hashed_key, *value)
+                })
+                .collect::<Vec<_>>();
+
             let new_root = self
                 .forest
-                .batch_insert(prev_root, delta_entries.iter().copied())
+                .batch_insert(prev_root, hashed_entries.iter().copied())
                 .expect("forest insertion should succeed");
 
             self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
