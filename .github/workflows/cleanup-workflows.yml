@@ -37,7 +37,11 @@ jobs:
           git fetch origin main
           WORKFLOWS=$(git ls-tree -r origin/main --name-only | grep '^.github/workflows/')
           echo $WORKFLOWS
-          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+          {
+            echo "workflows<<EOF"
+            echo "$WORKFLOWS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Workflows on next
         id: next
@@ -45,7 +49,11 @@ jobs:
           git fetch origin next
           WORKFLOWS=$(git ls-tree -r origin/next --name-only | grep '^.github/workflows/')
           echo $WORKFLOWS
-          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+          {
+            echo "workflows<<EOF"
+            echo "$WORKFLOWS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Workflows on github
         id: github
@@ -61,7 +69,11 @@ jobs:
             --jq '.[] | select(.path | startswith(".github")) | .path' \
           )
           echo $WORKFLOWS
-          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+          {
+            echo "workflows<<EOF"
+            echo "$WORKFLOWS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Filter for deleted workflows
         id: deleted
@@ -84,7 +96,11 @@ jobs:
           )
           DELETED_FILES=$(echo "$DELETED_FILES" | sort | uniq -u)
           echo $DELETED_FILES
-          echo "workflows=$DELETED_FILES" >> "$GITHUB_OUTPUT"
+          {
+            echo "workflows<<EOF"
+            echo "$DELETED_FILES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Delete runs from deleted workflows
         env:
