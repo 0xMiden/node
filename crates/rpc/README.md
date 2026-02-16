@@ -24,7 +24,6 @@ The full gRPC method definitions can be found in the [proto](../proto/README.md)
 - [SubmitProvenTransaction](#submitproventransaction)
 - [SyncAccountVault](#SyncAccountVault)
 - [SyncNotes](#syncnotes)
-- [SyncState](#syncstate)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
 - [SyncTransactions](#synctransactions)
 
@@ -212,25 +211,6 @@ When note synchronization fails, detailed error information is provided through 
 | `DESERIALIZATION_FAILED`  | 1     | `INVALID_ARGUMENT` | Malformed note tags format            |
 | `INVALID_BLOCK_RANGE`     | 2     | `INVALID_ARGUMENT` | Invalid block range parameters        |
 | `TOO_MANY_TAGS`           | 3     | `INVALID_ARGUMENT` | Too many note tags in request         |
-
----
-
-### SyncState
-
-Returns info which can be used by the client to sync up to the latest state of the chain for the objects (accounts and
-notes) the client is interested in.
-
-**Limits:** `account_id` (1000), `note_tag` (1000)
-
-This request returns the next block containing requested data. It also returns `chain_tip` which is the latest block
-number in the chain. Client is expected to repeat these requests in a loop until
-`response.block_header.block_num == response.chain_tip`, at which point the client is fully synchronized with the chain.
-
-Each request also returns info about new notes, accounts, etc. created. It also returns Chain MMR delta that can be
-used to update the state of Chain MMR. This includes both chain MMR peaks and chain MMR nodes.
-
-For preserving some degree of privacy, note tags contain only high part of hashes. Thus, returned data contains excessive
-notes, client can make additional filtering of that data on its side.
 
 ---
 

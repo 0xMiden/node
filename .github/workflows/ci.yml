@@ -167,11 +167,12 @@ jobs:
           cargo run --bin miden-node-stress-test seed-store \
             --data-directory ${{ env.DATA_DIR }} \
             --num-accounts 500 --public-accounts-percentage 50
-      - name: Benchmark state sync
-        run: |
-          cargo run --bin miden-node-stress-test benchmark-store \
-            --data-directory ${{ env.DATA_DIR }} \
-            --iterations 10 --concurrency 1 sync-state
+  # TODO re-introduce 
+      # - name: Benchmark state sync
+        # run: |
+          # cargo run --bin miden-node-stress-test benchmark-store \
+            # --data-directory ${{ env.DATA_DIR }} \
+            # --iterations 10 --concurrency 1 sync-state
       - name: Benchmark notes sync
         run: |
           cargo run --bin miden-node-stress-test benchmark-store \
