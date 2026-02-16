@@ -27,67 +27,7 @@ use super::DatabaseError;
 use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
-use crate::db::{TransactionSummary, schema};
-
-/// Select transactions for given accounts in a specified block range
-///
-/// # Parameters
-/// * `account_ids`: List of account IDs to filter by
-///     - Limit: 0 <= size <= 1000
-/// * `block_range`: Range of blocks to include inclusive
-///
-/// # Returns
-///
-/// A vector of [`TransactionSummary`] types or an error.
-///
-/// # Raw SQL
-/// ```sql
-/// SELECT
-///     account_id,
-///     block_num,
-///     transaction_id
-/// FROM
-///     transactions
-/// WHERE
-///     block_num > ?1 AND
-///     block_num <= ?2 AND
-///     account_id IN (?3)
-/// ORDER BY
-///     transaction_id ASC
-/// ```
-pub fn select_transactions_by_accounts_and_block_range(
-    conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<Vec<TransactionSummary>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
-
-    let desired_account_ids = serialize_vec(account_ids);
-    let raw = SelectDsl::select(
-        schema::transactions::table,
-        (
-            schema::transactions::account_id,
-            schema::transactions::block_num,
-            schema::transactions::transaction_id,
-        ),
-    )
-    .filter(schema::transactions::block_num.gt(block_range.start().to_raw_sql()))
-    .filter(schema::transactions::block_num.le(block_range.end().to_raw_sql()))
-    .filter(schema::transactions::account_id.eq_any(desired_account_ids))
-    .order(schema::transactions::transaction_id.asc())
-    .load::<TransactionSummaryRaw>(conn)
-    .map_err(DatabaseError::from)?;
-    vec_raw_try_into(raw)
-}
-
-#[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
-#[diesel(table_name = schema::transactions)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct TransactionSummaryRaw {
-    account_id: Vec<u8>,
-    block_num: i64,
-    transaction_id: Vec<u8>,
-}
+use crate::db::schema;
 
 #[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
 #[diesel(table_name = schema::transactions)]
@@ -101,17 +41,6 @@ pub struct TransactionRecordRaw {
     nullifiers: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
-}
-
-impl TryInto<crate::db::TransactionSummary> for TransactionSummaryRaw {
-    type Error = DatabaseError;
-    fn try_into(self) -> Result<crate::db::TransactionSummary, Self::Error> {
-        Ok(crate::db::TransactionSummary {
-            account_id: AccountId::read_from_bytes(&self.account_id[..])?,
-            block_num: BlockNumber::from_raw_sql(self.block_num)?,
-            transaction_id: TransactionId::read_from_bytes(&self.transaction_id[..])?,
-        })
-    }
 }
 
 impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {

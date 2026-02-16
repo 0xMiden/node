@@ -346,7 +346,7 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 }
 
 /// Loads SMT forest with storage map and vault Merkle paths for all public accounts.
-#[instrument(target = COMPONENT, skip_all, fields(block_num = %block_num))]
+#[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
