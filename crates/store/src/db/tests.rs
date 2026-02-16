@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use assert_matches::assert_matches;
 use diesel::{Connection, SqliteConnection};
-use miden_node_proto::domain::account::AccountSummary;
+use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee, test_fee_params};
 use miden_protocol::account::auth::PublicKeyCommitment;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -73,6 +73,7 @@ use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
 use pretty_assertions::assert_eq;
 use rand::Rng;
+use tempfile::tempdir;
 
 use super::{AccountInfo, NoteRecord, NullifierInfo};
 use crate::db::TransactionSummary;
@@ -1224,6 +1225,126 @@ fn select_storage_map_sync_values() {
     ];
 
     assert_eq!(page.values, expected, "should return latest values ordered by key");
+}
+
+#[test]
+fn select_storage_map_sync_values_paginates_until_last_block() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(7);
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block1,
+        slot_name.clone(),
+        num_to_word(1),
+        num_to_word(11),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block2,
+        slot_name.clone(),
+        num_to_word(2),
+        num_to_word(22),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block3,
+        slot_name.clone(),
+        num_to_word(3),
+        num_to_word(33),
+    )
+    .unwrap();
+
+    let page = queries::select_account_storage_map_values_paged(
+        &mut conn,
+        account_id,
+        BlockNumber::GENESIS..=block3,
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(page.last_block_included, block1, "should truncate at block 1");
+    assert_eq!(page.values.len(), 1, "should include block 1 only");
+}
+
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn reconstruct_storage_map_from_db_pages_until_latest() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(9);
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    let db = crate::db::Db::load(db_path).await.unwrap();
+    let slot_name_for_db = slot_name.clone();
+    db.query("insert paged values", move |db_conn| {
+        db_conn.transaction(|db_conn| {
+            apply_migrations(db_conn)?;
+            create_block(db_conn, block1);
+            create_block(db_conn, block2);
+            create_block(db_conn, block3);
+
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 0)], block1)?;
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 1)], block2)?;
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 2)], block3)?;
+
+            queries::insert_account_storage_map_value(
+                db_conn,
+                account_id,
+                block1,
+                slot_name_for_db.clone(),
+                num_to_word(1),
+                num_to_word(10),
+            )?;
+            queries::insert_account_storage_map_value(
+                db_conn,
+                account_id,
+                block2,
+                slot_name_for_db.clone(),
+                num_to_word(2),
+                num_to_word(20),
+            )?;
+            queries::insert_account_storage_map_value(
+                db_conn,
+                account_id,
+                block3,
+                slot_name_for_db.clone(),
+                num_to_word(3),
+                num_to_word(30),
+            )?;
+            Ok::<_, DatabaseError>(())
+        })
+    })
+    .await
+    .unwrap();
+
+    let details = db
+        .reconstruct_storage_map_from_db(account_id, slot_name.clone(), block3, Some(1))
+        .await
+        .unwrap();
+
+    assert_matches!(details.entries, StorageMapEntries::AllEntries(entries) => {
+        assert_eq!(entries.len(), 3);
+    });
 }
 
 // UTILITIES

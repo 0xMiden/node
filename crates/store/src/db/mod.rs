@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::mem::size_of;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
@@ -639,23 +640,55 @@ impl Db {
     ) -> Result<miden_node_proto::domain::account::AccountStorageMapDetails> {
         use miden_node_proto::domain::account::AccountStorageMapDetails;
         use miden_protocol::EMPTY_WORD;
+        use miden_protocol::account::StorageSlotName;
 
         // TODO this remains expensive with a large history until we implement pruning for DB
         // columns
-        let values = self
+        let mut values = Vec::new();
+        let mut block_range_start = BlockNumber::GENESIS;
+        let entries_limit = entries_limit.unwrap_or_else(|| {
+            // TODO: These limits should be given by the protocol.
+            // See miden-base/issues/1770 for more details
+            pub const ROW_OVERHEAD_BYTES: usize =
+                2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>(); // key + value + block_num + slot_idx
+            MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES
+        });
+
+        let mut page = self
             .select_storage_map_sync_values(
                 account_id,
-                BlockNumber::GENESIS..=block_num,
-                entries_limit,
+                block_range_start..=block_num,
+                Some(entries_limit),
             )
             .await?;
-        if values.last_block_included != block_num {
-            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+
+        values.extend(page.values);
+
+        loop {
+            if page.last_block_included == block_num || page.last_block_included < block_range_start
+            {
+                break;
+            }
+
+            block_range_start = page.last_block_included.child();
+            page = self
+                .select_storage_map_sync_values(
+                    account_id,
+                    block_range_start..=block_num,
+                    Some(entries_limit),
+                )
+                .await?;
+
+            values.extend(page.values);
+        }
+
+        if page.last_block_included != block_num {
+            return Ok(AccountStorageMapDetails::limit_exceeded(StorageSlotName::mock(0)));
         }
 
         // Filter to the specific slot and collect latest values per key
         let mut latest_values = BTreeMap::<Word, Word>::new();
-        for value in values.values {
+        for value in values {
             if value.slot_name == slot_name {
                 latest_values.insert(value.key, value.value);
             }
@@ -665,7 +698,7 @@ impl Db {
         latest_values.retain(|_, v| *v != EMPTY_WORD);
 
         if latest_values.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
-            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+            return Ok(AccountStorageMapDetails::limit_exceeded(StorageSlotName::mock(0)));
         }
 
         let entries = Vec::from_iter(latest_values.into_iter());

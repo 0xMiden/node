@@ -703,7 +703,9 @@ pub(crate) fn select_account_storage_map_values_paged(
     } else {
         (
             *block_range.end(),
-            raw.into_iter().map(StorageMapValue::from_raw_row).collect::<Result<_, _>>()?,
+            raw.into_iter()
+                .map(StorageMapValue::from_raw_row)
+                .collect::<Result<Vec<_>, _>>()?,
         )
     };
 

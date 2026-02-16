@@ -34,7 +34,7 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 
 /// Default size for the LRU cache of latest storage map entries.
 /// Used to serve `SlotData::All` queries for the most recent block.
-const DEFAULT_STORAGE_CACHE_ENTRIES_SIZE: usize = 10_000;
+const DEFAULT_STORAGE_CACHE_ENTRIES_SIZE: usize = 5;
 
 // ERRORS
 // ================================================================================================
@@ -70,6 +70,7 @@ pub enum WitnessError {
 
 /// Snapshot of storage map entries at a specific block.
 struct StorageSnapshot {
+    block_num: BlockNumber,
     entries: BTreeMap<Word, Word>,
 }
 
@@ -92,8 +93,7 @@ pub(crate) struct InnerForest {
     /// LRU cache of latest storage map entries for `SlotData::All` queries.
     /// Only stores the most recent snapshot per (account, slot).
     /// Historical queries fall back to DB.
-    storage_entries_per_block_per_account_per_slot:
-        LruCache<(BlockNumber, AccountId, StorageSlotName), StorageSnapshot>,
+    storage_entries_per_account_per_slot: LruCache<(AccountId, StorageSlotName), StorageSnapshot>,
 
     vault_refcount: HashMap<Word, u64>,
     storage_slots_refcount: HashMap<Word, u64>,
@@ -117,7 +117,7 @@ impl InnerForest {
         Self {
             forest: SmtForest::new(),
             storage_map_roots: BTreeMap::new(),
-            storage_entries_per_block_per_account_per_slot: LruCache::new(
+            storage_entries_per_account_per_slot: LruCache::new(
                 NonZeroUsize::new(DEFAULT_STORAGE_CACHE_ENTRIES_SIZE).unwrap(),
             ),
             vault_refcount: HashMap::new(),
@@ -264,11 +264,13 @@ impl InnerForest {
         block_num: BlockNumber,
     ) -> Option<AccountStorageMapDetails> {
         // Get cached snapshot
-        let snapshot = self.storage_entries_per_block_per_account_per_slot.get(&(
-            block_num,
-            account_id,
-            slot_name.clone(),
-        ))?;
+        let snapshot = self
+            .storage_entries_per_account_per_slot
+            .get(&(account_id, slot_name.clone()))?;
+
+        if snapshot.block_num != block_num {
+            return None;
+        }
 
         if snapshot.entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             return Some(AccountStorageMapDetails {
@@ -279,6 +281,18 @@ impl InnerForest {
 
         let entries = Vec::from_iter(snapshot.entries.iter().map(|(k, v)| (*k, *v)));
         Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries))
+    }
+
+    pub(crate) fn cache_storage_map_entries(
+        &mut self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+        entries: Vec<(Word, Word)>,
+    ) {
+        let entries = BTreeMap::from_iter(entries);
+        self.storage_entries_per_account_per_slot
+            .put((account_id, slot_name), StorageSnapshot { block_num, entries });
     }
 
     // PUBLIC INTERFACE
@@ -566,9 +580,9 @@ impl InnerForest {
                 self.track_storage_map_slot_root(block_num, account_id, slot_name, prev_root);
 
                 // Update cache with empty map
-                self.storage_entries_per_block_per_account_per_slot.put(
-                    (block_num, account_id, slot_name.clone()),
-                    StorageSnapshot { entries: BTreeMap::new() },
+                self.storage_entries_per_account_per_slot.put(
+                    (account_id, slot_name.clone()),
+                    StorageSnapshot { block_num, entries: BTreeMap::new() },
                 );
 
                 continue;
@@ -586,8 +600,8 @@ impl InnerForest {
 
             // Update cache with the entries from this insertion
             let entries = BTreeMap::from_iter(map_entries);
-            self.storage_entries_per_block_per_account_per_slot
-                .put((block_num, account_id, slot_name.clone()), StorageSnapshot { entries });
+            self.storage_entries_per_account_per_slot
+                .put((account_id, slot_name.clone()), StorageSnapshot { block_num, entries });
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -671,16 +685,11 @@ impl InnerForest {
         delta_entries: &Vec<(Word, Word)>,
     ) {
         // Update cache by merging delta with latest entries
-        let key = (block_num, account_id, slot_name.clone());
+        let key = (account_id, slot_name.clone());
         let mut latest_entries = self
-            .storage_entries_per_block_per_account_per_slot
-            .iter()
-            .filter(|((_, cached_account_id, cached_slot_name), _)| {
-                *cached_account_id == account_id && cached_slot_name == slot_name
-            })
-            .map(|((cached_block, ..), snapshot)| (*cached_block, snapshot))
-            .max_by_key(|(cached_block, _)| cached_block.as_u32())
-            .map(|(_, snapshot)| snapshot.entries.clone())
+            .storage_entries_per_account_per_slot
+            .get(&key)
+            .map(|snapshot| snapshot.entries.clone())
             .unwrap_or_default();
 
         for (k, v) in delta_entries {
@@ -691,8 +700,8 @@ impl InnerForest {
             }
         }
 
-        self.storage_entries_per_block_per_account_per_slot
-            .put(key, StorageSnapshot { entries: latest_entries });
+        self.storage_entries_per_account_per_slot
+            .put(key, StorageSnapshot { block_num, entries: latest_entries });
     }
 
     // PRUNING

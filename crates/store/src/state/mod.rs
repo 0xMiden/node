@@ -18,6 +18,7 @@ use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountVaultDetails,
     SlotData,
+    StorageMapEntries,
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
@@ -1148,6 +1149,14 @@ impl State {
                             )
                             .await?;
                         forest_guard = self.forest.write().await;
+                        if let StorageMapEntries::AllEntries(entries) = details.entries.clone() {
+                            forest_guard.cache_storage_map_entries(
+                                account_id,
+                                slot_name.clone(),
+                                block_num,
+                                entries,
+                            );
+                        }
                         details
                     }
                 },

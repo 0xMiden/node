@@ -23,6 +23,10 @@ fn dummy_fungible_asset(faucet_id: AccountId, amount: u64) -> Asset {
     FungibleAsset::new(faucet_id, amount).unwrap().into()
 }
 
+fn num_to_word(n: u64) -> Word {
+    [Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)].into()
+}
+
 /// Creates a partial `AccountDelta` (without code) for testing incremental updates.
 fn dummy_partial_delta(
     account_id: AccountId,
@@ -455,6 +459,60 @@ fn storage_map_open_returns_proofs() {
     });
 }
 
+#[test]
+fn storage_map_all_entries_uses_db_after_cache_eviction() {
+    use std::collections::BTreeMap;
+
+    use assert_matches::assert_matches;
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    let mut forest = InnerForest::new();
+    let account_id = dummy_account();
+
+    for slot_index in 0..6u32 {
+        let slot_name = StorageSlotName::mock(slot_index as usize);
+        let block_num = BlockNumber::from(slot_index + 1);
+        let key = num_to_word(u64::from(slot_index + 1));
+        let value = num_to_word(u64::from(slot_index + 1) * 10);
+
+        let mut map_delta = StorageMapDelta::default();
+        map_delta.insert(key, value);
+        let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
+        let storage_delta = AccountStorageDelta::from_raw(raw);
+        let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
+        forest.update_account(block_num, &delta).unwrap();
+    }
+
+    let evicted_slot = StorageSlotName::mock(0);
+    assert!(
+        forest
+            .storage_entries_per_account_per_slot
+            .get(&(account_id, evicted_slot.clone()))
+            .is_none(),
+        "oldest slot should be evicted from LRU"
+    );
+
+    let db_entries = vec![(num_to_word(1), num_to_word(10))];
+    forest.cache_storage_map_entries(
+        account_id,
+        evicted_slot.clone(),
+        BlockNumber::from(1),
+        db_entries.clone(),
+    );
+
+    let details = forest
+        .get_storage_map_details_full_from_cache(
+            account_id,
+            evicted_slot.clone(),
+            BlockNumber::from(1),
+        )
+        .expect("cache should return details after fallback");
+
+    assert_matches!(details.entries, StorageMapEntries::AllEntries(entries) => {
+        assert_eq!(entries, db_entries);
+    });
+}
+
 // PRUNING TESTS
 // ================================================================================================
 
@@ -609,7 +667,7 @@ fn prune_storage_map_roots_removes_old_entries() {
     let expected_remaining = HISTORICAL_BLOCK_RETENTION as usize;
     assert_eq!(forest.storage_map_roots.len(), expected_remaining);
     // Cache size: LRU may have evicted entries, just verify it's populated
-    assert!(!forest.storage_entries_per_block_per_account_per_slot.is_empty());
+    assert!(!forest.storage_entries_per_account_per_slot.is_empty());
 }
 
 #[test]
@@ -687,11 +745,8 @@ fn prune_handles_multiple_slots() {
 
     let expected_remaining = HISTORICAL_BLOCK_RETENTION;
     assert_eq!(forest.storage_map_roots.len(), (expected_remaining * 2) as usize);
-    // Cache contains an entry per block/slot update
-    assert_eq!(
-        forest.storage_entries_per_block_per_account_per_slot.len(),
-        (TEST_CHAIN_LENGTH * 2) as usize
-    );
+    // Cache contains an entry per slot
+    assert_eq!(forest.storage_entries_per_account_per_slot.len(), 2);
 }
 
 #[test]
