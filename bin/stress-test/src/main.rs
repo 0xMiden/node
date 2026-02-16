@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
 use seeding::seed_store;
 use store::{
+    bench_sync_chain_mmr,
     bench_sync_notes,
     bench_sync_nullifiers,
-    bench_sync_state,
     bench_sync_transactions,
     load_state,
 };
@@ -70,8 +70,6 @@ pub enum Endpoint {
         #[arg(short, long, value_name = "PREFIXES", default_value = "10")]
         prefixes: usize,
     },
-    #[command(name = "sync-state")]
-    SyncState,
     #[command(name = "sync-notes")]
     SyncNotes,
     #[command(name = "sync-transactions")]
@@ -81,6 +79,12 @@ pub enum Endpoint {
         accounts: usize,
         /// Block range size for each request (number of blocks to query).
         #[arg(short, long, value_name = "BLOCK_RANGE", default_value = "100")]
+        block_range: u32,
+    },
+    #[command(name = "sync-chain-mmr")]
+    SyncChainMmr {
+        /// Block range size for each request (number of blocks to query).
+        #[arg(short, long, value_name = "BLOCK_RANGE", default_value = "1000")]
         block_range: u32,
     },
     #[command(name = "load-state")]
@@ -111,9 +115,6 @@ async fn main() {
             Endpoint::SyncNullifiers { prefixes } => {
                 bench_sync_nullifiers(data_directory, iterations, concurrency, prefixes).await;
             },
-            Endpoint::SyncState => {
-                bench_sync_state(data_directory, iterations, concurrency).await;
-            },
             Endpoint::SyncNotes => {
                 bench_sync_notes(data_directory, iterations, concurrency).await;
             },
@@ -126,6 +127,9 @@ async fn main() {
                     block_range,
                 )
                 .await;
+            },
+            Endpoint::SyncChainMmr { block_range } => {
+                bench_sync_chain_mmr(data_directory, iterations, concurrency, block_range).await;
             },
             Endpoint::LoadState => {
                 load_state(&data_directory).await;
