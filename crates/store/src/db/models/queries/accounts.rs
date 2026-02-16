@@ -1224,12 +1224,35 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 ///
 /// # Returns
 /// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
-pub fn cleanup_all_accounts(
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+pub(crate) fn prune_history(
     conn: &mut SqliteConnection,
     chain_tip: BlockNumber,
 ) -> Result<(usize, usize), DatabaseError> {
     let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
-    let vault_deleted = diesel::delete(
+    tracing::Span::current().record("cutoff_block", cutoff_block);
+    let vault_deleted = prune_account_vault_assets(conn, cutoff_block)?;
+    let storage_deleted = prune_account_storage_map_values(conn, cutoff_block)?;
+
+    Ok((vault_deleted, storage_deleted))
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_vault_assets(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
         schema::account_vault_assets::table.filter(
             schema::account_vault_assets::block_num
                 .lt(cutoff_block)
@@ -1237,9 +1260,20 @@ pub fn cleanup_all_accounts(
         ),
     )
     .execute(conn)
-    .map_err(DatabaseError::Diesel)?;
+    .map_err(DatabaseError::Diesel)
+}
 
-    let storage_deleted = diesel::delete(
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_storage_map_values(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
         schema::account_storage_map_values::table.filter(
             schema::account_storage_map_values::block_num
                 .lt(cutoff_block)
@@ -1247,7 +1281,5 @@ pub fn cleanup_all_accounts(
         ),
     )
     .execute(conn)
-    .map_err(DatabaseError::Diesel)?;
-
-    Ok((vault_deleted, storage_deleted))
+    .map_err(DatabaseError::Diesel)
 }
