@@ -97,6 +97,9 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # Performs the actual run deletion.
+      #
+      # This contains a lot of code, but the vast majority is just pretty-printing.
       - name: Delete runs from deleted workflows
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -174,6 +177,9 @@ jobs:
 
             # Paginate over workflow runs
             while true; do
+              # We use github's graphql API here which allows us to paginate over workflow runs.
+              #
+              # Unfortunately `gh run list` does not support pagination, so we use the graphql API instead.
               RESPONSE=$(gh api graphql -F workflowId="$WORKFLOW_ID" -F after="$AFTER_CURSOR" \
                 -f query='query($workflowId: ID!, $after: String) {
                   node(id: $workflowId) {
@@ -210,12 +216,6 @@ jobs:
               fi
 
               [ "$HAS_NEXT" != "true" ] && break
-
-              # TEMPORARY safety break
-              if [ "$WORKFLOW_COUNT" -gt 200 ]; then
-                echo " ⚠️ Temporary break: workflow count exceeded 200, stopping early."
-                break
-              fi
             done
 
             SUMMARY+=("$WORKFLOW_NAME|$WORKFLOW_COUNT")
