@@ -25,11 +25,6 @@
 //! transaction, any nesting of further `transaction(conn, || {})` has no effect and should be
 //! considered unnecessary boilerplate by default.
 
-#![expect(
-    clippy::needless_pass_by_value,
-    reason = "The parent scope does own it, passing by value avoids additional boilerplate"
-)]
-
 use diesel::SqliteConnection;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader};

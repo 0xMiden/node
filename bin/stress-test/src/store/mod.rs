@@ -457,13 +457,13 @@ pub async fn bench_sync_chain_mmr(
 
     let total_runs = results.len();
     let paginated_runs = results.iter().filter(|r| r.pages > 1).count();
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let pagination_rate = if total_runs > 0 {
         (paginated_runs as f64 / total_runs as f64) * 100.0
     } else {
         0.0
     };
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let avg_pages = if total_runs > 0 {
         results.iter().map(|r| r.pages as f64).sum::<f64>() / total_runs as f64
     } else {
