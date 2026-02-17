@@ -47,7 +47,7 @@ tracing           = { workspace = true }
 url               = { workspace = true }
 
 [build-dependencies]
-miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }

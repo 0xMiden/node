@@ -103,6 +103,7 @@ service Api {
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
+    // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 }
 
