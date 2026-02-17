@@ -151,12 +151,12 @@ mod account_tree_with_history_tests {
     fn test_many_accounts_sequential_updates() {
         // Create 50 different account IDs
         let account_count = 50;
-        let ids: Vec<_> = (0..account_count)
+        let account_ids: Vec<_> = (0..account_count)
             .map(|i| AccountIdBuilder::new().build_with_seed([i as u8; 32]))
             .collect();
 
         // Create initial state with all accounts having value [i, 0, 0, 0]
-        let initial_state: Vec<_> = ids
+        let initial_state: Vec<_> = account_ids
             .iter()
             .enumerate()
             .map(|(i, &id)| (id, Word::from([i as u32, 0, 0, 0])))
@@ -172,7 +172,7 @@ mod account_tree_with_history_tests {
                 .map(|i| {
                     let idx = ((block - 1) * 5 + i) % account_count;
                     let new_value = Word::from([idx as u32 + block as u32 * 100, 0, 0, 0]);
-                    (ids[idx], new_value)
+                    (account_ids[idx], new_value)
                 })
                 .collect();
             hist.compute_and_apply_mutations(updates).unwrap();
@@ -183,7 +183,7 @@ mod account_tree_with_history_tests {
 
         // Check genesis state for a few accounts
         for i in 0..4 {
-            let witness = hist.open_at(ids[i], BlockNumber::GENESIS).unwrap();
+            let witness = hist.open_at(account_ids[i], BlockNumber::GENESIS).unwrap();
             assert_eq!(
                 witness.state_commitment(),
                 Word::from([i as u32, 0, 0, 0]),
@@ -196,7 +196,8 @@ mod account_tree_with_history_tests {
         for block in 1..=num_blocks {
             for i in 0..5 {
                 let idx = ((block - 1) * 5 + i) % account_count;
-                let witness = hist.open_at(ids[idx], BlockNumber::from(block as u32)).unwrap();
+                let witness =
+                    hist.open_at(account_ids[idx], BlockNumber::from(block as u32)).unwrap();
                 let expected = Word::from([idx as u32 + block as u32 * 100, 0, 0, 0]);
                 assert_eq!(
                     witness.state_commitment(),
@@ -301,7 +302,7 @@ mod account_tree_with_history_tests {
     fn test_sparse_updates_many_accounts() {
         // Create 200 accounts but only update a few at a time
         let account_count = 200;
-        let ids: Vec<_> = (0..account_count)
+        let account_ids: Vec<_> = (0..account_count)
             .map(|i| {
                 let mut seed = [0u8; 32];
                 seed[0] = i as u8;
@@ -311,7 +312,7 @@ mod account_tree_with_history_tests {
             .collect();
 
         // Create initial state with first 50 accounts
-        let initial_state: Vec<_> = ids
+        let initial_state: Vec<_> = account_ids
             .iter()
             .take(50)
             .enumerate()
@@ -322,7 +323,7 @@ mod account_tree_with_history_tests {
         let mut hist = AccountTreeWithHistory::new(initial_tree, BlockNumber::GENESIS);
 
         // Block 1: Add 50 more accounts
-        let updates1: Vec<_> = ids
+        let updates1: Vec<_> = account_ids
             .iter()
             .skip(50)
             .take(50)
@@ -332,7 +333,7 @@ mod account_tree_with_history_tests {
         hist.compute_and_apply_mutations(updates1).unwrap();
 
         // Block 2: Update every 10th account
-        let updates2: Vec<_> = ids
+        let updates2: Vec<_> = account_ids
             .iter()
             .enumerate()
             .filter(|(i, _)| i % 10 == 0)
@@ -342,7 +343,7 @@ mod account_tree_with_history_tests {
         hist.compute_and_apply_mutations(updates2).unwrap();
 
         // Block 3: Add remaining accounts
-        let updates3: Vec<_> = ids
+        let updates3: Vec<_> = account_ids
             .iter()
             .skip(100)
             .enumerate()
@@ -353,13 +354,13 @@ mod account_tree_with_history_tests {
         // Verify states at different blocks
         // Check genesis - first 50 accounts exist, others don't
         for i in 0..50 {
-            let witness = hist.open_at(ids[i], BlockNumber::GENESIS).unwrap();
+            let witness = hist.open_at(account_ids[i], BlockNumber::GENESIS).unwrap();
             assert_eq!(witness.state_commitment(), Word::from([i as u32, 0, 0, 0]));
         }
 
         // Check block 1 - first 100 accounts exist
         for i in 50..100 {
-            let witness = hist.open_at(ids[i], BlockNumber::from(1)).unwrap();
+            let witness = hist.open_at(account_ids[i], BlockNumber::from(1)).unwrap();
             assert_eq!(witness.state_commitment(), Word::from([i as u32, 1, 0, 0]));
         }
 
@@ -367,14 +368,14 @@ mod account_tree_with_history_tests {
         for i in 0..10 {
             let idx = i * 10;
             if idx < 100 {
-                let witness = hist.open_at(ids[idx], BlockNumber::from(2)).unwrap();
+                let witness = hist.open_at(account_ids[idx], BlockNumber::from(2)).unwrap();
                 assert_eq!(witness.state_commitment(), Word::from([idx as u32, 2, 0, 0]));
             }
         }
 
         // Check block 3 - all 200 accounts should be accessible
         for i in [0, 50, 100, 150, 199] {
-            let witness = hist.open_at(ids[i], BlockNumber::from(3));
+            let witness = hist.open_at(account_ids[i], BlockNumber::from(3));
             assert!(witness.is_some(), "Account {} should exist at block 3", i);
         }
     }
