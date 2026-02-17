@@ -442,9 +442,9 @@ pub struct SyncChainMmrRequest {
 /// Represents the result of syncing chain MMR.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncChainMmrResponse {
-    /// Pagination information.
+    /// For which block range the MMR delta is returned.
     #[prost(message, optional, tag = "1")]
-    pub pagination_info: ::core::option::Option<PaginationInfo>,
+    pub block_range: ::core::option::Option<BlockRange>,
     /// Data needed to update the partial MMR from `request.block_range.block_from + 1` to
     /// `pagination_info.block_num`.
     #[prost(message, optional, tag = "2")]
