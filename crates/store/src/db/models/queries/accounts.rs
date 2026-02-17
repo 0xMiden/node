@@ -55,7 +55,7 @@ mod delta;
 use delta::{
     AccountStateForInsert,
     PartialAccountState,
-    apply_storage_delta_with_precomputed_roots,
+    apply_storage_delta,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
@@ -750,6 +750,57 @@ pub(crate) fn select_latest_account_storage(
     conn: &mut SqliteConnection,
     account_id: AccountId,
 ) -> Result<AccountStorage, DatabaseError> {
+    let (storage_header, map_entries_by_slot) =
+        select_latest_account_storage_components(conn, account_id)?;
+
+    // Reconstruct StorageSlots from header slots + map entries
+    let mut slots = Vec::new();
+    for slot_header in storage_header.slots() {
+        let slot = match slot_header.slot_type() {
+            StorageSlotType::Value => {
+                // For value slots, the header value IS the slot value
+                StorageSlot::with_value(slot_header.name().clone(), slot_header.value())
+            },
+            StorageSlotType::Map => {
+                // For map slots, reconstruct from map entries
+                let entries =
+                    map_entries_by_slot.get(slot_header.name()).cloned().unwrap_or_default();
+                let storage_map = StorageMap::with_entries(entries)?;
+                StorageSlot::with_map(slot_header.name().clone(), storage_map)
+            },
+        };
+        slots.push(slot);
+    }
+
+    Ok(AccountStorage::new(slots)?)
+}
+
+pub(crate) fn select_latest_storage_map_entries(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+    slot_name: StorageSlotName,
+) -> Result<BTreeMap<Word, Word>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
+    let account_id_bytes = account_id.to_bytes();
+    let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
+        SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
+            .filter(t::account_id.eq(&account_id_bytes))
+            .filter(t::slot_name.eq(slot_name.clone().to_raw_sql()))
+            .filter(t::is_latest.eq(true))
+            .load(conn)?;
+
+    let grouped = group_storage_map_entries(map_values)?;
+    Ok(grouped
+        .get(&slot_name)
+        .map(|entries| BTreeMap::from_iter(entries.iter().copied()))
+        .unwrap_or_default())
+}
+
+pub(crate) fn select_latest_account_storage_components(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+) -> Result<(AccountStorageHeader, BTreeMap<StorageSlotName, Vec<(Word, Word)>>), DatabaseError> {
     use schema::account_storage_map_values as t;
 
     let account_id_bytes = account_id.to_bytes();
@@ -763,13 +814,10 @@ pub(crate) fn select_latest_account_storage(
             .optional()?
             .flatten();
 
-    let Some(blob) = storage_blob else {
-        // No storage means empty storage
-        return Ok(AccountStorage::new(Vec::new())?);
+    let header = match storage_blob {
+        Some(blob) => AccountStorageHeader::read_from_bytes(&blob)?,
+        None => AccountStorageHeader::new(Vec::new())?,
     };
-
-    // Deserialize the AccountStorageHeader from the blob
-    let header = AccountStorageHeader::read_from_bytes(&blob)?;
 
     // Query all latest map values for this account
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
@@ -778,7 +826,12 @@ pub(crate) fn select_latest_account_storage(
             .filter(t::is_latest.eq(true))
             .load(conn)?;
 
-    // Group map values by slot name
+    Ok((header, group_storage_map_entries(map_values)?))
+}
+
+fn group_storage_map_entries(
+    map_values: Vec<(String, Vec<u8>, Vec<u8>)>,
+) -> Result<BTreeMap<StorageSlotName, Vec<(Word, Word)>>, DatabaseError> {
     let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
@@ -789,25 +842,7 @@ pub(crate) fn select_latest_account_storage(
         map_entries_by_slot.entry(slot_name).or_default().push((key, value));
     }
 
-    // Reconstruct StorageSlots from header slots + map entries
-    let mut slots = Vec::new();
-    for slot_header in header.slots() {
-        let slot = match slot_header.slot_type() {
-            StorageSlotType::Value => {
-                // For value slots, the header value IS the slot value
-                StorageSlot::with_value(slot_header.name().clone(), slot_header.value())
-            },
-            StorageSlotType::Map => {
-                // For map slots, reconstruct from map entries
-                let entries = map_entries_by_slot.remove(slot_header.name()).unwrap_or_default();
-                let storage_map = StorageMap::with_entries(entries)?;
-                StorageSlot::with_map(slot_header.name().clone(), storage_map)
-            },
-        };
-        slots.push(slot);
-    }
-
-    Ok(AccountStorage::new(slots)?)
+    Ok(map_entries_by_slot)
 }
 
 // ACCOUNT MUTATION
@@ -959,7 +994,6 @@ pub(crate) fn upsert_accounts(
     conn: &mut SqliteConnection,
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
-    precomputed_roots: &crate::inner_forest::BlockAccountRoots,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     for update in accounts {
@@ -1084,22 +1118,48 @@ pub(crate) fn upsert_accounts(
                     }
                 }
 
-                let roots = precomputed_roots.get(&account_id);
+                let mut map_entries = BTreeMap::new();
+                for (slot_name, map_delta) in delta.storage().maps() {
+                    if map_delta.is_empty() {
+                        continue;
+                    }
 
-                // Apply storage map value updates to header
-                let new_storage_header = apply_storage_delta_with_precomputed_roots(
+                    let slot_entries =
+                        select_latest_storage_map_entries(conn, account_id, slot_name.clone())?;
+                    map_entries.insert(slot_name.clone(), slot_entries);
+                }
+
+                let new_storage_header = apply_storage_delta(
                     &state_headers.storage_header,
                     delta.storage(),
-                    roots.map(|roots| &roots.storage_map_roots),
+                    &map_entries,
                 )?;
 
-                let new_vault_root =
-                    roots.and_then(|roots| roots.vault_root).unwrap_or(state_headers.vault_root);
+                let new_vault_root = {
+                    let (_last_block, assets) = select_account_vault_assets(
+                        conn,
+                        account_id,
+                        BlockNumber::GENESIS..=block_num,
+                    )?;
+                    let assets: Vec<Asset> =
+                        assets.into_iter().filter_map(|entry| entry.asset).collect();
+                    let mut vault = AssetVault::new(&assets)?;
+                    vault.apply_delta(delta.vault())?;
+                    vault.root()
+                };
 
                 // --- compute updated account state for the accounts row ---
                 // Apply nonce delta
-                let new_nonce =
-                    Felt::new(state_headers.nonce.as_int() + delta.nonce_delta().as_int());
+                let new_nonce_value = state_headers
+                    .nonce
+                    .as_int()
+                    .checked_add(delta.nonce_delta().as_int())
+                    .ok_or_else(|| {
+                        DatabaseError::DataCorrupted(format!(
+                            "Nonce overflow for account {account_id}"
+                        ))
+                    })?;
+                let new_nonce = Felt::new(new_nonce_value);
 
                 // Create minimal account state data for the row insert
                 let account_state = PartialAccountState {

@@ -43,7 +43,6 @@ use crate::db::migrations::MIGRATIONS;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::schema;
 use crate::errors::DatabaseError;
-use crate::inner_forest::BlockAccountRoots;
 
 fn setup_test_db() -> SqliteConnection {
     let mut conn =
@@ -230,8 +229,7 @@ fn test_select_account_header_at_block_returns_correct_header() {
         AccountUpdateDetails::Delta(delta),
     );
 
-    upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(&mut conn, &[account_update], block_num).expect("upsert_accounts failed");
 
     // Query the account header
     let (header, _storage_header) =
@@ -268,8 +266,7 @@ fn test_select_account_header_at_block_historical_query() {
         AccountUpdateDetails::Delta(delta_1),
     );
 
-    upsert_accounts(&mut conn, &[account_update_1], block_num_1, &BlockAccountRoots::new())
-        .expect("First upsert failed");
+    upsert_accounts(&mut conn, &[account_update_1], block_num_1).expect("First upsert failed");
 
     // Query at block 1 - should return the account
     let (header_1, _) =
@@ -308,8 +305,7 @@ fn test_select_account_vault_at_block_empty() {
         AccountUpdateDetails::Delta(delta),
     );
 
-    upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(&mut conn, &[account_update], block_num).expect("upsert_accounts failed");
 
     // Query vault - should return empty (the test account has no assets)
     let assets = select_account_vault_at_block(&mut conn, account_id, block_num)
@@ -342,8 +338,7 @@ fn test_upsert_accounts_inserts_storage_header() {
         BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Delta(delta));
 
     // Upsert account
-    let result =
-        upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new());
+    let result = upsert_accounts(&mut conn, &[account_update], block_num);
     assert!(result.is_ok(), "upsert_accounts failed: {:?}", result.err());
     assert_eq!(result.unwrap(), 1, "Expected 1 account to be inserted");
 
@@ -398,8 +393,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         AccountUpdateDetails::Delta(delta_1),
     );
 
-    upsert_accounts(&mut conn, &[account_update_1], block_num_1, &BlockAccountRoots::new())
-        .expect("First upsert failed");
+    upsert_accounts(&mut conn, &[account_update_1], block_num_1).expect("First upsert failed");
 
     // Create modified account with different storage value
     let storage_value_modified =
@@ -435,8 +429,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         AccountUpdateDetails::Delta(delta_2),
     );
 
-    upsert_accounts(&mut conn, &[account_update_2], block_num_2, &BlockAccountRoots::new())
-        .expect("Second upsert failed");
+    upsert_accounts(&mut conn, &[account_update_2], block_num_2).expect("Second upsert failed");
 
     // Verify 2 total account rows exist (both historical records)
     let total_accounts: i64 = schema::accounts::table
@@ -527,7 +520,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let account_update =
         BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Delta(delta));
 
-    upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new())
+    upsert_accounts(&mut conn, &[account_update], block_num)
         .expect("Upsert with multiple storage slots failed");
 
     // Query back and verify
@@ -589,7 +582,7 @@ fn test_upsert_accounts_with_empty_storage() {
     let account_update =
         BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Delta(delta));
 
-    upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new())
+    upsert_accounts(&mut conn, &[account_update], block_num)
         .expect("Upsert with empty storage failed");
 
     // Query back and verify
@@ -661,13 +654,8 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     );
 
     for block in [block_1, block_2, block_3] {
-        upsert_accounts(
-            &mut conn,
-            std::slice::from_ref(&account_update),
-            block,
-            &BlockAccountRoots::new(),
-        )
-        .expect("upsert_accounts failed");
+        upsert_accounts(&mut conn, std::slice::from_ref(&account_update), block)
+            .expect("upsert_accounts failed");
     }
 
     // Insert vault asset at block 1: vault_key_1 = 1000 tokens
@@ -772,13 +760,8 @@ fn test_select_account_vault_at_block_with_deletion() {
     );
 
     for block in [block_1, block_2, block_3] {
-        upsert_accounts(
-            &mut conn,
-            std::slice::from_ref(&account_update),
-            block,
-            &BlockAccountRoots::new(),
-        )
-        .expect("upsert_accounts failed");
+        upsert_accounts(&mut conn, std::slice::from_ref(&account_update), block)
+            .expect("upsert_accounts failed");
     }
 
     // Insert vault asset at block 1

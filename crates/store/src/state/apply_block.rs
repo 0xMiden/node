@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use miden_node_utils::ErrorReport;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
@@ -211,35 +210,14 @@ impl State {
         // Signals the write lock has been acquired, and the transaction can be committed.
         let (inform_acquire_done, acquire_done) = oneshot::channel::<()>();
 
-        // Extract public account updates with deltas before block is moved into async task.
-        // Private accounts are filtered out since they don't expose their state changes.
-        let account_deltas =
-            Vec::from_iter(body.updated_accounts().iter().filter_map(
-                |update| match update.details() {
-                    AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
-                    AccountUpdateDetails::Private => None,
-                },
-            ));
-
-        // Compute roots in InnerForest BEFORE spawning DB task, so DB can use precomputed roots.
-        // This avoids loading all entries from disk to recompute roots during DB writes.
-        let precomputed_roots = self
-            .forest
-            .write()
-            .await
-            .apply_block_updates(block_num, account_deltas.clone())?;
-
         // The DB and in-memory state updates need to be synchronized and are partially
         // overlapping. Namely, the DB transaction only proceeds after this task acquires the
         // in-memory write lock. This requires the DB update to run concurrently, so a new task is
         // spawned.
         let db = Arc::clone(&self.db);
         let db_update_task = tokio::spawn(
-            async move {
-                db.apply_block(allow_acquire, acquire_done, signed_block, notes, precomputed_roots)
-                    .await
-            }
-            .in_current_span(),
+            async move { db.apply_block(allow_acquire, acquire_done, signed_block, notes).await }
+                .in_current_span(),
         );
 
         // Wait for the message from the DB update task, that we ready to commit the DB transaction.

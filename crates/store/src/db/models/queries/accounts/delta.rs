@@ -17,12 +17,13 @@ use miden_protocol::account::{
     Account,
     AccountId,
     AccountStorageHeader,
+    StorageMap,
     StorageSlotHeader,
     StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::utils::{Deserializable, Serializable};
-use miden_protocol::{Felt, Word};
+use miden_protocol::{EMPTY_WORD, Felt, Word};
 
 use crate::db::models::conv::raw_sql_to_nonce;
 use crate::db::schema;
@@ -209,10 +210,10 @@ pub(super) fn select_vault_balances_by_faucet_ids(
 ///
 /// For value slots, updates the slot value directly.
 /// For map slots, uses the precomputed roots for updated maps.
-pub(super) fn apply_storage_delta_with_precomputed_roots(
+pub(super) fn apply_storage_delta(
     header: &AccountStorageHeader,
     delta: &AccountStorageDelta,
-    storage_map_roots: Option<&BTreeMap<StorageSlotName, Word>>,
+    map_entries: &BTreeMap<StorageSlotName, BTreeMap<Word, Word>>,
 ) -> Result<AccountStorageHeader, DatabaseError> {
     let mut value_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
     let mut map_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
@@ -226,14 +227,18 @@ pub(super) fn apply_storage_delta_with_precomputed_roots(
             continue;
         }
 
-        let new_root = storage_map_roots
-            .and_then(|roots| roots.get(slot_name).copied())
-            .ok_or_else(|| {
-                DatabaseError::DataCorrupted(format!(
-                    "Missing precomputed storage map root for slot {slot_name}"
-                ))
-            })?;
-        map_updates.insert(slot_name, new_root);
+        let mut entries = map_entries.get(slot_name).cloned().unwrap_or_default();
+        for (key, value) in map_delta.entries() {
+            if *value == EMPTY_WORD {
+                entries.remove(&(*key).into());
+            } else {
+                entries.insert((*key).into(), *value);
+            }
+        }
+
+        let storage_map = StorageMap::with_entries(entries.into_iter())
+            .map_err(DatabaseError::StorageMapError)?;
+        map_updates.insert(slot_name, storage_map.root());
     }
 
     let slots = Vec::from_iter(header.slots().map(|slot| {

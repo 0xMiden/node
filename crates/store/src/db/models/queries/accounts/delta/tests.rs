@@ -46,29 +46,6 @@ use crate::db::models::queries::accounts::{
     upsert_accounts,
 };
 use crate::db::schema::accounts;
-use crate::inner_forest::{BlockAccountRoots, PrecomputedAccountRoots};
-
-/// Builds `BlockAccountRoots` from an expected final account state.
-///
-/// Simulates what `InnerForest::apply_block_updates` computes for storage map and vault roots.
-fn precomputed_roots_from_account(account: &miden_protocol::account::Account) -> BlockAccountRoots {
-    use miden_protocol::account::StorageSlotContent;
-
-    let mut storage_map_roots = BTreeMap::new();
-    for slot in account.storage().slots() {
-        if let StorageSlotContent::Map(map) = slot.content() {
-            storage_map_roots.insert(slot.name().clone(), map.root());
-        }
-    }
-
-    BTreeMap::from_iter([(
-        account.id(),
-        PrecomputedAccountRoots {
-            vault_root: Some(account.vault().root()),
-            storage_map_roots,
-        },
-    )])
-}
 
 fn setup_test_db() -> SqliteConnection {
     let mut conn =
@@ -183,8 +160,7 @@ fn optimized_delta_matches_full_account_method() {
         account.commitment(),
         AccountUpdateDetails::Delta(delta_initial),
     );
-    upsert_accounts(&mut conn, &[account_update_initial], block_1, &BlockAccountRoots::new())
-        .expect("Initial upsert failed");
+    upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
 
     // Verify initial state
     let full_account_before =
@@ -258,9 +234,7 @@ fn optimized_delta_matches_full_account_method() {
         final_commitment,
         AccountUpdateDetails::Delta(partial_delta),
     );
-    let roots = precomputed_roots_from_account(&final_account_for_commitment);
-    upsert_accounts(&mut conn, &[account_update], block_2, &roots)
-        .expect("Partial delta upsert failed");
+    upsert_accounts(&mut conn, &[account_update], block_2).expect("Partial delta upsert failed");
 
     // ----- VERIFY: Query the DB and check that optimized path produced correct results -----
 
@@ -373,8 +347,7 @@ fn optimized_delta_updates_non_empty_vault() {
         account.commitment(),
         AccountUpdateDetails::Delta(delta_initial),
     );
-    upsert_accounts(&mut conn, &[account_update_initial], block_1, &BlockAccountRoots::new())
-        .expect("Initial upsert failed");
+    upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
 
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
@@ -405,9 +378,7 @@ fn optimized_delta_updates_non_empty_vault() {
         expected_commitment,
         AccountUpdateDetails::Delta(partial_delta),
     );
-    let roots = precomputed_roots_from_account(&expected_account);
-    upsert_accounts(&mut conn, &[account_update], block_2, &roots)
-        .expect("Partial delta upsert failed");
+    upsert_accounts(&mut conn, &[account_update], block_2).expect("Partial delta upsert failed");
 
     let vault_assets_after = select_account_vault_at_block(&mut conn, account.id(), block_2)
         .expect("Query vault should succeed");
@@ -493,8 +464,7 @@ fn optimized_delta_updates_storage_map_header() {
         account.commitment(),
         AccountUpdateDetails::Delta(delta_initial),
     );
-    upsert_accounts(&mut conn, &[account_update_initial], block_1, &BlockAccountRoots::new())
-        .expect("Initial upsert failed");
+    upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
 
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
@@ -524,9 +494,7 @@ fn optimized_delta_updates_storage_map_header() {
         expected_commitment,
         AccountUpdateDetails::Delta(partial_delta),
     );
-    let roots = precomputed_roots_from_account(&expected_account);
-    upsert_accounts(&mut conn, &[account_update], block_2, &roots)
-        .expect("Partial delta upsert failed");
+    upsert_accounts(&mut conn, &[account_update], block_2).expect("Partial delta upsert failed");
 
     let (header_after, storage_header_after) =
         select_account_header_with_storage_header_at_block(&mut conn, account.id(), block_2)
@@ -583,7 +551,7 @@ fn upsert_private_account() {
     let account_update =
         BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Private);
 
-    upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new())
+    upsert_accounts(&mut conn, &[account_update], block_num)
         .expect("Private account upsert failed");
 
     // Verify the account exists and commitment matches
@@ -662,7 +630,7 @@ fn upsert_full_state_delta() {
         AccountUpdateDetails::Delta(delta),
     );
 
-    upsert_accounts(&mut conn, &[account_update], block_num, &BlockAccountRoots::new())
+    upsert_accounts(&mut conn, &[account_update], block_num)
         .expect("Full-state delta upsert failed");
 
     // Verify the account state was stored correctly

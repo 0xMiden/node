@@ -33,7 +33,6 @@ use miden_protocol::transaction::OrderedTransactionHeaders;
 
 use super::DatabaseError;
 use crate::db::NoteRecord;
-use crate::inner_forest::BlockAccountRoots;
 
 mod transactions;
 pub use transactions::*;
@@ -51,9 +50,6 @@ pub(crate) use notes::*;
 ///
 /// # Arguments
 ///
-/// * `precomputed_roots` - Vault and storage map roots computed by `InnerForest`. Used directly
-///   instead of reloading all entries from disk to recompute roots during delta updates.
-///
 /// # Returns
 ///
 /// Number of records inserted and/or updated.
@@ -69,12 +65,11 @@ pub(crate) fn apply_block(
     nullifiers: &[Nullifier],
     accounts: &[BlockAccountUpdate],
     transactions: &OrderedTransactionHeaders,
-    precomputed_roots: &BlockAccountRoots,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     // Note: ordering here is important as the relevant tables have FK dependencies.
     count += insert_block_header(conn, block_header, signature)?;
-    count += upsert_accounts(conn, accounts, block_header.block_num(), precomputed_roots)?;
+    count += upsert_accounts(conn, accounts, block_header.block_num())?;
     count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(conn, notes)?;
     count += insert_transactions(conn, block_header.block_num(), transactions)?;
