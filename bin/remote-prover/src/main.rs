@@ -6,7 +6,6 @@ use tracing::info;
 
 use crate::server::prover::ProofKind;
 
-mod error;
 mod generated;
 mod server;
 
