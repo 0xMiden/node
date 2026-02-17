@@ -209,6 +209,11 @@ impl From<NoteRecord> for NoteSyncRecord {
 }
 
 impl Db {
+    /// Creates a new database instance with the provided connection pool.
+    pub fn new(pool: deadpool_diesel::Pool<ConnectionManager>) -> Self {
+        Self { pool }
+    }
+
     /// Creates a new database and inserts the genesis block.
     #[instrument(
         target = COMPONENT,
@@ -251,7 +256,7 @@ impl Db {
     }
 
     /// Create and commit a transaction with the queries added in the provided closure
-    pub(crate) async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
+    pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send
             + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
@@ -276,7 +281,7 @@ impl Db {
     }
 
     /// Run the query _without_ a transaction
-    pub(crate) async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
+    pub async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,
         R: Send + 'static,
