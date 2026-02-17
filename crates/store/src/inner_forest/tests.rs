@@ -460,6 +460,52 @@ fn storage_map_open_returns_proofs() {
 }
 
 #[test]
+fn storage_map_key_hashing_and_raw_entries_are_consistent() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::StorageMap;
+
+    const SLOT_INDEX: usize = 4;
+    const KEY_VALUE: u32 = 11;
+    const VALUE_VALUE: u32 = 22;
+
+    let mut forest = InnerForest::new();
+    let account_id = dummy_account();
+    let slot_name = StorageSlotName::mock(SLOT_INDEX);
+    let block_num = BlockNumber::GENESIS.child();
+    let raw_key = Word::from([KEY_VALUE, 0, 0, 0]);
+    let value = Word::from([VALUE_VALUE, 0, 0, 0]);
+
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(raw_key, value);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
+    forest.update_account(block_num, &delta).unwrap();
+
+    let root = forest.storage_map_roots[&(account_id, slot_name.clone(), block_num)];
+
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_name, block_num, raw_key)
+        .unwrap();
+    let proof: SmtProof = witness.into();
+    let hashed_key = StorageMap::hash_key(raw_key);
+    // Witness proofs use hashed keys because SMT leaves are keyed by the hash.
+    assert_eq!(proof.compute_root(), root);
+    assert_eq!(proof.get(&hashed_key), Some(value));
+    // Raw keys never appear in SMT proofs, only their hashed counterparts.
+    assert_eq!(proof.get(&raw_key), None);
+
+    let details =
+        forest.get_storage_map_details_full_from_cache(account_id, slot_name, block_num).unwrap();
+    assert_matches!(details.entries, StorageMapEntries::AllEntries(entries) => {
+        // Cached entries keep raw keys so callers see user-provided keys.
+        assert_eq!(entries, vec![(raw_key, value)]);
+    });
+}
+
+#[test]
 fn storage_map_all_entries_uses_db_after_cache_eviction() {
     use std::collections::BTreeMap;
 
