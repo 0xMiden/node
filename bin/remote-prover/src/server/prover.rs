@@ -14,10 +14,7 @@ use crate::COMPONENT;
 use crate::generated::{self as proto};
 use crate::server::proof_kind::ProofKind;
 
-/// The prover for the remote prover.
-///
-/// This enum is used to store the prover for the remote prover.
-/// Only one prover is enabled at a time.
+/// An enum representing the different types of provers available.
 pub enum Prover {
     Transaction(LocalTransactionProver),
     Batch(LocalBatchProver),
@@ -25,6 +22,7 @@ pub enum Prover {
 }
 
 impl Prover {
+    /// Constructs a [`Prover`] of the specified [`ProofKind`].
     pub fn new(proof_type: ProofKind) -> Self {
         match proof_type {
             ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
@@ -33,6 +31,8 @@ impl Prover {
         }
     }
 
+    /// Proves a [`ProofRequest`] using the appropriate prover implementation as specified during
+    /// construction.
     pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
         match self {
             Prover::Transaction(prover) => prover.prove_request(request),
@@ -42,12 +42,24 @@ impl Prover {
     }
 }
 
+/// This trait abstracts over proof request handling by providing a common interface for our
+/// different provers.
+///
+/// It standardizes the proving process by providing default implementations for the decoding of
+/// requests, and encoding of response. Notably it also standardizes the instrumentation, though
+/// implementations should still add attributes that can only be known post-decoding of the request.
+///
+/// Implementations of this trait only need to provide the input and ouputs types, as well as the
+/// proof implementation.
 trait ProveRequest {
     type Input: miden_protocol::utils::Deserializable;
     type Output: miden_protocol::utils::Serializable;
 
     fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status>;
 
+    /// Entry-point to the proof request handling.
+    ///
+    /// Decodes the request, proves it, and encodes the response.
     fn prove_request(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
         Self::decode_request(request)
             .and_then(|input| {

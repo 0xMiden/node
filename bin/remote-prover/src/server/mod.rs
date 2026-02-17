@@ -19,6 +19,9 @@ mod prover;
 mod service;
 mod status;
 
+/// Describes the remote-prover server.
+///
+/// Can be parsed from the command line using [`Config::parse`].
 #[derive(clap::Parser)]
 pub struct Config {
     /// The port the gRPC server will be hosted on.
@@ -41,6 +44,9 @@ pub struct Config {
 }
 
 impl Config {
+    /// Starts the remote-prover server.
+    ///
+    /// Note that this function will only return if the server errors.
     pub async fn serve(&self) -> anyhow::Result<()> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))
             .await
