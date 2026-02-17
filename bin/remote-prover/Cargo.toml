@@ -1,6 +1,6 @@
 [package]
 authors.workspace      = true
-description            = "Miden blockchain remote prover"
+description            = "Miden remote prover"
 edition.workspace      = true
 homepage.workspace     = true
 keywords               = ["miden", "prover", "remote"]
@@ -11,18 +11,12 @@ repository.workspace   = true
 rust-version.workspace = true
 version.workspace      = true
 
-[[bin]]
-name = "miden-remote-prover"
-path = "src/main.rs"
-
 [lints]
 workspace = true
 
 [dependencies]
 anyhow                = { workspace = true }
 async-trait           = { version = "0.1" }
-axum                  = { version = "0.8" }
-bytes                 = { version = "1.0" }
 clap                  = { features = ["env"], workspace = true }
 http                  = { workspace = true }
 humantime             = { workspace = true }
@@ -33,17 +27,8 @@ miden-protocol        = { features = ["std"], workspace = true }
 miden-tx              = { features = ["concurrent", "std"], workspace = true }
 miden-tx-batch-prover = { features = ["std"], workspace = true }
 opentelemetry         = { version = "0.31" }
-pingora               = { features = ["lb"], version = "0.6" }
-pingora-core          = { version = "0.6" }
-pingora-limits        = { version = "0.6" }
-pingora-proxy         = { version = "0.6" }
-prometheus            = { version = "0.14" }
 prost                 = { default-features = false, features = ["derive"], workspace = true }
-reqwest               = { version = "0.12" }
-semver                = { version = "1.0" }
 serde                 = { features = ["derive"], version = "1.0" }
-serde_qs              = { version = "0.15" }
-thiserror             = { workspace = true }
 tokio                 = { features = ["full"], workspace = true }
 tokio-stream          = { features = ["net"], version = "0.1" }
 tonic                 = { default-features = false, features = ["codegen", "router", "transport"], version = "0.14" }
@@ -52,8 +37,6 @@ tonic-prost           = { workspace = true }
 tonic-web             = { version = "0.14" }
 tower-http            = { features = ["trace"], workspace = true }
 tracing               = { workspace = true }
-tracing-opentelemetry = { version = "0.32" }
-uuid                  = { features = ["v4"], version = "1.16" }
 
 [dev-dependencies]
 miden-protocol  = { features = ["testing"], workspace = true }
