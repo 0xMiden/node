@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::logging::{OpenTelemetry, setup_tracing};
 use tracing::info;
@@ -12,5 +13,8 @@ async fn main() -> anyhow::Result<()> {
     let _otel_guard = setup_tracing(OpenTelemetry::Enabled)?;
     info!(target: COMPONENT, "Tracing initialized");
 
-    server::Config::parse().serve().await
+    let (handle, _port) =
+        server::Server::parse().spawn().await.context("failed to spawn server")?;
+
+    handle.await.context("proof server panicked").flatten()
 }

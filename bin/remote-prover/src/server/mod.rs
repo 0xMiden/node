@@ -6,6 +6,7 @@ use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use proof_kind::ProofKind;
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -19,11 +20,14 @@ mod prover;
 mod service;
 mod status;
 
+#[cfg(test)]
+mod tests;
+
 /// Describes the remote-prover server.
 ///
 /// Can be parsed from the command line using [`Config::parse`].
 #[derive(clap::Parser)]
-pub struct Config {
+pub struct Server {
     /// The port the gRPC server will be hosted on.
     #[arg(long, default_value = "50051", env = "MIDEN_PROVER_PORT")]
     port: u16,
@@ -43,14 +47,26 @@ pub struct Config {
     capacity: NonZeroUsize,
 }
 
-impl Config {
-    /// Starts the remote-prover server.
-    ///
-    /// Note that this function will only return if the server errors.
-    pub async fn serve(&self) -> anyhow::Result<()> {
+impl Server {
+    /// Spawns the prover server, returning its handle and the port it is listening on.
+    pub async fn spawn(&self) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, u16)> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))
             .await
             .context("failed to bind to gRPC port")?;
+
+        // We do this to get the actual port if configured with `self.port=0`.
+        let port = listener
+            .local_addr()
+            .expect("local address should exist for a tcp listener")
+            .port();
+
+        tracing::info!(
+            server.timeout=%humantime::Duration::from(self.timeout),
+            server.capacity=self.capacity,
+            proof.kind = %self.kind,
+            server.port = port,
+            "proof server listening"
+        );
 
         let status_service = status::StatusService::new(self.kind);
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
@@ -62,7 +78,7 @@ impl Config {
         // Mark the service as serving
         health_reporter.set_serving::<ApiServer<ProverService>>().await;
 
-        tonic::transport::Server::builder()
+        let server = tonic::transport::Server::builder()
             .accept_http1(true)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
@@ -72,9 +88,11 @@ impl Config {
             .add_service(prover_service)
             .add_service(status_service)
             .add_service(health_service)
-            .serve_with_incoming(TcpListenerStream::new(listener))
-            .await?;
+            .serve_with_incoming(TcpListenerStream::new(listener));
 
-        Ok(())
+        let server =
+            tokio::spawn(async move { server.await.context("failed while serving proof server") });
+
+        Ok((server, port))
     }
 }
