@@ -58,6 +58,25 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/next' }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
+      - name: Check static linkage
+        run: |
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          mapfile -t bin_targets < <(
+            echo "${metadata}" | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' | sort -u
+          )
+          [[ ${#bin_targets[@]} -ne 0 ]] || { echo "No bin targets found."; exit 1; }
+          for bin_target in "${bin_targets[@]}"; do
+            binary_path="target/debug/${bin_target}"
+            [[ -x "${binary_path}" ]] || { echo "Missing binary: ${binary_path}"; exit 1; }
+            ldd_output="$(ldd "${binary_path}" 2>&1 || true)"
+            [[ "${ldd_output}" != *"not a dynamic executable"* ]] || continue
+            ! echo "${ldd_output}" | grep -E -q 'librocksdb|libsqlite' || {
+              echo "Dynamic linkage detected for ${bin_target}."
+              echo "${ldd_output}"
+              exit 1
+            }
+          done
+          echo "Static linkage check passed."
   
   clippy:
     name: lint - clippy
