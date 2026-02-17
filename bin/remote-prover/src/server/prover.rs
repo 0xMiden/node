@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use miden_block_prover::LocalBlockProver;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
@@ -10,74 +8,24 @@ use miden_protocol::block::BlockProof;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch_prover::LocalBatchProver;
-use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
-use tonic::{Request, Response};
 use tracing::instrument;
 
 use crate::COMPONENT;
-use crate::generated::api_server::Api as ProverApi;
 use crate::generated::{self as proto};
-
-/// Specifies the type of proof supported by the remote prover.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum ProofKind {
-    Transaction,
-    Batch,
-    Block,
-}
-
-impl From<proto::ProofType> for ProofKind {
-    fn from(value: proto::ProofType) -> Self {
-        match value {
-            proto::ProofType::Transaction => ProofKind::Transaction,
-            proto::ProofType::Batch => ProofKind::Batch,
-            proto::ProofType::Block => ProofKind::Block,
-        }
-    }
-}
-
-impl std::fmt::Display for ProofKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProofKind::Transaction => write!(f, "transaction"),
-            ProofKind::Batch => write!(f, "batch"),
-            ProofKind::Block => write!(f, "block"),
-        }
-    }
-}
-
-impl miden_node_utils::tracing::ToValue for ProofKind {
-    fn to_value(&self) -> opentelemetry::Value {
-        self.to_string().into()
-    }
-}
-
-impl std::str::FromStr for ProofKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "transaction" => Ok(ProofKind::Transaction),
-            "batch" => Ok(ProofKind::Batch),
-            "block" => Ok(ProofKind::Block),
-            _ => Err(format!("Invalid proof type: {s}")),
-        }
-    }
-}
+use crate::server::proof_kind::ProofKind;
 
 /// The prover for the remote prover.
 ///
 /// This enum is used to store the prover for the remote prover.
 /// Only one prover is enabled at a time.
-enum Prover {
+pub enum Prover {
     Transaction(LocalTransactionProver),
     Batch(LocalBatchProver),
     Block(LocalBlockProver),
 }
 
 impl Prover {
-    fn new(proof_type: ProofKind) -> Self {
+    pub fn new(proof_type: ProofKind) -> Self {
         match proof_type {
             ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
             ProofKind::Batch => Self::Batch(LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)),
@@ -85,86 +33,12 @@ impl Prover {
         }
     }
 
-    fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
+    pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
         match self {
             Prover::Transaction(prover) => prover.prove_request(request),
             Prover::Batch(prover) => prover.prove_request(request),
             Prover::Block(prover) => prover.prove_request(request),
         }
-    }
-}
-
-pub struct ProverService {
-    permits: tokio::sync::Semaphore,
-    prover: tokio::sync::Mutex<Prover>,
-    kind: ProofKind,
-}
-
-impl ProverService {
-    pub fn with_capacity(kind: ProofKind, capacity: NonZeroUsize) -> Self {
-        let permits = tokio::sync::Semaphore::new(capacity.get());
-        let prover = Mutex::new(Prover::new(kind));
-        Self { permits, prover, kind }
-    }
-
-    fn is_supported(&self, kind: ProofKind) -> bool {
-        self.kind == kind
-    }
-
-    #[instrument(target=COMPONENT, skip_all, err)]
-    fn acquire_permit(&self) -> Result<SemaphorePermit<'_>, tonic::Status> {
-        self.permits
-            .try_acquire()
-            .map_err(|_| tonic::Status::resource_exhausted("proof queue is full"))
-    }
-
-    #[instrument(target=COMPONENT, skip_all)]
-    async fn acquire_prover_lock(&self) -> MutexGuard<'_, Prover> {
-        self.prover.lock().await
-    }
-}
-
-#[async_trait::async_trait]
-impl ProverApi for ProverService {
-    async fn prove(
-        &self,
-        request: Request<proto::ProofRequest>,
-    ) -> Result<Response<proto::Proof>, tonic::Status> {
-        // Record X-Request-ID header for trace correlation
-        let request_id = request
-            .metadata()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        tracing::Span::current().set_attribute("request.id", request_id);
-
-        // Check that the proof type is supported.
-        let request = request.into_inner();
-        // Protobuf enums return a default value if the enum is set to an unknown value.
-        // This round trip checks that the value is valid.
-        if request.proof_type() as i32 != request.proof_type {
-            return Err(tonic::Status::invalid_argument("unknown proof_type value"));
-        }
-        let proof_kind = ProofKind::from(request.proof_type());
-        tracing::Span::current().set_attribute("request.kind", proof_kind);
-
-        // Reject unsupported proof types early so they don't clog the queue.
-        if !self.is_supported(proof_kind) {
-            return Err(tonic::Status::invalid_argument("unsupported proof type"));
-        }
-
-        // This semaphore acts like a queue, but with a fixed capacity.
-        //
-        // We need to hold this until our request is processed to ensure that the queue capacity is
-        // not exceeded.
-        let _permit = self.acquire_permit()?;
-
-        // This mutex is fair and uses FIFO ordering.
-        let prover = self.acquire_prover_lock().await;
-
-        // Blocking in place is fairly safe since we guarantee that only a single request is
-        // processed at a time.
-        tokio::task::block_in_place(|| prover.prove(request)).map(tonic::Response::new)
     }
 }
 

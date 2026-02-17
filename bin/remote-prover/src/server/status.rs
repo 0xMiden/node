@@ -3,7 +3,7 @@ use tonic::{Request, Response, Status};
 
 use crate::generated::worker_status_api_server::WorkerStatusApi;
 use crate::generated::{self as proto};
-use crate::server::prover::ProofKind;
+use crate::server::proof_kind::ProofKind;
 
 pub struct StatusService {
     kind: ProofKind,
