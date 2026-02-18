@@ -217,15 +217,13 @@ impl InnerForest {
         asset_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
         let root = self.get_vault_root(account_id, block_num).ok_or(WitnessError::RootNotFound)?;
-        let witnessees = asset_keys
-            .into_iter()
-            .map(|key| {
+        let witnessees: Result<Vec<_>, WitnessError> =
+            Result::from_iter(asset_keys.into_iter().map(|key| {
                 let proof = self.forest.open(root, key.into())?;
                 let asset = AssetWitness::new(proof)?;
                 Ok(asset)
-            })
-            .collect::<Result<Vec<_>, WitnessError>>()?;
-        Ok(witnessees)
+            }));
+        witnessees
     }
 
     /// Opens a storage map and returns storage map details with SMT proofs for the given keys.
@@ -560,23 +558,21 @@ impl InnerForest {
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
 
-            // build a vector of entries and filter out any empty values; such values shouldn't
-            // be present in full-state deltas, but it is good to exclude them explicitly
-            let map_entries: Vec<(Word, Word)> = map_delta
-                .entries()
-                .iter()
-                .filter_map(|(&key, &value)| {
+            // build a vector of raw entries and filter out any empty values; such values
+            // shouldn't be present in full-state deltas, but it is good to exclude them
+            // explicitly
+            let raw_map_entries: Vec<(Word, Word)> =
+                Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
                     if value == EMPTY_WORD {
                         None
                     } else {
                         Some((Word::from(key), value))
                     }
-                })
-                .collect();
+                }));
 
             // if the delta is empty, make sure we create an entry in the storage map roots map
             // and update the cache
-            if map_entries.is_empty() {
+            if raw_map_entries.is_empty() {
                 self.track_storage_map_slot_root(block_num, account_id, slot_name, prev_root);
 
                 // Update cache with empty map
@@ -588,13 +584,11 @@ impl InnerForest {
                 continue;
             }
 
-            let hashed_entries = map_entries
-                .iter()
-                .map(|(raw_key, value)| {
-                    let hashed_key = StorageMap::hash_key(*raw_key);
-                    (hashed_key, *value)
-                })
-                .collect::<Vec<_>>();
+            let hashed_entries = Vec::from_iter(
+                raw_map_entries
+                    .iter()
+                    .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
+            );
 
             // insert the updates into the forest and update storage map roots map
             let new_root = self
@@ -604,10 +598,10 @@ impl InnerForest {
 
             self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
 
-            let num_entries = map_entries.len();
+            let num_entries = raw_map_entries.len();
 
             // Update cache with the entries from this insertion
-            let entries = BTreeMap::from_iter(map_entries);
+            let entries = BTreeMap::from_iter(raw_map_entries);
             self.storage_entries_per_account_per_slot
                 .put((account_id, slot_name.clone()), StorageSnapshot { block_num, entries });
 
@@ -656,16 +650,15 @@ impl InnerForest {
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
-            let delta_entries: Vec<(Word, Word)> =
-                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)).collect();
+            let delta_entries: Vec<(Word, Word)> = Vec::from_iter(
+                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
+            );
 
-            let hashed_entries = delta_entries
-                .iter()
-                .map(|(raw_key, value)| {
-                    let hashed_key = StorageMap::hash_key(*raw_key);
-                    (hashed_key, *value)
-                })
-                .collect::<Vec<_>>();
+            let hashed_entries = Vec::from_iter(
+                delta_entries
+                    .iter()
+                    .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
+            );
 
             let new_root = self
                 .forest
@@ -762,11 +755,9 @@ impl InnerForest {
     /// if there's a newer entry before pruning.
     fn prune_vault_roots(&mut self, cutoff_block: BlockNumber) -> usize {
         // Get blocks to prune (only blocks before cutoff)
-        let blocks_to_check: Vec<BlockNumber> = self
-            .vault_roots_by_block
-            .range(..=cutoff_block)
-            .map(|(block, _)| *block)
-            .collect();
+        let blocks_to_check: Vec<BlockNumber> = Vec::from_iter(
+            self.vault_roots_by_block.range(..=cutoff_block).map(|(block, _)| *block),
+        );
 
         let mut roots_to_prune = HashSet::new();
 
@@ -812,11 +803,9 @@ impl InnerForest {
     /// if there's a newer entry before pruning.
     fn prune_storage_roots(&mut self, cutoff_block: BlockNumber) -> usize {
         // Get blocks to prune (only blocks before cutoff)
-        let blocks_to_check: Vec<BlockNumber> = self
-            .storage_slots_by_block
-            .range(..=cutoff_block)
-            .map(|(block, _)| *block)
-            .collect();
+        let blocks_to_check: Vec<BlockNumber> = Vec::from_iter(
+            self.storage_slots_by_block.range(..=cutoff_block).map(|(block, _)| *block),
+        );
 
         let mut roots_to_prune = HashSet::new();
 

@@ -463,8 +463,8 @@ fn storage_map_open_returns_proofs() {
 fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
     use miden_protocol::account::StorageMap;
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
     const SLOT_INDEX: usize = 4;
     const KEY_VALUE: u32 = 11;
@@ -497,8 +497,9 @@ fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     // Raw keys never appear in SMT proofs, only their hashed counterparts.
     assert_eq!(proof.get(&raw_key), None);
 
-    let details =
-        forest.get_storage_map_details_full_from_cache(account_id, slot_name, block_num).unwrap();
+    let details = forest
+        .get_storage_map_details_full_from_cache(account_id, slot_name, block_num)
+        .unwrap();
     assert_matches!(details.entries, StorageMapEntries::AllEntries(entries) => {
         // Cached entries keep raw keys so callers see user-provided keys.
         assert_eq!(entries, vec![(raw_key, value)]);
