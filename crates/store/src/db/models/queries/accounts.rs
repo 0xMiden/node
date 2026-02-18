@@ -64,6 +64,8 @@ use delta::{
 mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
+type StorageHeaderWithEntries =
+    (AccountStorageHeader, BTreeMap<StorageSlotName, Vec<(Word, Word)>>);
 
 // NETWORK ACCOUNT TYPE
 // ================================================================================================
@@ -778,7 +780,7 @@ pub(crate) fn select_latest_account_storage(
 pub(crate) fn select_latest_storage_map_entries(
     conn: &mut SqliteConnection,
     account_id: AccountId,
-    slot_name: StorageSlotName,
+    slot_name: &StorageSlotName,
 ) -> Result<BTreeMap<Word, Word>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
@@ -792,7 +794,7 @@ pub(crate) fn select_latest_storage_map_entries(
 
     let grouped = group_storage_map_entries(map_values)?;
     Ok(grouped
-        .get(&slot_name)
+        .get(slot_name)
         .map(|entries| BTreeMap::from_iter(entries.iter().copied()))
         .unwrap_or_default())
 }
@@ -800,7 +802,7 @@ pub(crate) fn select_latest_storage_map_entries(
 pub(crate) fn select_latest_account_storage_components(
     conn: &mut SqliteConnection,
     account_id: AccountId,
-) -> Result<(AccountStorageHeader, BTreeMap<StorageSlotName, Vec<(Word, Word)>>), DatabaseError> {
+) -> Result<StorageHeaderWithEntries, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     let account_id_bytes = account_id.to_bytes();
@@ -1125,7 +1127,7 @@ pub(crate) fn upsert_accounts(
                     }
 
                     let slot_entries =
-                        select_latest_storage_map_entries(conn, account_id, slot_name.clone())?;
+                        select_latest_storage_map_entries(conn, account_id, slot_name)?;
                     map_entries.insert(slot_name.clone(), slot_entries);
                 }
 

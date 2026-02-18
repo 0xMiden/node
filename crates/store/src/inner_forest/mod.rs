@@ -53,6 +53,10 @@ pub enum InnerForestError {
         prev_balance: u64,
         delta: i64,
     },
+    #[error(transparent)]
+    AssetError(#[cause] AssetError),
+    #[error(transparent)]
+    MerkleError(#[cause] MerkleError),
 }
 
 #[derive(Debug, Error)]
@@ -307,7 +311,7 @@ impl InnerForest {
         let storage_map_roots = if delta.storage().is_empty() {
             BTreeMap::new()
         } else {
-            self.update_account_storage(block_num, account_id, delta.storage(), is_full_state)
+            self.update_account_storage(block_num, account_id, delta.storage(), is_full_state)?
         };
 
         Ok(PrecomputedAccountRoots { vault_root, storage_map_roots })
@@ -359,8 +363,7 @@ impl InnerForest {
 
         // Process fungible assets
         for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
-            let key: Word =
-                FungibleAsset::new(*faucet_id, 0).expect("valid faucet id").vault_key().into();
+            let key: Word = FungibleAsset::new(*faucet_id, 0)?.vault_key().into();
 
             let new_amount = {
                 // amount delta is a change that must be applied to previous balance.
@@ -387,7 +390,7 @@ impl InnerForest {
             let value = if new_amount == 0 {
                 EMPTY_WORD
             } else {
-                FungibleAsset::new(*faucet_id, new_amount).expect("valid fungible asset").into()
+                FungibleAsset::new(*faucet_id, new_amount)?.into()
             };
             entries.push((key, value));
         }
@@ -410,10 +413,7 @@ impl InnerForest {
 
         let num_entries = entries.len();
 
-        let new_root = self
-            .forest
-            .batch_insert(prev_root, entries)
-            .expect("forest insertion should succeed");
+        let new_root = self.forest.batch_insert(prev_root, entries)?;
 
         self.vault_roots.insert((account_id, block_num), new_root);
 
@@ -487,7 +487,7 @@ impl InnerForest {
         account_id: AccountId,
         storage_delta: &AccountStorageDelta,
         is_full_state: bool,
-    ) -> BTreeMap<StorageSlotName, Word> {
+    ) -> Result<BTreeMap<StorageSlotName, Word>, InnerForestError> {
         let mut updated_roots = BTreeMap::new();
 
         for (slot_name, map_delta) in storage_delta.maps() {
@@ -525,10 +525,8 @@ impl InnerForest {
                 continue;
             }
 
-            let updated_root = self
-                .forest
-                .batch_insert(prev_root, delta_entries.iter().copied())
-                .expect("forest insertion should succeed");
+            let updated_root =
+                self.forest.batch_insert(prev_root, delta_entries.iter().copied())?;
 
             self.storage_map_roots
                 .insert((account_id, slot_name.clone(), block_num), updated_root);
@@ -560,7 +558,7 @@ impl InnerForest {
             );
         }
 
-        updated_roots
+        Ok(updated_roots)
     }
 
     // TODO: tie in-memory forest retention to DB pruning policy once forest queries rely on it.

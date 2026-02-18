@@ -189,7 +189,7 @@ pub(super) fn select_vault_balances_by_faucet_ids(
             .filter(vault::vault_key.eq_any(&vault_keys))
             .load(conn)?;
 
-    let mut balances = BTreeMap::new();
+    let mut balances = BTreeMap::from_iter(faucet_ids.iter().map(|faucet_id| (*faucet_id, 0)));
 
     for (_vault_key_bytes, maybe_asset_bytes) in entries {
         if let Some(asset_bytes) = maybe_asset_bytes {
