@@ -512,26 +512,15 @@ async fn get_limits_endpoint() {
         QueryParamAccountIdLimit::LIMIT
     );
 
-    let sync_account_vault =
-        limits.endpoints.get("SyncAccountVault").expect("SyncAccountVault should exist");
-    assert_eq!(
-        sync_account_vault.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
-        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncAccountVault {} limit should be {}",
-        QueryParamAccountIdLimit::PARAM_NAME,
-        QueryParamAccountIdLimit::LIMIT
+    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id,
+    // not a repeated list, so they do not have list parameter limits.
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountVault"),
+        "SyncAccountVault should not have list parameter limits"
     );
-
-    let sync_account_storage_maps = limits
-        .endpoints
-        .get("SyncAccountStorageMaps")
-        .expect("SyncAccountStorageMaps should exist");
-    assert_eq!(
-        sync_account_storage_maps.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
-        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncAccountStorageMaps {} limit should be {}",
-        QueryParamAccountIdLimit::PARAM_NAME,
-        QueryParamAccountIdLimit::LIMIT
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountStorageMaps"),
+        "SyncAccountStorageMaps should not have list parameter limits"
     );
 
     // Verify GetNotesById endpoint
