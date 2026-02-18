@@ -18,7 +18,6 @@ workspace = true
 
 [dependencies]
 anyhow                 = { workspace = true }
-deadpool-diesel        = { workspace = true }
 diesel                 = { workspace = true }
 diesel_migrations      = { workspace = true }
 miden-node-db          = { workspace = true }

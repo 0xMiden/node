@@ -1015,7 +1015,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524bc3df0d57e98ecd022e21ba31166c2625e7d3e5bcc4510efaeeab4abcab04"
 dependencies = [
  "deadpool-runtime",
- "tracing",
 ]
 
 [[package]]
@@ -2803,7 +2802,6 @@ dependencies = [
  "deadpool-diesel",
  "deadpool-sync",
  "diesel",
- "libsqlite3-sys",
  "miden-protocol",
  "thiserror 2.0.18",
  "tracing",
@@ -2822,9 +2820,6 @@ name = "miden-node-ntx-builder"
 version = "0.14.0"
 dependencies = [
  "anyhow",
- "deadpool",
- "deadpool-diesel",
- "deadpool-sync",
  "diesel",
  "diesel_migrations",
  "futures",
@@ -2928,7 +2923,6 @@ dependencies = [
  "criterion",
  "deadpool",
  "deadpool-diesel",
- "deadpool-sync",
  "diesel",
  "diesel_migrations",
  "fs-err",
@@ -3028,7 +3022,6 @@ name = "miden-node-validator"
 version = "0.14.0"
 dependencies = [
  "anyhow",
- "deadpool-diesel",
  "diesel",
  "diesel_migrations",
  "miden-node-db",
