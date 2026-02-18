@@ -1,9 +1,31 @@
+use aws_sdk_kms::error::SdkError;
+use aws_sdk_kms::operation::sign::SignError;
 use aws_sdk_kms::types::SigningAlgorithmSpec;
 use miden_node_utils::signer::BlockSigner;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx::utils::{Deserializable, DeserializationError, Serializable};
 
+// KMS SIGNER ERROR
+// ================================================================================================
+
+#[derive(Debug, thiserror::Error)]
+pub enum KmsSignerError {
+    /// The KMS backend errored out.
+    #[error("KMS service failure")]
+    KmsServiceError(#[from] Box<SdkError<SignError>>),
+    /// The KMS backend did not error but returned an empty signature.
+    #[error("signing request returned empty signature")]
+    EmptySignature,
+    /// The KMS backend returned a signature with an invalid format.
+    #[error("signature invalid format")]
+    SignatureFormatError(#[from] DeserializationError),
+}
+
+// KMS SIGNER
+// ================================================================================================
+
+/// Block signer that uses AWS KMS to create signatures.
 pub struct KmsSigner {
     key_id: String,
     pub_key: PublicKey,
@@ -19,7 +41,6 @@ impl KmsSigner {
 
         // Retrieve public key.
         let pub_key_output = client.get_public_key().key_id(key_id.clone()).send().await?;
-
         if let Some(pub_key) = pub_key_output.public_key() {
             let pub_key = PublicKey::read_from_bytes(&pub_key.clone().into_inner())?;
             Ok(Self { key_id, pub_key, client })
@@ -31,21 +52,24 @@ impl KmsSigner {
 
 #[async_trait::async_trait]
 impl BlockSigner for KmsSigner {
-    type Error = aws_sdk_kms::Error;
+    type Error = KmsSignerError;
+
     async fn sign(&self, header: &BlockHeader) -> Result<Signature, Self::Error> {
-        let sign_output = tokio::runtime::Handle::current().block_on(async {
-            self.client
-                .sign()
-                .key_id(&self.key_id)
-                .signing_algorithm(SigningAlgorithmSpec::EcdsaSha256)
-                .message(header.commitment().to_bytes().into())
-                .send()
-                .await
-                .expect("todo get updated trait from base next")
-        });
-        let sig = sign_output.signature().expect("todo get updated trait from base next");
+        // Request signature from KMS backend.
+        let sign_output = self
+            .client
+            .sign()
+            .key_id(&self.key_id)
+            .signing_algorithm(SigningAlgorithmSpec::EcdsaSha256)
+            .message(header.commitment().to_bytes().into())
+            .send()
+            .await
+            .map_err(Box::from)?;
+
+        // Handle the returned signature.
+        let sig = sign_output.signature().ok_or(KmsSignerError::EmptySignature)?;
         let sig = sig.clone().into_inner(); // todo no clone?
-        Ok(Signature::read_from_bytes(&sig).expect("todo get updated trait from base next"))
+        Ok(Signature::read_from_bytes(&sig)?)
     }
 
     fn public_key(&self) -> PublicKey {
