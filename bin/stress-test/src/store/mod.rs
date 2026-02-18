@@ -439,9 +439,7 @@ pub async fn bench_sync_chain_mmr(
 
     let request = |_| {
         let mut client = store_client.clone();
-        tokio::spawn(async move {
-            sync_chain_mmr_paginated(&mut client, chain_tip, block_range_size).await
-        })
+        tokio::spawn(async move { sync_chain_mmr(&mut client, chain_tip, block_range_size).await })
     };
 
     let results = stream::iter(0..iterations)
@@ -456,77 +454,34 @@ pub async fn bench_sync_chain_mmr(
     print_summary(&timers_accumulator);
 
     let total_runs = results.len();
-    let paginated_runs = results.iter().filter(|r| r.pages > 1).count();
-    #[expect(clippy::cast_precision_loss)]
-    let pagination_rate = if total_runs > 0 {
-        (paginated_runs as f64 / total_runs as f64) * 100.0
-    } else {
-        0.0
-    };
-    #[expect(clippy::cast_precision_loss)]
-    let avg_pages = if total_runs > 0 {
-        results.iter().map(|r| r.pages as f64).sum::<f64>() / total_runs as f64
-    } else {
-        0.0
-    };
 
     println!("Pagination statistics:");
     println!("  Total runs: {total_runs}");
-    println!("  Runs triggering pagination: {paginated_runs}");
-    println!("  Pagination rate: {pagination_rate:.2}%");
-    println!("  Average pages per run: {avg_pages:.2}");
 }
 
 /// Sends a single `sync_chain_mmr` request to the store and returns a tuple with:
 /// - the elapsed time.
 /// - the response.
-pub async fn sync_chain_mmr(
+async fn sync_chain_mmr(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
     block_from: u32,
     block_to: u32,
-) -> (Duration, proto::rpc::SyncChainMmrResponse) {
+) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
         block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
     };
 
     let start = Instant::now();
     let response = api_client.sync_chain_mmr(sync_request).await.unwrap();
-    (start.elapsed(), response.into_inner())
+    let elapsed = start.elapsed();
+    let response = response.into_inner();
+    let _mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
+    SyncChainMmrRun { duration: elapsed }
 }
 
 #[derive(Clone)]
 struct SyncChainMmrRun {
     duration: Duration,
-    pages: usize,
-}
-
-async fn sync_chain_mmr_paginated(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    chain_tip: u32,
-    block_range_size: u32,
-) -> SyncChainMmrRun {
-    let mut total_duration = Duration::default();
-    let mut pages = 0usize;
-    let mut next_block_from = 0u32;
-
-    loop {
-        let target_block_to = next_block_from.saturating_add(block_range_size).min(chain_tip);
-        let (elapsed, response) =
-            sync_chain_mmr(api_client, next_block_from, target_block_to).await;
-        total_duration += elapsed;
-        pages += 1;
-
-        let pagination_info = response.pagination_info.expect("pagination_info should exist");
-        let _mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
-
-        if pagination_info.block_num >= pagination_info.chain_tip {
-            break;
-        }
-
-        next_block_from = pagination_info.block_num;
-    }
-
-    SyncChainMmrRun { duration: total_duration, pages }
 }
 
 // LOAD STATE

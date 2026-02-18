@@ -103,6 +103,7 @@ service Api {
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
+    // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 }
 
@@ -494,11 +495,10 @@ message SyncChainMmrRequest {
 
 // Represents the result of syncing chain MMR.
 message SyncChainMmrResponse {
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
-
+    // For which block range the MMR delta is returned.
+    BlockRange block_range = 1;
     // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    // `pagination_info.block_num`.
+    // `response.block_range.block_to` or the chain tip.
     primitives.MmrDelta mmr_delta = 2;
 }
 

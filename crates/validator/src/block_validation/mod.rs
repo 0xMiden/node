@@ -1,26 +1,28 @@
-use std::sync::Arc;
-
+use miden_node_store::{DatabaseError, Db};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::signer::BlockSigner;
-use miden_protocol::block::{BlockNumber, ProposedBlock};
+use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
-use miden_protocol::transaction::TransactionId;
-use tracing::{Instrument, info_span};
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
+use tracing::{info_span, instrument};
 
-use crate::server::ValidatedTransactions;
+use crate::COMPONENT;
+use crate::db::find_unvalidated_transactions;
 
 // BLOCK VALIDATION ERROR
 // ================================================================================================
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlockValidationError {
-    #[error("transaction {0} in block {1} has not been validated")]
-    TransactionNotValidated(TransactionId, BlockNumber),
+    #[error("block contains unvalidated transactions {0:?}")]
+    UnvalidatedTransactions(Vec<TransactionId>),
     #[error("failed to build block")]
     BlockBuildingFailed(#[from] ProposedBlockError),
     #[error("failed to sign block: {0}")]
     BlockSigningFailed(String),
+    #[error("failed to select transactions")]
+    DatabaseError(#[source] DatabaseError),
 }
 
 // BLOCK VALIDATION
@@ -28,33 +30,31 @@ pub enum BlockValidationError {
 
 /// Validates a block by checking that all transactions in the proposed block have been processed by
 /// the validator in the past.
-///
-/// Removes the validated transactions from the cache upon success.
+#[instrument(target = COMPONENT, skip_all, err)]
 pub async fn validate_block<S: BlockSigner>(
     proposed_block: ProposedBlock,
     signer: &S,
-    validated_transactions: Arc<ValidatedTransactions>,
+    db: &Db,
 ) -> Result<Signature, BlockValidationError> {
-    // Check that all transactions in the proposed block have been validated
-    let verify_span = info_span!("verify_transactions");
-    for tx_header in proposed_block.transactions() {
-        let tx_id = tx_header.id();
-        // TODO: LruCache is a poor abstraction since it locks many times.
-        if validated_transactions
-            .get(&tx_id)
-            .instrument(verify_span.clone())
-            .await
-            .is_none()
-        {
-            return Err(BlockValidationError::TransactionNotValidated(
-                tx_id,
-                proposed_block.block_num(),
-            ));
-        }
+    // Search for any proposed transactions that have not previously been validated.
+    let proposed_tx_ids =
+        proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
+    let unvalidated_txs = db
+        .transact("find_unvalidated_transactions", move |conn| {
+            find_unvalidated_transactions(conn, &proposed_tx_ids)
+        })
+        .await
+        .map_err(BlockValidationError::DatabaseError)?;
+
+    // All proposed transactions must have been validated.
+    if !unvalidated_txs.is_empty() {
+        return Err(BlockValidationError::UnvalidatedTransactions(unvalidated_txs));
     }
 
     // Build the block header.
-    let (header, _) = proposed_block.into_header_and_body()?;
+    let (header, _) = proposed_block
+        .into_header_and_body()
+        .map_err(BlockValidationError::BlockBuildingFailed)?;
 
     // Sign the header.
     let signature = info_span!("sign_block")
