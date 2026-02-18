@@ -44,8 +44,10 @@ fn parsing_yields_expected_default_values() -> TestResult {
     });
 
     // check total issuance of the faucet
+    // Metadata layout: [token_supply, max_supply, decimals, symbol]
+    let metadata_slot = miden_standards::account::faucets::BasicFungibleFaucet::metadata_slot();
     assert_eq!(
-        native_faucet.storage().get_item(AccountStorage::faucet_sysdata_slot()).unwrap()[3],
+        native_faucet.storage().get_item(metadata_slot).unwrap()[0],
         Felt::new(999_777),
         "Issuance mismatch"
     );

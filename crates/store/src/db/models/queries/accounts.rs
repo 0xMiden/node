@@ -990,9 +990,9 @@ pub(crate) fn upsert_accounts(
                 let account = Account::try_from(delta)?;
                 debug_assert_eq!(account_id, account.id());
 
-                if account.commitment() != update.final_state_commitment() {
+                if account.to_commitment() != update.final_state_commitment() {
                     return Err(DatabaseError::AccountCommitmentsMismatch {
-                        calculated: account.commitment(),
+                        calculated: account.to_commitment(),
                         expected: update.final_state_commitment(),
                     });
                 }
@@ -1135,7 +1135,7 @@ pub(crate) fn apply_delta(
 ) -> crate::db::Result<Account, DatabaseError> {
     account.apply_delta(delta)?;
 
-    let actual_commitment = account.commitment();
+    let actual_commitment = account.to_commitment();
     if &actual_commitment != final_state_commitment {
         return Err(DatabaseError::AccountCommitmentsMismatch {
             calculated: actual_commitment,

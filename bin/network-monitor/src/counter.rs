@@ -21,7 +21,6 @@ use miden_protocol::note::{
     Note,
     NoteAssets,
     NoteAttachment,
-    NoteExecutionHint,
     NoteMetadata,
     NoteRecipient,
     NoteScript,
@@ -34,7 +33,7 @@ use miden_protocol::utils::Deserializable;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::note::NetworkAccountTarget;
+use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::utils::Serializable;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
@@ -858,12 +857,9 @@ fn create_network_note(
         .context("Failed to create NetworkAccountTarget for counter account")?;
     let attachment: NoteAttachment = target.into();
 
-    let metadata = NoteMetadata::new(
-        wallet_account.id(),
-        NoteType::Public,
-        NoteTag::with_account_target(counter_account.id()),
-    )
-    .with_attachment(attachment);
+    let metadata = NoteMetadata::new(wallet_account.id(), NoteType::Public)
+        .with_tag(NoteTag::with_account_target(counter_account.id()))
+        .with_attachment(attachment);
 
     let serial_num = Word::new([
         Felt::new(rng.random()),

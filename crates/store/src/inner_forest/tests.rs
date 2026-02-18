@@ -451,6 +451,7 @@ fn test_empty_storage_map_entries_query() {
     use miden_protocol::account::{
         AccountBuilder,
         AccountComponent,
+        AccountComponentMetadata,
         AccountStorageMode,
         AccountType,
         StorageMap,
@@ -470,9 +471,9 @@ fn test_empty_storage_map_entries_query() {
     let component_code = CodeBuilder::default()
         .compile_component_code("test::interface", "pub proc test push.1 end")
         .unwrap();
-    let account_component = AccountComponent::new(component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let metadata = AccountComponentMetadata::new("test::interface").with_supports_all_types();
+    let account_component =
+        AccountComponent::new(component_code, component_storage, metadata).unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
