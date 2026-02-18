@@ -1,113 +1,368 @@
-//     use std::time::Duration;
+use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::time::Duration;
 
-//     use miden_node_utils::cors::cors_for_grpc_web_layer;
-//     use miden_protocol::asset::{Asset, FungibleAsset};
-//     use miden_protocol::note::NoteType;
-//     use miden_protocol::testing::account_id::{
-//         ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
-//         ACCOUNT_ID_SENDER,
-//     };
-//     use miden_protocol::transaction::ProvenTransaction;
-//     use miden_testing::{Auth, MockChainBuilder};
-//     use miden_tx::utils::Serializable;
-//     use tokio::net::TcpListener;
-//     use tonic::Request;
-//     use tonic_web::GrpcWebLayer;
+use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
+use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
+use miden_protocol::note::NoteType;
+use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
+use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
+use miden_testing::{Auth, MockChainBuilder};
+use miden_tx::LocalTransactionProver;
+use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx_batch_prover::LocalBatchProver;
 
-//     use crate::generated::api_client::ApiClient;
-//     use crate::generated::api_server::ApiServer;
-//     use crate::generated::{self as proto};
-//     use crate::server::prover::ProverRpcApi;
+use crate::generated::api_client::ApiClient;
+use crate::generated::{Proof, ProofRequest, ProofType};
+use crate::server::Server;
+use crate::server::proof_kind::ProofKind;
 
-//     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-//     async fn test_prove_transaction() {
-//         // Start the server in the background
-//         let listener = TcpListener::bind("127.0.0.1:50052").await.unwrap();
+/// A gRPC client with which to interact with the server.
+#[derive(Clone)]
+struct Client {
+    inner: ApiClient<tonic::transport::Channel>,
+}
 
-//         let proof_type = proto::remote_prover::ProofType::Transaction;
+impl Client {
+    async fn connect(port: u16) -> Self {
+        let inner = ApiClient::connect(format!("http://127.0.0.1:{port}"))
+            .await
+            .expect("client should connect");
 
-//         let api_service = ApiServer::new(ProverRpcApi::new(proof_type.into()));
+        Self { inner }
+    }
 
-//         // Spawn the server as a background task
-//         tokio::spawn(async move {
-//             tonic::transport::Server::builder()
-//                 .accept_http1(true)
-//                 .layer(cors_for_grpc_web_layer())
-//                 .layer(GrpcWebLayer::new())
-//                 .add_service(api_service)
-//                 .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-//                 .await
-//                 .unwrap();
-//         });
+    async fn submit_request(&mut self, request: ProofRequest) -> Result<Proof, tonic::Status> {
+        self.inner.prove(request).await.map(tonic::Response::into_inner)
+    }
+}
 
-//         // Give the server some time to start
-//         tokio::time::sleep(Duration::from_secs(1)).await;
+impl ProofRequest {
+    /// Generates a proof request for a transaction using [`MockChain`].
+    fn from_tx(tx: &ExecutedTransaction) -> Self {
+        let tx_inputs = tx.tx_inputs().clone();
 
-//         // Set up a gRPC client to send the request
-//         let mut client = ApiClient::connect("http://127.0.0.1:50052").await.unwrap();
-//         let mut client_2 = ApiClient::connect("http://127.0.0.1:50052").await.unwrap();
+        Self {
+            proof_type: ProofType::Transaction as i32,
+            payload: tx_inputs.to_bytes(),
+        }
+    }
 
-//         // Create a mock transaction to send to the server
-//         let mut mock_chain_builder = MockChainBuilder::new();
-//         let account = mock_chain_builder.add_existing_wallet(Auth::BasicAuth).unwrap();
+    fn from_batch(batch: &ProposedBatch) -> Self {
+        Self {
+            proof_type: ProofType::Batch as i32,
+            payload: batch.to_bytes(),
+        }
+    }
 
-//         let fungible_asset_1: Asset =
-//             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
-//                 .unwrap()
-//                 .into();
-//         let note_1 = mock_chain_builder
-//             .add_p2id_note(
-//                 ACCOUNT_ID_SENDER.try_into().unwrap(),
-//                 account.id(),
-//                 &[fungible_asset_1],
-//                 NoteType::Private,
-//             )
-//             .unwrap();
+    async fn mock_tx() -> ExecutedTransaction {
+        // Create a mock transaction to send to the server
+        let mut mock_chain_builder = MockChainBuilder::new();
+        let account = mock_chain_builder.add_existing_wallet(Auth::BasicAuth).unwrap();
 
-//         let mock_chain = mock_chain_builder.build().unwrap();
+        let fungible_asset_1: Asset =
+            FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
+                .unwrap()
+                .into();
+        let note_1 = mock_chain_builder
+            .add_p2id_note(
+                ACCOUNT_ID_SENDER.try_into().unwrap(),
+                account.id(),
+                &[fungible_asset_1],
+                NoteType::Private,
+            )
+            .unwrap();
 
-//         let tx_context = mock_chain
-//             .build_tx_context(account.id(), &[note_1.id()], &[])
-//             .unwrap()
-//             .build()
-//             .unwrap();
+        let mock_chain = mock_chain_builder.build().unwrap();
 
-//         let executed_transaction = Box::pin(tx_context.execute()).await.unwrap();
-//         let tx_inputs = executed_transaction.tx_inputs();
+        let tx_context = mock_chain
+            .build_tx_context(account.id(), &[note_1.id()], &[])
+            .unwrap()
+            .disable_debug_mode()
+            .build()
+            .unwrap();
 
-//         let request_1 = Request::new(proto::remote_prover::ProofRequest {
-//             proof_type: proto::remote_prover::ProofType::Transaction.into(),
-//             payload: tx_inputs.to_bytes(),
-//         });
+        Box::pin(tx_context.execute()).await.unwrap()
+    }
 
-//         let request_2 = Request::new(proto::remote_prover::ProofRequest {
-//             proof_type: proto::remote_prover::ProofType::Transaction.into(),
-//             payload: tx_inputs.to_bytes(),
-//         });
+    async fn mock_batch() -> ProposedBatch {
+        // Create a mock transaction to send to the server
+        let mut mock_chain_builder = MockChainBuilder::new();
+        let account = mock_chain_builder.add_existing_wallet(Auth::BasicAuth).unwrap();
 
-//         // Send both requests concurrently
-//         let (response_1, response_2) =
-//             tokio::join!(client.prove(request_1), client_2.prove(request_2));
+        let fungible_asset_1: Asset =
+            FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
+                .unwrap()
+                .into();
+        let note_1 = mock_chain_builder
+            .add_p2id_note(
+                ACCOUNT_ID_SENDER.try_into().unwrap(),
+                account.id(),
+                &[fungible_asset_1],
+                NoteType::Private,
+            )
+            .unwrap();
 
-//         // Check the success response
-//         assert!(response_1.is_ok() || .is_ok());
+        let mock_chain = mock_chain_builder.build().unwrap();
 
-//         // Check the failure response
-//         assert!(response_1.is_err() || response_2.is_err());
+        let tx = mock_chain
+            .build_tx_context(account.id(), &[note_1.id()], &[])
+            .unwrap()
+            .disable_debug_mode()
+            .build()
+            .unwrap();
 
-//         let response_success = response_1.or(response_2).unwrap();
+        let tx = Box::pin(tx.execute()).await.unwrap();
+        let tx = tokio::task::block_in_place(|| {
+            LocalTransactionProver::default().prove(tx.tx_inputs().clone()).unwrap()
+        });
 
-//         // Cast into a ProvenTransaction
-//         let _proven_transaction: ProvenTransaction =
-//             response_success.into_inner().try_into().expect("Failed to convert response");
-//     }
+        ProposedBatch::new(
+            vec![Arc::new(tx)],
+            mock_chain.latest_block_header(),
+            mock_chain.latest_partial_blockchain(),
+            BTreeMap::new(),
+        )
+        .unwrap()
+    }
+}
 
-// Create test for
-// - capacity=1 to ensure legacy behaviour works as expected
-// - capacity=2 to test concurrency is allowed
-// - invalid kind=100 is rejected
-// - unsupported kind is rejected
-// - timeout is respected
-// - transaction proof succeeds
-// - batch proof succeeds
-// - block proof succeeds
+// Test helpers for the server.
+//
+// Note: This is implemented under `#[cfg(test)]`.
+impl Server {
+    /// A server configured with an arbitrary port (i.e. `port=0`) and the given kind.
+    ///
+    /// Capacity is set to 10 with a timeout of 60 seconds.
+    fn with_aribtrary_port(kind: ProofKind) -> Self {
+        Self {
+            port: 0,
+            kind,
+            timeout: Duration::from_secs(60),
+            capacity: NonZeroUsize::new(10).unwrap(),
+        }
+    }
+
+    /// Overrides the capacity of the server.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given capacity is zero.
+    fn with_capacity(mut self, capacity: usize) -> Self {
+        self.capacity = NonZeroUsize::new(capacity).unwrap();
+        self
+    }
+
+    /// Overrides the timeout of the server.
+    fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+/// This test ensures that the legacy behaviour can still be configured.
+///
+/// The original prover worker refused to process multiple requests concurrently.
+/// This test ensures that the redesign behaves the same when limited to a capacity of 1.
+///
+/// Create a server with a capacity of one and submit two requests. Ensure
+/// that one succeeds and one fails with a resource exhaustion error.
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_behaviour_with_capacity_1() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+        .with_capacity(1)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+
+    let mut client_a = Client::connect(port).await;
+    let mut client_b = client_a.clone();
+
+    let a = client_a.submit_request(request.clone());
+    let b = client_b.submit_request(request);
+
+    let (first, second) = tokio::join!(a, b);
+
+    // We cannot know which got served and which got rejected.
+    // We can only assert that one of them is Ok and the other is Err.
+    assert!(first.is_ok() || second.is_ok());
+    assert!(first.is_err() || second.is_err());
+    // We also expect that the error is a resource exhaustion error.
+    let err = first.err().or(second.err()).unwrap();
+    assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+
+    server.abort();
+}
+
+/// Test that multiple requests can be queued and capacity is respected.
+///
+/// Create a server with a capacity of two and submit three requests. Ensure
+/// that two succeed and one fails with a resource exhaustion error.
+#[tokio::test(flavor = "multi_thread")]
+async fn capacity_is_respected() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+        .with_capacity(2)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    let mut client_a = Client::connect(port).await;
+    let mut client_b = client_a.clone();
+    let mut client_c = client_a.clone();
+
+    let a = client_a.submit_request(request.clone());
+    let b = client_b.submit_request(request.clone());
+    let c = client_c.submit_request(request);
+
+    let (first, second, third) = tokio::join!(a, b, c);
+
+    // We cannot know which got served and which got rejected.
+    // We can only assert that two succeeded and one failed.
+    let mut expected = [true, true, false];
+    let mut result = [first.is_ok(), second.is_ok(), third.is_ok()];
+    expected.sort_unstable();
+    result.sort_unstable();
+    assert_eq!(expected, result);
+
+    // We also expect that the error is a resource exhaustion error.
+    let err = first.err().or(second.err()).or(third.err()).unwrap();
+    assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+
+    server.abort();
+}
+
+/// Ensures that the server request timeout is adhered to.
+///
+/// This is tricky to test properly because we can't easily control the server's response time.
+/// Instead we configure the server to have a ridiculously short timeout which should hopefully
+/// always timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn timeout_is_respected() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+        .with_timeout(Duration::from_nanos(10))
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+
+    let mut client = Client::connect(port).await;
+
+    let x = std::time::Instant::now();
+    let response = client.submit_request(request).await;
+    let y = x.elapsed();
+    let err = response.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Cancelled);
+    assert!(err.message().contains("Timeout expired"));
+
+    server.abort();
+}
+
+/// Ensures that an invalid proof kind is rejected.
+///
+/// The error should be an invalid argument error, but since that is fairly broad we also inspect
+/// the error message for mention of the invalid proof kind. This is technically an implementation
+/// detail, but its the best we have without adding multiple abstraction layers.
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_proof_kind_is_rejected() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let mut request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    request.proof_type = i32::MAX;
+
+    let mut client = Client::connect(port).await;
+    let response = client.submit_request(request).await;
+    let err = response.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("unknown proof_type value"));
+
+    server.abort();
+}
+
+/// Ensures that a valid but unsupported proof kind is rejected.
+///
+/// Aka submit a transaction proof request to a batch proving server.
+///
+/// The error should be an invalid argument error, but since that is fairly broad we also inspect
+/// the error message for mention of the unsupported proof kind. This is technically an
+/// implementation detail, but its the best we have without adding multiple abstraction layers.
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_proof_kind_is_rejected() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Batch)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+
+    let mut client = Client::connect(port).await;
+    let response = client.submit_request(request).await;
+    let err = response.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("unsupported proof type"));
+
+    server.abort();
+}
+
+/// Checks that the a transaction request results in a correct proof.
+///
+/// The proof is replicated locally, which ensures that the gRPC codec and server code do the
+/// correct thing.
+#[tokio::test(flavor = "multi_thread")]
+async fn transaction_proof_is_correct() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let tx = ProofRequest::mock_tx().await;
+    let request = ProofRequest::from_tx(&tx);
+
+    let mut client = Client::connect(port).await;
+    let response = client.submit_request(request).await.unwrap();
+    let response = ProvenTransaction::read_from_bytes(&response.payload).unwrap();
+
+    let expected = tokio::task::block_in_place(|| {
+        LocalTransactionProver::default().prove(tx.tx_inputs().clone()).unwrap()
+    });
+    assert_eq!(response, expected);
+
+    server.abort();
+}
+
+/// Checks that the a batch request results in a correct proof.
+///
+/// The proof is replicated locally, which ensures that the gRPC codec and server code do the
+/// correct thing.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_proof_is_correct() {
+    let (server, port) = Server::with_aribtrary_port(ProofKind::Batch)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let batch = ProofRequest::mock_batch().await;
+    let request = ProofRequest::from_batch(&batch);
+
+    let mut client = Client::connect(port).await;
+    let response = client.submit_request(request).await.unwrap();
+    let response = ProvenBatch::read_from_bytes(&response.payload).unwrap();
+
+    let expected = tokio::task::block_in_place(|| {
+        LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(batch).unwrap()
+    });
+    assert_eq!(response, expected);
+
+    server.abort();
+}

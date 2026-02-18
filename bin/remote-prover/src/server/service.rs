@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
+use tokio::sync::SemaphorePermit;
 use tracing::instrument;
 
 use crate::server::proof_kind::ProofKind;
@@ -10,14 +10,14 @@ use crate::{COMPONENT, generated as proto};
 
 pub struct ProverService {
     permits: tokio::sync::Semaphore,
-    prover: tokio::sync::Mutex<Prover>,
+    prover: std::sync::Mutex<Prover>,
     kind: ProofKind,
 }
 
 impl ProverService {
     pub fn with_capacity(kind: ProofKind, capacity: NonZeroUsize) -> Self {
         let permits = tokio::sync::Semaphore::new(capacity.get());
-        let prover = Mutex::new(Prover::new(kind));
+        let prover = std::sync::Mutex::new(Prover::new(kind));
         Self { permits, prover, kind }
     }
 
@@ -33,8 +33,13 @@ impl ProverService {
     }
 
     #[instrument(target=COMPONENT, skip_all)]
-    async fn acquire_prover_lock(&self) -> MutexGuard<'_, Prover> {
-        self.prover.lock().await
+    fn acquire_prover(&self) -> std::sync::MutexGuard<'_, Prover> {
+        // Clear any poisoned prover state by simply resetting it.
+        self.prover.lock().unwrap_or_else(|mut poisoned| {
+            **poisoned.get_mut() = Prover::new(self.kind);
+            self.prover.clear_poison();
+            poisoned.into_inner()
+        })
     }
 }
 
@@ -72,12 +77,14 @@ impl proto::api_server::Api for ProverService {
         // We need to hold this until our request is processed to ensure that the queue capacity is
         // not exceeded.
         let _permit = self.acquire_permit()?;
+        let prover = self.prover;
 
-        // This mutex is fair and uses FIFO ordering.
-        let prover = self.acquire_prover_lock().await;
-
-        // Blocking in place is fairly safe since we guarantee that only a single request is
-        // processed at a time.
-        tokio::task::block_in_place(|| prover.prove(request)).map(tonic::Response::new)
+        // Note: block_in_place seems attractive, but this causes server timeout to be ignored
+        // since we have now escaped the async context.
+        tokio::task::spawn_blocking({
+            move || prover.lock().unwrap().prove(request).map(tonic::Response::new)
+        })
+        .await
+        .expect("prover should not panic")
     }
 }

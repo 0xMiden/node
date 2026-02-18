@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use miden_block_prover::LocalBlockProver;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
@@ -15,8 +17,9 @@ use crate::generated::{self as proto};
 use crate::server::proof_kind::ProofKind;
 
 /// An enum representing the different types of provers available.
+#[derive(Clone)]
 pub enum Prover {
-    Transaction(LocalTransactionProver),
+    Transaction(Arc<LocalTransactionProver>),
     Batch(LocalBatchProver),
     Block(LocalBlockProver),
 }
@@ -25,7 +28,9 @@ impl Prover {
     /// Constructs a [`Prover`] of the specified [`ProofKind`].
     pub fn new(proof_type: ProofKind) -> Self {
         match proof_type {
-            ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
+            ProofKind::Transaction => {
+                Self::Transaction(Arc::new(LocalTransactionProver::default()))
+            },
             ProofKind::Batch => Self::Batch(LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)),
             ProofKind::Block => Self::Block(LocalBlockProver::new(MIN_PROOF_SECURITY_LEVEL)),
         }
