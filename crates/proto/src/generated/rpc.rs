@@ -446,7 +446,7 @@ pub struct SyncChainMmrResponse {
     #[prost(message, optional, tag = "1")]
     pub block_range: ::core::option::Option<BlockRange>,
     /// Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    /// `pagination_info.block_num`.
+    /// `response.block_range.block_to` or the chain tip.
     #[prost(message, optional, tag = "2")]
     pub mmr_delta: ::core::option::Option<super::primitives::MmrDelta>,
 }
