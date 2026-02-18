@@ -33,16 +33,3 @@ impl miden_node_utils::tracing::ToValue for ProofKind {
         self.to_string().into()
     }
 }
-
-impl std::str::FromStr for ProofKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "transaction" => Ok(ProofKind::Transaction),
-            "batch" => Ok(ProofKind::Batch),
-            "block" => Ok(ProofKind::Block),
-            _ => Err(format!("Invalid proof type: {s}")),
-        }
-    }
-}
