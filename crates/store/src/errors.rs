@@ -30,7 +30,6 @@ use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 use tonic::Status;
 
-use crate::db::manager::ConnectionManagerError;
 use crate::db::models::conv::DatabaseTypeConversionError;
 use crate::inner_forest::{InnerForestError, WitnessError};
 
@@ -53,6 +52,8 @@ pub enum DatabaseError {
     AssetError(#[from] AssetError),
     #[error("closed channel")]
     ClosedChannel(#[from] RecvError),
+    #[error("database error")]
+    DatabaseError(#[from] miden_node_db::DatabaseError),
     #[error("deserialization failed")]
     DeserializationError(#[from] DeserializationError),
     #[error("hex parsing error")]
@@ -130,7 +131,7 @@ pub enum DatabaseError {
     #[error("schema verification failed")]
     SchemaVerification(#[from] SchemaVerificationError),
     #[error(transparent)]
-    ConnectionManager(#[from] ConnectionManagerError),
+    ConnectionManager(#[from] miden_node_db::ConnectionManagerError),
     #[error(transparent)]
     SqlValueConversion(#[from] DatabaseTypeConversionError),
     #[error("Not implemented: {0}")]
@@ -230,6 +231,8 @@ pub enum DatabaseSetupError {
     Io(#[from] io::Error),
     #[error("database error")]
     Database(#[from] DatabaseError),
+    #[error("database setup error")]
+    DatabaseSetupError(#[from] miden_node_db::DatabaseSetupError),
     #[error("genesis block error")]
     GenesisBlock(#[from] GenesisError),
     #[error("pool build error")]
@@ -383,6 +386,9 @@ pub enum NoteSyncError {
     #[error("database error")]
     #[grpc(internal)]
     DatabaseError(#[from] DatabaseError),
+    #[error("database error")]
+    #[grpc(internal)]
+    UnderlyingDatabaseError(#[from] miden_node_db::DatabaseError),
     #[error("block headers table is empty")]
     #[grpc(internal)]
     EmptyBlockHeadersTable,
@@ -701,7 +707,6 @@ mod compile_tests {
         AccountDeltaError,
         AccountError,
         DatabaseError,
-        DatabaseSetupError,
         DeserializationError,
         GenesisError,
         NetworkAccountError,
@@ -709,6 +714,7 @@ mod compile_tests {
         RecvError,
         StateInitializationError,
     };
+    use crate::errors::DatabaseSetupError;
 
     /// Ensure all enum variants remain compat with the desired
     /// trait bounds. Otherwise one gets very unwieldy errors.
