@@ -12,6 +12,8 @@ use tracing::Instrument;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
+/// Database handle that provides fundamental operations that various components of Miden Node can
+/// utililze for their storage needs.
 pub struct Db {
     pool: deadpool_diesel::Pool<ConnectionManager, deadpool::managed::Object<ConnectionManager>>,
 }

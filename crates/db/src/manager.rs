@@ -78,8 +78,8 @@ impl deadpool::managed::Manager for ConnectionManager {
 pub fn configure_connection_on_creation(
     conn: &mut SqliteConnection,
 ) -> Result<(), ConnectionManagerError> {
-    // Wait up to 5 seconds for writer locks before erroring.
-    diesel::sql_query("PRAGMA busy_timeout=5000")
+    // Wait up to 3 seconds for writer locks before erroring.
+    diesel::sql_query("PRAGMA busy_timeout=3000")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
 

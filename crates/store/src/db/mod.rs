@@ -51,6 +51,9 @@ pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
+/// The Store's database.
+///
+/// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.
 pub struct Db {
     db: miden_node_db::Db,
 }
