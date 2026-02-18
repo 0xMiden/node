@@ -1,7 +1,6 @@
 use std::any::type_name;
 use std::io;
 
-use deadpool_sync::InteractError;
 use miden_node_db::SchemaVerificationError;
 use miden_node_proto::domain::account::NetworkAccountError;
 use miden_node_proto::domain::block::InvalidBlockRange;
@@ -120,8 +119,6 @@ pub enum DatabaseError {
     InvalidStorageSlotType(i32),
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
-    #[error("SQLite pool interaction failed: {0}")]
-    InteractError(String),
     #[error("invalid Felt: {0}")]
     InvalidFelt(String),
     #[error(
@@ -146,21 +143,6 @@ pub enum DatabaseError {
 }
 
 impl DatabaseError {
-    /// Converts from `InteractError`
-    ///
-    /// Note: Required since `InteractError` has at least one enum
-    /// variant that is _not_ `Send + Sync` and hence prevents the
-    /// `Sync` auto implementation.
-    /// This does an internal conversion to string while maintaining
-    /// convenience.
-    ///
-    /// Using `MSG` as const so it can be called as
-    /// `.map_err(DatabaseError::interact::<"Your message">)`
-    pub fn interact(msg: &(impl ToString + ?Sized), e: &InteractError) -> Self {
-        let msg = msg.to_string();
-        Self::InteractError(format!("{msg} failed: {e:?}"))
-    }
-
     /// Failed to convert an SQL entry to a rust representation
     pub fn conversiont_from_sql<RT, E, MaybeE>(err: MaybeE) -> DatabaseError
     where
