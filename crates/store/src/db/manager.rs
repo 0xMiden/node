@@ -36,12 +36,12 @@ impl ConnectionManagerError {
 /// Create a connection manager with per-connection setup
 ///
 /// Particularly, `foreign_key` checks are enabled and using a write-append-log for journaling.
-pub(crate) struct ConnectionManager {
+pub struct ConnectionManager {
     pub(crate) manager: deadpool_diesel::sqlite::Manager,
 }
 
 impl ConnectionManager {
-    pub(crate) fn new(database_path: &str) -> Self {
+    pub fn new(database_path: &str) -> Self {
         let manager = deadpool_diesel::sqlite::Manager::new(
             database_path.to_owned(),
             deadpool_diesel::sqlite::Runtime::Tokio1,
@@ -78,6 +78,11 @@ impl deadpool::managed::Manager for ConnectionManager {
 pub(crate) fn configure_connection_on_creation(
     conn: &mut SqliteConnection,
 ) -> Result<(), ConnectionManagerError> {
+    // Wait up to 5 seconds for writer locks before erroring.
+    diesel::sql_query("PRAGMA busy_timeout=5000")
+        .execute(conn)
+        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
     // Enable the WAL mode. This allows concurrent reads while the transaction is being written,
     // this is required for proper synchronization of the servers in-memory and on-disk
     // representations (see [State::apply_block])

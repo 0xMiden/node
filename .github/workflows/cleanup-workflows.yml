@@ -36,106 +36,248 @@ jobs:
         run: |
           git fetch origin main
           WORKFLOWS=$(git ls-tree -r origin/main --name-only | grep '^.github/workflows/')
-          echo $WORKFLOWS
-          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+          printf "%s\n" $WORKFLOWS
+          {
+            echo "workflows<<EOF"
+            echo "$WORKFLOWS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Workflows on next
         id: next
         run: |
           git fetch origin next
           WORKFLOWS=$(git ls-tree -r origin/next --name-only | grep '^.github/workflows/')
-          echo $WORKFLOWS
-          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
-
-      - name: Workflows on github
-        id: github
-        run: |
-          # Note that we filter by `.github` path prefix to ensure we only get locally defined workflows.
-          #
-          # Examples of non-local workflows are `dependabot` and `copilot` which have paths:
-          # - dynamic/dependabot/dependabot-updates
-          # - dynamic/copilot-pull-request-reviewer/copilot-pull-request-reviewer
-          WORKFLOWS=$(gh workflow list \
-            --all \
-            --json path \
-            --jq '.[] | select(.path | startswith(".github")) | .path' \
-          )
-          echo $WORKFLOWS
-          echo "workflows=$WORKFLOWS" >> "$GITHUB_OUTPUT"
+          printf "%s\n" $WORKFLOWS
+          {
+            echo "workflows<<EOF"
+            echo "$WORKFLOWS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Filter for deleted workflows
         id: deleted
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Union of `main` and `next` workflows.
-          EXISTING_FILES=$(                       \
-            printf "%s\n%s\n"                     \
+          set -euo pipefail
+
+          # Union of `main` and `next` workflows as a JSON array of strings (paths)
+          EXISTING=$(printf "%s\n%s\n" \
             "${{ steps.main.outputs.workflows }}" \
             "${{ steps.next.outputs.workflows }}" \
           )
-          EXISTING_FILES=$(echo "$EXISTING_FILES" | sort -u)
-          echo $EXISTING_FILES
+          EXISTING=$(echo "$EXISTING" | sort -u | jq -R . | jq -s .)
 
-          # Find deleted workflows as the items in `WORKFLOWS` but not in the union of main and next.
-          # This assumes that _all_ items in main and next are present in `WORKFLOWS`.
-          DELETED_FILES=$(                          \
-            printf "%s\n%s\n"                       \
-            "$EXISTING_FILES"                       \
-            "${{ steps.github.outputs.workflows }}" \
+          echo "Existing workflows:"
+          echo "$EXISTING"
+
+          # Get workflows currently on GitHub as JSON array of objects
+          GITHUB=$(gh api repos/{owner}/{repo}/actions/workflows \
+            --jq '.workflows[] | select(.path | startswith(".github")) | { name, node_id, path }' \
+              | jq -s '.')
+
+          echo "Workflows on GitHub:"
+          echo "$GITHUB"
+
+          # Find deleted workflows: present on GitHub but not in main/next
+          DELETED=$(echo "$GITHUB" | jq -c \
+            --argjson existing "$EXISTING" '
+              map(select(.path as $p | $existing | index($p) | not))
+            '
           )
-          DELETED_FILES=$(echo "$DELETED_FILES" | sort | uniq -u)
-          echo $DELETED_FILES
-          echo "workflows=$DELETED_FILES" >> "$GITHUB_OUTPUT"
 
+          echo "Deleted workflows:"
+          echo "$DELETED"
+
+          # Output to GitHub Actions
+          {
+            echo "workflows<<EOF"
+            echo "$DELETED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Performs the actual run deletion.
+      #
+      # This contains a lot of code, but the vast majority is just pretty-printing.
       - name: Delete runs from deleted workflows
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODE: ${{ inputs.mode }}
-          DELETED_WORKFLOWS: ${{ steps.deleted.outputs.workflows }}
+          WORKFLOWS: ${{ steps.deleted.outputs.workflows }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          set -euo pipefail
+          if [ -z "$WORKFLOWS" ]; then
+            echo "No workflows to delete."
+            exit 0
+          fi
 
-          TOTAL_AFFECTED=0
+          # ================================================================================================
+          # Utility functions
+          # ================================================================================================
 
-          echo ""
-          echo "=== Workflow Cleanup Summary ==="
-          echo ""
+          # Fetches a page of workflow runs for a given workflow ID and cursor.
+          #
+          # We use github's graphql API here which allows us to paginate over workflow runs.
+          # Unfortunately `gh run list` does not support pagination, so we use the graphql API instead.
+          gh_workflow_run_page() {
+            local id="$1"
+            local cursor="$2"
 
-          while IFS= read -r workflow; do
-            [ -z "$workflow" ] && continue
+            gh api graphql -F workflowId="$id" -F after="$cursor" \
+              -f query='query($workflowId: ID!, $after: String) {
+                  node(id: $workflowId) {
+                    ... on Workflow {
+                      runs(first: 100, after: $after) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes { databaseId }
+                      }
+                    }
+                  }
+                }'
+          }
 
-            WF_COUNT=0
+          # ================================================================================================
+          # Print helpers for nice progress and table display
+          # ================================================================================================
 
+          # Column widths (table includes three spacers for ' | ' between columns)
+          widths_index=9
+          widths_name=30
+          widths_count=14
+          widths_total=12
+          widths_table=$(( $widths_index + 3 + $widths_name + 3 + $widths_count + 3 + $widths_total ))
+
+          # Repeats a character a given number of times.
+          repeat_char() {
+            local char=$1
+            local count=$2
+            printf "%0.s$char" $(seq 1 $count)
+          }
+
+          # Prints the given header as `==== <header> ====` to match the table layout.
+          print_table_header() {
+            local header="$1"
+            local header_len=${#header}
+            local left_pad=$(( ( $widths_table - header_len - 2) / 2 ))
+            local right_pad=$(( $widths_table - header_len - 2 - left_pad ))
+            printf " \n%s %s %s\n" $(repeat_char = $left_pad) "$header" $(repeat_char = $right_pad)
+          }
+
+          # Prints |---+---+---+---| with appropriate widths to accomodate the table headers.
+          print_table_separator() {
+            printf "%s+%s+%s+%s\n"                     \
+              "$(repeat_char - $((widths_index + 1)))" \
+              "$(repeat_char - $((widths_name + 2)))"  \
+              "$(repeat_char - $((widths_count + 2)))" \
+              "$(repeat_char - $((widths_total + 1)))"
+          }
+
+          # Prints a row of the table (index, workflow name, workflow count, global total)
+          print_table_row() {
+            local index=$1
+            local name=$2
+            local count=$3
+            local total=$4
+            printf "%*s | %-*s | %*s | %*s\n"  \
+              "$widths_index" "$index"          \
+              "$widths_name" "$name"            \
+              "$widths_count" "$count"          \
+              "$widths_total" "$total"
+          }
+
+          # Alias for print_table_row() with empty index and total columns.
+          print_summary_row() {
+            local name=$1
+            local count=$2
+            print_table_row "" "$name" "$count" ""
+          }
+
+          # ================================================================================================
+          # Print progress table header
+          # ================================================================================================
+          print_table_header "Workflow Cleanup Progress"
+          print_table_row "Index" "Workflow" "Workflow Count" "Global Total"
+          print_table_separator
+
+          # ================================================================================================
+          # Core workflow loop, iterate over workflows
+          # ================================================================================================
+
+          n_workflows=$(echo "$WORKFLOWS" | jq -r '. | length')
+          total=0
+          summary=()
+          index=0
+
+          mapfile -t WF_ARRAY < <(echo "$WORKFLOWS" | jq -c '.[]')
+          for wf in "${WF_ARRAY[@]}"; do
+            index=$((index + 1))
+            name=$(echo "$wf" | jq -r '.name')
+            count=0
+            id=$(echo "$wf" | jq -r '.node_id')
+
+            # Safety checks
+            if [ -z "$name" ]; then
+              echo "::error title=Workflow name empty::Resolved workflow name is empty at index $index"
+              exit 1
+            fi
+            if [ -z "$id" ]; then
+              echo "::error title=Workflow ID missing::Workflow '$name' has no ID"
+              exit 1
+            fi
+
+            cursor=""
+
+            # Paginate over workflow runs
             while true; do
-              RUN_IDS=$(gh run list \
-                --workflow "$workflow" \
-                --limit 100 \
-                --json databaseId \
-                --jq '.[].databaseId')
+              response=$(gh_workflow_run_page "$id" "$cursor")
 
-              if [ -z "$RUN_IDS" ]; then
-                break
-              fi
+              run_ids=$(echo "$response" | jq -r '.data.node.runs.nodes[].databaseId')
+              has_next=$(echo "$response" | jq -r '.data.node.runs.pageInfo.hasNextPage')
+              cursor=$(echo "$response" | jq -r '.data.node.runs.pageInfo.endCursor')
 
-              BATCH_COUNT=$(echo "$RUN_IDS" | wc -l | tr -d ' ')
-              WF_COUNT=$((WF_COUNT + BATCH_COUNT))
+              [ -z "$run_ids" ] && break
+
+              deleted=$(echo "$run_ids" | wc -l | tr -d ' ')
+              count=$((count + deleted))
+              total=$((total + deleted))
+
+              # Print progress
+              print_table_row "[$index/$n_workflows]" "$name" "$count" "$total"
 
               if [ "$MODE" = "execute" ]; then
-                for RUN_ID in $RUN_IDS; do
-                  gh run delete "$RUN_ID" --yes >/dev/null
+                for run_id in $run_ids; do
+                  gh run delete "$run_id" >/dev/null
                 done
               fi
+
+              [ "$has_next" != "true" ] && break
             done
 
-            echo "$workflow → $WF_COUNT runs"
-            TOTAL_AFFECTED=$((TOTAL_AFFECTED + WF_COUNT))
+            summary+=("$name|$count")
+          done
 
-          done <<< "$DELETED_WORKFLOWS"
+          # ================================================================================================
+          # Print a summary table
+          # ================================================================================================
+          print_table_header "Workflow Cleanup Summary"
+          print_summary_row "Workflow" "Runs"
+          print_table_separator
+          for entry in "${summary[@]}"; do
+            wf="${entry%%|*}"
+            count="${entry##*|}"
+            print_summary_row "$wf" "$count"
+          done
 
-          echo ""
-          echo "--------------------------------------"
-          echo "Total runs affected: $TOTAL_AFFECTED"
+          # ================================================================================================
+          # Print totals as a footer
+          # ================================================================================================
+          print_table_separator
+          print_summary_row "TOTAL" "$total"
 
-          if [ "$MODE" = "dry run" ]; then
+          if [ "$MODE" != "execute" ]; then
             echo "Dry run complete. No runs were deleted."
           else
             echo "Cleanup complete."

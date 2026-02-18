@@ -1,4 +1,5 @@
 mod block_validation;
+mod db;
 mod server;
 mod tx_validation;
 
