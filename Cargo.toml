@@ -92,22 +92,22 @@ pretty_assertions = { version = "1.4" }
 # to avoid future breakage.
 prost              = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
-rand               = { version = "0.9" }
-rand_chacha        = { version = "0.9" }
+rand               = { version = "0.10" }
+rand_chacha        = { version = "0.10" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
 tokio-util         = { version = "0.7" }
-toml               = { version = "0.9" }
+toml               = { version = "0.8" }
 tonic              = { default-features = false, version = "0.14" }
 tonic-health       = { version = "0.14" }
 tonic-prost        = { version = "0.14" }
 tonic-prost-build  = { version = "0.14" }
 tonic-reflection   = { version = "0.14" }
 tower              = { version = "0.5" }
-tower-http         = { features = ["cors", "trace"], version = "0.6" }
+tower-http         = { features = ["cors", "trace"], version = "0.5" }
 tracing            = { version = "0.1" }
 tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 url                = { features = ["serde"], version = "2.5" }
