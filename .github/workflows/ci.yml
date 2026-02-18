@@ -58,6 +58,43 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/next' }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
+      - name: Check static linkage
+        run: |
+          # Ensure database libraries are statically linked to avoid system library dependencies
+          #
+          # It explodes our possible dependency matrix when debugging, particularly
+          # in the case of sqlite and rocksdb as embedded databases, we want them
+          # shipped in identical versions we test with. Those are notoriously difficult
+          # to compile time configure and OSes make very opinionated choices.
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          mapfile -t bin_targets < <(
+            echo "${metadata}" | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' | sort -u
+          )
+          if [[ ${#bin_targets[@]} -eq 0 ]]; then
+            echo "error: No binary targets found in cargo manifest."
+            exit 1
+          fi
+          for bin_target in "${bin_targets[@]}"; do
+            # Ensure the binary was built by the previous step.
+            binary_path="target/debug/${bin_target}"
+            if ! [[ -x "${binary_path}" ]]; then
+              echo "error: Missing binary or missing executable bit: ${binary_path}";
+              exit 2;
+            fi
+            # ldd exits non-zero for static binaries, so we inspect its output instead.
+            # if ldd fails we use an empty string instead
+            ldd_output="$(ldd "${binary_path}" 2>&1 || true)"
+            if echo "${ldd_output}" | grep -E -q 'not a dynamic executable'; then
+              continue
+            fi
+            # librocksdb/libsqlite entries indicate dynamic linkage (bad).
+            if echo "${ldd_output}" | grep -E -q 'librocksdb|libsqlite'; then
+              echo "error: Dynamic linkage detected for ${bin_target}."
+              echo "${ldd_output}"
+              exit 3
+            fi
+          done
+          echo "Static linkage check passed for all of ${bin_targets[@]}"
   
   clippy:
     name: lint - clippy
