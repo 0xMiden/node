@@ -1,4 +1,3 @@
-use std::any::type_name;
 use std::io;
 
 use miden_node_db::SchemaVerificationError;
@@ -88,12 +87,6 @@ pub enum DatabaseError {
     },
     #[error(transparent)]
     QueryParamLimit(#[from] QueryLimitError),
-    #[error("conversion from SQL to rust type {to} failed")]
-    ConversionSqlToRust {
-        #[source]
-        inner: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
-        to: &'static str,
-    },
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------
@@ -138,20 +131,6 @@ pub enum DatabaseError {
         slot_name: String,
         block_num: BlockNumber,
     },
-}
-
-impl DatabaseError {
-    /// Failed to convert an SQL entry to a rust representation
-    pub fn conversiont_from_sql<RT, E, MaybeE>(err: MaybeE) -> DatabaseError
-    where
-        MaybeE: Into<Option<E>>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        DatabaseError::ConversionSqlToRust {
-            inner: err.into().map(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>),
-            to: type_name::<RT>(),
-        }
-    }
 }
 
 impl From<DatabaseError> for Status {
