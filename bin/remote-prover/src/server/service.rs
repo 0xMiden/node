@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use tokio::sync::SemaphorePermit;
+use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
 use tracing::instrument;
 
 use crate::server::proof_kind::ProofKind;
@@ -10,14 +10,14 @@ use crate::{COMPONENT, generated as proto};
 
 pub struct ProverService {
     permits: tokio::sync::Semaphore,
-    prover: std::sync::Mutex<Prover>,
+    prover: tokio::sync::Mutex<Prover>,
     kind: ProofKind,
 }
 
 impl ProverService {
     pub fn with_capacity(kind: ProofKind, capacity: NonZeroUsize) -> Self {
         let permits = tokio::sync::Semaphore::new(capacity.get());
-        let prover = std::sync::Mutex::new(Prover::new(kind));
+        let prover = Mutex::new(Prover::new(kind));
         Self { permits, prover, kind }
     }
 
@@ -33,13 +33,8 @@ impl ProverService {
     }
 
     #[instrument(target=COMPONENT, skip_all)]
-    fn acquire_prover(&self) -> std::sync::MutexGuard<'_, Prover> {
-        // Clear any poisoned prover state by simply resetting it.
-        self.prover.lock().unwrap_or_else(|mut poisoned| {
-            **poisoned.get_mut() = Prover::new(self.kind);
-            self.prover.clear_poison();
-            poisoned.into_inner()
-        })
+    async fn acquire_prover(&self) -> MutexGuard<'_, Prover> {
+        self.prover.lock().await
     }
 }
 
@@ -77,14 +72,17 @@ impl proto::api_server::Api for ProverService {
         // We need to hold this until our request is processed to ensure that the queue capacity is
         // not exceeded.
         let _permit = self.acquire_permit()?;
-        let prover = self.prover;
 
-        // Note: block_in_place seems attractive, but this causes server timeout to be ignored
-        // since we have now escaped the async context.
-        tokio::task::spawn_blocking({
-            move || prover.lock().unwrap().prove(request).map(tonic::Response::new)
-        })
-        .await
-        .expect("prover should not panic")
+        // This mutex is fair and uses FIFO ordering.
+        let prover = self.acquire_prover().await;
+
+        // Blocking in place is fairly safe since we guarantee that only a single request is
+        // processed at a time.
+        //
+        // This has the downside that requests being proven cannot be cancelled since we are now
+        // outside the async runtime. This could occur if the server timeout is exceeded, or
+        // the client cancels the request. A different approach is technically possible, but
+        // would require more complex logic to handle cancellation in tandem with sync.
+        tokio::task::block_in_place(|| prover.prove(request)).map(tonic::Response::new)
     }
 }

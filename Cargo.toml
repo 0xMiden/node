@@ -134,3 +134,7 @@ must_use_candidate           = "allow" # This marks many fn's which isn't helpfu
 needless_for_each            = "allow" # Context dependent if that's useful.
 should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
+
+# Configure `cargo-typos`
+[workspace.metadata.typos]
+files.extend-exclude = ["*.svg"] # Ignore SVG files.

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use miden_block_prover::LocalBlockProver;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
@@ -17,9 +15,8 @@ use crate::generated::{self as proto};
 use crate::server::proof_kind::ProofKind;
 
 /// An enum representing the different types of provers available.
-#[derive(Clone)]
 pub enum Prover {
-    Transaction(Arc<LocalTransactionProver>),
+    Transaction(LocalTransactionProver),
     Batch(LocalBatchProver),
     Block(LocalBlockProver),
 }
@@ -28,9 +25,7 @@ impl Prover {
     /// Constructs a [`Prover`] of the specified [`ProofKind`].
     pub fn new(proof_type: ProofKind) -> Self {
         match proof_type {
-            ProofKind::Transaction => {
-                Self::Transaction(Arc::new(LocalTransactionProver::default()))
-            },
+            ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
             ProofKind::Batch => Self::Batch(LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)),
             ProofKind::Block => Self::Block(LocalBlockProver::new(MIN_PROOF_SECURITY_LEVEL)),
         }
@@ -54,7 +49,7 @@ impl Prover {
 /// requests, and encoding of response. Notably it also standardizes the instrumentation, though
 /// implementations should still add attributes that can only be known post-decoding of the request.
 ///
-/// Implementations of this trait only need to provide the input and ouputs types, as well as the
+/// Implementations of this trait only need to provide the input and outputs types, as well as the
 /// proof implementation.
 trait ProveRequest {
     type Input: miden_protocol::utils::Deserializable;

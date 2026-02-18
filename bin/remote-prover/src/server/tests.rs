@@ -136,7 +136,7 @@ impl Server {
     /// A server configured with an arbitrary port (i.e. `port=0`) and the given kind.
     ///
     /// Capacity is set to 10 with a timeout of 60 seconds.
-    fn with_aribtrary_port(kind: ProofKind) -> Self {
+    fn with_arbitrary_port(kind: ProofKind) -> Self {
         Self {
             port: 0,
             kind,
@@ -171,7 +171,7 @@ impl Server {
 /// that one succeeds and one fails with a resource exhaustion error.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_behaviour_with_capacity_1() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_capacity(1)
         .spawn()
         .await
@@ -204,7 +204,7 @@ async fn legacy_behaviour_with_capacity_1() {
 /// that two succeed and one fails with a resource exhaustion error.
 #[tokio::test(flavor = "multi_thread")]
 async fn capacity_is_respected() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_capacity(2)
         .spawn()
         .await
@@ -238,12 +238,15 @@ async fn capacity_is_respected() {
 
 /// Ensures that the server request timeout is adhered to.
 ///
+/// We cannot actually enforce this for a request that has already being proven as the proof
+/// is done in a blocking sync task. We can however check that a second queued request is rejected.
+///
 /// This is tricky to test properly because we can't easily control the server's response time.
 /// Instead we configure the server to have a ridiculously short timeout which should hopefully
 /// always timeout.
 #[tokio::test(flavor = "multi_thread")]
 async fn timeout_is_respected() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_timeout(Duration::from_nanos(10))
         .spawn()
         .await
@@ -251,12 +254,16 @@ async fn timeout_is_respected() {
 
     let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
 
-    let mut client = Client::connect(port).await;
+    let mut client_a = Client::connect(port).await;
+    let mut client_b = Client::connect(port).await;
 
-    let x = std::time::Instant::now();
-    let response = client.submit_request(request).await;
-    let y = x.elapsed();
-    let err = response.unwrap_err();
+    let a = client_a.submit_request(request.clone());
+    let b = client_b.submit_request(request);
+
+    let (a, b) = tokio::join!(a, b);
+
+    // At least one of the requests should timeout.
+    let err = a.err().or(b.err()).unwrap();
 
     assert_eq!(err.code(), tonic::Code::Cancelled);
     assert!(err.message().contains("Timeout expired"));
@@ -271,7 +278,7 @@ async fn timeout_is_respected() {
 /// detail, but its the best we have without adding multiple abstraction layers.
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_proof_kind_is_rejected() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn()
         .await
         .expect("server should spawn");
@@ -298,7 +305,7 @@ async fn invalid_proof_kind_is_rejected() {
 /// implementation detail, but its the best we have without adding multiple abstraction layers.
 #[tokio::test(flavor = "multi_thread")]
 async fn unsupported_proof_kind_is_rejected() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Batch)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
         .spawn()
         .await
         .expect("server should spawn");
@@ -321,7 +328,7 @@ async fn unsupported_proof_kind_is_rejected() {
 /// correct thing.
 #[tokio::test(flavor = "multi_thread")]
 async fn transaction_proof_is_correct() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Transaction)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn()
         .await
         .expect("server should spawn");
@@ -347,7 +354,7 @@ async fn transaction_proof_is_correct() {
 /// correct thing.
 #[tokio::test(flavor = "multi_thread")]
 async fn batch_proof_is_correct() {
-    let (server, port) = Server::with_aribtrary_port(ProofKind::Batch)
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
         .spawn()
         .await
         .expect("server should spawn");
