@@ -70,8 +70,6 @@ pub enum DatabaseError {
     StorageMapError(#[from] StorageMapError),
     #[error("setup deadpool connection pool failed")]
     Deadpool(#[from] deadpool::managed::PoolError<deadpool_diesel::Error>),
-    #[error("setup deadpool connection pool failed")]
-    ConnectionPoolObtainError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error(transparent)]
     Diesel(#[from] diesel::result::Error),
     #[error("sqlite FFI boundary NUL termination error (not much you can do, file an issue)")]
