@@ -10,8 +10,8 @@ use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
 use miden_testing::{Auth, MockChainBuilder};
-use miden_tx::LocalTransactionProver;
 use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx::{LocalTransactionProver, TransactionVerifier};
 use miden_tx_batch_prover::LocalBatchProver;
 
 use crate::generated::api_client::ApiClient;
@@ -324,8 +324,7 @@ async fn unsupported_proof_kind_is_rejected() {
 
 /// Checks that the a transaction request results in a correct proof.
 ///
-/// The proof is replicated locally, which ensures that the gRPC codec and server code do the
-/// correct thing.
+/// The proof is verified and the transaction IDs of request and response must correspond.
 #[tokio::test(flavor = "multi_thread")]
 async fn transaction_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
@@ -340,10 +339,8 @@ async fn transaction_proof_is_correct() {
     let response = client.submit_request(request).await.unwrap();
     let response = ProvenTransaction::read_from_bytes(&response.payload).unwrap();
 
-    let expected = tokio::task::block_in_place(|| {
-        LocalTransactionProver::default().prove(tx.tx_inputs().clone()).unwrap()
-    });
-    assert_eq!(response, expected);
+    assert_eq!(response.id(), tx.id());
+    TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&response).unwrap();
 
     server.abort();
 }
