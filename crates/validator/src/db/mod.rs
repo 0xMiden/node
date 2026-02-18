@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use diesel::SqliteConnection;
 use diesel::dsl::exists;
 use diesel::prelude::*;
-use miden_node_store::{ConnectionManager, DatabaseError, DatabaseSetupError};
+use miden_node_db::{ConnectionManager, DatabaseError, DatabaseSetupError};
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::Serializable;
 use tracing::instrument;
@@ -19,7 +19,7 @@ use crate::tx_validation::ValidatedTransaction;
 
 /// Open a connection to the DB and apply any pending migrations.
 #[instrument(target = COMPONENT, skip_all)]
-pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, DatabaseSetupError> {
+pub async fn load(database_filepath: PathBuf) -> Result<miden_node_db::Db, DatabaseSetupError> {
     let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
     let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
 
@@ -29,7 +29,7 @@ pub async fn load(database_filepath: PathBuf) -> Result<miden_node_store::Db, Da
         "Connected to the database"
     );
 
-    let db = miden_node_store::Db::new(pool);
+    let db = miden_node_db::Db::new(pool);
     db.query("migrations", apply_migrations).await?;
     Ok(db)
 }

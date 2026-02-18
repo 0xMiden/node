@@ -31,6 +31,7 @@ miden-crypto               = { features = ["concurrent", "hashmaps"], workspace 
 miden-node-proto           = { workspace = true }
 miden-node-proto-build     = { features = ["internal"], workspace = true }
 miden-node-utils           = { workspace = true }
+miden-node-db              = { workspace = true }
 miden-remote-prover-client = { features = ["block-prover"], workspace = true }
 miden-standards            = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`

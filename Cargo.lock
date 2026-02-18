@@ -2796,6 +2796,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-db"
+version = "0.14.0"
+dependencies = [
+ "deadpool",
+ "deadpool-diesel",
+ "deadpool-sync",
+ "diesel",
+ "libsqlite3-sys",
+ "miden-protocol",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "miden-node-grpc-error-macro"
 version = "0.14.0"
 dependencies = [
@@ -2923,6 +2937,7 @@ dependencies = [
  "libsqlite3-sys",
  "miden-block-prover",
  "miden-crypto",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-rocksdb-cxx-linkage-fix",
@@ -3015,9 +3030,9 @@ dependencies = [
  "deadpool-diesel",
  "diesel",
  "diesel_migrations",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
- "miden-node-store",
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",

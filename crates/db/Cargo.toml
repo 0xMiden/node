@@ -1,0 +1,24 @@
+[package]
+authors.workspace      = true
+description            = "Shared database capabilities for Miden node"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["miden", "node", "database"]
+license.workspace      = true
+name                   = "miden-node-db"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+deadpool          = { workspace = true, default-features = false }
+deadpool-diesel   = { workspace = true, features = ["sqlite"] }
+deadpool-sync     = { workspace = true, default-features = false }
+diesel            = { workspace = true, features = ["sqlite"] }
+libsqlite3-sys    = { workspace = true }
+miden-protocol    = { workspace = true }
+thiserror         = { workspace = true }
+tracing         = { workspace = true }
