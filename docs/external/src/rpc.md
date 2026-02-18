@@ -22,7 +22,6 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [SyncNullifiers](#syncnullifiers)
 - [SyncAccountVault](#syncaccountvault)
 - [SyncNotes](#syncnotes)
-- [SyncState](#syncstate)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
 - [SyncTransactions](#synctransactions)
 - [Status](#status)
@@ -141,7 +140,9 @@ This endpoint allows clients to discover the maximum number of items that can be
   "endpoints": {
     "CheckNullifiers": { "parameters": { "nullifier": 1000 } },
     "SyncNullifiers": { "parameters": { "nullifier": 1000 } },
-    "SyncState": { "parameters": { "account_id": 1000, "note_tag": 1000 } },
+    "SyncTransactions": { "parameters": { "account_id": 1000 } },
+    "SyncAccountVault": { "parameters": { "account_id": 1000 } },
+    "SyncAccountStorageMaps": { "parameters": { "account_id": 1000 } },
     "SyncNotes": { "parameters": { "note_tag": 1000 } },
     "GetNotesById": { "parameters": { "note_id": 100 } }
   }
@@ -206,18 +207,6 @@ The response includes each note's metadata and inclusion proof.
 A basic note sync can be implemented by repeatedly requesting the previous response's block until reaching the tip of the chain.
 
 **Limits:** `note_tag` (1000)
-
-### SyncState
-
-Iteratively sync data for specific notes and accounts.
-
-This request returns the next block containing data of interest. Client is expected to repeat these requests in a loop until the response reaches the head of the chain, at which point the data is fully synced.
-
-Each update response also contains info about new notes, accounts etc. created. It also returns Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain MMR peaks and chain MMR nodes.
-
-The low part of note tags are redacted to preserve some degree of privacy. Returned data therefore contains additional notes which should be filtered out by the client.
-
-**Limits:** `account_id` (1000), `note_tag` (1000)
 
 ### SyncAccountStorageMaps
 

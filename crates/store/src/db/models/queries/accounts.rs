@@ -18,11 +18,7 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
-use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES,
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-};
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -45,7 +41,8 @@ use miden_protocol::utils::{Deserializable, Serializable};
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
-use crate::db::models::{serialize_vec, vec_raw_try_into};
+#[cfg(test)]
+use crate::db::models::vec_raw_try_into;
 use crate::db::{AccountVaultValue, schema};
 use crate::errors::DatabaseError;
 
@@ -484,49 +481,6 @@ pub(crate) fn select_account_vault_assets(
     Ok((last_block_included, values))
 }
 
-/// Select [`AccountSummary`] from the DB using the given [`SqliteConnection`], given that the
-/// account update was in the given block range (inclusive).
-///
-/// # Returns
-///
-/// The vector of [`AccountSummary`] with the matching accounts.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT
-///     account_id,
-///     account_commitment,
-///     block_num
-/// FROM
-///     accounts
-/// WHERE
-///     block_num > ?1 AND
-///     block_num <= ?2 AND
-///     account_id IN (?3)
-/// ORDER BY
-///     block_num ASC
-/// ```
-pub fn select_accounts_by_block_range(
-    conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<Vec<AccountSummary>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
-
-    let desired_account_ids = serialize_vec(account_ids);
-    let raw: Vec<AccountSummaryRaw> =
-        SelectDsl::select(schema::accounts::table, AccountSummaryRaw::as_select())
-            .filter(schema::accounts::block_num.gt(block_range.start().to_raw_sql()))
-            .filter(schema::accounts::block_num.le(block_range.end().to_raw_sql()))
-            .filter(schema::accounts::account_id.eq_any(desired_account_ids))
-            .order(schema::accounts::block_num.asc())
-            .load::<AccountSummaryRaw>(conn)?;
-    // SAFETY `From` implies `TryFrom<Error=Infallible`, which is the case for `AccountSummaryRaw`
-    // -> `AccountSummary`
-    Ok(vec_raw_try_into(raw).unwrap())
-}
-
 /// Select all accounts from the DB using the given [`SqliteConnection`].
 ///
 /// # Returns
@@ -917,11 +871,13 @@ pub(crate) fn insert_account_vault_asset(
         // First, update any existing rows with the same (account_id, vault_key) to set
         // is_latest=false
         let vault_key: Word = vault_key.into();
+        let vault_key_bytes = vault_key.to_bytes();
+        let account_id_bytes = account_id.to_bytes();
         let update_count = diesel::update(schema::account_vault_assets::table)
             .filter(
                 schema::account_vault_assets::account_id
-                    .eq(&account_id.to_bytes())
-                    .and(schema::account_vault_assets::vault_key.eq(&vault_key.to_bytes()))
+                    .eq(account_id_bytes)
+                    .and(schema::account_vault_assets::vault_key.eq(vault_key_bytes))
                     .and(schema::account_vault_assets::is_latest.eq(true)),
             )
             .set(schema::account_vault_assets::is_latest.eq(false))
@@ -1151,6 +1107,9 @@ pub(crate) fn upsert_accounts(
 
         diesel::insert_into(schema::accounts::table)
             .values(&account_value)
+            .on_conflict((schema::accounts::account_id, schema::accounts::block_num))
+            .do_update()
+            .set(&account_value)
             .execute(conn)?;
 
         // insert pending storage map entries
@@ -1251,4 +1210,79 @@ pub(crate) struct AccountStorageMapRowInsert {
     pub(crate) key: Vec<u8>,
     pub(crate) value: Vec<u8>,
     pub(crate) is_latest: bool,
+}
+
+// CLEANUP FUNCTIONS
+// ================================================================================================
+
+/// Number of historical blocks to retain for vault assets and storage map values.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
+/// except for entries marked with `is_latest=true` which are always retained.
+pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
+
+/// Clean up old entries for all accounts, deleting entries older than the retention window.
+///
+/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`.
+/// This is a simple and efficient approach that doesn't require window functions.
+///
+/// # Returns
+/// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+pub(crate) fn prune_history(
+    conn: &mut SqliteConnection,
+    chain_tip: BlockNumber,
+) -> Result<(usize, usize), DatabaseError> {
+    let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+    tracing::Span::current().record("cutoff_block", cutoff_block);
+    let vault_deleted = prune_account_vault_assets(conn, cutoff_block)?;
+    let storage_deleted = prune_account_storage_map_values(conn, cutoff_block)?;
+
+    Ok((vault_deleted, storage_deleted))
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_vault_assets(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
+        schema::account_vault_assets::table.filter(
+            schema::account_vault_assets::block_num
+                .lt(cutoff_block)
+                .and(schema::account_vault_assets::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_storage_map_values(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
+        schema::account_storage_map_values::table.filter(
+            schema::account_storage_map_values::block_num
+                .lt(cutoff_block)
+                .and(schema::account_storage_map_values::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
 }

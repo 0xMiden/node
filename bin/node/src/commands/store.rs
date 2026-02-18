@@ -20,7 +20,7 @@ use crate::commands::{
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_INSECURE_SECRET_KEY,
+    ENV_VALIDATOR_KEY,
     INSECURE_VALIDATOR_KEY_HEX,
     duration_to_human_readable_string,
 };
@@ -46,14 +46,16 @@ pub enum StoreCommand {
         genesis_config_file: Option<PathBuf>,
         /// Insecure, hex-encoded validator secret key for development and testing purposes.
         ///
+        /// Used to sign the genesis block in the bootstrap process.
+        ///
         /// If not provided, a predefined key is used.
         #[arg(
-            long = "validator.insecure.secret-key",
-            env = ENV_VALIDATOR_INSECURE_SECRET_KEY,
-            value_name = "VALIDATOR_INSECURE_SECRET_KEY",
+            long = "validator.key",
+            env = ENV_VALIDATOR_KEY,
+            value_name = "VALIDATOR_KEY",
             default_value = INSECURE_VALIDATOR_KEY_HEX
         )]
-        validator_insecure_secret_key: String,
+        validator_key: String,
     },
 
     /// Starts the store component.
@@ -109,12 +111,12 @@ impl StoreCommand {
                 data_directory,
                 accounts_directory,
                 genesis_config_file,
-                validator_insecure_secret_key,
+                validator_key,
             } => Self::bootstrap(
                 &data_directory,
                 &accounts_directory,
                 genesis_config_file.as_ref(),
-                validator_insecure_secret_key,
+                validator_key,
             ),
             StoreCommand::Start {
                 rpc_url,
@@ -192,10 +194,10 @@ impl StoreCommand {
         data_directory: &Path,
         accounts_directory: &Path,
         genesis_config: Option<&PathBuf>,
-        validator_insecure_secret_key: String,
+        validator_key: String,
     ) -> anyhow::Result<()> {
         // Decode the validator key.
-        let signer = SecretKey::read_from_bytes(&hex::decode(validator_insecure_secret_key)?)?;
+        let signer = SecretKey::read_from_bytes(&hex::decode(validator_key)?)?;
 
         // Parse genesis config (or default if not given).
         let config = genesis_config
