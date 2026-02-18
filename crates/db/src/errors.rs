@@ -13,7 +13,7 @@ pub enum SchemaVerificationError {
     #[error("failed to create in-memory reference database")]
     InMemoryDbCreation(#[source] diesel::ConnectionError),
     #[error("failed to apply migrations to reference database")]
-    MigrationApplication(#[source] Box<dyn std::error::Error + Send + Sync>),
+    MigrationApplication(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("failed to extract schema from database")]
     SchemaExtraction(#[source] diesel::result::Error),
     #[error(
