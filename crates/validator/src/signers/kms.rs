@@ -42,7 +42,7 @@ impl KmsSigner {
         // Retrieve public key.
         let pub_key_output = client.get_public_key().key_id(key_id.clone()).send().await?;
         if let Some(pub_key) = pub_key_output.public_key() {
-            let pub_key = PublicKey::read_from_bytes(&pub_key.clone().into_inner())?;
+            let pub_key = PublicKey::read_from_bytes(pub_key.as_ref())?;
             Ok(Self { key_id, pub_key, client })
         } else {
             anyhow::bail!("failed to retrieve public key");
@@ -68,8 +68,7 @@ impl BlockSigner for KmsSigner {
 
         // Handle the returned signature.
         let sig = sign_output.signature().ok_or(KmsSignerError::EmptySignature)?;
-        let sig = sig.clone().into_inner(); // todo no clone?
-        Ok(Signature::read_from_bytes(&sig)?)
+        Ok(Signature::read_from_bytes(sig.as_ref())?)
     }
 
     fn public_key(&self) -> PublicKey {
