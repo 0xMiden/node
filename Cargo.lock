@@ -2830,6 +2830,7 @@ dependencies = [
  "futures",
  "indexmap 2.13.0",
  "libsqlite3-sys",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-test-macro",
  "miden-node-utils",

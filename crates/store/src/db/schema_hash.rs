@@ -11,11 +11,11 @@
 
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use diesel_migrations::MigrationHarness;
+use miden_node_db::SchemaVerificationError;
 use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::MIGRATIONS;
-use crate::errors::SchemaVerificationError;
 
 /// Represents a schema object for comparison.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

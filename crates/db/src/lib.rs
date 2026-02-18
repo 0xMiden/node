@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub use conv::{DatabaseTypeConversionError, SqlTypeConvert};
 use diesel::{RunQueryDsl, SqliteConnection};
-pub use errors::{DatabaseError, DatabaseSetupError};
+pub use errors::{DatabaseError, DatabaseSetupError, SchemaVerificationError};
 pub use manager::{ConnectionManager, ConnectionManagerError, configure_connection_on_creation};
 use tracing::Instrument;
 

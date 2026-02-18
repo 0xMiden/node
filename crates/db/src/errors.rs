@@ -4,6 +4,30 @@ use std::io;
 use deadpool_sync::InteractError;
 use thiserror::Error;
 
+// SCHEMA VERIFICATION ERROR
+// =================================================================================================
+
+/// Errors that can occur during schema verification.
+#[derive(Debug, Error)]
+pub enum SchemaVerificationError {
+    #[error("failed to create in-memory reference database")]
+    InMemoryDbCreation(#[source] diesel::ConnectionError),
+    #[error("failed to apply migrations to reference database")]
+    MigrationApplication(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("failed to extract schema from database")]
+    SchemaExtraction(#[source] diesel::result::Error),
+    #[error(
+        "schema mismatch: expected {expected_count} objects, found {actual_count} \
+         ({missing_count} missing, {extra_count} unexpected)"
+    )]
+    Mismatch {
+        expected_count: usize,
+        actual_count: usize,
+        missing_count: usize,
+        extra_count: usize,
+    },
+}
+
 // DATABASE SETUP ERROR
 // =================================================================================================
 
@@ -36,6 +60,8 @@ pub enum DatabaseError {
     },
     #[error(transparent)]
     Diesel(#[from] diesel::result::Error),
+    #[error("schema verification failed")]
+    SchemaVerification(#[from] SchemaVerificationError),
 }
 
 impl DatabaseError {
