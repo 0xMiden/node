@@ -498,7 +498,7 @@ message SyncChainMmrResponse {
     // For which block range the MMR delta is returned.
     BlockRange block_range = 1;
     // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    // `pagination_info.block_num`.
+    // `response.block_range.block_to` or the chain tip.
     primitives.MmrDelta mmr_delta = 2;
 }
 

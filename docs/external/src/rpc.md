@@ -221,7 +221,7 @@ This endpoint enables clients to maintain an updated view of account storage.
 
 Returns MMR delta information needed to synchronize the chain MMR within a block range.
 
-Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range along with pagination info so the caller can continue syncing until the chain tip.
+Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range, but at most to (including) the chain tip.
 
 ### SyncTransactions
 

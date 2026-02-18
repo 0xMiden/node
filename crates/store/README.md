@@ -254,7 +254,7 @@ When storage map synchronization fails, detailed error information is provided t
 
 Returns MMR delta information needed to synchronize the chain MMR within a block range.
 
-Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range along with pagination info so the caller can continue syncing until the chain tip.
+Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range and the returned `block_range` reflects the last block included, which may be the chain tip.
 
 ---
 
