@@ -5,6 +5,7 @@ use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::grpc::UrlExt;
+use miden_node_validator::KmsSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
 use url::Url;
@@ -21,6 +22,7 @@ use crate::commands::{
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_KEY,
+    ENV_VALIDATOR_KMS_KEY_ID,
     INSECURE_VALIDATOR_KEY_HEX,
     duration_to_human_readable_string,
 };
@@ -56,6 +58,10 @@ pub enum StoreCommand {
             default_value = INSECURE_VALIDATOR_KEY_HEX
         )]
         validator_key: String,
+
+        /// Key ID for the KMS key used by validator to sign blocks.
+        #[arg(long = "kms.key-id", env = ENV_VALIDATOR_KMS_KEY_ID, value_name = "VALIDATOR_KMS_KEY_ID")]
+        validator_kms_key_id: Option<String>,
     },
 
     /// Starts the store component.
@@ -112,12 +118,17 @@ impl StoreCommand {
                 accounts_directory,
                 genesis_config_file,
                 validator_key,
-            } => Self::bootstrap(
-                &data_directory,
-                &accounts_directory,
-                genesis_config_file.as_ref(),
-                validator_key,
-            ),
+                validator_kms_key_id,
+            } => {
+                Self::bootstrap(
+                    &data_directory,
+                    &accounts_directory,
+                    genesis_config_file.as_ref(),
+                    validator_key,
+                    validator_kms_key_id,
+                )
+                .await
+            },
             StoreCommand::Start {
                 rpc_url,
                 ntx_builder_url,
@@ -190,15 +201,13 @@ impl StoreCommand {
         .context("failed while serving store component")
     }
 
-    fn bootstrap(
+    async fn bootstrap(
         data_directory: &Path,
         accounts_directory: &Path,
         genesis_config: Option<&PathBuf>,
         validator_key: String,
+        validator_kms_key_id: Option<String>,
     ) -> anyhow::Result<()> {
-        // Decode the validator key.
-        let signer = SecretKey::read_from_bytes(&hex::decode(validator_key)?)?;
-
         // Parse genesis config (or default if not given).
         let config = genesis_config
             .map(|file_path| {
@@ -209,8 +218,6 @@ impl StoreCommand {
             })
             .transpose()?
             .unwrap_or_default();
-
-        let (genesis_state, secrets) = config.into_state(signer)?;
 
         // Create directories if they do not already exist.
         for directory in &[accounts_directory, data_directory] {
@@ -234,19 +241,42 @@ impl StoreCommand {
             }
         }
 
-        // Write the accounts to disk
-        for item in secrets.as_account_files(&genesis_state) {
-            let AccountFileWithName { account_file, name } = item?;
-            let accountpath = accounts_directory.join(name);
-            // do not override existing keys
-            fs_err::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&accountpath)
-                .context("key file already exists")?;
-            account_file.write(accountpath)?;
-        }
+        if let Some(key_id) = validator_kms_key_id {
+            // Retrieve the validator key from the KMS.
+            let signer = KmsSigner::new(key_id).await?;
+            let (genesis_state, secrets) = config.into_state(signer)?;
+            // Write the accounts to disk
+            for item in secrets.as_account_files(&genesis_state) {
+                let AccountFileWithName { account_file, name } = item?;
+                let accountpath = accounts_directory.join(name);
+                // do not override existing keys
+                fs_err::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&accountpath)
+                    .context("key file already exists")?;
+                account_file.write(accountpath)?;
+            }
 
-        Store::bootstrap(genesis_state, data_directory)
+            Store::bootstrap(genesis_state, data_directory)
+        } else {
+            // Decode the validator key.
+            let signer = SecretKey::read_from_bytes(&hex::decode(validator_key)?)?;
+            let (genesis_state, secrets) = config.into_state(signer)?;
+            // Write the accounts to disk
+            for item in secrets.as_account_files(&genesis_state) {
+                let AccountFileWithName { account_file, name } = item?;
+                let accountpath = accounts_directory.join(name);
+                // do not override existing keys
+                fs_err::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&accountpath)
+                    .context("key file already exists")?;
+                account_file.write(accountpath)?;
+            }
+
+            Store::bootstrap(genesis_state, data_directory)
+        }
     }
 }

@@ -22,6 +22,7 @@ use crate::commands::{
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_KEY,
+    ENV_VALIDATOR_KMS_KEY_ID,
     INSECURE_VALIDATOR_KEY_HEX,
     NtxBuilderConfig,
     ValidatorConfig,
@@ -50,6 +51,8 @@ pub enum BundledCommand {
         /// Insecure, hex-encoded validator secret key for development and testing purposes.
         ///
         /// If not provided, a predefined key is used.
+        ///
+        /// Value is ignored if `kms.key-id` is provided.
         #[arg(
             long = "validator.key",
             env = ENV_VALIDATOR_KEY,
@@ -57,6 +60,10 @@ pub enum BundledCommand {
             default_value = INSECURE_VALIDATOR_KEY_HEX
         )]
         validator_key: String,
+
+        /// Key ID for the KMS key used by validator to sign blocks.
+        #[arg(long = "kms.key-id", env = ENV_VALIDATOR_KMS_KEY_ID, value_name = "VALIDATOR_KMS_KEY_ID")]
+        validator_kms_key_id: Option<String>,
     },
 
     /// Runs all three node components in the same process.
@@ -113,6 +120,7 @@ impl BundledCommand {
                 accounts_directory,
                 genesis_config_file,
                 validator_key,
+                validator_kms_key_id: kms_key_id,
             } => {
                 // Currently the bundled bootstrap is identical to the store's bootstrap.
                 crate::commands::store::StoreCommand::Bootstrap {
@@ -120,6 +128,7 @@ impl BundledCommand {
                     accounts_directory,
                     genesis_config_file,
                     validator_key,
+                    validator_kms_key_id: kms_key_id,
                 }
                 .handle()
                 .await

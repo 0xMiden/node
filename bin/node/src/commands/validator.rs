@@ -51,6 +51,8 @@ pub enum ValidatorCommand {
 
         /// Insecure, hex-encoded validator secret key for development and testing purposes.
         ///
+        /// If not provided, a predefined key is used.
+        ///
         /// Value is ignored if `kms.key-id` is provided.
         #[arg(long = "key", env = ENV_VALIDATOR_KEY, value_name = "VALIDATOR_KEY", default_value = INSECURE_VALIDATOR_KEY_HEX)]
         validator_key: String,
