@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use diesel::SqliteConnection;
 use diesel::dsl::exists;
 use diesel::prelude::*;
-use miden_node_db::{DatabaseError, DatabaseSetupError, Db};
+use miden_node_db::{DatabaseError, Db};
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::Serializable;
 use tracing::instrument;
@@ -19,7 +19,7 @@ use crate::tx_validation::ValidatedTransaction;
 
 /// Open a connection to the DB and apply any pending migrations.
 #[instrument(target = COMPONENT, skip_all)]
-pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseSetupError> {
+pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
     let db = Db::new(&database_filepath)?;
     tracing::info!(
         target: COMPONENT,

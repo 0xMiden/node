@@ -165,7 +165,7 @@ pub enum StateInitializationError {
     #[error("failed to load block store")]
     BlockStoreLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
-    DatabaseLoadError(#[from] DatabaseSetupError),
+    DatabaseLoadError(#[from] miden_node_db::DatabaseError),
     #[error("inner forest error")]
     InnerForestError(#[from] InnerForestError),
     #[error(
@@ -183,14 +183,6 @@ pub enum StateInitializationError {
     PublicAccountMissingDetails(AccountId),
     #[error("failed to convert account to delta: {0}")]
     AccountToDeltaConversionFailed(String),
-}
-
-#[derive(Debug, Error)]
-pub enum DatabaseSetupError {
-    #[error("database error")]
-    Database(#[from] DatabaseError),
-    #[error("database setup error")]
-    DatabaseSetupError(#[from] miden_node_db::DatabaseSetupError),
 }
 
 #[derive(Debug, Error)]
@@ -642,7 +634,6 @@ mod compile_tests {
         RecvError,
         StateInitializationError,
     };
-    use crate::errors::DatabaseSetupError;
 
     /// Ensure all enum variants remain compat with the desired
     /// trait bounds. Otherwise one gets very unwieldy errors.
@@ -667,7 +658,6 @@ mod compile_tests {
         ensure_is_error::<deadpool::managed::RecycleError<deadpool_diesel::Error>>(PhantomData);
 
         ensure_is_error::<DatabaseError>(PhantomData);
-        ensure_is_error::<DatabaseSetupError>(PhantomData);
         ensure_is_error::<diesel::result::Error>(PhantomData);
         ensure_is_error::<GenesisError>(PhantomData);
         ensure_is_error::<StateInitializationError>(PhantomData);

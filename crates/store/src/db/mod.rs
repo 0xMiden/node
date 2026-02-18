@@ -35,7 +35,7 @@ pub use crate::db::models::queries::{
     PublicAccountIdsPage,
 };
 use crate::db::models::{Page, queries};
-use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError};
+use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
 mod migrations;
@@ -266,7 +266,7 @@ impl Db {
 
     /// Open a connection to the DB and apply any pending migrations.
     #[instrument(target = COMPONENT, skip_all)]
-    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseSetupError> {
+    pub async fn load(database_filepath: PathBuf) -> Result<Self, miden_node_db::DatabaseError> {
         let db = miden_node_db::Db::new(&database_filepath)?;
         info!(
             target: COMPONENT,

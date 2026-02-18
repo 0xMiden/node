@@ -28,21 +28,6 @@ pub enum SchemaVerificationError {
     },
 }
 
-// DATABASE SETUP ERROR
-// =================================================================================================
-
-#[derive(Debug, Error)]
-pub enum DatabaseSetupError {
-    #[error("I/O error")]
-    Io(#[from] io::Error),
-    #[error("database error")]
-    Database(#[from] DatabaseError),
-    #[error("pool build error")]
-    PoolBuild(#[from] deadpool::managed::BuildError),
-    #[error("Setup deadpool connection pool failed")]
-    Pool(#[from] deadpool::managed::PoolError<deadpool_diesel::Error>),
-}
-
 // DATABASE ERROR
 // =================================================================================================
 
@@ -62,6 +47,12 @@ pub enum DatabaseError {
     Diesel(#[from] diesel::result::Error),
     #[error("schema verification failed")]
     SchemaVerification(#[from] SchemaVerificationError),
+    #[error("I/O error")]
+    Io(#[from] io::Error),
+    #[error("pool build error")]
+    PoolBuild(#[from] deadpool::managed::BuildError),
+    #[error("Setup deadpool connection pool failed")]
+    Pool(#[from] deadpool::managed::PoolError<deadpool_diesel::Error>),
 }
 
 impl DatabaseError {
