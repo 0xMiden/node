@@ -69,35 +69,16 @@ pub enum DatabaseError {
     AccountCommitmentsMismatch { expected: Word, calculated: Word },
     #[error("account {0} not found")]
     AccountNotFoundInDb(AccountId),
-    #[error("account {0} state at block height {1} not found")]
-    AccountAtBlockHeightNotFoundInDb(AccountId, BlockNumber),
-    #[error("block {0} not found in database")]
-    BlockNotFound(BlockNumber),
-    #[error("historical block {block_num} not available: {reason}")]
-    HistoricalBlockNotAvailable { block_num: BlockNumber, reason: String },
     #[error("accounts {0:?} not found")]
     AccountsNotFoundInDb(Vec<AccountId>),
     #[error("account {0} is not on the chain")]
     AccountNotPublic(AccountId),
     #[error("invalid block parameters: block_from ({from}) > block_to ({to})")]
     InvalidBlockRange { from: BlockNumber, to: BlockNumber },
-    #[error("invalid storage slot type: {0}")]
-    InvalidStorageSlotType(i32),
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
-    #[error("invalid Felt: {0}")]
-    InvalidFelt(String),
-    #[error(
-        "unsupported database version. There is no migration chain from/to this version. \
-        Remove all database files and try again."
-    )]
-    UnsupportedDatabaseVersion,
-    #[error(transparent)]
-    ConnectionManager(#[from] miden_node_db::ConnectionManagerError),
     #[error(transparent)]
     SqlValueConversion(#[from] DatabaseTypeConversionError),
-    #[error("Not implemented: {0}")]
-    NotImplemented(String),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
     StorageRootNotFound {
         account_id: AccountId,
