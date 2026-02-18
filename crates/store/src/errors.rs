@@ -38,12 +38,8 @@ use crate::inner_forest::{InnerForestError, WitnessError};
 pub enum DatabaseError {
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
     // ---------------------------------------------------------------------------------------------
-    #[error("account is incomplete")]
-    AccountIncomplete,
     #[error("account error")]
     AccountError(#[from] AccountError),
-    #[error("account delta error")]
-    AccountDeltaError(#[from] AccountDeltaError),
     #[error("asset vault error")]
     AssetVaultError(#[from] AssetVaultError),
     #[error("asset error")]
@@ -54,36 +50,16 @@ pub enum DatabaseError {
     DatabaseError(#[from] miden_node_db::DatabaseError),
     #[error("deserialization failed")]
     DeserializationError(#[from] DeserializationError),
-    #[error("hex parsing error")]
-    FromHexError(#[from] hex::FromHexError),
     #[error("I/O error")]
     IoError(#[from] io::Error),
     #[error("merkle error")]
     MerkleError(#[from] MerkleError),
-    #[error("network account error")]
-    NetworkAccountError(#[from] NetworkAccountError),
     #[error("note error")]
     NoteError(#[from] NoteError),
     #[error("storage map error")]
     StorageMapError(#[from] StorageMapError),
-    #[error("setup deadpool connection pool failed")]
-    Deadpool(#[from] deadpool::managed::PoolError<deadpool_diesel::Error>),
     #[error(transparent)]
     Diesel(#[from] diesel::result::Error),
-    #[error("sqlite FFI boundary NUL termination error (not much you can do, file an issue)")]
-    DieselSqliteFfi(#[from] std::ffi::NulError),
-    #[error(transparent)]
-    DeadpoolDiesel(#[from] deadpool_diesel::Error),
-    #[error(transparent)]
-    PoolRecycle(#[from] deadpool::managed::RecycleError<deadpool_diesel::Error>),
-    #[error("summing over column {column} of table {table} exceeded {limit}")]
-    ColumnSumExceedsLimit {
-        table: &'static str,
-        column: &'static str,
-        limit: &'static str,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
     #[error(transparent)]
     QueryParamLimit(#[from] QueryLimitError),
 
