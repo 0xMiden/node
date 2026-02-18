@@ -131,7 +131,10 @@ impl<S: BlockSigner> GenesisState<S> {
 
         let block_proof = BlockProof::new_dummy();
 
+        // Sign and assert verification for sanity (no mismatch between frontend and backend signing
+        // impls).
         let signature = block_on(self.block_signer.sign(&header))?;
+        assert!(signature.verify(header.commitment(), &self.block_signer.public_key()));
         // SAFETY: Header and accounts should be valid by construction.
         // No notes or nullifiers are created at genesis, which is consistent with the above empty
         // block note tree root and empty nullifier tree root.

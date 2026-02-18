@@ -5,6 +5,7 @@ use k256::elliptic_curve::sec1::ToEncodedPoint;
 use miden_node_utils::signer::BlockSigner;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::crypto::hash::keccak::Keccak256;
 use miden_tx::utils::{Deserializable, DeserializationError, Serializable};
 
 // KMS SIGNER ERROR
@@ -85,6 +86,9 @@ impl BlockSigner for KmsSigner {
     type Error = KmsSignerError;
 
     async fn sign(&self, header: &BlockHeader) -> Result<Signature, Self::Error> {
+        // 1) Compute Keccak-256 over the same bytes Miden signs
+        let msg = header.commitment().to_bytes();
+        let digest = Keccak256::hash(&msg); // 32 bytes
         // Request signature from KMS backend.
         let sign_output = self
             .client
@@ -92,14 +96,32 @@ impl BlockSigner for KmsSigner {
             .key_id(&self.key_id)
             .signing_algorithm(SigningAlgorithmSpec::EcdsaSha256)
             .message_type(aws_sdk_kms::types::MessageType::Digest)
-            .message(header.commitment().to_bytes().into())
+            .message(digest.to_bytes().into())
             .send()
             .await
             .map_err(Box::from)?;
 
-        // Handle the returned signature.
-        let sig = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
-        Ok(Signature::read_from_bytes(sig.as_ref())?)
+        // 3) Convert DER -> 64-byte r||s, and normalize s to low-S
+        use k256::ecdsa::Signature as K256Signature;
+        let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
+        let ksig = K256Signature::from_der(sig_der.as_ref()).map_err(|e| {
+            KmsSignerError::SignatureFormatError(DeserializationError::InvalidValue(
+                format!("DER decode error: {e}").into(),
+            ))
+        })?;
+        let rs = if let Some(norm) = ksig.normalize_s() {
+            norm.to_bytes()
+        } else {
+            ksig.to_bytes()
+        }; // 64 bytes
+
+        // 3.5) Append a recovery byte `v` to make 65 bytes (r||s||v).
+        let mut sig65 = [0u8; 65];
+        sig65[..64].copy_from_slice(&rs);
+        sig65[64] = 0; // recovery id; not used by verify(pk), so 0 is fine
+
+        // 4) Parse into Miden signature
+        Ok(Signature::read_from_bytes(&sig65)?)
     }
 
     fn public_key(&self) -> PublicKey {
