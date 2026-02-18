@@ -55,6 +55,7 @@ The full gRPC API can be found [here](../../proto/proto/store.proto).
 - [SyncAccountVault](#syncaccountvault)
 - [SyncNotes](#syncnotes)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
+- [SyncChainMmr](#syncchainmmr)
 - [SyncTransactions](#synctransactions)
 <!--toc:end-->
 
@@ -246,6 +247,14 @@ When storage map synchronization fails, detailed error information is provided t
 | `INVALID_BLOCK_RANGE`     | 2     | `INVALID_ARGUMENT` | Invalid block range parameters        |
 | `ACCOUNT_NOT_FOUND`       | 3     | `NOT_FOUND`        | Account ID does not exist             |
 | `ACCOUNT_NOT_PUBLIC`      | 4     | `INVALID_ARGUMENT` | Account storage not publicly accessible |
+
+---
+
+### SyncChainMmr
+
+Returns MMR delta information needed to synchronize the chain MMR within a block range.
+
+Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range and the returned `block_range` reflects the last block included, which may be the chain tip.
 
 ---
 

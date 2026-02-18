@@ -120,16 +120,6 @@ impl QueryParamLimiter for QueryParamBlockLimit {
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
 
-/// Used for the following RPC endpoints:
-/// * `sync_chain_mmr`
-///
-/// Capped at 1000 blocks to keep MMR deltas within the 4 MB payload budget.
-pub struct QueryParamBlockRangeLimit;
-impl QueryParamLimiter for QueryParamBlockRangeLimit {
-    const PARAM_NAME: &str = "block_range";
-    const LIMIT: usize = GENERAL_REQUEST_LIMIT;
-}
-
 /// Used for the following RPC endpoints
 /// * `get_account`
 ///
