@@ -1,6 +1,5 @@
 use std::io;
 
-use miden_node_db::SchemaVerificationError;
 use miden_node_proto::domain::account::NetworkAccountError;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::{ConversionError, GrpcError};
@@ -117,8 +116,6 @@ pub enum DatabaseError {
         Remove all database files and try again."
     )]
     UnsupportedDatabaseVersion,
-    #[error("schema verification failed")]
-    SchemaVerification(#[from] SchemaVerificationError),
     #[error(transparent)]
     ConnectionManager(#[from] miden_node_db::ConnectionManagerError),
     #[error(transparent)]
