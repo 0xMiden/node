@@ -2742,6 +2742,7 @@ dependencies = [
  "tonic-health",
  "tonic-prost",
  "tonic-prost-build",
+ "tonic-reflection",
  "tonic-web",
  "tower-http",
  "tracing",

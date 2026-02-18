@@ -1,9 +1,7 @@
-use serde::{Deserialize, Serialize};
-
 use crate::generated as proto;
 
 /// Specifies the type of proof supported by the remote prover.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
 pub enum ProofKind {
     Transaction,
     Batch,

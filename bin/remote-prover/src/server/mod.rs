@@ -23,16 +23,14 @@ mod status;
 #[cfg(test)]
 mod tests;
 
-/// Describes the remote-prover server.
-///
-/// Can be parsed from the command line using [`Config::parse`].
+/// A gRPC server providing a proving service for the Miden blockchain.
 #[derive(clap::Parser)]
 pub struct Server {
     /// The port the gRPC server will be hosted on.
     #[arg(long, default_value = "50051", env = "MIDEN_PROVER_PORT")]
     port: u16,
     /// The proof type that the prover will be handling.
-    #[arg(long, env = "MIDEN_PROVER_KIND")]
+    #[arg(long, value_enum, env = "MIDEN_PROVER_KIND")]
     kind: ProofKind,
     /// Maximum time allowed for a proof request to complete. Once exceeded, the request is
     /// aborted.
@@ -72,6 +70,12 @@ impl Server {
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
         let prover_service = ApiServer::new(prover_service);
 
+        let reflection_service = tonic_reflection::server::Builder::configure()
+            .register_file_descriptor_set(miden_node_proto_build::remote_prover_api_descriptor())
+            .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .context("failed to build reflection service")?;
+
         // Create a gRPC health reporter.
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
@@ -88,6 +92,7 @@ impl Server {
             .add_service(prover_service)
             .add_service(status_service)
             .add_service(health_service)
+            .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(listener));
 
         let server =
