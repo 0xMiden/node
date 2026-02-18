@@ -2735,7 +2735,6 @@ dependencies = [
  "miette",
  "opentelemetry",
  "prost",
- "serde",
  "tokio",
  "tokio-stream",
  "tonic",

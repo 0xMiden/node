@@ -29,7 +29,6 @@ miden-tx               = { features = ["concurrent", "std"], workspace = true }
 miden-tx-batch-prover  = { features = ["std"], workspace = true }
 opentelemetry          = { version = "0.31" }
 prost                  = { default-features = false, features = ["derive"], workspace = true }
-serde                  = { features = ["derive"], version = "1.0" }
 tokio                  = { features = ["full"], workspace = true }
 tokio-stream           = { features = ["net"], version = "0.1" }
 tonic                  = { default-features = false, features = ["codegen", "router", "transport"], version = "0.14" }
