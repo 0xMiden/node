@@ -39,6 +39,18 @@ command ensures that all required libraries are installed.
 sudo apt install llvm clang bindgen pkg-config libssl-dev libsqlite3-dev
 ```
 
+On macOS, ensure the Xcode Command Line Tools are installed:
+
+```sh
+xcode-select --install
+```
+
+If you still see `'cstdint' file not found` errors after installing the Command Line Tools (common after a macOS upgrade), try setting the SDK root explicitly:
+
+```sh
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+```
+
 Install the latest node binary:
 
 ```sh

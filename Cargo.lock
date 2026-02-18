@@ -3014,8 +3014,12 @@ name = "miden-node-validator"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "deadpool-diesel",
+ "diesel",
+ "diesel_migrations",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-store",
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",

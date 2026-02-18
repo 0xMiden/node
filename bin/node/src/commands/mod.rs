@@ -1,13 +1,16 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use tokio::net::TcpListener;
 use url::Url;
 
 pub mod block_producer;
@@ -37,7 +40,7 @@ const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_MAX_TXS_PER_BATCH";
 const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_MAX_BATCHES_PER_BLOCK";
 const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_MEMPOOL_TX_CAPACITY";
 const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE";
-const ENV_VALIDATOR_INSECURE_SECRET_KEY: &str = "MIDEN_NODE_VALIDATOR_INSECURE_SECRET_KEY";
+const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -48,7 +51,49 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-/// Configuration for the Network Transaction Builder component
+/// Configuration for the Validator component.
+#[derive(clap::Args)]
+pub struct ValidatorConfig {
+    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    /// Only used when the Validator URL argument is not set.
+    #[arg(
+        long = "validator.key",
+        env = ENV_VALIDATOR_KEY,
+        value_name = "VALIDATOR_KEY",
+        default_value = INSECURE_VALIDATOR_KEY_HEX
+    )]
+    validator_key: String,
+
+    /// The remote Validator's gRPC URL. If unset, will default to running a Validator
+    /// in-process. If set, the insecure key argument is ignored.
+    #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
+    validator_url: Option<Url>,
+}
+
+impl ValidatorConfig {
+    /// Converts the [`ValidatorConfig`] into a URL and an optional [`SocketAddr`].
+    ///
+    /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
+    ///
+    /// If `validator_url` is not set, it binds to a random port on localhost, creates a URL,
+    /// and returns the URL and the bound [`SocketAddr`].
+    async fn to_addresses(&self) -> anyhow::Result<(Url, Option<SocketAddr>)> {
+        if let Some(url) = &self.validator_url {
+            Ok((url.clone(), None))
+        } else {
+            let socket_addr = TcpListener::bind("127.0.0.1:0")
+                .await
+                .context("Failed to bind to validator gRPC endpoint")?
+                .local_addr()
+                .context("Failed to retrieve the validator's gRPC address")?;
+            let url = Url::parse(&format!("http://{socket_addr}"))
+                .context("Failed to parse Validator URL")?;
+            Ok((url, Some(socket_addr)))
+        }
+    }
+}
+
+/// Configuration for the Network Transaction Builder component.
 #[derive(clap::Args)]
 pub struct NtxBuilderConfig {
     /// Disable spawning the network transaction builder.
