@@ -4,10 +4,11 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
+use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use tracing::{info, instrument};
 
@@ -194,6 +195,23 @@ impl Db {
                 Ok(())
             })
             .await
+    }
+
+    /// Looks up a cached note script by root hash.
+    pub async fn lookup_note_script(&self, script_root: Word) -> Result<Option<NoteScript>> {
+        self.query("lookup_note_script", move |conn| {
+            queries::lookup_note_script(conn, &script_root)
+        })
+        .await
+    }
+
+    /// Persists a note script to the local cache.
+    pub async fn insert_note_script(&self, script_root: Word, script: &NoteScript) -> Result<()> {
+        let script = script.clone();
+        self.transact("insert_note_script", move |conn| {
+            queries::insert_note_script(conn, &script_root, &script)
+        })
+        .await
     }
 
     /// Creates a file-backed SQLite test connection with migrations applied.

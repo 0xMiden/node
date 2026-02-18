@@ -55,6 +55,7 @@ use tracing::{Instrument, instrument};
 use crate::COMPONENT;
 use crate::actor::account_state::TransactionCandidate;
 use crate::block_producer::BlockProducerClient;
+use crate::db::Db;
 use crate::store::StoreClient;
 
 #[derive(Debug, thiserror::Error)]
@@ -100,6 +101,9 @@ pub struct NtxContext {
 
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+
+    /// Local database for persistent note script caching.
+    db: Db,
 }
 
 impl NtxContext {
@@ -110,6 +114,7 @@ impl NtxContext {
         prover: Option<RemoteTransactionProver>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
+        db: Db,
     ) -> Self {
         Self {
             block_producer,
@@ -117,6 +122,7 @@ impl NtxContext {
             prover,
             store,
             script_cache,
+            db,
         }
     }
 
@@ -168,6 +174,7 @@ impl NtxContext {
                     chain_mmr,
                     self.store.clone(),
                     self.script_cache.clone(),
+                    self.db.clone(),
                 );
 
                 // Filter notes.
@@ -334,6 +341,8 @@ struct NtxDataStore {
     store: StoreClient,
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+    /// Local database for persistent note script caching.
+    db: Db,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///
     /// The registered slot names are subsequently used to retrieve storage map witnesses from the
@@ -366,6 +375,7 @@ impl NtxDataStore {
         chain_mmr: Arc<PartialBlockchain>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
+        db: Db,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
@@ -377,6 +387,7 @@ impl NtxDataStore {
             mast_store,
             store,
             script_cache,
+            db,
             storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
         }
     }
@@ -507,28 +518,40 @@ impl DataStore for NtxDataStore {
 
     /// Retrieves a note script by its root hash.
     ///
-    /// This implementation uses the configured RPC client to call the `GetNoteScriptByRoot`
-    /// endpoint on the RPC server.
+    /// Uses a 3-tier lookup strategy:
+    /// 1. In-memory LRU cache.
+    /// 2. Local SQLite database.
+    /// 3. Remote store via gRPC.
     fn get_note_script(
         &self,
         script_root: Word,
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
-            // Attempt to retrieve the script from the cache.
+            // 1. In-memory LRU cache.
             if let Some(cached_script) = self.script_cache.get(&script_root).await {
                 return Ok(Some(cached_script));
             }
 
-            // Retrieve the script from the store.
+            // 2. Local DB.
+            if let Some(script) = self.db.lookup_note_script(script_root).await.map_err(|err| {
+                DataStoreError::other_with_source("failed to look up note script in local DB", err)
+            })? {
+                self.script_cache.put(script_root, script.clone()).await;
+                return Ok(Some(script));
+            }
+
+            // 3. Remote store.
             let maybe_script =
                 self.store.get_note_script_by_root(script_root).await.map_err(|err| {
-                    DataStoreError::Other {
-                        error_msg: "failed to retrieve note script from store".to_string().into(),
-                        source: Some(err.into()),
-                    }
+                    DataStoreError::other_with_source(
+                        "failed to retrieve note script from store",
+                        err,
+                    )
                 })?;
-            // Handle response.
+
             if let Some(script) = maybe_script {
+                // Best-effort persist — don't fail the transaction if DB write fails.
+                let _ = self.db.insert_note_script(script_root, &script).await;
                 self.script_cache.put(script_root, script.clone()).await;
                 Ok(Some(script))
             } else {

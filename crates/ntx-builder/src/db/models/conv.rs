@@ -4,9 +4,10 @@ use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_node_proto::generated as proto;
+use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{Note, Nullifier};
+use miden_protocol::note::{Note, NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_tx::utils::{Deserializable, Serializable};
 use prost::Message;
@@ -74,4 +75,16 @@ pub fn single_target_note_from_bytes(
         .map_err(|e| DatabaseError::deserialization("network note proto", e))?;
     SingleTargetNetworkNote::try_from(proto_note)
         .map_err(|e| DatabaseError::deserialization("network note conversion", e))
+}
+
+pub fn word_to_bytes(word: &Word) -> Vec<u8> {
+    word.to_bytes()
+}
+
+pub fn note_script_to_bytes(script: &NoteScript) -> Vec<u8> {
+    script.to_bytes()
+}
+
+pub fn note_script_from_bytes(bytes: &[u8]) -> Result<NoteScript, DatabaseError> {
+    NoteScript::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("note script", e))
 }

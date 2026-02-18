@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::NtxBuilderConfig;
-use crate::actor::{AccountActorContext, AccountOrigin};
+use crate::actor::{AccountActorContext, AccountOrigin, ActorNotification};
 use crate::coordinator::Coordinator;
 use crate::db::Db;
 use crate::store::StoreClient;
@@ -98,9 +98,12 @@ pub struct NetworkTransactionBuilder {
     actor_context: AccountActorContext,
     /// Stream of mempool events from the block producer.
     mempool_events: MempoolEventStream,
+    /// Receiver for notifications from account actors (e.g., note failures).
+    notification_rx: mpsc::UnboundedReceiver<ActorNotification>,
 }
 
 impl NetworkTransactionBuilder {
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: NtxBuilderConfig,
         coordinator: Coordinator,
@@ -109,6 +112,7 @@ impl NetworkTransactionBuilder {
         chain_state: Arc<RwLock<ChainState>>,
         actor_context: AccountActorContext,
         mempool_events: MempoolEventStream,
+        notification_rx: mpsc::UnboundedReceiver<ActorNotification>,
     ) -> Self {
         Self {
             config,
@@ -118,6 +122,7 @@ impl NetworkTransactionBuilder {
             chain_state,
             actor_context,
             mempool_events,
+            notification_rx,
         }
     }
 
@@ -166,6 +171,10 @@ impl NetworkTransactionBuilder {
                 // becomes inactive (recv returns None and we stop matching).
                 Some(account_id) = account_rx.recv() => {
                     self.handle_loaded_account(account_id).await?;
+                },
+                // Handle actor notifications (DB writes delegated from actors).
+                Some(notification) = self.notification_rx.recv() => {
+                    self.handle_actor_notification(notification).await;
                 },
                 // Handle account loader task completion/failure.
                 // If the task fails, we abort since the builder would be in a degraded state
@@ -281,6 +290,22 @@ impl NetworkTransactionBuilder {
                     self.coordinator.cancel_actor(account_id);
                 }
                 Ok(())
+            },
+        }
+    }
+
+    /// Processes a notification from an account actor by performing the corresponding DB write.
+    async fn handle_actor_notification(&mut self, notification: ActorNotification) {
+        match notification {
+            ActorNotification::NotesFailed { nullifiers, block_num } => {
+                if let Err(err) = self.db.notes_failed(nullifiers, block_num).await {
+                    tracing::error!(err = %err, "failed to mark notes as failed");
+                }
+            },
+            ActorNotification::DropFailingNotes { account_id, max_attempts } => {
+                if let Err(err) = self.db.drop_failing_notes(account_id, max_attempts).await {
+                    tracing::error!(err = %err, "failed to drop failing notes");
+                }
             },
         }
     }

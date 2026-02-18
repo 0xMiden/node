@@ -18,6 +18,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    note_scripts (script_root) {
+        script_root -> Binary,
+        script_data -> Binary,
+    }
+}
+
+diesel::table! {
     notes (nullifier) {
         nullifier -> Binary,
         account_id -> Binary,
@@ -29,4 +36,4 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(accounts, chain_state, notes,);
+diesel::allow_tables_to_appear_in_same_query!(accounts, chain_state, note_scripts, notes,);

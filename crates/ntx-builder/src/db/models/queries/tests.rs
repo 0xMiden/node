@@ -513,6 +513,55 @@ fn upsert_chain_state_updates_singleton() {
     assert_eq!(stored_block_num, conversions::block_num_to_i64(block_num_2));
 }
 
+// NOTE SCRIPT TESTS
+// ================================================================================================
+
+#[test]
+fn note_script_insert_and_lookup() {
+    let (conn, _dir) = &mut test_conn();
+
+    // Extract a NoteScript from a mock note.
+    let account_id = mock_network_account_id();
+    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into();
+    let script = note.script().clone();
+    let root = script.root();
+
+    // Insert the script.
+    insert_note_script(conn, &root, &script).unwrap();
+
+    // Look it up — should match the original.
+    let found = lookup_note_script(conn, &root).unwrap();
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().root(), script.root());
+}
+
+#[test]
+fn note_script_lookup_returns_none_for_missing() {
+    let (conn, _dir) = &mut test_conn();
+
+    let missing_root = Word::default();
+    let found = lookup_note_script(conn, &missing_root).unwrap();
+    assert!(found.is_none());
+}
+
+#[test]
+fn note_script_insert_is_idempotent() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_id = mock_network_account_id();
+    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into();
+    let script = note.script().clone();
+    let root = script.root();
+
+    // Insert the same script twice — should not error.
+    insert_note_script(conn, &root, &script).unwrap();
+    insert_note_script(conn, &root, &script).unwrap();
+
+    // Should still be retrievable.
+    let found = lookup_note_script(conn, &root).unwrap();
+    assert!(found.is_some());
+}
+
 // HELPERS (domain type construction)
 // ================================================================================================
 
