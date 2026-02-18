@@ -72,25 +72,3 @@ impl Db {
         .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 }
-
-pub fn configure_connection_on_creation(
-    conn: &mut SqliteConnection,
-) -> Result<(), ConnectionManagerError> {
-    // Wait up to 5 seconds for writer locks before erroring.
-    diesel::sql_query("PRAGMA busy_timeout=5000")
-        .execute(conn)
-        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
-
-    // Enable the WAL mode. This allows concurrent reads while the transaction is being written,
-    // this is required for proper synchronization of the servers in-memory and on-disk
-    // representations (see [State::apply_block])
-    diesel::sql_query("PRAGMA journal_mode=WAL")
-        .execute(conn)
-        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
-
-    // Enable foreign key checks.
-    diesel::sql_query("PRAGMA foreign_keys=ON")
-        .execute(conn)
-        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
-    Ok(())
-}

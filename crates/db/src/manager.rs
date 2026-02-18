@@ -75,7 +75,7 @@ impl deadpool::managed::Manager for ConnectionManager {
     }
 }
 
-pub(crate) fn configure_connection_on_creation(
+pub fn configure_connection_on_creation(
     conn: &mut SqliteConnection,
 ) -> Result<(), ConnectionManagerError> {
     // Wait up to 5 seconds for writer locks before erroring.
