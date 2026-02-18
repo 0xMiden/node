@@ -18,8 +18,10 @@ pub struct Db {
 
 impl Db {
     /// Creates a new database instance with the provided connection pool.
-    pub fn new(pool: deadpool_diesel::Pool<ConnectionManager>) -> Self {
-        Self { pool }
+    pub fn new(database_filepath: &Path) -> Result<Self, DatabaseSetupError> {
+        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
+        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
+        Ok(Self { pool })
     }
 
     /// Create and commit a transaction with the queries added in the provided closure
@@ -68,14 +70,6 @@ impl Db {
         })
         .await
         .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
-    }
-
-    /// Open a connection to the DB and apply any pending migrations.
-    pub fn load(database_filepath: &Path) -> Result<Self, DatabaseSetupError> {
-        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
-
-        Ok(Db { pool })
     }
 }
 
