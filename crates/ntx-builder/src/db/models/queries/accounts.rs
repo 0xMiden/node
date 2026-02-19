@@ -83,7 +83,7 @@ pub fn upsert_committed_account(
 /// ORDER BY order_id DESC
 /// LIMIT 1
 /// ```
-pub fn latest_account(
+pub fn get_account(
     conn: &mut SqliteConnection,
     account_id: NetworkAccountId,
 ) -> Result<Option<Account>, DatabaseError> {
