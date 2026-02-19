@@ -106,7 +106,7 @@ pub fn add_transaction(
             NetworkAccountEffect::Updated(ref account_delta) => {
                 // Query latest_account, apply delta, insert inflight row.
                 let current_account =
-                    latest_account(conn, account_id)?.expect("account must exist to apply delta");
+                    get_account(conn, account_id)?.expect("account must exist to apply delta");
                 let mut updated = current_account;
                 updated.apply_delta(account_delta).expect(
                     "network account delta should apply since it was accepted by the mempool",

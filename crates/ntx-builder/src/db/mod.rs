@@ -152,7 +152,7 @@ impl Db {
         max_note_attempts: usize,
     ) -> Result<(Option<Account>, Vec<InflightNetworkNote>)> {
         self.query("select_candidate", move |conn| {
-            let account = queries::latest_account(conn, account_id)?;
+            let account = queries::get_account(conn, account_id)?;
             let notes = queries::available_notes(conn, account_id, block_num, max_note_attempts)?;
             Ok((account, notes))
         })
@@ -180,13 +180,7 @@ impl Db {
         nullifiers: Vec<Nullifier>,
     ) -> Result<()> {
         self.transact("handle_transaction_added", move |conn| {
-            queries::handle_transaction_added(
-                conn,
-                &tx_id,
-                account_delta.as_ref(),
-                &notes,
-                &nullifiers,
-            )
+            queries::add_transaction(conn, &tx_id, account_delta.as_ref(), &notes, &nullifiers)
         })
         .await
     }
@@ -199,7 +193,7 @@ impl Db {
         header: BlockHeader,
     ) -> Result<()> {
         self.transact("handle_block_committed", move |conn| {
-            queries::handle_block_committed(conn, &txs, block_num, &header)
+            queries::commit_block(conn, &txs, block_num, &header)
         })
         .await
     }
@@ -212,7 +206,7 @@ impl Db {
         tx_ids: Vec<TransactionId>,
     ) -> Result<Vec<NetworkAccountId>> {
         self.transact("handle_transactions_reverted", move |conn| {
-            queries::handle_transactions_reverted(conn, &tx_ids)
+            queries::revert_transaction(conn, &tx_ids)
         })
         .await
     }

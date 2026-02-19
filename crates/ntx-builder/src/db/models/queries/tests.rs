@@ -113,14 +113,14 @@ fn purge_inflight_clears_all_inflight_state() {
     upsert_committed_account(conn, account_id, &mock_account(account_id)).unwrap();
 
     // Insert a transaction (creates inflight account row + note + consumption).
-    handle_transaction_added(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
+    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
 
     assert!(count_inflight_accounts(conn) == 0); // No account delta, so no inflight account.
     assert_eq!(count_notes(conn), 1);
 
     // Mark note as consumed by another tx.
     let tx_id2 = mock_tx_id(2);
-    handle_transaction_added(conn, &tx_id2, None, &[], &[note.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id2, None, &[], &[note.nullifier()]).unwrap();
 
     // Verify consumed_by is set.
     let consumed_count: i64 = schema::notes::table
@@ -158,14 +158,8 @@ fn transaction_added_inserts_notes_and_marks_consumed() {
     assert_eq!(count_notes(conn), 1);
 
     // Add transaction that creates note2 and consumes note1.
-    handle_transaction_added(
-        conn,
-        &tx_id,
-        None,
-        std::slice::from_ref(&note2),
-        &[note1.nullifier()],
-    )
-    .unwrap();
+    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note2), &[note1.nullifier()])
+        .unwrap();
 
     // Should now have 2 notes total.
     assert_eq!(count_notes(conn), 2);
@@ -196,8 +190,8 @@ fn transaction_added_is_idempotent_for_notes() {
     let note = mock_single_target_note(account_id, 10);
 
     // Insert the same transaction twice.
-    handle_transaction_added(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
-    handle_transaction_added(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
+    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
+    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
 
     // Should only have one note (INSERT OR IGNORE).
     assert_eq!(count_notes(conn), 1);
@@ -217,7 +211,7 @@ fn block_committed_promotes_inflight_notes_to_committed() {
     let header = mock_block_header(block_num);
 
     // Add a transaction that creates a note.
-    handle_transaction_added(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
+    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
 
     // Verify created_by is set.
     let created: Option<Vec<u8>> = schema::notes::table
@@ -228,7 +222,7 @@ fn block_committed_promotes_inflight_notes_to_committed() {
     assert!(created.is_some());
 
     // Commit the block.
-    handle_block_committed(conn, &[tx_id], block_num, &header).unwrap();
+    commit_block(conn, &[tx_id], block_num, &header).unwrap();
 
     // created_by should now be NULL (promoted to committed).
     let created: Option<Vec<u8>> = schema::notes::table
@@ -252,12 +246,12 @@ fn block_committed_deletes_consumed_notes() {
 
     // Consume it via a transaction.
     let tx_id = mock_tx_id(1);
-    handle_transaction_added(conn, &tx_id, None, &[], &[note.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id, None, &[], &[note.nullifier()]).unwrap();
 
     // Commit the block.
     let block_num = BlockNumber::from(1u32);
     let header = mock_block_header(block_num);
-    handle_block_committed(conn, &[tx_id], block_num, &header).unwrap();
+    commit_block(conn, &[tx_id], block_num, &header).unwrap();
 
     // Consumed note should be deleted.
     assert_eq!(count_notes(conn), 0);
@@ -289,7 +283,7 @@ fn block_committed_promotes_inflight_account_to_committed() {
     // Commit the block.
     let block_num = BlockNumber::from(1u32);
     let header = mock_block_header(block_num);
-    handle_block_committed(conn, &[tx_id], block_num, &header).unwrap();
+    commit_block(conn, &[tx_id], block_num, &header).unwrap();
 
     // Should have 1 committed and 0 inflight.
     assert_eq!(count_committed_accounts(conn), 1);
@@ -311,7 +305,7 @@ fn transactions_reverted_restores_consumed_notes() {
 
     // Consume it via a transaction.
     let tx_id = mock_tx_id(1);
-    handle_transaction_added(conn, &tx_id, None, &[], &[note.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id, None, &[], &[note.nullifier()]).unwrap();
 
     // Verify consumed.
     let consumed: Option<Vec<u8>> = schema::notes::table
@@ -322,7 +316,7 @@ fn transactions_reverted_restores_consumed_notes() {
     assert!(consumed.is_some());
 
     // Revert the transaction.
-    let reverted = handle_transactions_reverted(conn, &[tx_id]).unwrap();
+    let reverted = revert_transaction(conn, &[tx_id]).unwrap();
     assert!(reverted.is_empty());
 
     // Note should be un-consumed.
@@ -343,11 +337,11 @@ fn transactions_reverted_deletes_inflight_created_notes() {
     let note = mock_single_target_note(account_id, 10);
 
     // Add transaction that creates a note.
-    handle_transaction_added(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
+    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
     assert_eq!(count_notes(conn), 1);
 
     // Revert the transaction.
-    handle_transactions_reverted(conn, &[tx_id]).unwrap();
+    revert_transaction(conn, &[tx_id]).unwrap();
 
     // Inflight-created note should be deleted.
     assert_eq!(count_notes(conn), 0);
@@ -370,7 +364,7 @@ fn transactions_reverted_reports_reverted_account_creations() {
     diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
 
     // Revert the transaction --- account creation should be reported.
-    let reverted = handle_transactions_reverted(conn, &[tx_id]).unwrap();
+    let reverted = revert_transaction(conn, &[tx_id]).unwrap();
     assert_eq!(reverted.len(), 1);
     assert_eq!(reverted[0], account_id);
 
@@ -396,7 +390,7 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
 
     // Consume one note.
     let tx_id = mock_tx_id(1);
-    handle_transaction_added(conn, &tx_id, None, &[], &[note_consumed.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id, None, &[], &[note_consumed.nullifier()]).unwrap();
 
     // Mark one note as failed many times (exceed max_attempts=3).
     let block_num = BlockNumber::from(100u32);

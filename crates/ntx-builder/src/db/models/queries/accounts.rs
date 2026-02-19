@@ -97,5 +97,6 @@ pub fn get_account(
         .first(conn)
         .optional()?;
 
-    row.map(conversions::account_from_bytes).transpose()
+    row.map(|AccountRow { account_data, .. }| conversions::account_from_bytes(&account_data))
+        .transpose()
 }
