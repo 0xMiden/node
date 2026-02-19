@@ -32,7 +32,7 @@ pub enum GenesisConfigError {
     #[error("adding assets to account failed")]
     AccountDelta(#[from] AccountDeltaError),
     #[error(
-        "the defined asset {symbol:?} has no corresponding faucet, or the faucet was provided as an account file"
+        "the defined asset '{symbol}' has no corresponding faucet, or the faucet was provided as an account file"
     )]
     MissingFaucetDefinition { symbol: TokenSymbolStr },
     #[error("account with id {account_id} was referenced but is not part of given genesis state")]
@@ -51,10 +51,10 @@ pub enum GenesisConfigError {
     BasicWallet(#[from] BasicWalletError),
     #[error(r#"incompatible combination of `max_supply` ({max_supply})" and `decimals` ({decimals}) exceeding the allowed value range of an `u64`"#)]
     OutOfRange { max_supply: u64, decimals: u8 },
-    #[error("Found duplicate faucet definition for token symbol {symbol:?}")]
+    #[error("Found duplicate faucet definition for token symbol '{symbol}'")]
     DuplicateFaucetDefinition { symbol: TokenSymbolStr },
     #[error(
-        "Total issuance {total_issuance} of {symbol:?} exceeds faucet's maximum issuance of {max_supply}"
+        "Total issuance {total_issuance} of '{symbol}' exceeds faucet's maximum issuance of {max_supply}"
     )]
     MaxIssuanceExceeded {
         symbol: TokenSymbolStr,
