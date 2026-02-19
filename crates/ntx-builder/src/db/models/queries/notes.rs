@@ -152,33 +152,6 @@ pub fn notes_failed(
     Ok(())
 }
 
-/// Drops notes for the given account that have exceeded the maximum attempt count.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// DELETE FROM notes
-/// WHERE account_id = ?1 AND attempt_count >= ?2
-/// ```
-#[expect(clippy::cast_possible_wrap)]
-pub fn drop_failing_notes(
-    conn: &mut SqliteConnection,
-    account_id: NetworkAccountId,
-    max_attempts: usize,
-) -> Result<(), DatabaseError> {
-    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
-    let max_attempts = max_attempts as i32;
-
-    diesel::delete(
-        schema::notes::table
-            .filter(schema::notes::account_id.eq(&account_id_bytes))
-            .filter(schema::notes::attempt_count.ge(max_attempts)),
-    )
-    .execute(conn)?;
-
-    Ok(())
-}
-
 // HELPERS
 // ================================================================================================
 

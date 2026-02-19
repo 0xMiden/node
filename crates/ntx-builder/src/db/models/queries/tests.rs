@@ -426,39 +426,6 @@ fn available_notes_only_returns_notes_for_specified_account() {
     assert_eq!(result[0].to_inner().nullifier(), note_acct1.nullifier());
 }
 
-// DROP FAILING NOTES TESTS
-// ================================================================================================
-
-#[test]
-fn drop_failing_notes_scoped_to_account() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id_1 = mock_network_account_id();
-    let account_id_2 = mock_network_account_id_seeded(42);
-
-    let note_acct1 = mock_single_target_note(account_id_1, 10);
-    let note_acct2 = mock_single_target_note(account_id_2, 20);
-
-    // Insert both as committed.
-    insert_committed_notes(conn, &[note_acct1.clone(), note_acct2.clone()]).unwrap();
-
-    // Fail both notes enough times to exceed max_attempts=2.
-    let block_num = BlockNumber::from(100u32);
-    notes_failed(conn, &[note_acct1.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_acct1.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_acct2.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_acct2.nullifier()], block_num).unwrap();
-
-    // Drop failing notes for account_id_1 only.
-    drop_failing_notes(conn, account_id_1, 2).unwrap();
-
-    // note_acct1 should be deleted, note_acct2 should remain.
-    assert_eq!(count_notes(conn), 1);
-    let remaining: Vec<Vec<u8>> =
-        schema::notes::table.select(schema::notes::nullifier).load(conn).unwrap();
-    assert_eq!(remaining[0], conversions::nullifier_to_bytes(&note_acct2.nullifier()));
-}
-
 // NOTES FAILED TESTS
 // ================================================================================================
 

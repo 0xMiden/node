@@ -40,11 +40,6 @@ pub enum ActorNotification {
         nullifiers: Vec<Nullifier>,
         block_num: BlockNumber,
     },
-    /// Notes for the given account that have exceeded the maximum attempt count should be dropped.
-    DropFailingNotes {
-        account_id: NetworkAccountId,
-        max_attempts: usize,
-    },
 }
 
 // ACTOR SHUTDOWN REASON
@@ -294,12 +289,6 @@ impl AccountActor {
                         Ok(_permit) => {
                             // Read the chain state.
                             let chain_state = self.chain_state.read().await.clone();
-
-                            // Drop notes that have failed too many times.
-                            let _ = self.notification_tx.send(ActorNotification::DropFailingNotes {
-                                account_id,
-                                max_attempts: self.max_note_attempts,
-                            }).await;
 
                             // Query DB for latest account and available notes.
                             let tx_candidate = self.select_candidate_from_db(

@@ -77,19 +77,6 @@ impl Db {
             .await
     }
 
-    /// Drops notes for the given account that have exceeded the maximum attempt count.
-    pub async fn drop_failing_notes(
-        &self,
-        account_id: NetworkAccountId,
-        max_attempts: usize,
-    ) -> Result<()> {
-        self.inner
-            .transact("drop_failing_notes", move |conn| {
-                queries::drop_failing_notes(conn, account_id, max_attempts)
-            })
-            .await
-    }
-
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
@@ -199,19 +186,21 @@ impl Db {
 
     /// Looks up a cached note script by root hash.
     pub async fn lookup_note_script(&self, script_root: Word) -> Result<Option<NoteScript>> {
-        self.query("lookup_note_script", move |conn| {
-            queries::lookup_note_script(conn, &script_root)
-        })
-        .await
+        self.inner
+            .query("lookup_note_script", move |conn| {
+                queries::lookup_note_script(conn, &script_root)
+            })
+            .await
     }
 
     /// Persists a note script to the local cache.
     pub async fn insert_note_script(&self, script_root: Word, script: &NoteScript) -> Result<()> {
         let script = script.clone();
-        self.transact("insert_note_script", move |conn| {
-            queries::insert_note_script(conn, &script_root, &script)
-        })
-        .await
+        self.inner
+            .transact("insert_note_script", move |conn| {
+                queries::insert_note_script(conn, &script_root, &script)
+            })
+            .await
     }
 
     /// Creates a file-backed SQLite test connection with migrations applied.

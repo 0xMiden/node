@@ -1,10 +1,10 @@
 //! Database queries for persisting and retrieving note scripts.
 
 use diesel::prelude::*;
+use miden_node_db::DatabaseError;
 use miden_protocol::Word;
 use miden_protocol::note::NoteScript;
 
-use crate::db::errors::DatabaseError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 

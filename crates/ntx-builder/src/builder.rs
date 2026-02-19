@@ -302,11 +302,6 @@ impl NetworkTransactionBuilder {
                     tracing::error!(err = %err, "failed to mark notes as failed");
                 }
             },
-            ActorNotification::DropFailingNotes { account_id, max_attempts } => {
-                if let Err(err) = self.db.drop_failing_notes(account_id, max_attempts).await {
-                    tracing::error!(err = %err, "failed to drop failing notes");
-                }
-            },
         }
     }
 
