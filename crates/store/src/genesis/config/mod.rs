@@ -1,7 +1,7 @@
 //! Describe a subset of the genesis manifest in easily human readable format
 
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
@@ -43,10 +43,10 @@ use self::errors::GenesisConfigError;
 #[cfg(test)]
 mod tests;
 
-// TOML PARSING STRUCTS (INTERMEDIATE)
+// GENESIS CONFIG
 // ================================================================================================
 
-/// Intermediate struct for TOML parsing - native faucet can be params or file path
+/// Native faucet can be specified as inline parameters or as a path to a pre-built account file.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(untagged)]
 enum NativeFaucetToml {
@@ -57,21 +57,22 @@ enum NativeFaucetToml {
         max_supply: u64,
     },
     /// Load from pre-built account file (production/multisig)
-    File { path: std::path::PathBuf },
+    File { path: PathBuf },
 }
 
-/// Intermediate struct for TOML parsing - arbitrary account from file
+/// An account loaded from a `.mac` file (path relative to genesis config directory).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AccountToml {
-    /// Path to .mac file (relative to genesis config directory)
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
-/// Intermediate struct for full TOML parsing
+/// Specify a set of faucets and wallets with assets for easier test deployments.
+///
+/// Notice: Any faucet must be declared _before_ it's use in a wallet/regular account.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GenesisConfigToml {
+pub struct GenesisConfig {
     version: u32,
     timestamp: u32,
     native_faucet: NativeFaucetToml,
@@ -82,23 +83,8 @@ struct GenesisConfigToml {
     fungible_faucet: Vec<FungibleFaucetConfig>,
     #[serde(default)]
     account: Vec<AccountToml>,
-}
-
-// GENESIS CONFIG
-// ================================================================================================
-
-/// Specify a set of faucets and wallets with assets for easier test deployments.
-///
-/// Notice: Any faucet must be declared _before_ it's use in a wallet/regular account.
-#[derive(Debug, Clone)]
-pub struct GenesisConfig {
-    version: u32,
-    timestamp: u32,
-    native_faucet: NativeFaucet,
-    fee_parameters: FeeParameterConfig,
-    wallet: Vec<WalletConfig>,
-    fungible_faucet: Vec<FungibleFaucetConfig>,
-    accounts: Vec<Account>,
+    #[serde(skip)]
+    config_dir: PathBuf,
 }
 
 impl Default for GenesisConfig {
@@ -114,14 +100,15 @@ impl Default for GenesisConfig {
             )
             .expect("Timestamp should fit into u32"),
             wallet: vec![],
-            native_faucet: NativeFaucet::Parameters {
+            native_faucet: NativeFaucetToml::Parameters {
                 max_supply: 100_000_000_000_000_000u64,
                 decimals: 6u8,
-                symbol: miden.clone(),
+                symbol: miden,
             },
             fee_parameters: FeeParameterConfig { verification_base_fee: 0 },
             fungible_faucet: vec![],
-            accounts: vec![],
+            account: vec![],
+            config_dir: PathBuf::from("."),
         }
     }
 }
@@ -140,55 +127,15 @@ impl GenesisConfig {
         Self::read_toml(&toml_str, config_dir)
     }
 
-    /// Read the genesis accounts from a TOML formatted string.
+    /// Parse a genesis config from a TOML formatted string.
     ///
-    /// The `config_dir` parameter is used to resolve relative paths for account files
-    /// referenced in the configuration (e.g., `[[account]]` entries with `path` fields).
+    /// The `config_dir` parameter is stored so that relative paths for account files
+    /// (e.g., `[[account]]` entries with `path` fields, or native faucet file references)
+    /// can be resolved later during [`Self::into_state`].
     fn read_toml(toml_str: &str, config_dir: &Path) -> Result<Self, GenesisConfigError> {
-        // Parse TOML into intermediate struct
-        let toml_config: GenesisConfigToml = toml::from_str(toml_str)?;
-
-        // Handle native faucet (params or file)
-        let native_faucet = match toml_config.native_faucet {
-            NativeFaucetToml::Parameters { symbol, decimals, max_supply } => {
-                NativeFaucet::Parameters { symbol, decimals, max_supply }
-            },
-            NativeFaucetToml::File { path } => {
-                let full_path = config_dir.join(&path);
-                let account_file = AccountFile::read(&full_path)
-                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
-                let account = account_file.account;
-
-                // Validate it's a fungible faucet
-                if account.id().account_type() != AccountType::FungibleFaucet {
-                    return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
-                }
-
-                NativeFaucet::Account { account: Box::new(account) }
-            },
-        };
-
-        // Load all account files
-        let accounts = toml_config
-            .account
-            .into_iter()
-            .map(|acc| {
-                let full_path = config_dir.join(&acc.path);
-                let account_file = AccountFile::read(&full_path)
-                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
-                Ok(account_file.account)
-            })
-            .collect::<Result<Vec<_>, GenesisConfigError>>()?;
-
-        Ok(Self {
-            version: toml_config.version,
-            timestamp: toml_config.timestamp,
-            native_faucet,
-            fee_parameters: toml_config.fee_parameters,
-            wallet: toml_config.wallet,
-            fungible_faucet: toml_config.fungible_faucet,
-            accounts,
-        })
+        let mut config: Self = toml::from_str(toml_str)?;
+        config.config_dir = config_dir.to_path_buf();
+        Ok(config)
     }
 
     /// Convert the in memory representation into the new genesis state
@@ -206,10 +153,20 @@ impl GenesisConfig {
             fee_parameters,
             fungible_faucet: fungible_faucet_configs,
             wallet: wallet_configs,
-            accounts: file_loaded_accounts,
+            account: account_entries,
+            config_dir,
         } = self;
 
-        let symbol = native_faucet.symbol();
+        // Load account files from disk
+        let file_loaded_accounts = account_entries
+            .into_iter()
+            .map(|acc| {
+                let full_path = config_dir.join(&acc.path);
+                let account_file = AccountFile::read(&full_path)
+                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
+                Ok(account_file.account)
+            })
+            .collect::<Result<Vec<_>, GenesisConfigError>>()?;
 
         let mut wallet_accounts = Vec::<Account>::new();
         // Every asset sitting in a wallet, has to reference a faucet for that asset
@@ -219,20 +176,38 @@ impl GenesisConfig {
         // accounts/sign transactions
         let mut secrets = Vec::new();
 
-        // Handle native faucet: use pre-loaded account if available, otherwise build from params
-        let native_faucet_account = match native_faucet {
-            NativeFaucet::Parameters { .. } => {
-                let (faucet_account, secret_key) =
-                    native_faucet.to_faucet_config().build_account()?;
-                faucet_accounts.insert(symbol.clone(), faucet_account.clone());
+        // Handle native faucet: build from parameters or load from file
+        let (native_faucet_account, symbol) = match native_faucet {
+            NativeFaucetToml::Parameters { symbol, decimals, max_supply } => {
+                let faucet_config = FungibleFaucetConfig {
+                    symbol: symbol.clone(),
+                    decimals,
+                    max_supply,
+                    storage_mode: StorageMode::Public,
+                };
+                let (faucet_account, secret_key) = faucet_config.build_account()?;
                 secrets.push((
                     format!("faucet_{symbol}.mac", symbol = symbol.to_string().to_lowercase()),
                     faucet_account.id(),
                     secret_key,
                 ));
-                faucet_account
+                (faucet_account, symbol)
             },
-            NativeFaucet::Account { account } => *account,
+            NativeFaucetToml::File { path } => {
+                let full_path = config_dir.join(&path);
+                let account_file = AccountFile::read(&full_path)
+                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
+                let account = account_file.account;
+
+                if account.id().account_type() != AccountType::FungibleFaucet {
+                    return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
+                }
+
+                let faucet = BasicFungibleFaucet::try_from(&account)
+                    .expect("validated as fungible faucet above");
+                let symbol = TokenSymbolStr::from(faucet.symbol());
+                (account, symbol)
+            },
         };
         let native_faucet_account_id = native_faucet_account.id();
         faucet_accounts.insert(symbol.clone(), native_faucet_account);
@@ -386,54 +361,6 @@ impl GenesisConfig {
             },
             AccountSecrets { secrets },
         ))
-    }
-}
-
-// NATIVE FAUCET
-// ================================================================================================
-
-/// Declare the native fungible asset
-#[derive(Debug, Clone)]
-enum NativeFaucet {
-    Parameters {
-        symbol: TokenSymbolStr,
-        decimals: u8,
-        max_supply: u64,
-    },
-    Account {
-        account: Box<Account>,
-    },
-}
-
-impl NativeFaucet {
-    fn to_faucet_config(&self) -> FungibleFaucetConfig {
-        match self {
-            NativeFaucet::Parameters { symbol, decimals, max_supply } => FungibleFaucetConfig {
-                symbol: symbol.clone(),
-                decimals: *decimals,
-                max_supply: *max_supply,
-                storage_mode: StorageMode::Public,
-            },
-            NativeFaucet::Account { .. } => {
-                panic!(
-                    "conversion to fungible faucet config should not happen when an account file is provided"
-                );
-            },
-        }
-    }
-}
-
-impl NativeFaucet {
-    fn symbol(&self) -> TokenSymbolStr {
-        match self {
-            NativeFaucet::Parameters { symbol, .. } => symbol.clone(),
-            NativeFaucet::Account { account } => {
-                // this is safe since we validate the account type when reading the genesis config
-                let faucet = BasicFungibleFaucet::try_from(account.as_ref())
-                    .expect("native faucet account should be a fungible faucet");
-                TokenSymbolStr::from(faucet.symbol())
-            },
-        }
     }
 }
 

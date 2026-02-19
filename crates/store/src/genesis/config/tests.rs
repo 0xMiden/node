@@ -249,8 +249,11 @@ verification_base_fee = 0
 "#;
     let config_path = write_toml_file(config_dir, toml_content);
 
-    // Parse should fail with NativeFaucetNotFungible error
-    let result = GenesisConfig::read_toml_file(&config_path);
+    // Parsing should succeed
+    let gcfg = GenesisConfig::read_toml_file(&config_path)?;
+
+    // into_state should fail with NativeFaucetNotFungible error when loading the file
+    let result = gcfg.into_state(SecretKey::new());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -283,7 +286,12 @@ path = "does_not_exist.mac"
     // Use temp dir as config dir
     let temp_dir = tempfile::tempdir().unwrap();
     let config_path = write_toml_file(temp_dir.path(), toml_content);
-    let result = GenesisConfig::read_toml_file(&config_path);
+
+    // Parsing should succeed
+    let gcfg = GenesisConfig::read_toml_file(&config_path).unwrap();
+
+    // into_state should fail with AccountFileRead error when loading the file
+    let result = gcfg.into_state(SecretKey::new());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
