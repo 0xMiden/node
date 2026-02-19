@@ -91,14 +91,13 @@ impl BlockSigner for KmsSigner {
             norm.to_bytes()
         } else {
             sig.to_bytes()
-        }; // 64 bytes
+        }; // 64 bytes.
 
-        // 3.5) Append a recovery byte `v` to make 65 bytes (r||s||v).
+        // Append a recovery byte `v` to make 65 bytes (r||s||v).
         let mut sig65 = [0u8; 65];
         sig65[..64].copy_from_slice(&rs);
-        sig65[64] = 0; // Recovery id; not used by verify(pk), so 0 is fine.
+        sig65[64] = 0; // Recovery id is not used by verify(pk), so 0 is fine.
 
-        // 4) Parse into Miden signature
         Ok(Signature::read_from_bytes(&sig65)?)
     }
 
