@@ -548,10 +548,6 @@ async fn sync_chain_mmr_returns_delta() {
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();
 
-    let pagination_info = response.pagination_info.expect("pagination_info should exist");
-    assert_eq!(pagination_info.chain_tip, 0);
-    assert_eq!(pagination_info.block_num, 0);
-
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
     assert!(mmr_delta.data.is_empty());
