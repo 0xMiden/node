@@ -45,7 +45,7 @@ fn parsing_yields_expected_default_values() -> TestResult {
 
     // check total issuance of the faucet
     assert_eq!(
-        native_faucet.storage().get_item(BasicFungibleFaucet::metadata_slot()).unwrap()[3],
+        native_faucet.storage().get_item(BasicFungibleFaucet::metadata_slot()).unwrap()[0],
         Felt::new(999_777),
         "Issuance mismatch"
     );
