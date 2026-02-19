@@ -12,7 +12,6 @@ use miden_node_proto_build::{
 };
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::block::BlockSigner;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -54,10 +53,7 @@ impl Store {
         skip_all,
         err,
     )]
-    pub fn bootstrap<S: BlockSigner>(
-        genesis: GenesisState<S>,
-        data_directory: &Path,
-    ) -> anyhow::Result<()> {
+    pub fn bootstrap(genesis: GenesisState, data_directory: &Path) -> anyhow::Result<()> {
         let genesis = genesis
             .into_block()
             .context("failed to convert genesis configuration into the genesis block")?;

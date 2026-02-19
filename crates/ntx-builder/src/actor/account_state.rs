@@ -378,11 +378,11 @@ mod tests {
     use miden_protocol::account::{AccountBuilder, AccountStorageMode, AccountType};
     use miden_protocol::asset::{Asset, FungibleAsset};
     use miden_protocol::crypto::rand::RpoRandomCoin;
-    use miden_protocol::note::{Note, NoteAttachment, NoteExecutionHint, NoteType};
+    use miden_protocol::note::{Note, NoteAttachment, NoteType};
     use miden_protocol::testing::account_id::AccountIdBuilder;
     use miden_protocol::transaction::TransactionId;
     use miden_protocol::{EMPTY_WORD, Felt, Hasher};
-    use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
+    use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 
     use super::*;
 
@@ -427,7 +427,7 @@ mod tests {
             .expect("NetworkAccountTarget creation should succeed for network account");
         let attachment: NoteAttachment = target.into();
 
-        create_p2id_note(
+        P2idNote::create(
             target_account_id,
             target_account_id,
             vec![Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap())],

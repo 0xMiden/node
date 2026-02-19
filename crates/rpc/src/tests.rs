@@ -74,7 +74,7 @@ fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransa
     ProvenTransactionBuilder::new(
         account_id,
         [8; 32].try_into().unwrap(),
-        account.commitment(),
+        account.to_commitment(),
         delta.to_commitment(),
         0.into(),
         Word::default(),
