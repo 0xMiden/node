@@ -97,8 +97,5 @@ pub fn latest_account(
         .first(conn)
         .optional()?;
 
-    match row {
-        Some(r) => Ok(Some(conversions::account_from_bytes(&r.account_data)?)),
-        None => Ok(None),
-    }
+    row.map(conversions::account_from_bytes).transpose()
 }
