@@ -90,7 +90,7 @@ pub fn purge_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> 
 /// SET consumed_by = ?1
 /// WHERE nullifier = ?2 AND consumed_by IS NULL
 /// ```
-pub fn handle_transaction_added(
+pub fn add_transaction(
     conn: &mut SqliteConnection,
     tx_id: &TransactionId,
     account_delta: Option<&AccountUpdateDetails>,
