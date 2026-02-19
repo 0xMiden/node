@@ -407,7 +407,9 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     let config = GenesisConfig::default();
     let signer = SecretKey::new();
     let (genesis_state, _) = config.into_state(signer).unwrap();
-    Store::bootstrap(genesis_state.clone(), data_directory.path()).expect("store should bootstrap");
+    Store::bootstrap(genesis_state.clone(), data_directory.path())
+        .await
+        .expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let rpc_listener = TcpListener::bind(store_addr).await.expect("store should bind a port");
     let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
@@ -436,7 +438,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     (
         store_runtime,
         data_directory,
-        genesis_state.into_block().unwrap().inner().header().commitment(),
+        genesis_state.into_block().await.unwrap().inner().header().commitment(),
     )
 }
 
@@ -512,26 +514,15 @@ async fn get_limits_endpoint() {
         QueryParamAccountIdLimit::LIMIT
     );
 
-    let sync_account_vault =
-        limits.endpoints.get("SyncAccountVault").expect("SyncAccountVault should exist");
-    assert_eq!(
-        sync_account_vault.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
-        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncAccountVault {} limit should be {}",
-        QueryParamAccountIdLimit::PARAM_NAME,
-        QueryParamAccountIdLimit::LIMIT
+    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id,
+    // not a repeated list, so they do not have list parameter limits.
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountVault"),
+        "SyncAccountVault should not have list parameter limits"
     );
-
-    let sync_account_storage_maps = limits
-        .endpoints
-        .get("SyncAccountStorageMaps")
-        .expect("SyncAccountStorageMaps should exist");
-    assert_eq!(
-        sync_account_storage_maps.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
-        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncAccountStorageMaps {} limit should be {}",
-        QueryParamAccountIdLimit::PARAM_NAME,
-        QueryParamAccountIdLimit::LIMIT
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountStorageMaps"),
+        "SyncAccountStorageMaps should not have list parameter limits"
     );
 
     // Verify GetNotesById endpoint

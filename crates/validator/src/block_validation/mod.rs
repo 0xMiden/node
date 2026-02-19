@@ -1,4 +1,4 @@
-use miden_node_store::{DatabaseError, Db};
+use miden_node_db::{DatabaseError, Db};
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;

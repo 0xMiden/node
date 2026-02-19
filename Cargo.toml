@@ -5,6 +5,7 @@ members = [
   "bin/remote-prover",
   "bin/stress-test",
   "crates/block-producer",
+  "crates/db",
   "crates/grpc-error-macro",
   "crates/ntx-builder",
   "crates/proto",
@@ -41,6 +42,7 @@ debug = true
 [workspace.dependencies]
 # Workspace crates.
 miden-node-block-producer   = { path = "crates/block-producer", version = "0.14" }
+miden-node-db               = { path = "crates/db", version = "0.14" }
 miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.14" }
 miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.14" }
 miden-node-proto            = { path = "crates/proto", version = "0.14" }

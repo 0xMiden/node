@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_db::Db;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
-use miden_node_store::Db;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -154,7 +154,10 @@ impl api_server::Api for ValidatorServer {
         // Store the validated transaction.
         self.db
             .transact("insert_transaction", move |conn| insert_transaction(conn, &tx_info))
-            .await?;
+            .await
+            .map_err(|err| {
+                Status::internal(err.as_report_context("Failed to insert transaction"))
+            })?;
         Ok(tonic::Response::new(()))
     }
 
