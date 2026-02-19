@@ -13,6 +13,7 @@ use miden_protocol::block::{
     FeeParameters,
     ProvenBlock,
 };
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
 use miden_protocol::errors::AccountError;
@@ -26,12 +27,12 @@ pub mod config;
 
 /// Represents the state at genesis, which will be used to derive the genesis block.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GenesisState<S> {
+pub struct GenesisState {
     pub accounts: Vec<Account>,
     pub fee_parameters: FeeParameters,
     pub version: u32,
     pub timestamp: u32,
-    pub block_signer: S,
+    pub block_signer: SecretKey,
 }
 
 /// A type-safety wrapper ensuring that genesis block data can only be created from
@@ -48,13 +49,13 @@ impl GenesisBlock {
     }
 }
 
-impl<S> GenesisState<S> {
+impl GenesisState {
     pub fn new(
         accounts: Vec<Account>,
         fee_parameters: FeeParameters,
         version: u32,
         timestamp: u32,
-        signer: S,
+        signer: SecretKey,
     ) -> Self {
         Self {
             accounts,
@@ -64,9 +65,7 @@ impl<S> GenesisState<S> {
             block_signer: signer,
         }
     }
-}
 
-impl<S: BlockSigner> GenesisState<S> {
     /// Returns the block header and the account SMT
     pub async fn into_block(self) -> anyhow::Result<GenesisBlock> {
         let accounts: Vec<BlockAccountUpdate> = self
@@ -81,7 +80,7 @@ impl<S: BlockSigner> GenesisState<S> {
 
                 Ok(BlockAccountUpdate::new(
                     account.id(),
-                    account.commitment(),
+                    account.to_commitment(),
                     account_update_details,
                 ))
             })

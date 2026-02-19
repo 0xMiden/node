@@ -14,6 +14,7 @@ use diesel::{
 use diesel_migrations::MigrationHarness;
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
@@ -143,9 +144,13 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         .compile_component_code("test::interface", "pub proc foo push.1 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -225,7 +230,7 @@ fn test_select_account_header_at_block_returns_correct_header() {
     let delta = AccountDelta::try_from(account.clone()).unwrap();
     let account_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta),
     );
 
@@ -262,7 +267,7 @@ fn test_select_account_header_at_block_historical_query() {
     let delta_1 = AccountDelta::try_from(account.clone()).unwrap();
     let account_update_1 = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta_1),
     );
 
@@ -301,7 +306,7 @@ fn test_select_account_vault_at_block_empty() {
     let delta = AccountDelta::try_from(account.clone()).unwrap();
     let account_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta),
     );
 
@@ -328,7 +333,7 @@ fn test_upsert_accounts_inserts_storage_header() {
 
     let storage_commitment_original = account.storage().to_commitment();
     let storage_slots_len = account.storage().slots().len();
-    let account_commitment = account.commitment();
+    let account_commitment = account.to_commitment();
 
     // Create full state delta from the account
     let delta = AccountDelta::try_from(account).unwrap();
@@ -382,7 +387,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
 
     // Save storage commitment before moving account
     let storage_commitment_1 = account.storage().to_commitment();
-    let account_commitment_1 = account.commitment();
+    let account_commitment_1 = account.to_commitment();
 
     // First update with original account - full state delta
     let delta_1 = AccountDelta::try_from(account).unwrap();
@@ -405,9 +410,13 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         .compile_component_code("test::interface", "pub proc foo push.1 end")
         .unwrap();
 
-    let component_2 = AccountComponent::new(account_component_code, component_storage_modified)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component_2 = AccountComponent::new(
+        account_component_code,
+        component_storage_modified,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account_2 = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -418,7 +427,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         .unwrap();
 
     let storage_commitment_2 = account_2.storage().to_commitment();
-    let account_commitment_2 = account_2.commitment();
+    let account_commitment_2 = account_2.to_commitment();
 
     // Second update with modified account - full state delta
     let delta_2 = AccountDelta::try_from(account_2).unwrap();
@@ -498,9 +507,13 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         .compile_component_code("test::interface", "pub proc foo push.1 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -514,7 +527,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     insert_block_header(&mut conn, block_num);
 
     let storage_commitment = account.storage().to_commitment();
-    let account_commitment = account.commitment();
+    let account_commitment = account.to_commitment();
     let delta = AccountDelta::try_from(account).unwrap();
 
     let account_update =
@@ -560,9 +573,13 @@ fn test_upsert_accounts_with_empty_storage() {
         .compile_component_code("test::interface", "pub proc foo push.1 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, vec![])
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        vec![],
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -576,7 +593,7 @@ fn test_upsert_accounts_with_empty_storage() {
     insert_block_header(&mut conn, block_num);
 
     let storage_commitment = account.storage().to_commitment();
-    let account_commitment = account.commitment();
+    let account_commitment = account.to_commitment();
     let delta = AccountDelta::try_from(account).unwrap();
 
     let account_update =
@@ -649,7 +666,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     let delta = AccountDelta::try_from(account.clone()).unwrap();
     let account_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta),
     );
 
@@ -755,7 +772,7 @@ fn test_select_account_vault_at_block_with_deletion() {
     let delta = AccountDelta::try_from(account.clone()).unwrap();
     let account_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta),
     );
 

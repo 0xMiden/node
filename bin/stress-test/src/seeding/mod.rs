@@ -16,7 +16,6 @@ use miden_protocol::account::{
     AccountBuilder,
     AccountDelta,
     AccountId,
-    AccountStorage,
     AccountStorageMode,
     AccountType,
 };
@@ -50,7 +49,7 @@ use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::account::faucets::BasicFungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
-use miden_standards::note::create_p2id_note;
+use miden_standards::note::P2idNote;
 use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSlice;
@@ -308,7 +307,7 @@ fn create_accounts_and_notes(
 /// specified `faucet_id` and sent to the specified target account.
 fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RpoRandomCoin) -> Note {
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
-    create_p2id_note(
+    P2idNote::create(
         faucet_id,
         target_id,
         vec![asset],
@@ -418,7 +417,7 @@ fn create_consume_note_tx(
     ProvenTransactionBuilder::new(
         account.id(),
         init_hash,
-        account.commitment(),
+        account.to_commitment(),
         account_delta_commitment,
         block_ref.block_num(),
         block_ref.commitment(),
@@ -439,13 +438,13 @@ fn create_emit_note_tx(
     faucet: &mut Account,
     output_notes: Vec<Note>,
 ) -> ProvenTransaction {
-    let initial_account_hash = faucet.commitment();
+    let initial_account_hash = faucet.to_commitment();
 
-    let metadata_slot_name = AccountStorage::faucet_sysdata_slot();
+    let metadata_slot_name = BasicFungibleFaucet::metadata_slot();
     let slot = faucet.storage().get_item(metadata_slot_name).unwrap();
     faucet
         .storage_mut()
-        .set_item(metadata_slot_name, [slot[0], slot[1], slot[2], slot[3] + Felt::new(10)].into())
+        .set_item(metadata_slot_name, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
         .unwrap();
 
     faucet.increment_nonce(ONE).unwrap();
@@ -453,7 +452,7 @@ fn create_emit_note_tx(
     ProvenTransactionBuilder::new(
         faucet.id(),
         initial_account_hash,
-        faucet.commitment(),
+        faucet.to_commitment(),
         Word::empty(),
         block_ref.block_num(),
         block_ref.commitment(),

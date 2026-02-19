@@ -5,8 +5,7 @@ use miden_node_proto::generated::block_producer::api_client as block_producer_cl
 use miden_node_store::{GenesisState, Store};
 use miden_node_utils::fee::test_fee_params;
 use miden_node_validator::{Validator, ValidatorSigner};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::testing::random_signer::RandomBlockSigner as _;
+use miden_protocol::testing::random_secret_key::random_secret_key;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
 use tokio::{runtime, task};
@@ -49,7 +48,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         Validator {
             address: validator_addr,
             grpc_timeout,
-            signer: ValidatorSigner::new_local(SecretKey::random()),
+            signer: ValidatorSigner::new_local(random_secret_key()),
             data_directory,
         }
         .serve()
@@ -130,7 +129,7 @@ async fn start_store(
     store_addr: std::net::SocketAddr,
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
-    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, SecretKey::random());
+    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
     Store::bootstrap(genesis_state.clone(), data_directory)
         .await
         .expect("store should bootstrap");
