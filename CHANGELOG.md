@@ -12,10 +12,6 @@
 
 ### Changes
 
-- [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
-
-### Changes
-
 - [BREAKING] Removed obsolete `SyncState` RPC endpoint; clients should use `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, or `SyncChainMmr` instead ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
 - Added account ID limits for `SyncTransactions`, `SyncAccountVault`, and `SyncAccountStorageMaps` to `GetLimits` responses ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
 - [BREAKING] Added typed `GetAccountError` for `GetAccount` endpoint, splitting `BlockNotAvailable` into `UnknownBlock` and `BlockPruned`. `AccountNotFound` and `AccountNotPublic` now return `InvalidArgument` gRPC status instead of `NotFound`; clients should parse the error details discriminant rather than branching on status codes ([#1646](https://github.com/0xMiden/miden-node/pull/1646)).
@@ -24,6 +20,7 @@
 - Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).
 - Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/miden-node/pull/1651)).
 - Improved tracing span fields ([#1650](https://github.com/0xMiden/miden-node/pull/1650))
+- [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
 
 ## v0.13.5 (TBD)
 

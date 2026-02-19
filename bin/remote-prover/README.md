@@ -125,7 +125,7 @@ The server implements the following health and status related gRPC services:
 
 - [gRPC Health Check](https://grpc.io/docs/guides/health-checking/)
 - [gRPC Reflection](https://grpc.io/docs/guides/reflection/) 
-- [WorkerStatusApi](https://github.com/miden-io/miden-prover/blob/main/proto/proto/remote_prover.proto)
+- [WorkerStatusApi](https://github.com/0xMiden/miden-node/blob/main/proto/proto/remote_prover.proto)
 
 The server supports OpenTelemetry traces which can be configured using the environment variables specified in the OpenTelemetry documentation.
 

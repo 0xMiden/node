@@ -117,6 +117,6 @@ impl ProveRequest for LocalBlockProver {
     fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
         let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
         self.prove(tx_batches, &block_header, block_inputs)
-            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
+            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))
     }
 }
