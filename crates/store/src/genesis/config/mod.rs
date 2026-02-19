@@ -70,6 +70,7 @@ struct AccountToml {
 
 /// Intermediate struct for full TOML parsing
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GenesisConfigToml {
     version: u32,
     timestamp: u32,
@@ -690,7 +691,7 @@ impl From<TokenSymbolStr> for TokenSymbol {
 
 impl From<TokenSymbol> for TokenSymbolStr {
     fn from(symbol: TokenSymbol) -> Self {
-        // TokenSymbol guarantees valid format, so to_string should not fail
+        // SAFETY: TokenSymbol guarantees valid format, so to_string should not fail
         let raw = symbol.to_string().expect("TokenSymbol should always produce valid string");
         Self { raw, encoded: symbol }
     }
