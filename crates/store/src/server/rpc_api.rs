@@ -158,9 +158,6 @@ impl rpc_server::Rpc for StoreApi {
         &self,
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
-        // TODO find a reasonable upper boundary
-        const MAX_BLOCKS: u32 = 1 << 20;
-
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
 
@@ -183,23 +180,13 @@ impl rpc_server::Rpc for StoreApi {
             }))?;
         }
         let block_range = block_from..=block_to;
-        let len = 1 + block_range.end().as_u32() - block_range.start().as_u32();
-        let trimmed_block_range = if len > MAX_BLOCKS {
-            block_from..=BlockNumber::from(block_from.as_u32() + MAX_BLOCKS)
-        } else {
-            block_range
-        };
-
-        let mmr_delta = self
-            .state
-            .sync_chain_mmr(trimmed_block_range.clone())
-            .await
-            .map_err(internal_error)?;
+        let mmr_delta =
+            self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
-                chain_tip: chain_tip.as_u32(),
-                block_num: trimmed_block_range.end().as_u32(),
+            block_range: Some(proto::rpc::BlockRange {
+                block_from: block_range.start().as_u32(),
+                block_to: Some(block_range.end().as_u32()),
             }),
             mmr_delta: Some(mmr_delta.into()),
         }))
