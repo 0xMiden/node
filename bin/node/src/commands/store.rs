@@ -5,6 +5,7 @@ use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::grpc::UrlExt;
+use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::KmsSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
@@ -241,42 +242,39 @@ impl StoreCommand {
             }
         }
 
+        // Bootstrap with KMS key or local key.
         if let Some(key_id) = validator_kms_key_id {
-            // Retrieve the validator key from the KMS.
             let signer = KmsSigner::new(key_id).await?;
-            let (genesis_state, secrets) = config.into_state(signer)?;
-            // Write the accounts to disk
-            for item in secrets.as_account_files(&genesis_state) {
-                let AccountFileWithName { account_file, name } = item?;
-                let accountpath = accounts_directory.join(name);
-                // do not override existing keys
-                fs_err::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&accountpath)
-                    .context("key file already exists")?;
-                account_file.write(accountpath)?;
-            }
-
-            Store::bootstrap(genesis_state, data_directory)
+            Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
         } else {
-            // Decode the validator key.
             let signer = SecretKey::read_from_bytes(&hex::decode(validator_key)?)?;
-            let (genesis_state, secrets) = config.into_state(signer)?;
-            // Write the accounts to disk
-            for item in secrets.as_account_files(&genesis_state) {
-                let AccountFileWithName { account_file, name } = item?;
-                let accountpath = accounts_directory.join(name);
-                // do not override existing keys
-                fs_err::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&accountpath)
-                    .context("key file already exists")?;
-                account_file.write(accountpath)?;
-            }
-
-            Store::bootstrap(genesis_state, data_directory)
+            Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
         }
+    }
+
+    fn bootstrap_with_signer<S: BlockSigner>(
+        config: GenesisConfig,
+        signer: S,
+        accounts_directory: &Path,
+        data_directory: &Path,
+    ) -> anyhow::Result<()> {
+        // Build genesis state with the provided signer.
+        let (genesis_state, secrets) = config.into_state(signer)?;
+
+        // Write accouts to file.
+        for item in secrets.as_account_files(&genesis_state) {
+            let AccountFileWithName { account_file, name } = item?;
+            let accountpath = accounts_directory.join(name);
+            // do not override existing keys
+            fs_err::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&accountpath)
+                .context("key file already exists")?;
+            account_file.write(accountpath)?;
+        }
+
+        // Bootstrap store.
+        Store::bootstrap(genesis_state, data_directory)
     }
 }
