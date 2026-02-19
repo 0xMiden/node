@@ -19,10 +19,10 @@ use crate::genesis::config::TokenSymbolStr;
 pub enum GenesisConfigError {
     #[error(transparent)]
     Toml(#[from] toml::de::Error),
-    #[error("failed to read config file at {path}: {reason}")]
-    ConfigFileRead { path: PathBuf, reason: String },
-    #[error("failed to read account file at {path}: {reason}")]
-    AccountFileRead { path: PathBuf, reason: String },
+    #[error("failed to read config file at {1}")]
+    ConfigFileRead(#[source] std::io::Error, PathBuf),
+    #[error("failed to read account file at {1}")]
+    AccountFileRead(#[source] std::io::Error, PathBuf),
     #[error("native faucet from file {path} is not a fungible faucet")]
     NativeFaucetNotFungible { path: PathBuf },
     #[error("account translation from config to state failed")]

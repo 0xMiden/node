@@ -287,7 +287,7 @@ path = "does_not_exist.mac"
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, GenesisConfigError::AccountFileRead { .. }),
+        matches!(err, GenesisConfigError::AccountFileRead(..)),
         "Expected AccountFileRead error, got: {err:?}"
     );
 }

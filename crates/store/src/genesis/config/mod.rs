@@ -134,11 +134,8 @@ impl GenesisConfig {
     ///
     /// Notice: It will generate the specified case during [`fn into_state`].
     pub fn read_toml_file(path: &Path) -> Result<Self, GenesisConfigError> {
-        let toml_str =
-            fs_err::read_to_string(path).map_err(|e| GenesisConfigError::ConfigFileRead {
-                path: path.to_path_buf(),
-                reason: e.to_string(),
-            })?;
+        let toml_str = fs_err::read_to_string(path)
+            .map_err(|e| GenesisConfigError::ConfigFileRead(e, path.to_path_buf()))?;
         let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
         Self::read_toml(&toml_str, config_dir)
     }
@@ -158,12 +155,8 @@ impl GenesisConfig {
             },
             NativeFaucetToml::File { path } => {
                 let full_path = config_dir.join(&path);
-                let account_file = AccountFile::read(&full_path).map_err(|e| {
-                    GenesisConfigError::AccountFileRead {
-                        path: full_path.clone(),
-                        reason: e.to_string(),
-                    }
-                })?;
+                let account_file = AccountFile::read(&full_path)
+                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
                 let account = account_file.account;
 
                 // Validate it's a fungible faucet
@@ -181,12 +174,8 @@ impl GenesisConfig {
             .into_iter()
             .map(|acc| {
                 let full_path = config_dir.join(&acc.path);
-                let account_file = AccountFile::read(&full_path).map_err(|e| {
-                    GenesisConfigError::AccountFileRead {
-                        path: full_path.clone(),
-                        reason: e.to_string(),
-                    }
-                })?;
+                let account_file = AccountFile::read(&full_path)
+                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
                 Ok(account_file.account)
             })
             .collect::<Result<Vec<_>, GenesisConfigError>>()?;
