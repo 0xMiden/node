@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use diesel::SqliteConnection;
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::account::Account;
@@ -9,17 +9,13 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
-use tracing::{Instrument, info, instrument};
+use tracing::{info, instrument};
 
 use crate::COMPONENT;
 use crate::actor::inflight_note::InflightNetworkNote;
-use crate::db::errors::{DatabaseError, DatabaseSetupError};
-use crate::db::manager::ConnectionManager;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
 
-pub mod errors;
-pub(crate) mod manager;
 pub(crate) mod models;
 
 mod migrations;
@@ -32,7 +28,7 @@ pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct Db {
-    pool: deadpool_diesel::Pool<ConnectionManager, deadpool::managed::Object<ConnectionManager>>,
+    inner: miden_node_db::Db,
 }
 
 impl Db {
@@ -45,11 +41,7 @@ impl Db {
         err,
     )]
     pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
-        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager)
-            .max_size(16)
-            .build()
-            .map_err(DatabaseSetupError::PoolBuild)
+        let inner = miden_node_db::Db::new(&database_filepath)
             .context("failed to build connection pool")?;
 
         info!(
@@ -58,61 +50,12 @@ impl Db {
             "Connected to the database"
         );
 
-        let me = Db { pool };
-        me.query("migrations", apply_migrations)
+        let me = Db { inner };
+        me.inner
+            .query("migrations", apply_migrations)
             .await
             .context("failed to apply migrations on pool connection")?;
         Ok(me)
-    }
-
-    /// Create and commit a transaction with the queries added in the provided closure.
-    pub(crate) async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
-    where
-        Q: Send
-            + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
-            + 'static,
-        R: Send + 'static,
-        M: Send + ToString,
-        E: From<diesel::result::Error>,
-        E: From<DatabaseError>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let conn = self
-            .pool
-            .get()
-            .in_current_span()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        conn.interact(|conn| <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query))
-            .in_current_span()
-            .await
-            .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
-    }
-
-    /// Run the query _without_ a transaction.
-    pub(crate) async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
-    where
-        Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,
-        R: Send + 'static,
-        M: Send + ToString,
-        E: From<DatabaseError>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let conn = self
-            .pool
-            .get()
-            .in_current_span()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        conn.interact(move |conn| {
-            let r = query(conn)?;
-            Ok(r)
-        })
-        .in_current_span()
-        .await
-        .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 
     // PUBLIC QUERY METHODS
@@ -125,11 +68,12 @@ impl Db {
         block_num: BlockNumber,
         max_attempts: usize,
     ) -> Result<bool> {
-        self.query("has_available_notes", move |conn| {
-            let notes = queries::available_notes(conn, account_id, block_num, max_attempts)?;
-            Ok(!notes.is_empty())
-        })
-        .await
+        self.inner
+            .query("has_available_notes", move |conn| {
+                let notes = queries::available_notes(conn, account_id, block_num, max_attempts)?;
+                Ok(!notes.is_empty())
+            })
+            .await
     }
 
     /// Drops notes for the given account that have exceeded the maximum attempt count.
@@ -138,10 +82,11 @@ impl Db {
         account_id: NetworkAccountId,
         max_attempts: usize,
     ) -> Result<()> {
-        self.transact("drop_failing_notes", move |conn| {
-            queries::drop_failing_notes(conn, account_id, max_attempts)
-        })
-        .await
+        self.inner
+            .transact("drop_failing_notes", move |conn| {
+                queries::drop_failing_notes(conn, account_id, max_attempts)
+            })
+            .await
     }
 
     /// Returns the latest account state and available notes for the given account.
@@ -151,12 +96,14 @@ impl Db {
         block_num: BlockNumber,
         max_note_attempts: usize,
     ) -> Result<(Option<Account>, Vec<InflightNetworkNote>)> {
-        self.query("select_candidate", move |conn| {
-            let account = queries::get_account(conn, account_id)?;
-            let notes = queries::available_notes(conn, account_id, block_num, max_note_attempts)?;
-            Ok((account, notes))
-        })
-        .await
+        self.inner
+            .query("select_candidate", move |conn| {
+                let account = queries::get_account(conn, account_id)?;
+                let notes =
+                    queries::available_notes(conn, account_id, block_num, max_note_attempts)?;
+                Ok((account, notes))
+            })
+            .await
     }
 
     /// Marks notes as failed by incrementing `attempt_count` and setting `last_attempt`.
@@ -165,10 +112,11 @@ impl Db {
         nullifiers: Vec<Nullifier>,
         block_num: BlockNumber,
     ) -> Result<()> {
-        self.transact("notes_failed", move |conn| {
-            queries::notes_failed(conn, &nullifiers, block_num)
-        })
-        .await
+        self.inner
+            .transact("notes_failed", move |conn| {
+                queries::notes_failed(conn, &nullifiers, block_num)
+            })
+            .await
     }
 
     /// Handles a `TransactionAdded` mempool event by writing effects to the DB.
@@ -179,10 +127,11 @@ impl Db {
         notes: Vec<SingleTargetNetworkNote>,
         nullifiers: Vec<Nullifier>,
     ) -> Result<()> {
-        self.transact("handle_transaction_added", move |conn| {
-            queries::add_transaction(conn, &tx_id, account_delta.as_ref(), &notes, &nullifiers)
-        })
-        .await
+        self.inner
+            .transact("handle_transaction_added", move |conn| {
+                queries::add_transaction(conn, &tx_id, account_delta.as_ref(), &notes, &nullifiers)
+            })
+            .await
     }
 
     /// Handles a `BlockCommitted` mempool event by committing transaction effects.
@@ -192,10 +141,11 @@ impl Db {
         block_num: BlockNumber,
         header: BlockHeader,
     ) -> Result<()> {
-        self.transact("handle_block_committed", move |conn| {
-            queries::commit_block(conn, &txs, block_num, &header)
-        })
-        .await
+        self.inner
+            .transact("handle_block_committed", move |conn| {
+                queries::commit_block(conn, &txs, block_num, &header)
+            })
+            .await
     }
 
     /// Handles a `TransactionsReverted` mempool event by undoing transaction effects.
@@ -205,15 +155,16 @@ impl Db {
         &self,
         tx_ids: Vec<TransactionId>,
     ) -> Result<Vec<NetworkAccountId>> {
-        self.transact("handle_transactions_reverted", move |conn| {
-            queries::revert_transaction(conn, &tx_ids)
-        })
-        .await
+        self.inner
+            .transact("handle_transactions_reverted", move |conn| {
+                queries::revert_transaction(conn, &tx_ids)
+            })
+            .await
     }
 
     /// Purges all inflight state. Called on startup to get a clean slate.
     pub async fn purge_inflight(&self) -> Result<()> {
-        self.transact("purge_inflight", queries::purge_inflight).await
+        self.inner.transact("purge_inflight", queries::purge_inflight).await
     }
 
     /// Inserts or replaces the singleton chain state row.
@@ -222,10 +173,11 @@ impl Db {
         block_num: BlockNumber,
         header: BlockHeader,
     ) -> Result<()> {
-        self.transact("upsert_chain_state", move |conn| {
-            queries::upsert_chain_state(conn, block_num, &header)
-        })
-        .await
+        self.inner
+            .transact("upsert_chain_state", move |conn| {
+                queries::upsert_chain_state(conn, block_num, &header)
+            })
+            .await
     }
 
     /// Syncs an account and its notes from the store into the DB.
@@ -235,20 +187,20 @@ impl Db {
         account: Account,
         notes: Vec<SingleTargetNetworkNote>,
     ) -> Result<()> {
-        self.transact("sync_account_from_store", move |conn| {
-            queries::upsert_committed_account(conn, account_id, &account)?;
-            queries::insert_committed_notes(conn, &notes)?;
-            Ok(())
-        })
-        .await
+        self.inner
+            .transact("sync_account_from_store", move |conn| {
+                queries::upsert_committed_account(conn, account_id, &account)?;
+                queries::insert_committed_notes(conn, &notes)?;
+                Ok(())
+            })
+            .await
     }
 
     /// Creates a file-backed SQLite test connection with migrations applied.
     #[cfg(test)]
-    pub fn test_conn() -> (SqliteConnection, tempfile::TempDir) {
-        use diesel::Connection;
-
-        use crate::db::manager::configure_connection_on_creation;
+    pub fn test_conn() -> (diesel::SqliteConnection, tempfile::TempDir) {
+        use diesel::{Connection, SqliteConnection};
+        use miden_node_db::configure_connection_on_creation;
 
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("test.sqlite3");

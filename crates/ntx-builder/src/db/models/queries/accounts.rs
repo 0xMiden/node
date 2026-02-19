@@ -1,10 +1,10 @@
 //! Account-related queries and models.
 
 use diesel::prelude::*;
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::Account;
 
-use crate::db::errors::DatabaseError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 

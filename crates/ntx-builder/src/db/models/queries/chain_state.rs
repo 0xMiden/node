@@ -1,9 +1,9 @@
 //! Chain state queries and models.
 
 use diesel::prelude::*;
+use miden_node_db::DatabaseError;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 
-use crate::db::errors::DatabaseError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 

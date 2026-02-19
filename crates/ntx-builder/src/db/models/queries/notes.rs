@@ -1,13 +1,13 @@
 //! Note-related queries and models.
 
 use diesel::prelude::*;
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
 use crate::actor::inflight_note::InflightNetworkNote;
-use crate::db::errors::DatabaseError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 

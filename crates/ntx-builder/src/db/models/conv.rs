@@ -1,5 +1,6 @@
 //! Conversions between Miden domain types and database column types.
 
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_node_proto::generated as proto;
@@ -9,8 +10,6 @@ use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_tx::utils::{Deserializable, Serializable};
 use prost::Message;
-
-use crate::db::errors::DatabaseError;
 
 // SERIALIZATION (domain → DB)
 // ================================================================================================

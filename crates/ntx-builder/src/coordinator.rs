@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
@@ -13,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::actor::{AccountActor, AccountActorContext, AccountOrigin, ActorShutdownReason};
 use crate::db::Db;
-use crate::db::errors::DatabaseError;
 
 // ACTOR HANDLE
 // ================================================================================================

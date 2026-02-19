@@ -13,7 +13,7 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/migrations"
 #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
 pub fn apply_migrations(
     conn: &mut SqliteConnection,
-) -> std::result::Result<(), crate::errors::DatabaseError> {
+) -> std::result::Result<(), miden_node_db::DatabaseError> {
     let migrations = conn.pending_migrations(MIGRATIONS).expect("In memory migrations never fail");
     tracing::info!(target = COMPONENT, migrations = migrations.len(), "Applying migrations");
 

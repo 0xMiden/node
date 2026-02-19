@@ -75,11 +75,11 @@ impl deadpool::managed::Manager for ConnectionManager {
     }
 }
 
-pub(crate) fn configure_connection_on_creation(
+pub fn configure_connection_on_creation(
     conn: &mut SqliteConnection,
 ) -> Result<(), ConnectionManagerError> {
-    // Wait up to 5 seconds for writer locks before erroring.
-    diesel::sql_query("PRAGMA busy_timeout=5000")
+    // Wait up to 3 seconds for writer locks before erroring.
+    diesel::sql_query("PRAGMA busy_timeout=3000")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
 
@@ -92,6 +92,11 @@ pub(crate) fn configure_connection_on_creation(
 
     // Enable foreign key checks.
     diesel::sql_query("PRAGMA foreign_keys=ON")
+        .execute(conn)
+        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
+    // Set busy timeout so concurrent writers wait instead of immediately failing.
+    diesel::sql_query("PRAGMA busy_timeout=5000")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
     Ok(())

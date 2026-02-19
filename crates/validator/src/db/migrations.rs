@@ -1,6 +1,6 @@
 use diesel::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
-use miden_node_store::DatabaseError;
+use miden_node_db::DatabaseError;
 use tracing::instrument;
 
 use crate::COMPONENT;

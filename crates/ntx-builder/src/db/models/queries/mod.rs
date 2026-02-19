@@ -1,6 +1,7 @@
 //! Database query functions for the NTX builder.
 
 use diesel::prelude::*;
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -9,7 +10,6 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
 
 use crate::actor::account_effect::NetworkAccountEffect;
-use crate::db::errors::DatabaseError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 
