@@ -1,3 +1,4 @@
+use anyhow::Context;
 use aws_sdk_kms::error::SdkError;
 use aws_sdk_kms::operation::sign::SignError;
 use aws_sdk_kms::types::SigningAlgorithmSpec;
@@ -53,7 +54,7 @@ impl KmsSigner {
 
         // Decode the DER-encoded SPKI and compress it.
         let kpub = K256PublicKey::from_public_key_der(spki_der)
-            .map_err(|e| anyhow::anyhow!("failed to parse SPKI as secp256k1: {e}"))?;
+            .context("failed to parse SPKI as secp256k1")?;
         let compressed = kpub.to_encoded_point(true); // 33 bytes, 0x02/0x03 || X.
         let sec1_compressed = compressed.as_bytes();
 
