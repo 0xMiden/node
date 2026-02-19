@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
-use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
+use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -36,7 +36,7 @@ pub use crate::db::models::queries::{
     PublicAccountIdsPage,
 };
 use crate::db::models::{Page, queries};
-use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
+use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
 pub(crate) mod manager;
@@ -91,13 +91,6 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
     fn eq(&self, (nullifier, block_num): &(Nullifier, BlockNumber)) -> bool {
         &self.nullifier == nullifier && &self.block_num == block_num
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct TransactionSummary {
-    pub account_id: AccountId,
-    pub block_num: BlockNumber,
-    pub transaction_id: TransactionId,
 }
 
 #[derive(Debug, PartialEq)]
@@ -178,14 +171,6 @@ impl From<NoteRecord> for proto::note::NoteSyncRecord {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct StateSyncUpdate {
-    pub notes: Vec<NoteSyncRecord>,
-    pub block_header: BlockHeader,
-    pub account_updates: Vec<AccountSummary>,
-    pub transactions: Vec<TransactionSummary>,
-}
-
-#[derive(Debug, PartialEq)]
 pub struct NoteSyncUpdate {
     pub notes: Vec<NoteSyncRecord>,
     pub block_header: BlockHeader,
@@ -224,6 +209,11 @@ impl From<NoteRecord> for NoteSyncRecord {
 }
 
 impl Db {
+    /// Creates a new database instance with the provided connection pool.
+    pub fn new(pool: deadpool_diesel::Pool<ConnectionManager>) -> Self {
+        Self { pool }
+    }
+
     /// Creates a new database and inserts the genesis block.
     #[instrument(
         target = COMPONENT,
@@ -266,7 +256,7 @@ impl Db {
     }
 
     /// Create and commit a transaction with the queries added in the provided closure
-    pub(crate) async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
+    pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send
             + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
@@ -291,7 +281,7 @@ impl Db {
     }
 
     /// Run the query _without_ a transaction
-    pub(crate) async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
+    pub async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,
         R: Send + 'static,
@@ -344,7 +334,14 @@ impl Db {
     }
 
     /// Loads the nullifiers that match the prefixes from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(
+        level = "debug",
+        target = COMPONENT,
+        skip_all,
+        fields(prefix_len, prefixes = nullifier_prefixes.len()),
+        ret(level = "debug"),
+        err
+    )]
     pub async fn select_nullifiers_by_prefix(
         &self,
         prefix_len: u32,
@@ -515,19 +512,6 @@ impl Db {
     }
 
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn get_state_sync(
-        &self,
-        block_number: BlockNumber,
-        account_ids: Vec<AccountId>,
-        note_tags: Vec<u32>,
-    ) -> Result<StateSyncUpdate, StateSyncError> {
-        self.transact::<StateSyncUpdate, StateSyncError, _, _>("state sync", move |conn| {
-            queries::get_state_sync(conn, block_number, account_ids, note_tags)
-        })
-        .await
-    }
-
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn get_note_sync(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -602,6 +586,8 @@ impl Db {
             if allow_acquire.send(()).is_err() {
                 tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
             }
+
+            models::queries::prune_history(conn, signed_block.header().block_num())?;
 
             acquire_done.blocking_recv()?;
 

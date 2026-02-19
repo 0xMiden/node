@@ -22,8 +22,8 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [SyncNullifiers](#syncnullifiers)
 - [SyncAccountVault](#syncaccountvault)
 - [SyncNotes](#syncnotes)
-- [SyncState](#syncstate)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
+- [SyncChainMmr](#syncchainmmr)
 - [SyncTransactions](#synctransactions)
 - [Status](#status)
 
@@ -107,6 +107,19 @@ The witness proves the account's state commitment in the account tree. If detail
 
 If `block_num` is provided, returns the state at that historical block; otherwise, returns the latest state.
 
+#### Error Codes
+
+When the request fails, detailed error information is provided through gRPC status details. The following error codes may be returned:
+
+| Error Code                | Value | gRPC Status        | Description                                          |
+|---------------------------|-------|--------------------|------------------------------------------------------|
+| `INTERNAL_ERROR`          | 0     | `INTERNAL`         | Internal server error occurred                       |
+| `DESERIALIZATION_FAILED`  | 1     | `INVALID_ARGUMENT` | Request could not be deserialized                    |
+| `ACCOUNT_NOT_FOUND`       | 2     | `INVALID_ARGUMENT` | Account not found at the requested block             |
+| `ACCOUNT_NOT_PUBLIC`      | 3     | `INVALID_ARGUMENT` | Account details requested for a non-public account   |
+| `UNKNOWN_BLOCK`           | 4     | `INVALID_ARGUMENT` | Requested block number is unknown                    |
+| `BLOCK_PRUNED`            | 5     | `INVALID_ARGUMENT` | Requested block has been pruned                      |
+
 ### GetBlockByNumber
 
 Request the raw data for a specific block.
@@ -128,7 +141,9 @@ This endpoint allows clients to discover the maximum number of items that can be
   "endpoints": {
     "CheckNullifiers": { "parameters": { "nullifier": 1000 } },
     "SyncNullifiers": { "parameters": { "nullifier": 1000 } },
-    "SyncState": { "parameters": { "account_id": 1000, "note_tag": 1000 } },
+    "SyncTransactions": { "parameters": { "account_id": 1000 } },
+    "SyncAccountVault": { "parameters": { "account_id": 1000 } },
+    "SyncAccountStorageMaps": { "parameters": { "account_id": 1000 } },
     "SyncNotes": { "parameters": { "note_tag": 1000 } },
     "GetNotesById": { "parameters": { "note_id": 100 } }
   }
@@ -194,18 +209,6 @@ A basic note sync can be implemented by repeatedly requesting the previous respo
 
 **Limits:** `note_tag` (1000)
 
-### SyncState
-
-Iteratively sync data for specific notes and accounts.
-
-This request returns the next block containing data of interest. Client is expected to repeat these requests in a loop until the response reaches the head of the chain, at which point the data is fully synced.
-
-Each update response also contains info about new notes, accounts etc. created. It also returns Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain MMR peaks and chain MMR nodes.
-
-The low part of note tags are redacted to preserve some degree of privacy. Returned data therefore contains additional notes which should be filtered out by the client.
-
-**Limits:** `account_id` (1000), `note_tag` (1000)
-
 ### SyncAccountStorageMaps
 
 Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
@@ -213,6 +216,12 @@ Returns storage map synchronization data for a specified public account within a
 Caller specifies the `account_id` of the public account and the block range (`block_from`, `block_to`) for which to retrieve storage updates. The response includes all storage map key-value updates that occurred within that range, along with the last block included in the sync and the current chain tip.
 
 This endpoint enables clients to maintain an updated view of account storage.
+
+### SyncChainMmr
+
+Returns MMR delta information needed to synchronize the chain MMR within a block range.
+
+Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range, but at most to (including) the chain tip.
 
 ### SyncTransactions
 

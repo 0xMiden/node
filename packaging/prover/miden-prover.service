@@ -14,3 +14,4 @@ WorkingDirectory=/opt/miden-prover
 User=miden-prover
 RestartSec=5
 Restart=always
+LimitCORE=infinity

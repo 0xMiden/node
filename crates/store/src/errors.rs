@@ -359,6 +359,19 @@ pub enum StateSyncError {
     FailedToBuildMmrDelta(#[from] MmrError),
 }
 
+#[derive(Error, Debug, GrpcError)]
+pub enum SyncChainMmrError {
+    #[error("invalid block range")]
+    InvalidBlockRange(#[source] InvalidBlockRange),
+    #[error("start block is not known")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_from: BlockNumber,
+    },
+    #[error("malformed block number")]
+    DeserializationFailed(#[source] ConversionError),
+}
+
 impl From<diesel::result::Error> for StateSyncError {
     fn from(value: diesel::result::Error) -> Self {
         Self::DatabaseError(DatabaseError::from(value))
@@ -489,6 +502,26 @@ pub enum GetBlockByNumberError {
     DeserializationFailed(#[from] DeserializationError),
 }
 
+// GET ACCOUNT ERRORS
+// ================================================================================================
+
+#[derive(Debug, Error, GrpcError)]
+pub enum GetAccountError {
+    #[error("database error")]
+    #[grpc(internal)]
+    DatabaseError(#[from] DatabaseError),
+    #[error("malformed request")]
+    DeserializationFailed(#[from] ConversionError),
+    #[error("account {0} not found at block {1}")]
+    AccountNotFound(AccountId, BlockNumber),
+    #[error("account {0} is not public")]
+    AccountNotPublic(AccountId),
+    #[error("block {0} is unknown")]
+    UnknownBlock(BlockNumber),
+    #[error("block {0} has been pruned")]
+    BlockPruned(BlockNumber),
+}
+
 // GET NOTES BY ID ERRORS
 // ================================================================================================
 
@@ -581,6 +614,83 @@ pub enum SchemaVerificationError {
     },
 }
 
+#[cfg(test)]
+mod get_account_error_tests {
+    use miden_protocol::account::AccountId;
+    use miden_protocol::block::BlockNumber;
+    use miden_protocol::testing::account_id::AccountIdBuilder;
+    use tonic::Status;
+
+    use super::GetAccountError;
+
+    fn test_account_id() -> AccountId {
+        AccountIdBuilder::new().build_with_seed([1; 32])
+    }
+
+    #[test]
+    fn unknown_block_returns_invalid_argument() {
+        let block = BlockNumber::from(999);
+        let err = GetAccountError::UnknownBlock(block);
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(!status.metadata().is_empty() || !status.details().is_empty());
+    }
+
+    #[test]
+    fn block_pruned_returns_invalid_argument() {
+        let block = BlockNumber::from(1);
+        let err = GetAccountError::BlockPruned(block);
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn account_not_public_returns_invalid_argument() {
+        let err = GetAccountError::AccountNotPublic(test_account_id());
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn account_not_found_returns_invalid_argument_with_block_context() {
+        let account_id = test_account_id();
+        let block = BlockNumber::from(5);
+        let err = GetAccountError::AccountNotFound(account_id, block);
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "error message should mention 'not found'");
+        assert!(msg.contains("block"), "error message should include block context");
+
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn each_variant_has_unique_discriminant() {
+        let account_id = test_account_id();
+        let block = BlockNumber::from(1);
+
+        let errors = [
+            GetAccountError::AccountNotFound(account_id, block),
+            GetAccountError::AccountNotPublic(account_id),
+            GetAccountError::UnknownBlock(block),
+            GetAccountError::BlockPruned(block),
+        ];
+
+        let codes: Vec<u8> = errors.iter().map(|e| e.api_error().api_code()).collect();
+
+        // All non-internal variants should have unique, non-zero discriminants
+        for &code in &codes {
+            assert_ne!(code, 0, "non-internal variants should not map to Internal (0)");
+        }
+
+        // Check uniqueness
+        let mut sorted = codes.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), codes.len(), "all error variants should have unique codes");
+    }
+}
+
 // Do not scope for `cfg(test)` - if it the traitbounds don't suffice the issue will already appear
 // in the compilation of the library or binary, which would prevent getting to compiling the
 // following code.
@@ -602,7 +712,7 @@ mod compile_tests {
 
     /// Ensure all enum variants remain compat with the desired
     /// trait bounds. Otherwise one gets very unwieldy errors.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn assumed_trait_bounds_upheld() {
         fn ensure_is_error<E>(_phony: PhantomData<E>)
         where

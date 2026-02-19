@@ -192,16 +192,13 @@ impl api_server::Api for RpcService {
         self.store.clone().get_block_header_by_number(request).await
     }
 
-    async fn sync_state(
+    async fn sync_chain_mmr(
         &self,
-        request: Request<proto::rpc::SyncStateRequest>,
-    ) -> Result<Response<proto::rpc::SyncStateResponse>, Status> {
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
-        check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
-
-        self.store.clone().sync_state(request).await
+        self.store.clone().sync_chain_mmr(request).await
     }
 
     async fn sync_account_storage_maps(
@@ -407,8 +404,7 @@ impl api_server::Api for RpcService {
         request: Request<proto::rpc::AccountRequest>,
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
-            SlotData::MapKeys as ProtoMapKeys,
-            SlotData::AllEntries as ProtoMapAllEntries
+            SlotData::AllEntries as ProtoMapAllEntries, SlotData::MapKeys as ProtoMapKeys,
         };
 
         let request = request.into_inner();
@@ -483,6 +479,8 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
+        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
+
         self.store.clone().sync_transactions(request).await
     }
 
@@ -505,7 +503,6 @@ fn out_of_range_error<E: core::fmt::Display>(err: E) -> Status {
 }
 
 /// Check, but don't repeat ourselves mapping the error
-#[allow(clippy::result_large_err)]
 fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
@@ -538,11 +535,8 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
                 endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
             ),
             (
-                "SyncState".into(),
-                endpoint_limits(&[
-                    (AccountId::PARAM_NAME, AccountId::LIMIT),
-                    (NoteTag::PARAM_NAME, NoteTag::LIMIT),
-                ]),
+                "SyncTransactions".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),

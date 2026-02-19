@@ -130,7 +130,7 @@ impl GenesisConfig {
     /// Convert the in memory representation into the new genesis state
     ///
     /// Also returns the set of secrets for the generated accounts.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub fn into_state<S>(
         self,
         signer: S,
@@ -208,7 +208,7 @@ impl GenesisConfig {
         for (index, WalletConfig { has_updatable_code, storage_mode, assets }) in
             wallet_configs.into_iter().enumerate()
         {
-            tracing::debug!("Adding wallet account {index} with {assets:?}");
+            tracing::debug!(index, assets = ?assets, "Adding wallet account");
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));

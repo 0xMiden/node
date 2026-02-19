@@ -16,6 +16,7 @@ pub mod explorer;
 pub mod faucet;
 pub mod frontend;
 mod monitor;
+pub mod note_transport;
 pub mod remote_prover;
 pub mod status;
 

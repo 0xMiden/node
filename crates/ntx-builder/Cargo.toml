@@ -15,8 +15,14 @@ workspace = true
 
 [dependencies]
 anyhow                     = { workspace = true }
+deadpool                   = { features = ["managed", "rt_tokio_1"], workspace = true }
+deadpool-diesel            = { features = ["sqlite"], workspace = true }
+deadpool-sync              = { features = ["tracing"], workspace = true }
+diesel                     = { features = ["numeric", "sqlite"], workspace = true }
+diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
 indexmap                   = { workspace = true }
+libsqlite3-sys             = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-utils           = { workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
@@ -25,7 +31,7 @@ miden-tx                   = { default-features = true, workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["rt-multi-thread"], workspace = true }
 tokio-stream               = { workspace = true }
-tokio-util                 = { version = "0.7" }
+tokio-util                 = { workspace = true }
 tonic                      = { workspace = true }
 tracing                    = { workspace = true }
 url                        = { workspace = true }
@@ -36,3 +42,6 @@ miden-node-utils      = { features = ["testing"], workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { workspace = true }
 rstest                = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["libsqlite3-sys"]

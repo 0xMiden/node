@@ -170,6 +170,13 @@ pub struct ExplorerStatusDetails {
     pub proof_commitment: String,
 }
 
+/// Details of the note transport service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NoteTransportStatusDetails {
+    pub url: String,
+    pub serving_status: String,
+}
+
 /// Details of a service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServiceDetails {
@@ -180,6 +187,7 @@ pub enum ServiceDetails {
     NtxIncrement(IncrementDetails),
     NtxTracking(CounterTrackingDetails),
     ExplorerStatus(ExplorerStatusDetails),
+    NoteTransportStatus(NoteTransportStatusDetails),
     Error,
 }
 

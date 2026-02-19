@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 'next'
+          ref: "next"
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - name: Install RocksDB
@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 'next'
+          ref: "next"
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - name: Install RocksDB
@@ -54,15 +54,65 @@ jobs:
       - name: Check all feature combinations
         run: make check-features
 
-  # Check that our MSRV complies with our specified rust version.
-  msrv:
-    name: msrv check
-    runs-on: ubuntu-24.04
+  workspace-packages:
+    name: list packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.package-matrix.outputs.packages }}
+    # Deliberately use stable rust instead of the toolchain.toml version.
+    # This prevents installing the toolchain version which isn't crucial for this operation.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 'next'
-      - name: check
+          ref: "next"
+      - name: Extract workspace packages
+        id: package-matrix
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          ./scripts/check-msrv.sh
+          PACKAGES=$(cargo metadata --format-version 1 --no-deps \
+            | jq -c '
+              .workspace_members as $members
+              | .packages
+              | map(select(.id as $id | $members | index($id)))
+              | map(.name)
+            ')
+
+          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+
+  msrv:
+    needs: workspace-packages
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.workspace-packages.outputs.packages) }}
+    # Deliberately use stable rust instead of the toolchain.toml version.
+    # This is prevents issues where e.g. `cargo-msrv` requires a newer version of rust than the toolchain.toml version.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: "next"
+      - name: Install binstall
+        uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-msrv
+        run: cargo binstall --no-confirm cargo-msrv
+      - name: Get manifest path for package
+        id: pkg
+        run: |
+          MANIFEST_PATH=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '
+              .packages[]
+              | select(.name == "${{ matrix.package }}")
+              | .manifest_path
+            ')
+          echo "manifest_path=$MANIFEST_PATH" >> "$GITHUB_OUTPUT"
+      - name: Show package info
+        run: |
+          echo "Package: ${{ matrix.package }}"
+          echo "Manifest path: ${{ steps.pkg.outputs.manifest_path }}"
+          cargo msrv show --manifest-path "${{ steps.pkg.outputs.manifest_path }}"
+      - name: Check MSRV
+        run: |
+          cargo msrv verify --manifest-path "${{ steps.pkg.outputs.manifest_path }}"
