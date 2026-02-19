@@ -261,7 +261,7 @@ impl StoreCommand {
         // Build genesis state with the provided signer.
         let (genesis_state, secrets) = config.into_state(signer)?;
 
-        // Write accouts to file.
+        // Write accounts to file.
         for item in secrets.as_account_files(&genesis_state) {
             let AccountFileWithName { account_file, name } = item?;
             let accountpath = accounts_directory.join(name);
