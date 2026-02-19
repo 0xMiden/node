@@ -302,6 +302,11 @@ impl NetworkTransactionBuilder {
                     tracing::error!(err = %err, "failed to mark notes as failed");
                 }
             },
+            ActorNotification::CacheNoteScript { script_root, script } => {
+                if let Err(err) = self.db.insert_note_script(script_root, &script).await {
+                    tracing::error!(err = %err, "failed to cache note script");
+                }
+            },
         }
     }
 

@@ -78,6 +78,12 @@ pub enum NtxError {
 
 type NtxResult<T> = Result<T, NtxError>;
 
+/// The result of a successful transaction execution.
+///
+/// Contains the transaction ID, any notes that failed during filtering, and note scripts fetched
+/// from the remote store that should be persisted to the local DB cache.
+pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteScript)>);
+
 // NETWORK TRANSACTION CONTEXT
 // ================================================================================================
 
@@ -138,8 +144,9 @@ impl NtxContext {
     ///
     /// # Returns
     ///
-    /// On success, returns the [`TransactionId`] of the executed transaction and a list of
-    /// [`FailedNote`]s representing notes that were filtered out before execution.
+    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes
+    /// that failed during filtering, and note scripts fetched from the remote store that should
+    /// be persisted to the local DB cache.
     ///
     /// # Errors
     ///
@@ -152,7 +159,7 @@ impl NtxContext {
     pub fn execute_transaction(
         self,
         tx: TransactionCandidate,
-    ) -> impl FutureMaybeSend<NtxResult<(TransactionId, Vec<FailedNote>)>> {
+    ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
         let TransactionCandidate {
             account,
             notes,
@@ -185,6 +192,9 @@ impl NtxContext {
                 // Execute transaction.
                 let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
 
+                // Collect scripts fetched from the remote store during execution.
+                let scripts_to_cache = data_store.take_fetched_scripts().await;
+
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
                 let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
@@ -195,7 +205,7 @@ impl NtxContext {
                 // Submit transaction to block producer.
                 self.submit(&proven_tx).await?;
 
-                Ok((proven_tx.id(), failed_notes))
+                Ok((proven_tx.id(), failed_notes, scripts_to_cache))
             })
             .in_current_span()
             .await
@@ -341,8 +351,11 @@ struct NtxDataStore {
     store: StoreClient,
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
-    /// Local database for persistent note script caching.
+    /// Local database for persistent note script.
     db: Db,
+    /// Scripts fetched from the remote store during execution, to be persisted by the
+    /// coordinator.
+    fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///
     /// The registered slot names are subsequently used to retrieve storage map witnesses from the
@@ -388,8 +401,14 @@ impl NtxDataStore {
             store,
             script_cache,
             db,
+            fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
         }
+    }
+
+    /// Returns the list of note scripts fetched from the remote store during execution.
+    async fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
+        self.fetched_scripts.lock().await.drain(..).collect()
     }
 
     /// Registers storage map slot names for the given account ID and storage header.
@@ -550,8 +569,8 @@ impl DataStore for NtxDataStore {
                 })?;
 
             if let Some(script) = maybe_script {
-                // Best-effort persist — don't fail the transaction if DB write fails.
-                let _ = self.db.insert_note_script(script_root, &script).await;
+                // Collect for later persistence by the coordinator.
+                self.fetched_scripts.lock().await.push((script_root, script.clone()));
                 self.script_cache.put(script_root, script.clone()).await;
                 Ok(Some(script))
             } else {

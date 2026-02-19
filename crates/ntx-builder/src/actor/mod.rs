@@ -40,6 +40,8 @@ pub enum ActorNotification {
         nullifiers: Vec<Nullifier>,
         block_num: BlockNumber,
     },
+    /// A note script was fetched from the remote store and should be persisted to the local DB.
+    CacheNoteScript { script_root: Word, script: NoteScript },
 }
 
 // ACTOR SHUTDOWN REASON
@@ -368,11 +370,13 @@ impl AccountActor {
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
             // Execution completed without failed notes.
-            Ok((tx_id, failed)) if failed.is_empty() => {
+            Ok((tx_id, failed, scripts_to_cache)) if failed.is_empty() => {
+                self.cache_note_scripts(scripts_to_cache).await;
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Execution completed with some failed notes.
-            Ok((tx_id, failed)) => {
+            Ok((tx_id, failed, scripts_to_cache)) => {
+                self.cache_note_scripts(scripts_to_cache).await;
                 let nullifiers: Vec<_> =
                     failed.into_iter().map(|note| note.note.nullifier()).collect();
                 self.mark_notes_failed(&nullifiers, block_num).await;
@@ -388,6 +392,16 @@ impl AccountActor {
                     .collect();
                 self.mark_notes_failed(&nullifiers, block_num).await;
             },
+        }
+    }
+
+    /// Sends notifications to the coordinator to cache note scripts fetched from the remote store.
+    async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
+        for (script_root, script) in scripts {
+            let _ = self
+                .notification_tx
+                .send(ActorNotification::CacheNoteScript { script_root, script })
+                .await;
         }
     }
 
