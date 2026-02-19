@@ -3528,7 +3528,6 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",
- "spki",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
