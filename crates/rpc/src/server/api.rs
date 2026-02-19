@@ -479,6 +479,8 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
+        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
+
         self.store.clone().sync_transactions(request).await
     }
 
@@ -534,14 +536,6 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
             ),
             (
                 "SyncTransactions".into(),
-                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
-            ),
-            (
-                "SyncAccountVault".into(),
-                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
-            ),
-            (
-                "SyncAccountStorageMaps".into(),
                 endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
