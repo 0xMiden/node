@@ -24,14 +24,14 @@ aws-sdk-kms            = { version = "1.100" }
 deadpool-diesel        = { workspace = true }
 diesel                 = { workspace = true }
 diesel_migrations      = { workspace = true }
+k256                   = "0.13.4"
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-store       = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { workspace = true }
-spki = "0.7.3"
-k256 = "0.13.4"
+spki                   = "0.7.3"
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }
