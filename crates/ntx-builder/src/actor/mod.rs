@@ -91,7 +91,7 @@ pub struct AccountActorContext {
     /// Database for persistent state.
     pub db: Db,
     /// Channel for sending notifications to the coordinator (via the builder event loop).
-    pub notification_tx: mpsc::UnboundedSender<ActorNotification>,
+    pub notification_tx: mpsc::Sender<ActorNotification>,
 }
 
 // ACCOUNT ORIGIN
@@ -194,7 +194,7 @@ pub struct AccountActor {
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
     /// Channel for sending notifications to the coordinator.
-    notification_tx: mpsc::UnboundedSender<ActorNotification>,
+    notification_tx: mpsc::Sender<ActorNotification>,
 }
 
 impl AccountActor {
@@ -299,7 +299,7 @@ impl AccountActor {
                             let _ = self.notification_tx.send(ActorNotification::DropFailingNotes {
                                 account_id,
                                 max_attempts: self.max_note_attempts,
-                            });
+                            }).await;
 
                             // Query DB for latest account and available notes.
                             let tx_candidate = self.select_candidate_from_db(
@@ -386,7 +386,7 @@ impl AccountActor {
             Ok((tx_id, failed)) => {
                 let nullifiers: Vec<_> =
                     failed.into_iter().map(|note| note.note.nullifier()).collect();
-                self.mark_notes_failed(&nullifiers, block_num);
+                self.mark_notes_failed(&nullifiers, block_num).await;
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
@@ -397,17 +397,20 @@ impl AccountActor {
                     .into_iter()
                     .map(|note| Note::from(note.into_inner()).nullifier())
                     .collect();
-                self.mark_notes_failed(&nullifiers, block_num);
+                self.mark_notes_failed(&nullifiers, block_num).await;
             },
         }
     }
 
     /// Sends a notification to the coordinator to mark notes as failed.
-    fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
-        let _ = self.notification_tx.send(ActorNotification::NotesFailed {
-            nullifiers: nullifiers.to_vec(),
-            block_num,
-        });
+    async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
+        let _ = self
+            .notification_tx
+            .send(ActorNotification::NotesFailed {
+                nullifiers: nullifiers.to_vec(),
+                block_num,
+            })
+            .await;
     }
 }
 

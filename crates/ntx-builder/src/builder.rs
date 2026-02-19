@@ -99,7 +99,7 @@ pub struct NetworkTransactionBuilder {
     /// Stream of mempool events from the block producer.
     mempool_events: MempoolEventStream,
     /// Receiver for notifications from account actors (e.g., note failures).
-    notification_rx: mpsc::UnboundedReceiver<ActorNotification>,
+    notification_rx: mpsc::Receiver<ActorNotification>,
 }
 
 impl NetworkTransactionBuilder {
@@ -112,7 +112,7 @@ impl NetworkTransactionBuilder {
         chain_state: Arc<RwLock<ChainState>>,
         actor_context: AccountActorContext,
         mempool_events: MempoolEventStream,
-        notification_rx: mpsc::UnboundedReceiver<ActorNotification>,
+        notification_rx: mpsc::Receiver<ActorNotification>,
     ) -> Self {
         Self {
             config,

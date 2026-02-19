@@ -249,7 +249,7 @@ impl NtxBuilderConfig {
 
         let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
 
-        let (notification_tx, notification_rx) = mpsc::unbounded_channel();
+        let (notification_tx, notification_rx) = mpsc::channel(1);
 
         let actor_context = AccountActorContext {
             block_producer_url: self.block_producer_url.clone(),
