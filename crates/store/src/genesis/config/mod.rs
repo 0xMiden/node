@@ -47,6 +47,9 @@ mod tests;
 // ================================================================================================
 
 /// An account loaded from a `.mac` file (path relative to genesis config directory).
+///
+/// Notice: Generic accounts are not validated (e.g. that their vault assets reference known
+/// faucets), leaving the responsibility of ensuring valid genesis state to the operator.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GenericAccountConfig {
