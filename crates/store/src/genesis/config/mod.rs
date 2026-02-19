@@ -49,7 +49,7 @@ mod tests;
 /// Native faucet can be specified as inline parameters or as a path to a pre-built account file.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(untagged)]
-enum NativeFaucetToml {
+enum NativeFaucetConfig {
     /// Build from parameters (dev/testing)
     Parameters {
         symbol: TokenSymbolStr,
@@ -75,7 +75,7 @@ struct AccountToml {
 pub struct GenesisConfig {
     version: u32,
     timestamp: u32,
-    native_faucet: NativeFaucetToml,
+    native_faucet: NativeFaucetConfig,
     fee_parameters: FeeParameterConfig,
     #[serde(default)]
     wallet: Vec<WalletConfig>,
@@ -100,7 +100,7 @@ impl Default for GenesisConfig {
             )
             .expect("Timestamp should fit into u32"),
             wallet: vec![],
-            native_faucet: NativeFaucetToml::Parameters {
+            native_faucet: NativeFaucetConfig::Parameters {
                 max_supply: 100_000_000_000_000_000u64,
                 decimals: 6u8,
                 symbol: miden,
@@ -178,7 +178,7 @@ impl GenesisConfig {
 
         // Handle native faucet: build from parameters or load from file
         let (native_faucet_account, symbol) = match native_faucet {
-            NativeFaucetToml::Parameters { symbol, decimals, max_supply } => {
+            NativeFaucetConfig::Parameters { symbol, decimals, max_supply } => {
                 let faucet_config = FungibleFaucetConfig {
                     symbol: symbol.clone(),
                     decimals,
@@ -193,7 +193,7 @@ impl GenesisConfig {
                 ));
                 (faucet_account, symbol)
             },
-            NativeFaucetToml::File { path } => {
+            NativeFaucetConfig::File { path } => {
                 let full_path = config_dir.join(&path);
                 let account_file = AccountFile::read(&full_path)
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
