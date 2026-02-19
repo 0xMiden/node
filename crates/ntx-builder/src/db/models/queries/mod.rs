@@ -190,7 +190,7 @@ pub fn add_transaction(
 /// ```
 ///
 /// Finally updates chain state (see [`upsert_chain_state`]).
-pub fn handle_block_committed(
+pub fn commit_block(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
     block_num: BlockNumber,
