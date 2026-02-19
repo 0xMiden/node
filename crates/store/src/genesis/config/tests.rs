@@ -53,9 +53,9 @@ fn parsing_yields_expected_default_values() -> TestResult {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_accounts_have_nonce_one() -> TestResult {
+async fn genesis_accounts_have_nonce_one() -> TestResult {
     let gcfg = GenesisConfig::default();
     let (state, secrets) = gcfg.into_state(SecretKey::new()).unwrap();
     let mut iter = secrets.as_account_files(&state);
@@ -64,6 +64,6 @@ fn genesis_accounts_have_nonce_one() -> TestResult {
 
     assert_eq!(status_quo.account.nonce(), ONE);
 
-    let _block = state.into_block()?;
+    let _block = state.into_block().await?;
     Ok(())
 }

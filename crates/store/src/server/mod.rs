@@ -54,12 +54,13 @@ impl Store {
         skip_all,
         err,
     )]
-    pub fn bootstrap<S: BlockSigner>(
+    pub async fn bootstrap<S: BlockSigner>(
         genesis: GenesisState<S>,
         data_directory: &Path,
     ) -> anyhow::Result<()> {
         let genesis = genesis
             .into_block()
+            .await
             .context("failed to convert genesis configuration into the genesis block")?;
 
         let data_directory =

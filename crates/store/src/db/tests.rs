@@ -1383,9 +1383,9 @@ fn test_select_account_code_by_commitment_multiple_codes() {
 // ================================================================================================
 
 /// Verifies genesis block with account containing vault assets can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets() {
+async fn genesis_with_account_assets() {
     use crate::genesis::GenesisState;
     let component_code = "pub proc foo push.1 end";
 
@@ -1410,15 +1410,15 @@ fn genesis_with_account_assets() {
 
     let genesis_state =
         GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_storage_map() {
+async fn genesis_with_account_storage_map() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1459,15 +1459,15 @@ fn genesis_with_account_storage_map() {
 
     let genesis_state =
         GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets_and_storage() {
+async fn genesis_with_account_assets_and_storage() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1506,16 +1506,16 @@ fn genesis_with_account_assets_and_storage() {
 
     let genesis_state =
         GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types.
 /// Tests realistic genesis scenario with basic accounts, assets, and storage.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_multiple_accounts() {
+async fn genesis_with_multiple_accounts() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1584,7 +1584,7 @@ fn genesis_with_multiple_accounts() {
         0,
         SecretKey::random(),
     );
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }

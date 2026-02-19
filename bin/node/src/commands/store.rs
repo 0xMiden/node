@@ -227,14 +227,16 @@ impl StoreCommand {
         match signer {
             ValidatorSigner::Kms(signer) => {
                 Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
+                    .await
             },
             ValidatorSigner::Local(signer) => {
                 Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
+                    .await
             },
         }
     }
 
-    fn bootstrap_with_signer(
+    async fn bootstrap_with_signer(
         config: GenesisConfig,
         signer: impl BlockSigner,
         accounts_directory: &Path,
@@ -257,6 +259,6 @@ impl StoreCommand {
         }
 
         // Bootstrap store.
-        Store::bootstrap(genesis_state, data_directory)
+        Store::bootstrap(genesis_state, data_directory).await
     }
 }

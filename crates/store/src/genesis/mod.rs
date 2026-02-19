@@ -1,4 +1,3 @@
-use futures::executor::block_on;
 use miden_node_utils::signer::BlockSigner;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -69,7 +68,7 @@ impl<S> GenesisState<S> {
 
 impl<S: BlockSigner> GenesisState<S> {
     /// Returns the block header and the account SMT
-    pub fn into_block(self) -> anyhow::Result<GenesisBlock> {
+    pub async fn into_block(self) -> anyhow::Result<GenesisBlock> {
         let accounts: Vec<BlockAccountUpdate> = self
             .accounts
             .iter()
@@ -133,7 +132,7 @@ impl<S: BlockSigner> GenesisState<S> {
 
         // Sign and assert verification for sanity (no mismatch between frontend and backend signing
         // impls).
-        let signature = block_on(self.block_signer.sign(&header))?;
+        let signature = self.block_signer.sign(&header).await?;
         assert!(signature.verify(header.commitment(), &self.block_signer.public_key()));
         // SAFETY: Header and accounts should be valid by construction.
         // No notes or nullifiers are created at genesis, which is consistent with the above empty
