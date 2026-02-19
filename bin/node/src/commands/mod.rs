@@ -9,6 +9,9 @@ use miden_node_block_producer::{
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use miden_node_validator::ValidatorSigner;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::utils::Deserializable;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -51,9 +54,53 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-/// Configuration for the Validator component.
+/// Configuration for the Validator key used to sign blocks.
+///
+/// Used by the Validator command and the genesis bootstrap command.
 #[derive(clap::Args)]
-pub struct ValidatorConfig {
+#[group(required = true, multiple = false)]
+pub struct ValidatorKey {
+    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    ///
+    /// If not provided, a predefined key is used.
+    ///
+    /// Cannot be used with `key.kms-id`.
+    #[arg(
+        long = "validator.key.hex",
+        env = ENV_VALIDATOR_KEY,
+        value_name = "VALIDATOR_KEY",
+        default_value = INSECURE_VALIDATOR_KEY_HEX,
+    )]
+    validator_key: String,
+    /// Key ID for the KMS key used by validator to sign blocks.
+    ///
+    /// Cannot be used with `key.hex`.
+    #[arg(
+        long = "key.kms-id",
+        env = ENV_VALIDATOR_KMS_KEY_ID,
+        value_name = "VALIDATOR_KMS_KEY_ID",
+    )]
+    validator_kms_key_id: Option<String>,
+}
+
+impl ValidatorKey {
+    pub async fn into_signer(self) -> anyhow::Result<ValidatorSigner> {
+        if let Some(kms_key_id) = self.validator_kms_key_id {
+            // Use KMS key ID to create a ValidatorSigner.
+            let signer = ValidatorSigner::new_kms(kms_key_id).await?;
+            Ok(signer)
+        } else {
+            // Use hex-encoded key to create a ValidatorSigner.
+            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
+            let signer = ValidatorSigner::new_local(signer);
+            Ok(signer)
+        }
+    }
+}
+
+/// Configuration for the Validator component when run in the bundled mode.
+#[derive(clap::Args)]
+pub struct BundledValidatorConfig {
     /// Insecure, hex-encoded validator secret key for development and testing purposes.
     /// Only used when the Validator URL argument is not set.
     #[arg(
@@ -70,7 +117,7 @@ pub struct ValidatorConfig {
     validator_url: Option<Url>,
 }
 
-impl ValidatorConfig {
+impl BundledValidatorConfig {
     /// Converts the [`ValidatorConfig`] into a URL and an optional [`SocketAddr`].
     ///
     /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].

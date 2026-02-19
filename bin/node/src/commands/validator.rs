@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_utils::grpc::UrlExt;
-use miden_node_utils::signer::BlockSigner;
-use miden_node_validator::{KmsSigner, Validator};
+use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
 use url::Url;
@@ -53,12 +52,25 @@ pub enum ValidatorCommand {
         ///
         /// If not provided, a predefined key is used.
         ///
-        /// Value is ignored if `kms.key-id` is provided.
-        #[arg(long = "key", env = ENV_VALIDATOR_KEY, value_name = "VALIDATOR_KEY", default_value = INSECURE_VALIDATOR_KEY_HEX)]
+        /// Cannot be used with `key.kms-id`.
+        #[arg(
+            long = "key.hex",
+            env = ENV_VALIDATOR_KEY,
+            value_name = "VALIDATOR_KEY",
+            default_value = INSECURE_VALIDATOR_KEY_HEX,
+            group = "key"
+        )]
         validator_key: String,
 
         /// Key ID for the KMS key used by validator to sign blocks.
-        #[arg(long = "kms.key-id", env = ENV_VALIDATOR_KMS_KEY_ID, value_name = "VALIDATOR_KMS_KEY_ID")]
+        ///
+        /// Cannot be used with `key.hex`.
+        #[arg(
+            long = "key.kms-id",
+            env = ENV_VALIDATOR_KMS_KEY_ID,
+            value_name = "VALIDATOR_KMS_KEY_ID",
+            group = "key"
+        )]
         kms_key_id: Option<String>,
     },
 }
@@ -80,24 +92,22 @@ impl ValidatorCommand {
 
         // Run validator with KMS key backend if key id provided.
         if let Some(kms_key_id) = kms_key_id {
-            let signer = KmsSigner::new(kms_key_id).await?;
+            let signer = ValidatorSigner::new_kms(kms_key_id).await?;
             Self::serve(address, grpc_timeout, signer, data_directory).await
         } else {
             let signer = SecretKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
+            let signer = ValidatorSigner::new_local(signer);
             Self::serve(address, grpc_timeout, signer, data_directory).await
         }
     }
 
     /// Runs the validator component until failure.
-    async fn serve<S>(
+    async fn serve(
         address: SocketAddr,
         grpc_timeout: Duration,
-        signer: S,
+        signer: ValidatorSigner,
         data_directory: PathBuf,
-    ) -> anyhow::Result<()>
-    where
-        S: BlockSigner + Send + Sync + 'static,
-    {
+    ) -> anyhow::Result<()> {
         Validator {
             address,
             grpc_timeout,

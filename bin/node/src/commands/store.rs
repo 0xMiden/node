@@ -6,9 +6,7 @@ use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
-use miden_node_validator::KmsSigner;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::Deserializable;
+use miden_node_validator::ValidatorSigner;
 use url::Url;
 
 use super::{
@@ -22,9 +20,7 @@ use crate::commands::{
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_KEY,
-    ENV_VALIDATOR_KMS_KEY_ID,
-    INSECURE_VALIDATOR_KEY_HEX,
+    ValidatorKey,
     duration_to_human_readable_string,
 };
 
@@ -47,22 +43,9 @@ pub enum StoreCommand {
         /// Use the given configuration file to construct the genesis state from.
         #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
         genesis_config_file: Option<PathBuf>,
-        /// Insecure, hex-encoded validator secret key for development and testing purposes.
-        ///
-        /// Used to sign the genesis block in the bootstrap process.
-        ///
-        /// If not provided, a predefined key is used.
-        #[arg(
-            long = "validator.key",
-            env = ENV_VALIDATOR_KEY,
-            value_name = "VALIDATOR_KEY",
-            default_value = INSECURE_VALIDATOR_KEY_HEX
-        )]
-        validator_key: String,
-
-        /// Key ID for the KMS key used by validator to sign blocks.
-        #[arg(long = "kms.key-id", env = ENV_VALIDATOR_KMS_KEY_ID, value_name = "VALIDATOR_KMS_KEY_ID")]
-        validator_kms_key_id: Option<String>,
+        /// Configuration for the Validator key used to sign genesis block.
+        #[command(flatten)]
+        validator_key: ValidatorKey,
     },
 
     /// Starts the store component.
@@ -119,14 +102,12 @@ impl StoreCommand {
                 accounts_directory,
                 genesis_config_file,
                 validator_key,
-                validator_kms_key_id,
             } => {
                 Self::bootstrap(
                     &data_directory,
                     &accounts_directory,
                     genesis_config_file.as_ref(),
                     validator_key,
-                    validator_kms_key_id,
                 )
                 .await
             },
@@ -206,8 +187,7 @@ impl StoreCommand {
         data_directory: &Path,
         accounts_directory: &Path,
         genesis_config: Option<&PathBuf>,
-        validator_key: String,
-        validator_kms_key_id: Option<String>,
+        validator_key: ValidatorKey,
     ) -> anyhow::Result<()> {
         // Parse genesis config (or default if not given).
         let config = genesis_config
@@ -243,18 +223,20 @@ impl StoreCommand {
         }
 
         // Bootstrap with KMS key or local key.
-        if let Some(key_id) = validator_kms_key_id {
-            let signer = KmsSigner::new(key_id).await?;
-            Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
-        } else {
-            let signer = SecretKey::read_from_bytes(&hex::decode(validator_key)?)?;
-            Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
+        let signer = validator_key.into_signer().await?;
+        match signer {
+            ValidatorSigner::Kms(signer) => {
+                Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
+            },
+            ValidatorSigner::Local(signer) => {
+                Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
+            },
         }
     }
 
-    fn bootstrap_with_signer<S: BlockSigner>(
+    fn bootstrap_with_signer(
         config: GenesisConfig,
-        signer: S,
+        signer: impl BlockSigner,
         accounts_directory: &Path,
         data_directory: &Path,
     ) -> anyhow::Result<()> {
