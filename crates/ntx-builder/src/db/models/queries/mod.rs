@@ -267,7 +267,7 @@ pub fn commit_block(
 /// -- Restore consumed notes
 /// UPDATE notes SET consumed_by = NULL WHERE consumed_by = ?1
 /// ```
-pub fn handle_transactions_reverted(
+pub fn revert_transaction(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
 ) -> Result<Vec<NetworkAccountId>, DatabaseError> {
