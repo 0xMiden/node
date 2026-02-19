@@ -1015,7 +1015,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524bc3df0d57e98ecd022e21ba31166c2625e7d3e5bcc4510efaeeab4abcab04"
 dependencies = [
  "deadpool-runtime",
- "tracing",
 ]
 
 [[package]]
@@ -2796,6 +2795,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-db"
+version = "0.14.0"
+dependencies = [
+ "deadpool",
+ "deadpool-diesel",
+ "deadpool-sync",
+ "diesel",
+ "miden-protocol",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "miden-node-grpc-error-macro"
 version = "0.14.0"
 dependencies = [
@@ -2808,14 +2820,12 @@ name = "miden-node-ntx-builder"
 version = "0.14.0"
 dependencies = [
  "anyhow",
- "deadpool",
- "deadpool-diesel",
- "deadpool-sync",
  "diesel",
  "diesel_migrations",
  "futures",
  "indexmap 2.13.0",
  "libsqlite3-sys",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-test-macro",
  "miden-node-utils",
@@ -2913,7 +2923,6 @@ dependencies = [
  "criterion",
  "deadpool",
  "deadpool-diesel",
- "deadpool-sync",
  "diesel",
  "diesel_migrations",
  "fs-err",
@@ -2923,6 +2932,7 @@ dependencies = [
  "libsqlite3-sys",
  "miden-block-prover",
  "miden-crypto",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-rocksdb-cxx-linkage-fix",
@@ -3012,12 +3022,11 @@ name = "miden-node-validator"
 version = "0.14.0"
 dependencies = [
  "anyhow",
- "deadpool-diesel",
  "diesel",
  "diesel_migrations",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
- "miden-node-store",
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",

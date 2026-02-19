@@ -1,9 +1,9 @@
 use diesel::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+use miden_node_db::DatabaseError;
 use tracing::instrument;
 
 use crate::COMPONENT;
-use crate::db::errors::DatabaseError;
 use crate::db::schema_hash::verify_schema;
 
 // The rebuild is automatically triggered by `build.rs` as described in
