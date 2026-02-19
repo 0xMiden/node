@@ -63,7 +63,7 @@ enum NativeFaucetConfig {
 /// An account loaded from a `.mac` file (path relative to genesis config directory).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AccountToml {
+struct GenericAccountConfig {
     path: PathBuf,
 }
 
@@ -82,7 +82,7 @@ pub struct GenesisConfig {
     #[serde(default)]
     fungible_faucet: Vec<FungibleFaucetConfig>,
     #[serde(default)]
-    account: Vec<AccountToml>,
+    account: Vec<GenericAccountConfig>,
     #[serde(skip)]
     config_dir: PathBuf,
 }
