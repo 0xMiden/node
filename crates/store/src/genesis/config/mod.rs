@@ -223,10 +223,8 @@ impl GenesisConfig {
                 let current_metadata = TokenMetadata::try_from(faucet_account.storage())?;
                 let updated_metadata =
                     current_metadata.with_token_supply(Felt::new(total_issuance))?;
-                storage_delta.set_item(
-                    TokenMetadata::metadata_slot().clone(),
-                    updated_metadata.into(),
-                )?;
+                storage_delta
+                    .set_item(TokenMetadata::metadata_slot().clone(), updated_metadata.into())?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
