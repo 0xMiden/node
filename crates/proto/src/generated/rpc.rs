@@ -442,11 +442,11 @@ pub struct SyncChainMmrRequest {
 /// Represents the result of syncing chain MMR.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncChainMmrResponse {
-    /// Pagination information.
+    /// For which block range the MMR delta is returned.
     #[prost(message, optional, tag = "1")]
-    pub pagination_info: ::core::option::Option<PaginationInfo>,
+    pub block_range: ::core::option::Option<BlockRange>,
     /// Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    /// `pagination_info.block_num`.
+    /// `response.block_range.block_to` or the chain tip.
     #[prost(message, optional, tag = "2")]
     pub mmr_delta: ::core::option::Option<super::primitives::MmrDelta>,
 }
@@ -1052,6 +1052,7 @@ pub mod api_client {
                 .insert(GrpcMethod::new("rpc.Api", "SyncAccountStorageMaps"));
             self.inner.unary(req, path, codec).await
         }
+        /// Returns MMR delta needed to synchronize the chain MMR within the requested block range.
         pub async fn sync_chain_mmr(
             &mut self,
             request: impl tonic::IntoRequest<super::SyncChainMmrRequest>,
@@ -1236,6 +1237,7 @@ pub mod api_server {
             tonic::Response<super::SyncAccountStorageMapsResponse>,
             tonic::Status,
         >;
+        /// Returns MMR delta needed to synchronize the chain MMR within the requested block range.
         async fn sync_chain_mmr(
             &self,
             request: tonic::Request<super::SyncChainMmrRequest>,

@@ -2,7 +2,7 @@
 -- The chain MMR is reconstructed on startup from the store and maintained in memory.
 CREATE TABLE chain_state (
     -- Singleton constraint: only one row allowed.
-    id              INTEGER PRIMARY KEY CHECK (id = 0),
+    id              INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
     -- Block number of the chain tip.
     block_num       INTEGER NOT NULL,
     -- Serialized BlockHeader.
@@ -16,7 +16,7 @@ CREATE TABLE chain_state (
 -- The auto-incrementing order_id preserves insertion order (VecDeque semantics).
 CREATE TABLE accounts (
     -- Auto-incrementing ID preserves insertion order.
-    order_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id        INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     -- AccountId serialized bytes (8 bytes).
     account_id      BLOB    NOT NULL,
     -- Serialized Account state.
@@ -27,6 +27,9 @@ CREATE TABLE accounts (
 
 -- At most one committed row per account.
 CREATE UNIQUE INDEX idx_accounts_committed ON accounts(account_id) WHERE transaction_id IS NULL;
+-- At most one inflight row per (account, transaction) pair.
+CREATE UNIQUE INDEX idx_accounts_inflight ON accounts(account_id, transaction_id)
+    WHERE transaction_id IS NOT NULL;
 CREATE INDEX idx_accounts_account ON accounts(account_id);
 CREATE INDEX idx_accounts_tx ON accounts(transaction_id) WHERE transaction_id IS NOT NULL;
 

@@ -512,26 +512,15 @@ async fn get_limits_endpoint() {
         QueryParamAccountIdLimit::LIMIT
     );
 
-    let sync_account_vault =
-        limits.endpoints.get("SyncAccountVault").expect("SyncAccountVault should exist");
-    assert_eq!(
-        sync_account_vault.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
-        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncAccountVault {} limit should be {}",
-        QueryParamAccountIdLimit::PARAM_NAME,
-        QueryParamAccountIdLimit::LIMIT
+    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id,
+    // not a repeated list, so they do not have list parameter limits.
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountVault"),
+        "SyncAccountVault should not have list parameter limits"
     );
-
-    let sync_account_storage_maps = limits
-        .endpoints
-        .get("SyncAccountStorageMaps")
-        .expect("SyncAccountStorageMaps should exist");
-    assert_eq!(
-        sync_account_storage_maps.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
-        Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncAccountStorageMaps {} limit should be {}",
-        QueryParamAccountIdLimit::PARAM_NAME,
-        QueryParamAccountIdLimit::LIMIT
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountStorageMaps"),
+        "SyncAccountStorageMaps should not have list parameter limits"
     );
 
     // Verify GetNotesById endpoint
@@ -558,10 +547,6 @@ async fn sync_chain_mmr_returns_delta() {
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();
-
-    let pagination_info = response.pagination_info.expect("pagination_info should exist");
-    assert_eq!(pagination_info.chain_tip, 0);
-    assert_eq!(pagination_info.block_num, 0);
 
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
