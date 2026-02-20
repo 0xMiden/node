@@ -21,7 +21,6 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::{Felt, FieldElement, ONE, Word};
@@ -97,10 +96,10 @@ impl GenesisConfig {
     ///
     /// Also returns the set of secrets for the generated accounts.
     #[expect(clippy::too_many_lines)]
-    pub fn into_state(
+    pub fn into_state<S>(
         self,
-        signer: SecretKey,
-    ) -> Result<(GenesisState, AccountSecrets), GenesisConfigError> {
+        signer: S,
+    ) -> Result<(GenesisState<S>, AccountSecrets), GenesisConfigError> {
         let GenesisConfig {
             version,
             timestamp,
@@ -449,8 +448,8 @@ impl AccountSecrets {
     /// and the index in
     pub fn as_account_files(
         &self,
-        genesis_state: &GenesisState,
-    ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + use<'_> {
+        genesis_state: &GenesisState<impl miden_node_utils::signer::BlockSigner>,
+    ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + '_ {
         let account_lut = IndexMap::<AccountId, Account>::from_iter(
             genesis_state.accounts.iter().map(|account| (account.id(), account.clone())),
         );
