@@ -2,7 +2,7 @@
 
 diesel::table! {
     accounts (order_id) {
-        order_id -> Nullable<Integer>,
+        order_id -> Integer,
         account_id -> Binary,
         account_data -> Binary,
         transaction_id -> Nullable<Binary>,
@@ -11,8 +11,8 @@ diesel::table! {
 
 diesel::table! {
     chain_state (id) {
-        id -> Nullable<Integer>,
-        block_num -> Integer,
+        id -> Integer,
+        block_num -> BigInt,
         block_header -> Binary,
     }
 }
@@ -23,7 +23,7 @@ diesel::table! {
         account_id -> Binary,
         note_data -> Binary,
         attempt_count -> Integer,
-        last_attempt -> Nullable<Integer>,
+        last_attempt -> Nullable<BigInt>,
         created_by -> Nullable<Binary>,
         consumed_by -> Nullable<Binary>,
     }
