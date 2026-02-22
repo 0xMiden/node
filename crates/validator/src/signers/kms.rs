@@ -19,16 +19,16 @@ use miden_tx::utils::{Deserializable, DeserializationError, Serializable};
 pub enum KmsSignerError {
     /// The KMS backend errored out.
     #[error("KMS service failure")]
-    KmsServiceError(#[from] Box<SdkError<SignError>>),
+    KmsServiceError(#[source] Box<SdkError<SignError>>),
     /// The KMS backend did not error but returned an empty signature.
     #[error("KMS request returned an empty result")]
     EmptyBlob,
     /// The KMS backend returned a signature with an invalid format.
     #[error("k256 signature error")]
-    K256Error(#[from] k256::ecdsa::Error),
+    K256Error(#[source] k256::ecdsa::Error),
     /// The KMS backend returned a signature with an invalid format.
     #[error("invalid signature format")]
-    SignatureFormatError(#[from] DeserializationError),
+    SignatureFormatError(#[source] DeserializationError),
 }
 
 // KMS SIGNER
@@ -87,11 +87,12 @@ impl BlockSigner for KmsSigner {
             .message(digest.to_bytes().into())
             .send()
             .await
-            .map_err(Box::from)?;
+            .map_err(Box::from)
+            .map_err(KmsSignerError::KmsServiceError)?;
 
         // Convert DER -> 64-byte r||s, and normalize s to low-S.
         let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
-        let sig = K256Signature::from_der(sig_der.as_ref())?;
+        let sig = K256Signature::from_der(sig_der.as_ref()).map_err(KmsSignerError::K256Error)?;
         let rs = if let Some(norm) = sig.normalize_s() {
             norm.to_bytes()
         } else {
@@ -103,7 +104,7 @@ impl BlockSigner for KmsSigner {
         sig65[..64].copy_from_slice(&rs);
         sig65[64] = 0; // Recovery id is not used by verify(pk), so 0 is fine.
 
-        Ok(Signature::read_from_bytes(&sig65)?)
+        Ok(Signature::read_from_bytes(&sig65).map_err(KmsSignerError::SignatureFormatError)?)
     }
 
     fn public_key(&self) -> PublicKey {
