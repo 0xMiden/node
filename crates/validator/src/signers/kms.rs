@@ -69,7 +69,10 @@ impl BlockSigner for KmsSigner {
     type Error = KmsSignerError;
 
     async fn sign(&self, header: &BlockHeader) -> Result<Signature, Self::Error> {
-        // AWS KMS does not support SHA3 (Keccak-256), so we need to produce the digest ourselves.
+        // The Validator signs Ethereum-style Keccak-256 digests. AWS KMS does not support SHA-3
+        // hashing for ECDSA keys (ECC_SECG_P256K1 being the corresponding key-spec), so we pre-hash
+        // the message and pass MessageType::Digest. KMS signs the provided 32-byte digest
+        // verbatim.
         let msg = header.commitment().to_bytes();
         let digest = Keccak256::hash(&msg);
 
