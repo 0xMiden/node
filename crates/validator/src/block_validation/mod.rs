@@ -16,7 +16,7 @@ pub enum BlockValidationError {
     #[error("block contains unvalidated transactions {0:?}")]
     UnvalidatedTransactions(Vec<TransactionId>),
     #[error("failed to build block")]
-    BlockBuildingFailed(#[from] ProposedBlockError),
+    BlockBuildingFailed(#[source] ProposedBlockError),
     #[error("failed to sign block: {0}")]
     BlockSigningFailed(String),
     #[error("failed to select transactions")]
