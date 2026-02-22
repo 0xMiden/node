@@ -34,6 +34,8 @@ use crate::inner_forest::{InnerForestError, WitnessError};
 // DATABASE ERRORS
 // =================================================================================================
 
+/// Errors that can occur during database operations — reads, writes, queries, and type
+/// conversions. Used as a common error type across most store operations.
 #[derive(Debug, Error)]
 pub enum DatabaseError {
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
@@ -102,6 +104,9 @@ impl From<DatabaseError> for Status {
 // INITIALIZATION ERRORS
 // =================================================================================================
 
+/// Errors that can occur while initialising the store's in-memory state at startup, including
+/// loading or rebuilding the account tree, nullifier tree, and forest from the database and
+/// on-disk storage.
 #[derive(Error, Debug)]
 pub enum StateInitializationError {
     #[error("account tree IO error: {0}")]
@@ -139,6 +144,8 @@ pub enum StateInitializationError {
     AccountToDeltaConversionFailed(String),
 }
 
+/// Errors that can occur when loading or applying the genesis block to bootstrap a fresh store
+/// database.
 #[derive(Debug, Error)]
 pub enum GenesisError {
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
@@ -157,6 +164,8 @@ pub enum GenesisError {
 
 // ENDPOINT ERRORS
 // =================================================================================================
+/// Errors that indicate a submitted block is structurally or cryptographically invalid. Returned
+/// by block validation during [`State::apply_block`].
 #[derive(Error, Debug)]
 pub enum InvalidBlockError {
     #[error("duplicated nullifiers {0:?}")]
@@ -188,6 +197,8 @@ pub enum InvalidBlockError {
     FailedToBuildNoteTree(String),
 }
 
+/// Errors that can occur when applying a proven block to the store — including database writes,
+/// tree mutations, and cross-task coordination failures.
 #[derive(Error, Debug)]
 pub enum ApplyBlockError {
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
@@ -225,6 +236,8 @@ impl From<ApplyBlockError> for Status {
     }
 }
 
+/// Errors that can occur when retrieving a block header by block number, optionally including its
+/// MMR proof.
 #[derive(Error, Debug, GrpcError)]
 pub enum GetBlockHeaderError {
     #[error("database error")]
@@ -235,6 +248,8 @@ pub enum GetBlockHeaderError {
     MmrError(#[from] MmrError),
 }
 
+/// Errors that can occur when retrieving the inputs needed to prove a block — including account
+/// states, nullifiers, note proofs, and batch reference block headers.
 #[derive(Error, Debug)]
 pub enum GetBlockInputsError {
     #[error("failed to select note inclusion proofs")]
@@ -250,6 +265,8 @@ pub enum GetBlockInputsError {
     },
 }
 
+/// Errors that can occur during a `SyncState` operation, which returns the latest account, note,
+/// and nullifier state changes from a given block onwards.
 #[derive(Error, Debug)]
 pub enum StateSyncError {
     #[error("database error")]
@@ -260,6 +277,8 @@ pub enum StateSyncError {
     FailedToBuildMmrDelta(#[from] MmrError),
 }
 
+/// Errors that can occur when syncing the chain MMR, which provides the MMR peaks and proofs
+/// needed by clients to authenticate historical block headers.
 #[derive(Error, Debug, GrpcError)]
 pub enum SyncChainMmrError {
     #[error("invalid block range")]
@@ -279,6 +298,8 @@ impl From<diesel::result::Error> for StateSyncError {
     }
 }
 
+/// Errors that can occur during a `SyncNotes` operation, which returns notes matching a set of
+/// note tags from a given block onwards.
 #[derive(Error, Debug, GrpcError)]
 pub enum NoteSyncError {
     #[error("database error")]
@@ -305,6 +326,8 @@ impl From<diesel::result::Error> for NoteSyncError {
     }
 }
 
+/// Errors that can occur when retrieving the current chain tip header and its corresponding MMR
+/// peaks for unauthenticated transaction execution.
 #[derive(Error, Debug)]
 pub enum GetCurrentBlockchainDataError {
     #[error("failed to retrieve block header")]
@@ -313,6 +336,8 @@ pub enum GetCurrentBlockchainDataError {
     InvalidPeaks(MmrError),
 }
 
+/// Errors that can occur when retrieving the inputs needed to prove a transaction batch —
+/// including note inclusion proofs and reference block headers.
 #[derive(Error, Debug)]
 pub enum GetBatchInputsError {
     #[error("failed to select note inclusion proofs")]
@@ -333,6 +358,8 @@ pub enum GetBatchInputsError {
 // SYNC NULLIFIERS ERRORS
 // ================================================================================================
 
+/// Errors that can occur during a `SyncNullifiers` operation, which returns spent nullifiers
+/// within a block range matching a set of 16-bit prefix filters.
 #[derive(Debug, Error, GrpcError)]
 pub enum SyncNullifiersError {
     #[error("database error")]
@@ -349,6 +376,8 @@ pub enum SyncNullifiersError {
 // SYNC ACCOUNT VAULT ERRORS
 // ================================================================================================
 
+/// Errors that can occur when syncing an account's asset vault, returning fungible and
+/// non-fungible asset changes over a block range.
 #[derive(Debug, Error, GrpcError)]
 pub enum SyncAccountVaultError {
     #[error("database error")]
@@ -365,6 +394,8 @@ pub enum SyncAccountVaultError {
 // SYNC STORAGE MAPS ERRORS
 // ================================================================================================
 
+/// Errors that can occur when syncing an account's storage map slots, returning key-value changes
+/// for named storage maps over a block range.
 #[derive(Debug, Error, GrpcError)]
 pub enum SyncAccountStorageMapsError {
     #[error("database error")]
@@ -383,6 +414,8 @@ pub enum SyncAccountStorageMapsError {
 // GET NETWORK ACCOUNT IDS
 // ================================================================================================
 
+/// Errors that can occur when retrieving the IDs of all network accounts created within a given
+/// block range.
 #[derive(Debug, Error, GrpcError)]
 pub enum GetNetworkAccountIdsError {
     #[error("database error")]
@@ -397,6 +430,7 @@ pub enum GetNetworkAccountIdsError {
 // GET BLOCK BY NUMBER ERRORS
 // ================================================================================================
 
+/// Errors that can occur when retrieving a full signed block by its block number.
 #[derive(Debug, Error, GrpcError)]
 pub enum GetBlockByNumberError {
     #[error("database error")]
@@ -409,6 +443,8 @@ pub enum GetBlockByNumberError {
 // GET ACCOUNT ERRORS
 // ================================================================================================
 
+/// Errors that can occur when retrieving the state and Merkle proof for an account at a specific
+/// block number.
 #[derive(Debug, Error, GrpcError)]
 pub enum GetAccountError {
     #[error("database error")]
@@ -429,6 +465,7 @@ pub enum GetAccountError {
 // GET NOTES BY ID ERRORS
 // ================================================================================================
 
+/// Errors that can occur when retrieving one or more notes by their IDs.
 #[derive(Debug, Error, GrpcError)]
 pub enum GetNotesByIdError {
     #[error("database error")]
@@ -445,6 +482,7 @@ pub enum GetNotesByIdError {
 // GET NOTE SCRIPT BY ROOT ERRORS
 // ================================================================================================
 
+/// Errors that can occur when retrieving a note script by its MAST root.
 #[derive(Debug, Error, GrpcError)]
 pub enum GetNoteScriptByRootError {
     #[error("database error")]
@@ -459,6 +497,7 @@ pub enum GetNoteScriptByRootError {
 // CHECK NULLIFIERS ERRORS
 // ================================================================================================
 
+/// Errors that can occur when checking whether a set of nullifiers has been spent.
 #[derive(Debug, Error, GrpcError)]
 pub enum CheckNullifiersError {
     #[error("database error")]
@@ -471,6 +510,8 @@ pub enum CheckNullifiersError {
 // SYNC TRANSACTIONS ERRORS
 // ================================================================================================
 
+/// Errors that can occur during a `SyncTransactions` operation, which returns transactions and
+/// their account witnesses within a block range.
 #[derive(Debug, Error, GrpcError)]
 pub enum SyncTransactionsError {
     #[error("database error")]
@@ -486,6 +527,8 @@ pub enum SyncTransactionsError {
     WitnessError(#[from] WitnessError),
 }
 
+/// Errors that can occur when retrieving Merkle witnesses for account vault assets or storage map
+/// values.
 #[derive(Debug, Error, GrpcError)]
 pub enum GetWitnessesError {
     #[error("malformed request")]
