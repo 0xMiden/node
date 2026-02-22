@@ -64,7 +64,7 @@ pub struct ValidatorKey {
     ///
     /// If not provided, a predefined key is used.
     ///
-    /// Cannot be used with `key.kms-id`.
+    /// Cannot be used with `validator.key.kms-id`.
     #[arg(
         long = "validator.key.hex",
         env = ENV_VALIDATOR_KEY,
@@ -74,9 +74,9 @@ pub struct ValidatorKey {
     validator_key: String,
     /// Key ID for the KMS key used by validator to sign blocks.
     ///
-    /// Cannot be used with `key.hex`.
+    /// Cannot be used with `validator.key.hex`.
     #[arg(
-        long = "key.kms-id",
+        long = "validator.key.kms-id",
         env = ENV_VALIDATOR_KMS_KEY_ID,
         value_name = "VALIDATOR_KMS_KEY_ID",
     )]
