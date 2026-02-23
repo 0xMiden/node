@@ -121,7 +121,7 @@ impl GenesisConfig {
     pub fn read_toml_file(path: &Path) -> Result<Self, GenesisConfigError> {
         let toml_str = fs_err::read_to_string(path)
             .map_err(|e| GenesisConfigError::ConfigFileRead(e, path.to_path_buf()))?;
-        let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let config_dir = path.parent().expect("config file path must have a parent directory");
         Self::read_toml(&toml_str, config_dir)
     }
 
