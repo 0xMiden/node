@@ -65,7 +65,7 @@ mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
 type StorageHeaderWithEntries =
-    (AccountStorageHeader, BTreeMap<StorageSlotName, Vec<(Word, Word)>>);
+    (AccountStorageHeader, BTreeMap<StorageSlotName, BTreeMap<Word, Word>>);
 
 // NETWORK ACCOUNT TYPE
 // ================================================================================================
@@ -754,57 +754,32 @@ pub(crate) fn select_latest_account_storage(
 ) -> Result<AccountStorage, DatabaseError> {
     let (storage_header, map_entries_by_slot) =
         select_latest_account_storage_components(conn, account_id)?;
-
     // Reconstruct StorageSlots from header slots + map entries
-    let mut slots = Vec::new();
-    for slot_header in storage_header.slots() {
-        let slot = match slot_header.slot_type() {
-            StorageSlotType::Value => {
-                // For value slots, the header value IS the slot value
-                StorageSlot::with_value(slot_header.name().clone(), slot_header.value())
-            },
-            StorageSlotType::Map => {
-                // For map slots, reconstruct from map entries
-                let entries =
-                    map_entries_by_slot.get(slot_header.name()).cloned().unwrap_or_default();
-                let storage_map = StorageMap::with_entries(entries)?;
-                StorageSlot::with_map(slot_header.name().clone(), storage_map)
-            },
-        };
-        slots.push(slot);
-    }
+    let slots =
+        Result::<Vec<_>, DatabaseError>::from_iter(storage_header.slots().map(|slot_header| {
+            let slot = match slot_header.slot_type() {
+                StorageSlotType::Value => {
+                    // For value slots, the header value IS the slot value
+                    StorageSlot::with_value(slot_header.name().clone(), slot_header.value())
+                },
+                StorageSlotType::Map => {
+                    // For map slots, reconstruct from map entries
+                    let entries =
+                        map_entries_by_slot.get(slot_header.name()).cloned().unwrap_or_default();
+                    let storage_map = StorageMap::with_entries(entries.into_iter())?;
+                    StorageSlot::with_map(slot_header.name().clone(), storage_map)
+                },
+            };
+            Ok(slot)
+        }))?;
 
     Ok(AccountStorage::new(slots)?)
-}
-
-pub(crate) fn select_latest_storage_map_entries(
-    conn: &mut SqliteConnection,
-    account_id: AccountId,
-    slot_name: &StorageSlotName,
-) -> Result<BTreeMap<Word, Word>, DatabaseError> {
-    use schema::account_storage_map_values as t;
-
-    let account_id_bytes = account_id.to_bytes();
-    let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
-        SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
-            .filter(t::account_id.eq(&account_id_bytes))
-            .filter(t::slot_name.eq(slot_name.clone().to_raw_sql()))
-            .filter(t::is_latest.eq(true))
-            .load(conn)?;
-
-    let grouped = group_storage_map_entries(map_values)?;
-    Ok(grouped
-        .get(slot_name)
-        .map(|entries| BTreeMap::from_iter(entries.iter().copied()))
-        .unwrap_or_default())
 }
 
 pub(crate) fn select_latest_account_storage_components(
     conn: &mut SqliteConnection,
     account_id: AccountId,
 ) -> Result<StorageHeaderWithEntries, DatabaseError> {
-    use schema::account_storage_map_values as t;
-
     let account_id_bytes = account_id.to_bytes();
 
     // Query storage header blob for this account where is_latest = true
@@ -821,27 +796,87 @@ pub(crate) fn select_latest_account_storage_components(
         None => AccountStorageHeader::new(Vec::new())?,
     };
 
-    // Query all latest map values for this account
+    let entries = select_latest_storage_map_entries_all(conn, &account_id)?;
+    Ok((header, entries))
+}
+
+// TODO this is expensive and should only be called from tests
+fn select_latest_storage_map_entries_all(
+    conn: &mut SqliteConnection,
+    account_id: &AccountId,
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
         SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
-            .filter(t::account_id.eq(&account_id_bytes))
+            .filter(t::account_id.eq(&account_id.to_bytes()))
             .filter(t::is_latest.eq(true))
             .load(conn)?;
 
-    Ok((header, group_storage_map_entries(map_values)?))
+    group_storage_map_entries(map_values)
+}
+
+fn select_latest_storage_map_entries_for_slots(
+    conn: &mut SqliteConnection,
+    account_id: &AccountId,
+    slot_names: &[StorageSlotName],
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
+    if slot_names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    if let [slot_name] = slot_names {
+        let entries = select_latest_storage_map_entries_for_slot(conn, account_id, slot_name)?;
+        if entries.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut map_entries = BTreeMap::new();
+        map_entries.insert(slot_name.clone(), entries);
+        return Ok(map_entries);
+    }
+
+    let slot_names = Vec::from_iter(slot_names.iter().cloned().map(StorageSlotName::to_raw_sql));
+    let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
+        SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
+            .filter(t::account_id.eq(&account_id.to_bytes()))
+            .filter(t::is_latest.eq(true))
+            .filter(t::slot_name.eq_any(slot_names))
+            .load(conn)?;
+
+    group_storage_map_entries(map_values)
+}
+
+fn select_latest_storage_map_entries_for_slot(
+    conn: &mut SqliteConnection,
+    account_id: &AccountId,
+    slot_name: &StorageSlotName,
+) -> Result<BTreeMap<Word, Word>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
+    let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
+        SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
+            .filter(t::account_id.eq(&account_id.to_bytes()))
+            .filter(t::is_latest.eq(true))
+            .filter(t::slot_name.eq(slot_name.clone().to_raw_sql()))
+            .load(conn)?;
+
+    Ok(group_storage_map_entries(map_values)?.remove(slot_name).unwrap_or_default())
 }
 
 fn group_storage_map_entries(
     map_values: Vec<(String, Vec<u8>, Vec<u8>)>,
-) -> Result<BTreeMap<StorageSlotName, Vec<(Word, Word)>>, DatabaseError> {
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, BTreeMap<Word, Word>> = BTreeMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
         let key = Word::read_from_bytes(&key_bytes)?;
         let value = Word::read_from_bytes(&value_bytes)?;
-        map_entries_by_slot.entry(slot_name).or_default().push((key, value));
+        map_entries_by_slot.entry(slot_name).or_default().insert(key, value);
     }
 
     Ok(map_entries_by_slot)
@@ -1089,13 +1124,19 @@ pub(crate) fn upsert_accounts(
                 // update fungible assets
                 for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
                     let prev_balance = prev_balances.get(faucet_id).copied().unwrap_or(0);
-                    let new_balance =
-                        u64::try_from(i128::from(prev_balance) + i128::from(*amount_delta))
-                            .map_err(|_| {
-                                DatabaseError::DataCorrupted(format!(
-                                    "Balance underflow for account {account_id}, faucet {faucet_id}"
-                                ))
-                            })?;
+                    let new_balance = amount_delta
+                        .checked_abs()
+                        .and_then(|abs_delta| u64::try_from(abs_delta).ok())
+                        .and_then(|abs_delta| match amount_delta.cmp(&0) {
+                            std::cmp::Ordering::Greater => prev_balance.checked_add(abs_delta),
+                            std::cmp::Ordering::Less => prev_balance.checked_sub(abs_delta),
+                            std::cmp::Ordering::Equal => Some(prev_balance),
+                        })
+                        .ok_or_else(|| {
+                            DatabaseError::DataCorrupted(format!(
+                                "Balance underflow for account {account_id}, faucet {faucet_id}"
+                            ))
+                        })?;
 
                     let asset: Asset = FungibleAsset::new(*faucet_id, new_balance)?.into();
                     let update_or_remove = if new_balance == 0 { None } else { Some(asset) };
@@ -1120,16 +1161,20 @@ pub(crate) fn upsert_accounts(
                     }
                 }
 
-                let mut map_entries = BTreeMap::new();
-                for (slot_name, map_delta) in delta.storage().maps() {
-                    if map_delta.is_empty() {
-                        continue;
-                    }
+                let slot_names: Vec<StorageSlotName> = delta
+                    .storage()
+                    .maps()
+                    .filter_map(|(slot_name, map_delta)| {
+                        if map_delta.is_empty() {
+                            None
+                        } else {
+                            Some(slot_name.clone())
+                        }
+                    })
+                    .collect();
 
-                    let slot_entries =
-                        select_latest_storage_map_entries(conn, account_id, slot_name)?;
-                    map_entries.insert(slot_name.clone(), slot_entries);
-                }
+                let map_entries =
+                    select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
 
                 let new_storage_header = apply_storage_delta(
                     &state_headers.storage_header,
