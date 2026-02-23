@@ -1171,6 +1171,21 @@ pub(crate) fn upsert_accounts(
                     vault_root: new_vault_root,
                 };
 
+                let account_header = miden_protocol::account::AccountHeader::new(
+                    account_id,
+                    account_state.nonce,
+                    account_state.vault_root,
+                    account_state.storage_header.to_commitment(),
+                    account_state.code_commitment,
+                );
+
+                if account_header.commitment() != update.final_state_commitment() {
+                    return Err(DatabaseError::AccountCommitmentsMismatch {
+                        calculated: account_header.commitment(),
+                        expected: update.final_state_commitment(),
+                    });
+                }
+
                 (AccountStateForInsert::PartialState(account_state), storage, assets)
             },
         };
@@ -1224,23 +1239,6 @@ pub(crate) fn upsert_accounts(
                 state,
             ),
         };
-
-        if let AccountStateForInsert::PartialState(state) = &account_state {
-            let account_header = miden_protocol::account::AccountHeader::new(
-                account_id,
-                state.nonce,
-                state.vault_root,
-                state.storage_header.to_commitment(),
-                state.code_commitment,
-            );
-
-            if account_header.commitment() != update.final_state_commitment() {
-                return Err(DatabaseError::AccountCommitmentsMismatch {
-                    calculated: account_header.commitment(),
-                    expected: update.final_state_commitment(),
-                });
-            }
-        }
 
         diesel::insert_into(schema::accounts::table)
             .values(&account_value)

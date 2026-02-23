@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use miden_node_utils::ErrorReport;
+use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
@@ -45,6 +46,7 @@ impl State {
 
         let header = signed_block.header();
         let body = signed_block.body();
+        let account_updates = body.updated_accounts().to_vec();
 
         // Validate that header and body match.
         let tx_commitment = body.transactions().commitment();
@@ -266,6 +268,14 @@ impl State {
                 .account_tree
                 .apply_mutations(account_tree_update)
                 .expect("Unreachable: old account tree root must be checked before this step");
+
+            let mut forest = self.forest.write().await;
+            for update in &account_updates {
+                if let AccountUpdateDetails::Delta(delta) = update.details() {
+                    forest.update_account(block_num, delta)?;
+                }
+            }
+
             inner.blockchain.push(block_commitment);
 
             Ok(())

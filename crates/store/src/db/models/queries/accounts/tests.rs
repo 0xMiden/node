@@ -728,6 +728,65 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     assert!(amounts.contains(&500), "Block 3 should have vault_key_2 with 500 tokens");
 }
 
+/// Tests that a 5-block history returns the correct asset per block.
+#[test]
+fn test_select_account_vault_at_block_exponential_updates() {
+    use assert_matches::assert_matches;
+    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
+
+    let mut conn = setup_test_db();
+    let (account, _) = create_test_account_with_storage();
+    let account_id = account.id();
+
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    const BLOCK_COUNT: u32 = 5;
+    let blocks: Vec<BlockNumber> = (0..BLOCK_COUNT).map(BlockNumber::from).collect();
+
+    for block in &blocks {
+        insert_block_header(&mut conn, *block);
+    }
+
+    let delta = AccountDelta::try_from(account.clone()).unwrap();
+    let account_update = BlockAccountUpdate::new(
+        account_id,
+        account.commitment(),
+        AccountUpdateDetails::Delta(delta),
+    );
+
+    for block in &blocks {
+        upsert_accounts(&mut conn, std::slice::from_ref(&account_update), *block)
+            .expect("upsert_accounts failed");
+    }
+
+    let vault_key = AssetVaultKey::new_unchecked(Word::from([
+        Felt::new(3),
+        Felt::new(0),
+        Felt::new(0),
+        Felt::new(0),
+    ]));
+
+    for (index, block) in blocks.iter().enumerate() {
+        let amount = 1u64 << index;
+        let asset = Asset::Fungible(FungibleAsset::new(faucet_id, amount).unwrap());
+        insert_account_vault_asset(&mut conn, account_id, *block, vault_key, Some(asset))
+            .expect("insert vault asset failed");
+    }
+
+    for (index, block) in blocks.iter().enumerate() {
+        let assets_at_block = select_account_vault_at_block(&mut conn, account_id, *block)
+            .expect("Query at block should succeed");
+
+        assert_eq!(assets_at_block.len(), 1, "Should have 1 asset at block");
+        let expected_amount = 1u64 << index;
+        assert_matches!(
+            &assets_at_block[0],
+            Asset::Fungible(f) if f.amount() == expected_amount
+        );
+    }
+}
+
 /// Tests that deleted vault assets (asset = None) are correctly excluded from results,
 /// and that the deduplication handles deletion entries properly.
 #[test]
