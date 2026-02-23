@@ -46,7 +46,6 @@ impl State {
 
         let header = signed_block.header();
         let body = signed_block.body();
-        let account_updates = body.updated_accounts().to_vec();
 
         // Validate that header and body match.
         let tx_commitment = body.transactions().commitment();
@@ -212,6 +211,16 @@ impl State {
         // Signals the write lock has been acquired, and the transaction can be committed.
         let (inform_acquire_done, acquire_done) = oneshot::channel::<()>();
 
+        // Extract public account updates with deltas before block is moved into async task.
+        // Private accounts are filtered out since they don't expose their state changes.
+        let account_deltas =
+            Vec::from_iter(body.updated_accounts().iter().filter_map(
+                |update| match update.details() {
+                    AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
+                    AccountUpdateDetails::Private => None,
+                },
+            ));
+
         // The DB and in-memory state updates need to be synchronized and are partially
         // overlapping. Namely, the DB transaction only proceeds after this task acquires the
         // in-memory write lock. This requires the DB update to run concurrently, so a new task is
@@ -269,19 +278,14 @@ impl State {
                 .apply_mutations(account_tree_update)
                 .expect("Unreachable: old account tree root must be checked before this step");
 
-            let mut forest = self.forest.write().await;
-            for update in &account_updates {
-                if let AccountUpdateDetails::Delta(delta) = update.details() {
-                    forest.update_account(block_num, delta)?;
-                }
-            }
-
             inner.blockchain.push(block_commitment);
 
             Ok(())
         }
         .in_current_span()
         .await?;
+
+        self.forest.write().await.apply_block_updates(block_num, account_deltas)?;
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 

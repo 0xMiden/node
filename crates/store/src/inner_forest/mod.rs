@@ -222,6 +222,38 @@ impl InnerForest {
 
     /// Updates the forest with account vault and storage changes from a delta.
     ///
+    /// Iterates through account updates and applies each delta to the forest.
+    /// Private accounts should be filtered out before calling this method.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_num` - Block number for which these updates apply
+    /// * `account_updates` - Iterator of `AccountDelta` for public accounts
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if applying a vault delta results in a negative balance.
+    pub(crate) fn apply_block_updates(
+        &mut self,
+        block_num: BlockNumber,
+        account_updates: impl IntoIterator<Item = AccountDelta>,
+    ) -> Result<(), InnerForestError> {
+        for delta in account_updates {
+            self.update_account(block_num, &delta)?;
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                account_id = %delta.id(),
+                %block_num,
+                is_full_state = delta.is_full_state(),
+                "Updated forest with account delta"
+            );
+        }
+        Ok(())
+    }
+
+    /// Updates the forest with account vault and storage changes from a delta.
+    ///
     /// Unified interface for updating all account state in the forest, handling both full-state
     /// deltas (new accounts or reconstruction from DB) and partial deltas (incremental updates
     /// during block application).
