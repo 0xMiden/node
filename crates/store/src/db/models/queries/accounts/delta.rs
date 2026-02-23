@@ -129,11 +129,7 @@ pub(super) fn select_minimal_account_state_headers(
         None => AccountStorageHeader::new(Vec::new())?,
     };
 
-    Ok(AccountStateHeadersForDelta {
-        nonce,
-        code_commitment,
-        storage_header,
-    })
+    Ok(AccountStateHeadersForDelta { nonce, code_commitment, storage_header })
 }
 
 /// Selects vault balances for specific faucet IDs.

@@ -731,6 +731,8 @@ fn test_select_account_vault_at_block_historical_with_updates() {
 /// Tests that a 5-block history returns the correct asset per block.
 #[test]
 fn test_select_account_vault_at_block_exponential_updates() {
+    const BLOCK_COUNT: u32 = 5;
+
     use assert_matches::assert_matches;
     use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
@@ -741,7 +743,6 @@ fn test_select_account_vault_at_block_exponential_updates() {
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
 
-    const BLOCK_COUNT: u32 = 5;
     let blocks: Vec<BlockNumber> = (0..BLOCK_COUNT).map(BlockNumber::from).collect();
 
     for block in &blocks {

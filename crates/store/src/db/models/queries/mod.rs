@@ -53,10 +53,6 @@ pub(crate) use notes::*;
 /// # Returns
 ///
 /// Number of records inserted and/or updated.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "apply_block wires block inserts to multiple tables"
-)]
 pub(crate) fn apply_block(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,
