@@ -1,5 +1,5 @@
 use diesel::prelude::*;
-use miden_node_store::SqlTypeConvert;
+use miden_node_db::SqlTypeConvert;
 use miden_tx::utils::Serializable;
 
 use crate::db::schema;

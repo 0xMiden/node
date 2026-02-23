@@ -15,19 +15,17 @@ workspace = true
 
 [dependencies]
 anyhow                     = { workspace = true }
-deadpool                   = { features = ["managed", "rt_tokio_1"], workspace = true }
-deadpool-diesel            = { features = ["sqlite"], workspace = true }
-deadpool-sync              = { features = ["tracing"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
-indexmap                   = { workspace = true }
 libsqlite3-sys             = { workspace = true }
+miden-node-db              = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-utils           = { workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["tx-prover"], workspace = true }
 miden-tx                   = { default-features = true, workspace = true }
+prost                      = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["rt-multi-thread"], workspace = true }
 tokio-stream               = { workspace = true }
@@ -40,8 +38,10 @@ url                        = { workspace = true }
 miden-node-test-macro = { path = "../test-macro" }
 miden-node-utils      = { features = ["testing"], workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
-miden-standards       = { workspace = true }
+miden-standards       = { features = ["testing"], workspace = true }
+rand_chacha           = { workspace = true }
 rstest                = { workspace = true }
+tempfile              = { version = "3.20" }
 
 [package.metadata.cargo-machete]
 ignored = ["libsqlite3-sys"]

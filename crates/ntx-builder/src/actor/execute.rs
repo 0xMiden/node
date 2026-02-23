@@ -55,6 +55,7 @@ use tracing::{Instrument, instrument};
 use crate::COMPONENT;
 use crate::actor::account_state::TransactionCandidate;
 use crate::block_producer::BlockProducerClient;
+use crate::db::Db;
 use crate::store::StoreClient;
 
 #[derive(Debug, thiserror::Error)]
@@ -76,6 +77,12 @@ pub enum NtxError {
 }
 
 type NtxResult<T> = Result<T, NtxError>;
+
+/// The result of a successful transaction execution.
+///
+/// Contains the transaction ID, any notes that failed during filtering, and note scripts fetched
+/// from the remote store that should be persisted to the local DB cache.
+pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteScript)>);
 
 // NETWORK TRANSACTION CONTEXT
 // ================================================================================================
@@ -100,6 +107,9 @@ pub struct NtxContext {
 
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+
+    /// Local database for persistent note script caching.
+    db: Db,
 }
 
 impl NtxContext {
@@ -110,6 +120,7 @@ impl NtxContext {
         prover: Option<RemoteTransactionProver>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
+        db: Db,
     ) -> Self {
         Self {
             block_producer,
@@ -117,6 +128,7 @@ impl NtxContext {
             prover,
             store,
             script_cache,
+            db,
         }
     }
 
@@ -132,8 +144,9 @@ impl NtxContext {
     ///
     /// # Returns
     ///
-    /// On success, returns the [`TransactionId`] of the executed transaction and a list of
-    /// [`FailedNote`]s representing notes that were filtered out before execution.
+    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes
+    /// that failed during filtering, and note scripts fetched from the remote store that should
+    /// be persisted to the local DB cache.
     ///
     /// # Errors
     ///
@@ -146,7 +159,7 @@ impl NtxContext {
     pub fn execute_transaction(
         self,
         tx: TransactionCandidate,
-    ) -> impl FutureMaybeSend<NtxResult<(TransactionId, Vec<FailedNote>)>> {
+    ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
         let TransactionCandidate {
             account,
             notes,
@@ -168,6 +181,7 @@ impl NtxContext {
                     chain_mmr,
                     self.store.clone(),
                     self.script_cache.clone(),
+                    self.db.clone(),
                 );
 
                 // Filter notes.
@@ -177,6 +191,9 @@ impl NtxContext {
 
                 // Execute transaction.
                 let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
+
+                // Collect scripts fetched from the remote store during execution.
+                let scripts_to_cache = data_store.take_fetched_scripts().await;
 
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
@@ -188,7 +205,7 @@ impl NtxContext {
                 // Submit transaction to block producer.
                 self.submit(&proven_tx).await?;
 
-                Ok((proven_tx.id(), failed_notes))
+                Ok((proven_tx.id(), failed_notes, scripts_to_cache))
             })
             .in_current_span()
             .await
@@ -334,6 +351,11 @@ struct NtxDataStore {
     store: StoreClient,
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+    /// Local database for persistent note script.
+    db: Db,
+    /// Scripts fetched from the remote store during execution, to be persisted by the
+    /// coordinator.
+    fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///
     /// The registered slot names are subsequently used to retrieve storage map witnesses from the
@@ -366,6 +388,7 @@ impl NtxDataStore {
         chain_mmr: Arc<PartialBlockchain>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
+        db: Db,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
@@ -377,8 +400,15 @@ impl NtxDataStore {
             mast_store,
             store,
             script_cache,
+            db,
+            fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
         }
+    }
+
+    /// Returns the list of note scripts fetched from the remote store during execution.
+    async fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
+        self.fetched_scripts.lock().await.drain(..).collect()
     }
 
     /// Registers storage map slot names for the given account ID and storage header.
@@ -507,28 +537,40 @@ impl DataStore for NtxDataStore {
 
     /// Retrieves a note script by its root hash.
     ///
-    /// This implementation uses the configured RPC client to call the `GetNoteScriptByRoot`
-    /// endpoint on the RPC server.
+    /// Uses a 3-tier lookup strategy:
+    /// 1. In-memory LRU cache.
+    /// 2. Local SQLite database.
+    /// 3. Remote store via gRPC.
     fn get_note_script(
         &self,
         script_root: Word,
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
-            // Attempt to retrieve the script from the cache.
+            // 1. In-memory LRU cache.
             if let Some(cached_script) = self.script_cache.get(&script_root).await {
                 return Ok(Some(cached_script));
             }
 
-            // Retrieve the script from the store.
+            // 2. Local DB.
+            if let Some(script) = self.db.lookup_note_script(script_root).await.map_err(|err| {
+                DataStoreError::other_with_source("failed to look up note script in local DB", err)
+            })? {
+                self.script_cache.put(script_root, script.clone()).await;
+                return Ok(Some(script));
+            }
+
+            // 3. Remote store.
             let maybe_script =
                 self.store.get_note_script_by_root(script_root).await.map_err(|err| {
-                    DataStoreError::Other {
-                        error_msg: "failed to retrieve note script from store".to_string().into(),
-                        source: Some(err.into()),
-                    }
+                    DataStoreError::other_with_source(
+                        "failed to retrieve note script from store",
+                        err,
+                    )
                 })?;
-            // Handle response.
+
             if let Some(script) = maybe_script {
+                // Collect for later persistence by the coordinator.
+                self.fetched_scripts.lock().await.push((script_root, script.clone()));
                 self.script_cache.put(script_root, script.clone()).await;
                 Ok(Some(script))
             } else {

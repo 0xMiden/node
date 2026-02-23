@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -123,19 +124,37 @@ pub struct NtxBuilderConfig {
         default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
     )]
     pub script_cache_size: NonZeroUsize,
+
+    /// Directory for the ntx-builder's persistent database.
+    ///
+    /// If not set, defaults to the node's data directory.
+    #[arg(long = "ntx-builder.data-directory", value_name = "DIR")]
+    pub data_directory: Option<PathBuf>,
 }
 
 impl NtxBuilderConfig {
     /// Converts this CLI config into the ntx-builder's internal config.
+    ///
+    /// The `node_data_directory` is used as the default location for the ntx-builder's database
+    /// if `--ntx-builder.data-directory` is not explicitly set.
     pub fn into_builder_config(
         self,
         store_url: Url,
         block_producer_url: Url,
         validator_url: Url,
+        node_data_directory: &Path,
     ) -> miden_node_ntx_builder::NtxBuilderConfig {
-        miden_node_ntx_builder::NtxBuilderConfig::new(store_url, block_producer_url, validator_url)
-            .with_tx_prover_url(self.tx_prover_url)
-            .with_script_cache_size(self.script_cache_size)
+        let data_dir = self.data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
+        let database_filepath = data_dir.join("ntx-builder.sqlite3");
+
+        miden_node_ntx_builder::NtxBuilderConfig::new(
+            store_url,
+            block_producer_url,
+            validator_url,
+            database_filepath,
+        )
+        .with_tx_prover_url(self.tx_prover_url)
+        .with_script_cache_size(self.script_cache_size)
     }
 }
 

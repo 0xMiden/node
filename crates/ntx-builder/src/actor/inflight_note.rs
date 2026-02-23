@@ -29,6 +29,15 @@ impl InflightNetworkNote {
         }
     }
 
+    /// Reconstructs an inflight network note from its constituent parts (e.g., from DB rows).
+    pub fn from_parts(
+        note: SingleTargetNetworkNote,
+        attempt_count: usize,
+        last_attempt: Option<BlockNumber>,
+    ) -> Self {
+        Self { note, attempt_count, last_attempt }
+    }
+
     /// Consumes the inflight network note and returns the inner network note.
     pub fn into_inner(self) -> SingleTargetNetworkNote {
         self.note
