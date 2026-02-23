@@ -36,6 +36,10 @@ version      = "0.14.0"
 [profile.test.package.miden-crypto]
 opt-level = 2
 
+# Avoid running the expensive debug assertion in winter-prover
+[profile.test.package.winter-prover]
+debug-assertions = false
+
 [profile.release]
 debug = true
 
@@ -132,3 +136,7 @@ must_use_candidate           = "allow" # This marks many fn's which isn't helpfu
 needless_for_each            = "allow" # Context dependent if that's useful.
 should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
+
+# Configure `cargo-typos`
+[workspace.metadata.typos]
+files.extend-exclude = ["*.svg"] # Ignore SVG files.

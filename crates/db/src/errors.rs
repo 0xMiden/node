@@ -82,4 +82,17 @@ impl DatabaseError {
             to: type_name::<RT>(),
         }
     }
+
+    /// Creates a deserialization error with a static context string and the original error.
+    ///
+    /// This is a convenience wrapper around [`ConversionSqlToRust`](Self::ConversionSqlToRust).
+    pub fn deserialization(
+        context: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::ConversionSqlToRust {
+            inner: Some(Box::new(source)),
+            to: context,
+        }
+    }
 }

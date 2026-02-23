@@ -94,5 +94,10 @@ pub fn configure_connection_on_creation(
     diesel::sql_query("PRAGMA foreign_keys=ON")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
+    // Set busy timeout so concurrent writers wait instead of immediately failing.
+    diesel::sql_query("PRAGMA busy_timeout=5000")
+        .execute(conn)
+        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
     Ok(())
 }

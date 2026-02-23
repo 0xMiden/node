@@ -1,13 +1,13 @@
+pub(crate) mod account_effect;
 pub mod account_state;
 mod execute;
-mod inflight_note;
-mod note_state;
+pub(crate) mod inflight_note;
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use account_state::{NetworkAccountState, TransactionCandidate};
+use account_state::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
@@ -17,7 +17,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::NoteScript;
+use miden_protocol::note::{Note, NoteScript};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
@@ -26,6 +26,7 @@ use url::Url;
 
 use crate::block_producer::BlockProducerClient;
 use crate::builder::ChainState;
+use crate::db::Db;
 use crate::store::StoreClient;
 
 // ACTOR SHUTDOWN REASON
@@ -33,8 +34,6 @@ use crate::store::StoreClient;
 
 /// The reason an actor has shut down.
 pub enum ActorShutdownReason {
-    /// Occurs when the transaction that created the actor is reverted.
-    AccountReverted(NetworkAccountId),
     /// Occurs when an account actor detects failure in the messaging channel used by the
     /// coordinator.
     EventChannelClosed,
@@ -71,6 +70,8 @@ pub struct AccountActorContext {
     pub max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     pub max_note_attempts: usize,
+    /// Database for persistent state.
+    pub db: Db,
 }
 
 // ACCOUNT ORIGIN
@@ -132,10 +133,10 @@ enum ActorMode {
 ///
 /// ## Core Responsibilities
 ///
-/// - **State Management**: Loads and maintains the current state of network accounts, including
-///   available notes, pending transactions, and account commitments.
+/// - **State Management**: Queries the database for the current state of network accounts,
+///   including available notes and the latest account state.
 /// - **Transaction Selection**: Selects viable notes and constructs a [`TransactionCandidate`]
-///   based on current chain state.
+///   based on current chain state and DB queries.
 /// - **Transaction Execution**: Executes selected transactions using either local or remote
 ///   proving.
 /// - **Mempool Integration**: Listens for mempool events to stay synchronized with the network
@@ -143,11 +144,12 @@ enum ActorMode {
 ///
 /// ## Lifecycle
 ///
-/// 1. **Initialization**: Loads account state from the store or uses provided account data.
+/// 1. **Initialization**: Checks DB for available notes to determine initial mode.
 /// 2. **Event Loop**: Continuously processes mempool events and executes transactions.
 /// 3. **Transaction Processing**: Selects, executes, and proves transactions, and submits them to
 ///    block producer.
-/// 4. **State Updates**: Updates internal state based on mempool events and execution results.
+/// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
+///    notified.
 /// 5. **Shutdown**: Terminates gracefully when cancelled or encounters unrecoverable errors.
 ///
 /// ## Concurrency
@@ -158,6 +160,7 @@ enum ActorMode {
 pub struct AccountActor {
     origin: AccountOrigin,
     store: StoreClient,
+    db: Db,
     mode: ActorMode,
     event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
     cancel_token: CancellationToken,
@@ -193,6 +196,7 @@ impl AccountActor {
         Self {
             origin,
             store: actor_context.store.clone(),
+            db: actor_context.db.clone(),
             mode: ActorMode::NoViableNotes,
             event_rx,
             cancel_token,
@@ -209,23 +213,19 @@ impl AccountActor {
     /// Runs the account actor, processing events and managing state until a reason to shutdown is
     /// encountered.
     pub async fn run(mut self, semaphore: Arc<Semaphore>) -> ActorShutdownReason {
-        // Load the account state from the store and set up the account actor state.
-        let account = {
-            match self.origin {
-                AccountOrigin::Store(account_id) => self
-                    .store
-                    .get_network_account(account_id)
-                    .await
-                    .expect("actor should be able to load account")
-                    .expect("actor account should exist"),
-                AccountOrigin::Transaction(ref account) => *(account.clone()),
-            }
-        };
+        let account_id = self.origin.id();
+
+        // Determine initial mode by checking DB for available notes.
         let block_num = self.chain_state.read().await.chain_tip_header.block_num();
-        let mut state =
-            NetworkAccountState::load(account, self.origin.id(), &self.store, block_num)
-                .await
-                .expect("actor should be able to load account state");
+        let has_notes = self
+            .db
+            .has_available_notes(account_id, block_num, self.max_note_attempts)
+            .await
+            .expect("actor should be able to check for available notes");
+
+        if has_notes {
+            self.mode = ActorMode::NotesAvailable;
+        }
 
         loop {
             // Enable or disable transaction execution based on actor mode.
@@ -239,27 +239,30 @@ impl AccountActor {
             };
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
-                    return ActorShutdownReason::Cancelled(self.origin.id());
+                    return ActorShutdownReason::Cancelled(account_id);
                 }
                 // Handle mempool events.
                 event = self.event_rx.recv() => {
                     let Some(event) = event else {
                          return ActorShutdownReason::EventChannelClosed;
                     };
-                    // Re-enable transaction execution if the transaction being waited on has been
-                    // added to the mempool.
+                    // Re-enable transaction execution if the transaction being waited on has
+                    // been resolved (added to mempool, committed in a block, or reverted).
                     if let ActorMode::TransactionInflight(awaited_id) = self.mode {
-                        if let MempoolEvent::TransactionAdded { id, .. } = *event {
-                            if id == awaited_id {
-                                self.mode = ActorMode::NotesAvailable;
-                            }
+                        let should_wake = match event.as_ref() {
+                            MempoolEvent::TransactionAdded { id, .. } => *id == awaited_id,
+                            MempoolEvent::BlockCommitted { txs, .. } => {
+                                txs.contains(&awaited_id)
+                            },
+                            MempoolEvent::TransactionsReverted(tx_ids) => {
+                                tx_ids.contains(&awaited_id)
+                            },
+                        };
+                        if should_wake {
+                            self.mode = ActorMode::NotesAvailable;
                         }
                     } else {
                         self.mode = ActorMode::NotesAvailable;
-                    }
-                    // Update state.
-                    if let Some(shutdown_reason) = state.mempool_update(event.as_ref()) {
-                        return shutdown_reason;
                     }
                 },
                 // Execute transactions.
@@ -268,13 +271,20 @@ impl AccountActor {
                         Ok(_permit) => {
                             // Read the chain state.
                             let chain_state = self.chain_state.read().await.clone();
-                            // Find a candidate transaction and execute it.
-                            if let Some(tx_candidate) = state.select_candidate(
-                                self.max_notes_per_tx,
-                                self.max_note_attempts,
+
+                            // Drop notes that have failed too many times.
+                            if let Err(err) = self.db.drop_failing_notes(account_id, self.max_note_attempts).await {
+                                tracing::error!(err = %err, "failed to drop failing notes");
+                            }
+
+                            // Query DB for latest account and available notes.
+                            let tx_candidate = self.select_candidate_from_db(
+                                account_id,
                                 chain_state,
-                            ) {
-                                self.execute_transactions(&mut state, tx_candidate).await;
+                            ).await;
+
+                            if let Some(tx_candidate) = tx_candidate {
+                                self.execute_transactions(account_id, tx_candidate).await;
                             } else {
                                 // No transactions to execute, wait for events.
                                 self.mode = ActorMode::NoViableNotes;
@@ -289,13 +299,44 @@ impl AccountActor {
         }
     }
 
+    /// Selects a transaction candidate by querying the DB.
+    async fn select_candidate_from_db(
+        &self,
+        account_id: NetworkAccountId,
+        chain_state: ChainState,
+    ) -> Option<TransactionCandidate> {
+        let block_num = chain_state.chain_tip_header.block_num();
+        let max_notes = self.max_notes_per_tx.get();
+
+        let (latest_account, notes) = self
+            .db
+            .select_candidate(account_id, block_num, self.max_note_attempts)
+            .await
+            .expect("actor should be able to query DB for candidate");
+
+        let account = latest_account?;
+
+        let notes: Vec<_> = notes.into_iter().take(max_notes).collect();
+        if notes.is_empty() {
+            return None;
+        }
+
+        let (chain_tip_header, chain_mmr) = chain_state.into_parts();
+        Some(TransactionCandidate {
+            account,
+            notes,
+            chain_tip_header,
+            chain_mmr,
+        })
+    }
+
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Updates the state of the actor based on the execution result.
-    #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, state, tx_candidate))]
+    #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &mut self,
-        state: &mut NetworkAccountState,
+        account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
     ) {
         let block_num = tx_candidate.chain_tip_header.block_num();
@@ -318,18 +359,32 @@ impl AccountActor {
             },
             // Execution completed with some failed notes.
             Ok((tx_id, failed)) => {
-                let notes = failed.into_iter().map(|note| note.note).collect::<Vec<_>>();
-                state.notes_failed(notes.as_slice(), block_num);
+                let nullifiers: Vec<_> =
+                    failed.into_iter().map(|note| note.note.nullifier()).collect();
+                self.mark_notes_failed(&nullifiers, block_num).await;
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
             Err(err) => {
                 tracing::error!(err = err.as_report(), "network transaction failed");
                 self.mode = ActorMode::NoViableNotes;
-                let notes =
-                    notes.into_iter().map(|note| note.into_inner().into()).collect::<Vec<_>>();
-                state.notes_failed(notes.as_slice(), block_num);
+                let nullifiers: Vec<_> = notes
+                    .into_iter()
+                    .map(|note| Note::from(note.into_inner()).nullifier())
+                    .collect();
+                self.mark_notes_failed(&nullifiers, block_num).await;
             },
+        }
+    }
+
+    /// Marks notes as failed in the DB.
+    async fn mark_notes_failed(
+        &self,
+        nullifiers: &[miden_protocol::note::Nullifier],
+        block_num: BlockNumber,
+    ) {
+        if let Err(err) = self.db.notes_failed(nullifiers.to_vec(), block_num).await {
+            tracing::error!(err = %err, "failed to mark notes as failed");
         }
     }
 }
@@ -367,4 +422,35 @@ fn has_backoff_passed(
 
     // Check if the backoff period has passed.
     blocks_passed.as_usize() > backoff_threshold
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::block::BlockNumber;
+
+    use super::has_backoff_passed;
+
+    #[rstest::rstest]
+    #[test]
+    #[case::all_zero(Some(BlockNumber::GENESIS), BlockNumber::GENESIS, 0, true)]
+    #[case::no_attempts(None, BlockNumber::GENESIS, 0, true)]
+    #[case::one_attempt(Some(BlockNumber::GENESIS), BlockNumber::from(2), 1, true)]
+    #[case::three_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(3), 3, true)]
+    #[case::ten_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(13), 10, true)]
+    #[case::twenty_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(149), 20, true)]
+    #[case::one_attempt_false(Some(BlockNumber::GENESIS), BlockNumber::from(1), 1, false)]
+    #[case::three_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(2), 3, false)]
+    #[case::ten_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(12), 10, false)]
+    #[case::twenty_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(148), 20, false)]
+    fn backoff_has_passed(
+        #[case] last_attempt_block_num: Option<BlockNumber>,
+        #[case] current_block_num: BlockNumber,
+        #[case] attempt_count: usize,
+        #[case] backoff_should_have_passed: bool,
+    ) {
+        assert_eq!(
+            backoff_should_have_passed,
+            has_backoff_passed(current_block_num, last_attempt_block_num, attempt_count)
+        );
+    }
 }
