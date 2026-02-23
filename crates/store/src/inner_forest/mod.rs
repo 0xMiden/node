@@ -20,24 +20,6 @@ use thiserror::Error;
 #[cfg(test)]
 mod tests;
 
-// TYPES
-// ================================================================================================
-
-/// Precomputed account roots from in-memory SMT updates.
-///
-/// Contains the vault root and storage map roots computed by applying deltas to the in-memory
-/// `SmtForest`. Used to avoid reloading all entries from the database when updating accounts.
-#[derive(Debug, Clone, Default)]
-pub struct PrecomputedAccountRoots {
-    /// New vault root after applying delta (None if vault unchanged).
-    pub vault_root: Option<Word>,
-    /// New storage map roots by slot name after applying delta.
-    pub storage_map_roots: BTreeMap<StorageSlotName, Word>,
-}
-
-/// Collection of precomputed roots for all accounts updated in a block.
-pub type BlockAccountRoots = BTreeMap<AccountId, PrecomputedAccountRoots>;
-
 // ERRORS
 // ================================================================================================
 
@@ -53,10 +35,10 @@ pub enum InnerForestError {
         prev_balance: u64,
         delta: i64,
     },
-    #[error(transparent)]
-    AssetError(#[cause] AssetError),
-    #[error(transparent)]
-    MerkleError(#[cause] MerkleError),
+    #[error("asset error")]
+    AssetError(#[from] AssetError),
+    #[error("merkle error")]
+    MerkleError(#[from] MerkleError),
 }
 
 #[derive(Debug, Error)]
@@ -238,46 +220,6 @@ impl InnerForest {
     // PUBLIC INTERFACE
     // --------------------------------------------------------------------------------------------
 
-    /// Applies account updates from a block to the forest and returns precomputed roots.
-    ///
-    /// Iterates through account updates and applies each delta to the forest. Returns the
-    /// computed vault and storage map roots for each account, to be used by DB writes.
-    /// Private accounts should be filtered out before calling this method.
-    ///
-    /// # Arguments
-    ///
-    /// * `block_num` - Block number for which these updates apply
-    /// * `account_updates` - Iterator of `AccountDelta` for public accounts
-    ///
-    /// # Returns
-    ///
-    /// A map from account id to precomputed roots (vault root and storage map roots).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if applying a vault delta results in a negative balance.
-    pub(crate) fn apply_block_updates(
-        &mut self,
-        block_num: BlockNumber,
-        account_updates: impl IntoIterator<Item = AccountDelta>,
-    ) -> Result<BlockAccountRoots, InnerForestError> {
-        let mut account_roots = BlockAccountRoots::new();
-
-        for delta in account_updates {
-            let roots = self.update_account(block_num, &delta)?;
-            account_roots.insert(delta.id(), roots);
-
-            tracing::debug!(
-                target: crate::COMPONENT,
-                account_id = %delta.id(),
-                %block_num,
-                is_full_state = delta.is_full_state(),
-                "Updated forest with account delta"
-            );
-        }
-        Ok(account_roots)
-    }
-
     /// Updates the forest with account vault and storage changes from a delta.
     ///
     /// Unified interface for updating all account state in the forest, handling both full-state
@@ -287,10 +229,6 @@ impl InnerForest {
     /// Full-state deltas (`delta.is_full_state() == true`) populate the forest from scratch using
     /// an empty SMT root. Partial deltas apply changes on top of the previous block's state.
     ///
-    /// # Returns
-    ///
-    /// Precomputed roots for the account (vault root and storage map roots).
-    ///
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
@@ -298,23 +236,19 @@ impl InnerForest {
         &mut self,
         block_num: BlockNumber,
         delta: &AccountDelta,
-    ) -> Result<PrecomputedAccountRoots, InnerForestError> {
+    ) -> Result<(), InnerForestError> {
         let account_id = delta.id();
         let is_full_state = delta.is_full_state();
 
-        let vault_root = if is_full_state || !delta.vault().is_empty() {
-            Some(self.update_account_vault(block_num, account_id, delta.vault(), is_full_state)?)
-        } else {
-            None
-        };
+        if is_full_state || !delta.vault().is_empty() {
+            self.update_account_vault(block_num, account_id, delta.vault(), is_full_state)?;
+        }
 
-        let storage_map_roots = if delta.storage().is_empty() {
-            BTreeMap::new()
-        } else {
-            self.update_account_storage(block_num, account_id, delta.storage(), is_full_state)?
-        };
+        if !delta.storage().is_empty() {
+            self.update_account_storage(block_num, account_id, delta.storage(), is_full_state)?;
+        }
 
-        Ok(PrecomputedAccountRoots { vault_root, storage_map_roots })
+        Ok(())
     }
 
     // ASSET VAULT DELTA PROCESSING
