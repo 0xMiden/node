@@ -1,8 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::num::NonZeroUsize;
-
-use lru::LruCache;
-use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
+use std::collections::BTreeSet;
+use miden_node_proto::domain::account::AccountStorageMapDetails;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
@@ -13,8 +10,13 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::crypto::merkle::smt::{SMT_DEPTH, SmtForest};
-use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
+use miden_crypto::hash::rpo::Rpo256;
+use miden_crypto::merkle::smt::{
+    ForestInMemoryBackend, ForestOperation, LargeSmtForest, LargeSmtForestError, LineageId,
+    RootInfo, SMT_DEPTH, SmtUpdateBatch, TreeId,
+};
+use miden_crypto::merkle::{EmptySubtreeRoots, MerkleError};
+use miden_protocol::utils::Serializable;
 use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
@@ -31,10 +33,6 @@ mod tests;
 /// Number of historical blocks to retain in the in-memory forest.
 /// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be pruned.
 pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
-
-/// Default size for the LRU cache of latest storage map entries.
-/// Used to serve `SlotData::All` queries for the most recent block.
-const DEFAULT_STORAGE_CACHE_ENTRIES_SIZE: usize = 5;
 
 // ERRORS
 // ================================================================================================
@@ -68,64 +66,23 @@ pub enum WitnessError {
 // INNER FOREST
 // ================================================================================================
 
-/// Snapshot of storage map entries at a specific block.
-struct StorageSnapshot {
-    block_num: BlockNumber,
-    entries: BTreeMap<Word, Word>,
-}
-
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct InnerForest {
-    /// `SmtForest` for efficient account storage reconstruction.
+    /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
-    forest: SmtForest,
-
-    /// Maps (`account_id`, `slot_name`, `block_num`) to SMT root.
-    /// Populated during block import for all storage map slots.
-    ///
-    /// Used for `SlotData::MapKeys` queries (SMT proof generation).
-    /// Works for all historical blocks within retention window.
-    ///
-    /// Attention: Must be a `BTreeMap`, since not every block contains a value here, so we need to
-    /// be able to query the previous blocks cheaply.
-    storage_map_roots: BTreeMap<(AccountId, StorageSlotName, BlockNumber), Word>,
-
-    /// LRU cache of latest storage map entries for `SlotData::All` queries.
-    /// Only stores the most recent snapshot per (account, slot).
-    /// Historical queries fall back to DB.
-    storage_entries_per_account_per_slot: LruCache<(AccountId, StorageSlotName), StorageSnapshot>,
-
-    vault_refcount: HashMap<Word, u64>,
-    storage_slots_refcount: HashMap<Word, u64>,
-
-    /// Maps (`account_id`, `block_num`) to vault SMT root.
-    /// Tracks asset vault versions across all blocks with structural sharing.
-    ///
-    /// Attention: Must be a `BTreeMap`, since not every block contains a value here, so we need to
-    /// be able to query the previous blocks cheaply.
-    vault_roots: BTreeMap<(AccountId, BlockNumber), Word>,
-
-    /// Tracks vault roots by block number for pruning.
-    vault_roots_by_block: BTreeMap<BlockNumber, Vec<AccountId>>,
-
-    /// Tracks storage map roots by block number for pruning.
-    storage_slots_by_block: BTreeMap<BlockNumber, Vec<(AccountId, StorageSlotName)>>,
+    forest: LargeSmtForest<ForestInMemoryBackend>,
 }
 
 impl InnerForest {
     pub(crate) fn new() -> Self {
         Self {
-            forest: SmtForest::new(),
-            storage_map_roots: BTreeMap::new(),
-            storage_entries_per_account_per_slot: LruCache::new(
-                NonZeroUsize::new(DEFAULT_STORAGE_CACHE_ENTRIES_SIZE).unwrap(),
-            ),
-            vault_refcount: HashMap::new(),
-            storage_slots_refcount: HashMap::new(),
-            vault_roots: BTreeMap::new(),
-            vault_roots_by_block: BTreeMap::new(),
-            storage_slots_by_block: BTreeMap::new(),
+            forest: Self::create_forest(),
         }
+    }
+
+    fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
+        let backend = ForestInMemoryBackend::new();
+        LargeSmtForest::new(backend).expect("in-memory backend should initialize")
     }
 
     // HELPERS
@@ -136,59 +93,141 @@ impl InnerForest {
         *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
     }
 
-    /// Decrement the reference count in the given map.
-    ///
-    /// Returns `true` if the refcount reached zero.
-    fn decrement_refcount(map: &mut HashMap<Word, u64>, root: Word) -> bool {
-        let Some(count) = map.get_mut(&root) else {
-            return false;
-        };
-        if *count == 1 {
-            map.remove(&root);
-            true
+    fn tree_id_for_root(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> TreeId {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        self.lookup_tree_id(lineage, block_num)
+    }
+
+    fn tree_id_for_vault_root(&self, account_id: AccountId, block_num: BlockNumber) -> TreeId {
+        let lineage = Self::vault_lineage_id(account_id);
+        self.lookup_tree_id(lineage, block_num)
+    }
+
+    fn lookup_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> TreeId {
+        TreeId::new(lineage, block_num.as_u64())
+    }
+
+    fn storage_lineage_id(account_id: AccountId, slot_name: &StorageSlotName) -> LineageId {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&account_id.to_bytes());
+        bytes.extend_from_slice(slot_name.as_str().as_bytes());
+        LineageId::new(Rpo256::hash(&bytes).as_bytes())
+    }
+
+    fn vault_lineage_id(account_id: AccountId) -> LineageId {
+        LineageId::new(Rpo256::hash(&account_id.to_bytes()).as_bytes())
+    }
+
+    fn build_forest_operations(
+        entries: impl IntoIterator<Item = (Word, Word)>,
+    ) -> Vec<ForestOperation> {
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                if value == EMPTY_WORD {
+                    ForestOperation::remove(key)
+                } else {
+                    ForestOperation::insert(key, value)
+                }
+            })
+            .collect()
+    }
+
+    fn apply_forest_updates(
+        &mut self,
+        lineage: LineageId,
+        block_num: BlockNumber,
+        operations: Vec<ForestOperation>,
+    ) -> Word {
+        let updates = if operations.is_empty() {
+            SmtUpdateBatch::empty()
         } else {
-            *count -= 1;
-            false
+            SmtUpdateBatch::new(operations.into_iter())
+        };
+        let version = block_num.as_u64();
+        let tree = if self.forest.latest_version(lineage).is_some() {
+            self.forest
+                .update_tree(lineage, version, updates)
+                .expect("forest update should succeed")
+        } else {
+            self.forest
+                .add_lineage(lineage, version, updates)
+                .expect("forest update should succeed")
+        };
+        tree.root()
+    }
+
+    fn map_forest_error(error: LargeSmtForestError) -> MerkleError {
+        match error {
+            LargeSmtForestError::Merkle(merkle) => merkle,
+            other => MerkleError::InternalError(other.to_string()),
         }
     }
+
+    fn map_forest_error_to_witness(error: LargeSmtForestError) -> WitnessError {
+        match error {
+            LargeSmtForestError::Merkle(merkle) => WitnessError::MerkleError(merkle),
+            other => WitnessError::MerkleError(MerkleError::InternalError(other.to_string())),
+        }
+    }
+
 
     // ACCESSORS
     // --------------------------------------------------------------------------------------------
 
-    /// Retrieves a vault root for the specified account at or before the specified block.
+    fn tree_id_for_lookup(&self, lineage: LineageId, block_num: BlockNumber) -> Option<TreeId> {
+        let tree = self.lookup_tree_id(lineage, block_num);
+        match self.forest.root_info(tree) {
+            RootInfo::LatestVersion(_) | RootInfo::HistoricalVersion(_) => Some(tree),
+            RootInfo::Missing => {
+                let latest_version = self.forest.latest_version(lineage)?;
+                if latest_version <= block_num.as_u64() {
+                    Some(TreeId::new(lineage, latest_version))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn tree_root(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
+        let tree = self.tree_id_for_lookup(lineage, block_num)?;
+        match self.forest.root_info(tree) {
+            RootInfo::LatestVersion(root) | RootInfo::HistoricalVersion(root) => Some(root),
+            RootInfo::Missing => None,
+        }
+    }
+
+    /// Retrieves a vault root for the specified account and block.
     pub(crate) fn get_vault_root(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
     ) -> Option<Word> {
-        self.vault_roots
-            .range((account_id, BlockNumber::GENESIS)..=(account_id, block_num))
-            .next_back()
-            .map(|(_, root)| *root)
+        let lineage = Self::vault_lineage_id(account_id);
+        self.tree_root(lineage, block_num)
     }
 
-    /// Retrieves the storage map root for an account slot at or before the specified block.
+    /// Retrieves the storage map root for an account slot at the specified block.
     pub(crate) fn get_storage_map_root(
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
     ) -> Option<Word> {
-        self.storage_map_roots
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), block_num),
-            )
-            .next_back()
-            .map(|(_, root)| *root)
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        self.tree_root(lineage, block_num)
     }
 
     // WITNESSES and PROOFS
     // --------------------------------------------------------------------------------------------
 
     /// Retrieves a storage map witness for the specified account and storage slot.
-    ///
-    /// Finds the most recent witness at or before the specified block number.
     ///
     /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
     /// get the actual key into the storage map.
@@ -199,11 +238,15 @@ impl InnerForest {
         block_num: BlockNumber,
         raw_key: Word,
     ) -> Result<StorageMapWitness, WitnessError> {
-        let key = StorageMap::hash_key(raw_key);
-        let root = self
-            .get_storage_map_root(account_id, slot_name, block_num)
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self
+            .tree_id_for_lookup(lineage, block_num)
             .ok_or(WitnessError::RootNotFound)?;
-        let proof = self.forest.open(root, key)?;
+        let key = StorageMap::hash_key(raw_key);
+        let proof = self
+            .forest
+            .open(tree, key)
+            .map_err(Self::map_forest_error_to_witness)?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
     }
@@ -216,10 +259,16 @@ impl InnerForest {
         block_num: BlockNumber,
         asset_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let root = self.get_vault_root(account_id, block_num).ok_or(WitnessError::RootNotFound)?;
+        let lineage = Self::vault_lineage_id(account_id);
+        let tree = self
+            .tree_id_for_lookup(lineage, block_num)
+            .ok_or(WitnessError::RootNotFound)?;
         let witnessees: Result<Vec<_>, WitnessError> =
             Result::from_iter(asset_keys.into_iter().map(|key| {
-                let proof = self.forest.open(root, key.into())?;
+                let proof = self
+                    .forest
+                    .open(tree, key.into())
+                    .map_err(Self::map_forest_error_to_witness)?;
                 let asset = AssetWitness::new(proof)?;
                 Ok(asset)
             }));
@@ -237,60 +286,15 @@ impl InnerForest {
         block_num: BlockNumber,
         raw_keys: &[Word],
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
-        let root = self.get_storage_map_root(account_id, &slot_name, block_num)?;
+        let lineage = Self::storage_lineage_id(account_id, &slot_name);
+        let tree = self.tree_id_for_lookup(lineage, block_num)?;
 
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
             let key = StorageMap::hash_key(*raw_key);
-            self.forest.open(root, key)
+            self.forest.open(tree, key).map_err(Self::map_forest_error)
         }));
 
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
-    }
-
-    /// Returns all key-value entries for a specific account storage slot at the latest cached
-    /// block. Historical queries fall back to DB reconstruction.
-    ///
-    /// Returns `None` if:
-    /// - No entries exist for this account/slot
-    /// - Query is for a historical block (not the most recent)
-    ///
-    /// Returns `LimitExceeded` if there are too many entries to return.
-    pub(crate) fn get_storage_map_details_full_from_cache(
-        &mut self,
-        account_id: AccountId,
-        slot_name: StorageSlotName,
-        block_num: BlockNumber,
-    ) -> Option<AccountStorageMapDetails> {
-        // Get cached snapshot
-        let snapshot = self
-            .storage_entries_per_account_per_slot
-            .get(&(account_id, slot_name.clone()))?;
-
-        if snapshot.block_num != block_num {
-            return None;
-        }
-
-        if snapshot.entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
-            return Some(AccountStorageMapDetails {
-                slot_name,
-                entries: StorageMapEntries::LimitExceeded,
-            });
-        }
-
-        let entries = Vec::from_iter(snapshot.entries.iter().map(|(k, v)| (*k, *v)));
-        Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries))
-    }
-
-    pub(crate) fn cache_storage_map_entries(
-        &mut self,
-        account_id: AccountId,
-        slot_name: StorageSlotName,
-        block_num: BlockNumber,
-        entries: Vec<(Word, Word)>,
-    ) {
-        let entries = BTreeMap::from_iter(entries);
-        self.storage_entries_per_account_per_slot
-            .put((account_id, slot_name), StorageSnapshot { block_num, entries });
     }
 
     // PUBLIC INTERFACE
@@ -373,10 +377,10 @@ impl InnerForest {
     /// Retrieves the most recent vault SMT root for an account. If no vault root is found for the
     /// account, returns an empty SMT root.
     fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
-        self.vault_roots
-            .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::from(u32::MAX)))
-            .next_back()
-            .map_or_else(Self::empty_smt_root, |(_, root)| *root)
+        let lineage = Self::vault_lineage_id(account_id);
+        self.forest
+            .latest_root(lineage)
+            .map_or_else(Self::empty_smt_root, |root| root)
     }
 
     /// Inserts asset vault data into the forest for the specified account. Assumes that asset
@@ -389,13 +393,24 @@ impl InnerForest {
     ) {
         // get the current vault root for the account, and make sure it is empty
         let prev_root = self.get_latest_vault_root(account_id);
+        let lineage = Self::vault_lineage_id(account_id);
         assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+        assert!(
+            self.forest.latest_version(lineage).is_none(),
+            "account should not be in the forest"
+        );
 
-        // if there are no assets in the vault, add a root of an empty SMT to the vault roots map
-        // so that the map has entries for all accounts, and then return (i.e., no need to insert
-        // anything into the forest)
         if delta.is_empty() {
-            self.track_vault_root(block_num, account_id, prev_root);
+            let lineage = Self::vault_lineage_id(account_id);
+            let _new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                %account_id,
+                %block_num,
+                vault_entries = 0,
+                "Inserted vault into forest"
+            );
             return;
         }
 
@@ -418,12 +433,9 @@ impl InnerForest {
         assert!(!entries.is_empty(), "non-empty delta should contain entries");
         let num_entries = entries.len();
 
-        let new_root = self
-            .forest
-            .batch_insert(prev_root, entries)
-            .expect("forest insertion should succeed");
-
-        self.track_vault_root(block_num, account_id, new_root);
+        let lineage = Self::vault_lineage_id(account_id);
+        let operations = Self::build_forest_operations(entries);
+        let _new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -434,11 +446,6 @@ impl InnerForest {
         );
     }
 
-    fn track_vault_root(&mut self, block_num: BlockNumber, account_id: AccountId, new_root: Word) {
-        self.vault_roots.insert((account_id, block_num), new_root);
-        self.vault_roots_by_block.entry(block_num).or_default().push(account_id);
-        *self.vault_refcount.entry(new_root).or_insert(0) += 1;
-    }
 
     /// Updates the forest with vault changes from a delta. The vault delta is assumed to be
     /// non-empty.
@@ -458,7 +465,11 @@ impl InnerForest {
         assert!(!delta.is_empty(), "expected the delta not to be empty");
 
         // get the previous vault root; the root could be for an empty or non-empty SMT
-        let prev_root = self.get_latest_vault_root(account_id);
+        let lineage = Self::vault_lineage_id(account_id);
+        let prev_tree = self
+            .forest
+            .latest_version(lineage)
+            .map(|version| TreeId::new(lineage, version));
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
@@ -472,10 +483,8 @@ impl InnerForest {
                 //
                 // TODO: SmtForest only exposes `fn open()` which computes a full Merkle proof. We
                 // only need the leaf, so a direct `fn get()` method would be faster.
-                let prev_amount = self
-                    .forest
-                    .open(prev_root, key)
-                    .ok()
+                let prev_amount = prev_tree
+                    .and_then(|tree| self.forest.open(tree, key).ok())
                     .and_then(|proof| proof.get(&key))
                     .and_then(|word| FungibleAsset::try_from(word).ok())
                     .map_or(0, |asset| asset.amount());
@@ -508,12 +517,9 @@ impl InnerForest {
 
         let num_entries = entries.len();
 
-        let new_root = self
-            .forest
-            .batch_insert(prev_root, entries)
-            .expect("forest insertion should succeed");
-
-        self.track_vault_root(block_num, account_id, new_root);
+        let lineage = Self::vault_lineage_id(account_id);
+        let operations = Self::build_forest_operations(entries);
+        let _new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -535,14 +541,12 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: &StorageSlotName,
     ) -> Word {
-        self.storage_map_roots
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), BlockNumber::from(u32::MAX)),
-            )
-            .next_back()
-            .map_or_else(Self::empty_smt_root, |(_, root)| *root)
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        self.forest
+            .latest_root(lineage)
+            .map_or_else(Self::empty_smt_root, |root| root)
     }
+
 
     /// Inserts all storage maps from the provided storage delta into the forest.
     ///
@@ -570,16 +574,9 @@ impl InnerForest {
                     }
                 }));
 
-            // if the delta is empty, make sure we create an entry in the storage map roots map
-            // and update the cache
             if raw_map_entries.is_empty() {
-                self.track_storage_map_slot_root(block_num, account_id, slot_name, prev_root);
-
-                // Update cache with empty map
-                self.storage_entries_per_account_per_slot.put(
-                    (account_id, slot_name.clone()),
-                    StorageSnapshot { block_num, entries: BTreeMap::new() },
-                );
+                let lineage = Self::storage_lineage_id(account_id, slot_name);
+                let _new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
 
                 continue;
             }
@@ -590,20 +587,15 @@ impl InnerForest {
                     .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
             );
 
-            // insert the updates into the forest and update storage map roots map
-            let new_root = self
-                .forest
-                .batch_insert(prev_root, hashed_entries.iter().copied())
-                .expect("forest insertion should succeed");
-
-            self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
+            let lineage = Self::storage_lineage_id(account_id, slot_name);
+            assert!(
+                self.forest.latest_version(lineage).is_none(),
+                "account should not be in the forest"
+            );
+            let operations = Self::build_forest_operations(hashed_entries);
+            let _new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             let num_entries = raw_map_entries.len();
-
-            // Update cache with the entries from this insertion
-            let entries = BTreeMap::from_iter(raw_map_entries);
-            self.storage_entries_per_account_per_slot
-                .put((account_id, slot_name.clone()), StorageSnapshot { block_num, entries });
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -616,21 +608,6 @@ impl InnerForest {
         }
     }
 
-    fn track_storage_map_slot_root(
-        &mut self,
-        block_num: BlockNumber,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-        new_root: Word,
-    ) {
-        self.storage_map_roots
-            .insert((account_id, slot_name.clone(), block_num), new_root);
-        self.storage_slots_by_block
-            .entry(block_num)
-            .or_default()
-            .push((account_id, slot_name.clone()));
-        *self.storage_slots_refcount.entry(new_root).or_insert(0) += 1;
-    }
 
     /// Updates the forest with storage map changes from a delta.
     ///
@@ -649,7 +626,7 @@ impl InnerForest {
             }
 
             // update the storage map tree in the forest and add an entry to the storage map roots
-            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
+            let lineage = Self::storage_lineage_id(account_id, slot_name);
             let delta_entries: Vec<(Word, Word)> = Vec::from_iter(
                 map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
             );
@@ -660,20 +637,8 @@ impl InnerForest {
                     .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
             );
 
-            let new_root = self
-                .forest
-                .batch_insert(prev_root, hashed_entries.iter().copied())
-                .expect("forest insertion should succeed");
-
-            self.track_storage_map_slot_root(block_num, account_id, slot_name, new_root);
-
-            self.update_storage_map_slot_cache_entry(
-                block_num,
-                account_id,
-                slot_name,
-                &delta_entries,
-                prev_root,
-            );
+            let operations = Self::build_forest_operations(hashed_entries);
+            let _new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -686,166 +651,23 @@ impl InnerForest {
         }
     }
 
-    /// Update the storage map using the given set of key-value-entries.
-    fn update_storage_map_slot_cache_entry(
-        &mut self,
-        block_num: BlockNumber,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-        delta_entries: &Vec<(Word, Word)>,
-        prev_root: Word,
-    ) {
-        // Update cache by merging delta with latest entries
-        let key = (account_id, slot_name.clone());
-        let Some(mut latest_entries) = self
-            .storage_entries_per_account_per_slot
-            .get(&key)
-            .map(|snapshot| snapshot.entries.clone())
-            .or_else(|| {
-                if prev_root == Self::empty_smt_root() {
-                    Some(BTreeMap::new())
-                } else {
-                    None
-                }
-            })
-        else {
-            return;
-        };
-
-        for (k, v) in delta_entries {
-            if *v == EMPTY_WORD {
-                latest_entries.remove(k);
-            } else {
-                latest_entries.insert(*k, *v);
-            }
-        }
-
-        self.storage_entries_per_account_per_slot
-            .put(key, StorageSnapshot { block_num, entries: latest_entries });
-    }
-
     // PRUNING
     // --------------------------------------------------------------------------------------------
 
     /// Prunes old entries from the in-memory forest data structures.
     ///
-    /// Only iterates over blocks in the pruning window (before cutoff). For each affected account
-    /// or slot, checks if there's a newer entry before pruning - preserving the most recent state.
-    ///
-    /// The `SmtForest` itself is not pruned directly as it uses structural sharing and old roots
-    /// are naturally garbage-collected when they become unreachable.
-    ///
-    /// Note: Returns (`vault_roots_removed`, `storage_roots_removed`). Storage entries count is
-    /// no longer tracked since we use an LRU cache.
+    /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
     #[instrument(target = COMPONENT, skip_all, fields(block.number = %chain_tip), ret)]
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize) {
         let cutoff_block =
             BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+        let before = self.forest.roots().count();
 
-        let vault_roots_removed = self.prune_vault_roots(cutoff_block);
-        let storage_roots_removed = self.prune_storage_roots(cutoff_block);
+        self.forest.truncate(cutoff_block.as_u64());
 
-        // Cache is self-pruning via LRU eviction
-        (vault_roots_removed, storage_roots_removed)
-    }
+        let after = self.forest.roots().count();
+        let removed = before.saturating_sub(after);
 
-    /// Prunes vault roots beyond the cutoff block.
-    ///
-    /// Only iterates over blocks in the pruning window, then for each affected account checks
-    /// if there's a newer entry before pruning.
-    fn prune_vault_roots(&mut self, cutoff_block: BlockNumber) -> usize {
-        // Get blocks to prune (only blocks before cutoff)
-        let blocks_to_check: Vec<BlockNumber> = Vec::from_iter(
-            self.vault_roots_by_block.range(..=cutoff_block).map(|(block, _)| *block),
-        );
-
-        let mut roots_to_prune = HashSet::new();
-
-        for block in blocks_to_check {
-            let Some(accounts) = self.vault_roots_by_block.remove(&block) else {
-                continue;
-            };
-
-            let mut accounts_to_keep = Vec::new();
-
-            for account_id in accounts {
-                // Check if there's a newer entry for this account
-                let has_newer_entry = self
-                    .vault_roots
-                    .range((account_id, block.child())..=(account_id, BlockNumber::from(u32::MAX)))
-                    .next()
-                    .is_some();
-
-                if has_newer_entry {
-                    if let Some(root) = self.vault_roots.remove(&(account_id, block)) {
-                        if Self::decrement_refcount(&mut self.vault_refcount, root) {
-                            roots_to_prune.insert(root);
-                        }
-                    }
-                } else {
-                    accounts_to_keep.push(account_id);
-                }
-            }
-
-            if !accounts_to_keep.is_empty() {
-                self.vault_roots_by_block.insert(block, accounts_to_keep);
-            }
-        }
-
-        let roots_removed = roots_to_prune.len();
-        self.forest.pop_smts(roots_to_prune);
-        roots_removed
-    }
-
-    /// Prunes storage map roots older than/before the cutoff block.
-    ///
-    /// Only iterates over blocks in the pruning window, then for each affected slot checks
-    /// if there's a newer entry before pruning.
-    fn prune_storage_roots(&mut self, cutoff_block: BlockNumber) -> usize {
-        // Get blocks to prune (only blocks before cutoff)
-        let blocks_to_check: Vec<BlockNumber> = Vec::from_iter(
-            self.storage_slots_by_block.range(..=cutoff_block).map(|(block, _)| *block),
-        );
-
-        let mut roots_to_prune = HashSet::new();
-
-        for block in blocks_to_check {
-            let Some(slots) = self.storage_slots_by_block.remove(&block) else {
-                continue;
-            };
-
-            let mut slots_to_keep = Vec::new();
-
-            for (account_id, slot_name) in slots {
-                // Check if there's a newer entry for this account/slot
-                let has_newer_entry = self
-                    .storage_map_roots
-                    .range(
-                        (account_id, slot_name.clone(), block.child())
-                            ..=(account_id, slot_name.clone(), BlockNumber::from(u32::MAX)),
-                    )
-                    .next()
-                    .is_some();
-
-                if has_newer_entry {
-                    let key = (account_id, slot_name.clone(), block);
-                    if let Some(root) = self.storage_map_roots.remove(&key) {
-                        if Self::decrement_refcount(&mut self.storage_slots_refcount, root) {
-                            roots_to_prune.insert(root);
-                        }
-                    }
-                } else {
-                    slots_to_keep.push((account_id, slot_name));
-                }
-            }
-
-            if !slots_to_keep.is_empty() {
-                self.storage_slots_by_block.insert(block, slots_to_keep);
-            }
-        }
-
-        let roots_removed = roots_to_prune.len();
-        self.forest.pop_smts(roots_to_prune);
-        roots_removed
+        (removed, 0)
     }
 }

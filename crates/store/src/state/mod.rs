@@ -18,7 +18,6 @@ use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountVaultDetails,
     SlotData,
-    StorageMapEntries,
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
@@ -1123,43 +1122,26 @@ impl State {
                     })?
                     .map_err(DatabaseError::MerkleError)?,
                 SlotData::All => {
-                    // Try cache first (latest block only)
-                    if let Some(details) = forest_guard.get_storage_map_details_full_from_cache(
-                        account_id,
-                        slot_name.clone(),
-                        block_num,
-                    ) {
-                        details
-                    } else {
-                        // we don't want to hold the forest guard for a prolonged time
-                        drop(forest_guard);
-                        // we collect all storage items, if the account is small enough or
-                        // return `AccountStorageMapDetails::LimitExceeded`
-                        let details = self
-                            .db
-                            .reconstruct_storage_map_from_db(
-                                account_id,
-                                slot_name.clone(),
-                                block_num,
-                                Some(
-                                    // TODO unify this with
-                                    // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                                    // and accumulated the limits
-                                    <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                                ),
-                            )
-                            .await?;
-                        forest_guard = self.forest.write().await;
-                        if let StorageMapEntries::AllEntries(entries) = details.entries.clone() {
-                            forest_guard.cache_storage_map_entries(
-                                account_id,
-                                slot_name.clone(),
-                                block_num,
-                                entries,
-                            );
-                        }
-                        details
-                    }
+                    // we don't want to hold the forest guard for a prolonged time
+                    drop(forest_guard);
+                    // we collect all storage items, if the account is small enough or
+                    // return `AccountStorageMapDetails::LimitExceeded`
+                    let details = self
+                        .db
+                        .reconstruct_storage_map_from_db(
+                            account_id,
+                            slot_name.clone(),
+                            block_num,
+                            Some(
+                                // TODO unify this with
+                                // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
+                                // and accumulated the limits
+                                <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
+                            ),
+                        )
+                        .await?;
+                    forest_guard = self.forest.write().await;
+                    details
                 },
             };
 

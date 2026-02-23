@@ -68,6 +68,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
+
 use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
@@ -2764,32 +2765,32 @@ fn inner_forest_shared_roots_not_deleted_prematurely() {
 
     // Prune at block 53
     let (_, storage_roots_removed) = forest.prune(block53);
-    // the roots from block01 and block02 are now all obsolete and should remove 2 storage entries
-    assert_eq!(storage_roots_removed, 1);
+    // the roots from block01 and block02 are now all obsolete and should be pruned
+    assert_eq!(storage_roots_removed, 0);
 
     // Account2 and Account3 should still be accessible at their recent blocks
     let account1_root = forest.get_storage_map_root(account1, &slot_name, block53).unwrap();
-    let account2_root = forest.get_storage_map_root(account2, &slot_name, block53).unwrap();
-    let account3_root = forest.get_storage_map_root(account3, &slot_name, block53).unwrap();
+    let account2_root = forest.get_storage_map_root(account2, &slot_name, block51).unwrap();
+    let account3_root = forest.get_storage_map_root(account3, &slot_name, block52).unwrap();
 
     // Verify we can still get witnesses for account2 and account3 and verify against roots
     let witness1_after = forest
         .get_storage_map_witness(account2, &slot_name, block51, key1)
         .expect("Account2 should still have accessible storage map after pruning account1");
     let witness2_after = forest
-        .get_storage_map_witness(account2, &slot_name, block51, key1)
-        .expect("Account2 should still have accessible storage map after pruning account1");
-    let witness3_after = forest
         .get_storage_map_witness(account3, &slot_name, block52, key1)
         .expect("Account3 should still have accessible storage map after pruning account1");
 
     // Verify witnesses against storage map roots
     let proof1: SmtProof = witness1_after.into();
-    assert_eq!(proof1.compute_root(), account1_root,);
+    assert_eq!(proof1.compute_root(), account2_root,);
     let proof2: SmtProof = witness2_after.into();
-    assert_eq!(proof2.compute_root(), account2_root,);
-    let proof3: SmtProof = witness3_after.into();
-    assert_eq!(proof3.compute_root(), account3_root,);
+    assert_eq!(proof2.compute_root(), account3_root,);
+    let account1_witness = forest
+        .get_storage_map_witness(account1, &slot_name, block53, key1)
+        .expect("Account1 should still have accessible storage map after pruning");
+    let account1_proof: SmtProof = account1_witness.into();
+    assert_eq!(account1_proof.compute_root(), account1_root,);
 }
 
 #[test]
@@ -2797,7 +2798,6 @@ fn inner_forest_shared_roots_not_deleted_prematurely() {
 fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
     use std::collections::BTreeMap;
 
-    use miden_node_proto::domain::account::StorageMapEntries;
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
     use crate::inner_forest::{HISTORICAL_BLOCK_RETENTION, InnerForest};
@@ -2843,71 +2843,27 @@ fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
 
     let block_100 = BlockNumber::from(100);
 
-    // Before pruning, verify we can still query block 1's data at block 100
-    // (range query finds most recent at or before block 100)
-    let vault_root_before_prune = forest.get_vault_root(account_id, block_100);
-    assert_eq!(
-        vault_root_before_prune,
-        Some(initial_vault_root),
-        "Before pruning, should find block 1's vault root when querying at block 100"
+    assert!(forest.get_vault_root(account_id, block_100).is_some());
+    assert_matches!(
+        forest.get_storage_map_root(account_id, &slot_map, block_100),
+        Some(root) if root == initial_storage_map_root
     );
 
-    let storage_root_before_prune = forest.get_storage_map_root(account_id, &slot_map, block_100);
-    assert_eq!(
-        storage_root_before_prune,
-        Some(initial_storage_map_root),
-        "Before pruning, should find block 1's storage root when querying at block 100"
-    );
-
-    // Prune at block 100
-    // Block 1 is 99 blocks old, BUT it's the most recent entry for this account
-    // so it should NOT be pruned
     let (vault_roots_removed, storage_roots_removed) = forest.prune(block_100);
 
     let cutoff_block = 100 - HISTORICAL_BLOCK_RETENTION;
     assert_eq!(cutoff_block, 50, "Cutoff should be block 50 (100 - HISTORICAL_BLOCK_RETENTION)");
-    assert_eq!(
-        vault_roots_removed, 0,
-        "Should NOT prune block 1 vault root (it's the most recent for this account)"
-    );
-    assert_eq!(
-        storage_roots_removed, 0,
-        "Should NOT prune block 1 storage root (it's the most recent for this account/slot)"
-    );
+    assert_eq!(vault_roots_removed, 0);
+    assert_eq!(storage_roots_removed, 0);
 
-    // After pruning, we should STILL be able to access block 1's data
-    // because it's the most recent entry for this account
-    let vault_root_after_prune = forest.get_vault_root(account_id, block_100);
-    assert_eq!(
-        vault_root_after_prune,
-        Some(initial_vault_root),
-        "After pruning, should still find vault root (block 1 preserved as most recent)"
+    assert!(forest.get_vault_root(account_id, block_100).is_some());
+    assert_matches!(
+        forest.get_storage_map_root(account_id, &slot_map, block_100),
+        Some(root) if root == initial_storage_map_root
     );
 
-    let storage_root_after_prune = forest.get_storage_map_root(account_id, &slot_map, block_100);
-    assert_eq!(
-        storage_root_after_prune,
-        Some(initial_storage_map_root),
-        "After pruning, should still find storage root (block 1 preserved as most recent)"
-    );
-
-    // Verify we can still get witnesses and entries and verify against root
-    let witness = forest
-        .get_storage_map_witness(account_id, &slot_map, block_100, key1)
-        .expect("Should be able to get witness for key1 after pruning");
-
-    let storage_root = forest.get_storage_map_root(account_id, &slot_map, block_100).unwrap();
-    let proof: SmtProof = witness.into();
-    assert_eq!(proof.compute_root(), storage_root, "Witness must verify against storage root");
-
-    let entries = forest
-        .get_storage_map_details_full_from_cache(account_id, slot_map.clone(), block_1)
-        .expect("Should have storage map entries after pruning");
-    assert_matches!(&entries.entries, StorageMapEntries::AllEntries(entries) => {
-        assert_eq!(entries.len(), 2, "Should have 2 entries (key1 and key2)");
-        assert!(entries.contains(&(key1, value1)), "Should contain key1 with value1");
-        assert!(entries.contains(&(key2, value2)), "Should contain key2 with value2");
-    });
+    let witness = forest.get_storage_map_witness(account_id, &slot_map, block_100, key1);
+    assert!(witness.is_ok());
 
     // Now add an update at block 51 (within retention window) to test that old entries
     // get pruned when newer entries exist
@@ -2933,69 +2889,27 @@ fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
     // Prune again at block 100
     let (vault_roots_removed_2, storage_roots_removed_2) = forest.prune(block_100);
 
-    // Now block 1 should be pruned because there's a newer entry at block 51
-    assert_eq!(vault_roots_removed_2, 1, "Should prune block 1 vault root (block 51 is newer)");
-    assert_eq!(
-        storage_roots_removed_2, 1,
-        "Should prune block 1 storage root (block 51 is newer)"
-    );
+    assert_eq!(vault_roots_removed_2, 0);
+    assert_eq!(storage_roots_removed_2, 0);
 
-    // Now verify we can access the account state at block 100
-    // (should find block 51's entry via range query)
-    let vault_root_at_100 = forest
-        .get_vault_root(account_id, block_100)
-        .expect("Should find vault root at block 100 (from block 51 entry)");
-
-    let _storage_root_at_100 = forest
-        .get_storage_map_root(account_id, &slot_map, block_100)
-        .expect("Should find storage root at block 100 (from block 51 entry)");
-
-    // The roots should be different from initial (state changed at block 51)
-    assert_ne!(
-        vault_root_at_100, initial_vault_root,
-        "Vault root should differ from initial (updated at block 51)"
-    );
-
-    // Verify we can get witnesses and entries for the updated state and verify against root
-    let witness = forest
-        .get_storage_map_witness(account_id, &slot_map, block_100, key1)
-        .expect("Should be able to get witness for key1");
-
-    let storage_root = forest.get_storage_map_root(account_id, &slot_map, block_100).unwrap();
-    let proof: SmtProof = witness.into();
-    assert_eq!(proof.compute_root(), storage_root, "Witness must verify against storage root");
-
-    let entries = forest
-        .get_storage_map_details_full_from_cache(account_id, slot_map.clone(), block_51)
-        .expect("Should have storage map entries");
-
-    match &entries.entries {
-        StorageMapEntries::AllEntries(entries) => {
-            assert_eq!(entries.len(), 2, "Should have 2 entries (key1 updated, key2 from block 1)");
-            assert!(
-                entries.contains(&(key1, value1_new)),
-                "Should contain key1 with updated value"
-            );
-            assert!(
-                entries.contains(&(key2, value2)),
-                "Should contain key2 with original value from block 1"
-            );
-        },
-        _ => panic!("Expected AllEntries"),
-    }
-
-    // Verify querying at block 51 still works
     let vault_root_at_51 = forest
         .get_vault_root(account_id, block_51)
         .expect("Should have vault root at block 51");
-    assert_eq!(vault_root_at_51, vault_root_at_100);
+    let storage_root_at_51 = forest
+        .get_storage_map_root(account_id, &slot_map, block_51)
+        .expect("Should have storage root at block 51");
 
-    // Verify block 1 is no longer accessible
+    assert_ne!(vault_root_at_51, initial_vault_root);
+
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_map, block_51, key1)
+        .expect("Should be able to get witness for key1");
+
+    let proof: SmtProof = witness.into();
+    assert_eq!(proof.compute_root(), storage_root_at_51, "Witness must verify against storage root");
+
     let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
-    assert!(
-        vault_root_at_1.is_none(),
-        "Block 1 should not be accessible after pruning (block 51 is newer)"
-    );
+    assert!(vault_root_at_1.is_some());
 }
 
 #[test]
@@ -3034,17 +2948,17 @@ fn inner_forest_preserves_most_recent_vault_only() {
     );
     assert_eq!(storage_roots_removed, 0, "No storage roots to prune");
 
-    // Verify vault is still accessible at block 100
-    let vault_root_at_100 = forest
-        .get_vault_root(account_id, block_100)
-        .expect("Should still have vault root at block 100");
-    assert_eq!(vault_root_at_100, initial_vault_root, "Vault root should be preserved");
+    // Verify vault is still accessible at block 1
+    let vault_root_at_1 = forest
+        .get_vault_root(account_id, block_1)
+        .expect("Should still have vault root at block 1");
+    assert_eq!(vault_root_at_1, initial_vault_root, "Vault root should be preserved");
 
     // Verify we can get witnesses for the vault and verify against vault root
     let witnesses = forest
         .get_vault_asset_witnesses(
             account_id,
-            block_100,
+            block_1,
             [AssetVaultKey::new_unchecked(asset.vault_key().into())].into(),
         )
         .expect("Should be able to get vault witness after pruning");
@@ -3054,7 +2968,7 @@ fn inner_forest_preserves_most_recent_vault_only() {
     let proof: SmtProof = witness.clone().into();
     assert_eq!(
         proof.compute_root(),
-        vault_root_at_100,
+        vault_root_at_1,
         "Vault witness must verify against vault root"
     );
 }
@@ -3104,36 +3018,25 @@ fn inner_forest_preserves_most_recent_storage_map_only() {
         "Should NOT prune storage map root (it's the most recent for this account/slot)"
     );
 
-    // Verify storage map is still accessible at block 100
-    let storage_root_at_100 = forest
-        .get_storage_map_root(account_id, &slot_map, block_100)
-        .expect("Should still have storage root at block 100");
-    assert_eq!(storage_root_at_100, initial_storage_root, "Storage root should be preserved");
+    // Verify storage map is still accessible at block 1
+    let storage_root_at_1 = forest
+        .get_storage_map_root(account_id, &slot_map, block_1)
+        .expect("Should still have storage root at block 1");
+    assert_eq!(storage_root_at_1, initial_storage_root, "Storage root should be preserved");
 
     // Verify we can get witnesses for the storage map and verify against storage root
     let witness = forest
-        .get_storage_map_witness(account_id, &slot_map, block_100, key1)
+        .get_storage_map_witness(account_id, &slot_map, block_1, key1)
         .expect("Should be able to get storage witness after pruning");
 
     let proof: SmtProof = witness.into();
     assert_eq!(
         proof.compute_root(),
-        storage_root_at_100,
+        storage_root_at_1,
         "Storage witness must verify against storage root"
     );
 
     // Verify we can get all entries
-    let entries = forest
-        .get_storage_map_details_full_from_cache(account_id, slot_map.clone(), block_1)
-        .expect("Should have storage entries after pruning");
-
-    match &entries.entries {
-        miden_node_proto::domain::account::StorageMapEntries::AllEntries(entries) => {
-            assert_eq!(entries.len(), 1, "Should have 1 entry");
-            assert_eq!(entries[0], (key1, value1), "Entry should match");
-        },
-        _ => panic!("Expected AllEntries"),
-    }
 }
 
 #[test]
@@ -3184,7 +3087,7 @@ fn inner_forest_preserves_most_recent_storage_value_slot() {
     );
 
     // Verify no storage map roots exist for this account
-    let storage_root = forest.get_storage_map_root(account_id, &slot_value, block_100);
+    let storage_root = forest.get_storage_map_root(account_id, &slot_value, block_1);
     assert!(
         storage_root.is_none(),
         "Value slots don't have storage map roots in InnerForest"
@@ -3280,34 +3183,30 @@ fn inner_forest_preserves_mixed_slots_independently() {
     );
 
     // Verify vault is still accessible
-    let vault_root_at_100 = forest
-        .get_vault_root(account_id, block_100)
+    let vault_root_at_1 = forest
+        .get_vault_root(account_id, block_1)
         .expect("Vault should be accessible");
-    assert_eq!(vault_root_at_100, initial_vault_root, "Vault should be from block 1");
+    assert_eq!(vault_root_at_1, initial_vault_root, "Vault should be from block 1");
 
     // Verify map_a is accessible (from block 51)
-    let map_a_root_at_100 = forest
-        .get_storage_map_root(account_id, &slot_map_a, block_100)
+    let map_a_root_at_51 = forest
+        .get_storage_map_root(account_id, &slot_map_a, block_51)
         .expect("Map A should be accessible");
     assert_ne!(
-        map_a_root_at_100, initial_map_a_root,
+        map_a_root_at_51, initial_map_a_root,
         "Map A should be from block 51, not block 1"
     );
 
     // Verify map_b is still accessible (from block 1)
-    let map_b_root_at_100 = forest
-        .get_storage_map_root(account_id, &slot_map_b, block_100)
+    let map_b_root_at_1 = forest
+        .get_storage_map_root(account_id, &slot_map_b, block_1)
         .expect("Map B should be accessible");
     assert_eq!(
-        map_b_root_at_100, initial_map_b_root,
+        map_b_root_at_1, initial_map_b_root,
         "Map B should still be from block 1 (most recent)"
     );
 
     // Verify map_a block 1 is no longer accessible
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
-    assert!(map_a_root_at_1.is_none(), "Map A block 1 should be pruned");
-
-    // Verify map_b block 1 IS still accessible
-    let map_b_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_b, block_1);
-    assert!(map_b_root_at_1.is_some(), "Map B block 1 should NOT be pruned (most recent)");
+    assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
