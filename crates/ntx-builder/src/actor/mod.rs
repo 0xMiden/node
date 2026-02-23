@@ -11,7 +11,6 @@ use account_state::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -20,7 +19,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
+use tokio::sync::{AcquireError, Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -29,16 +28,19 @@ use crate::builder::ChainState;
 use crate::db::Db;
 use crate::store::StoreClient;
 
-// ACTOR NOTIFICATION
+// ACTOR REQUESTS
 // ================================================================================================
 
-/// A notification sent from an account actor to the coordinator.
-pub enum ActorNotification {
+/// A request sent from an account actor to the coordinator via a shared mpsc channel.
+pub enum ActorRequest {
     /// One or more notes failed during transaction execution and should have their attempt
-    /// counters incremented.
+    /// counters incremented. The actor waits for the coordinator to acknowledge the DB write via
+    /// the oneshot channel, preventing race conditions where the actor could re-select the same
+    /// notes before the failure is persisted.
     NotesFailed {
         nullifiers: Vec<Nullifier>,
         block_num: BlockNumber,
+        ack_tx: tokio::sync::oneshot::Sender<()>,
     },
     /// A note script was fetched from the remote store and should be persisted to the local DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
@@ -49,9 +51,6 @@ pub enum ActorNotification {
 
 /// The reason an actor has shut down.
 pub enum ActorShutdownReason {
-    /// Occurs when an account actor detects failure in the messaging channel used by the
-    /// coordinator.
-    EventChannelClosed,
     /// Occurs when an account actor detects failure in acquiring the rate-limiting semaphore.
     SemaphoreFailed(AcquireError),
     /// Occurs when an account actor detects its corresponding cancellation token has been triggered
@@ -87,8 +86,8 @@ pub struct AccountActorContext {
     pub max_note_attempts: usize,
     /// Database for persistent state.
     pub db: Db,
-    /// Channel for sending notifications to the coordinator (via the builder event loop).
-    pub notification_tx: mpsc::Sender<ActorNotification>,
+    /// Channel for sending requests to the coordinator (via the builder event loop).
+    pub request_tx: mpsc::Sender<ActorRequest>,
 }
 
 // ACCOUNT ORIGIN
@@ -179,7 +178,7 @@ pub struct AccountActor {
     store: StoreClient,
     db: Db,
     mode: ActorMode,
-    event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
+    notify: Arc<Notify>,
     cancel_token: CancellationToken,
     block_producer: BlockProducerClient,
     validator: ValidatorClient,
@@ -190,17 +189,16 @@ pub struct AccountActor {
     max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
-    /// Channel for sending notifications to the coordinator.
-    notification_tx: mpsc::Sender<ActorNotification>,
+    /// Channel for sending requests to the coordinator.
+    request_tx: mpsc::Sender<ActorRequest>,
 }
 
 impl AccountActor {
-    /// Constructs a new account actor and corresponding messaging channel with the given
-    /// configuration.
+    /// Constructs a new account actor with the given configuration.
     pub fn new(
         origin: AccountOrigin,
         actor_context: &AccountActorContext,
-        event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
+        notify: Arc<Notify>,
         cancel_token: CancellationToken,
     ) -> Self {
         let block_producer = BlockProducerClient::new(actor_context.block_producer_url.clone());
@@ -217,7 +215,7 @@ impl AccountActor {
             store: actor_context.store.clone(),
             db: actor_context.db.clone(),
             mode: ActorMode::NoViableNotes,
-            event_rx,
+            notify,
             cancel_token,
             block_producer,
             validator,
@@ -226,7 +224,7 @@ impl AccountActor {
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
-            notification_tx: actor_context.notification_tx.clone(),
+            request_tx: actor_context.request_tx.clone(),
         }
     }
 
@@ -261,28 +259,22 @@ impl AccountActor {
                 _ = self.cancel_token.cancelled() => {
                     return ActorShutdownReason::Cancelled(account_id);
                 }
-                // Handle mempool events.
-                event = self.event_rx.recv() => {
-                    let Some(event) = event else {
-                         return ActorShutdownReason::EventChannelClosed;
-                    };
-                    // Re-enable transaction execution if the transaction being waited on has
-                    // been resolved (added to mempool, committed in a block, or reverted).
-                    if let ActorMode::TransactionInflight(awaited_id) = self.mode {
-                        let should_wake = match event.as_ref() {
-                            MempoolEvent::TransactionAdded { id, .. } => *id == awaited_id,
-                            MempoolEvent::BlockCommitted { txs, .. } => {
-                                txs.contains(&awaited_id)
-                            },
-                            MempoolEvent::TransactionsReverted(tx_ids) => {
-                                tx_ids.contains(&awaited_id)
-                            },
-                        };
-                        if should_wake {
+                // Handle coordinator notifications. On notification, re-evaluate state from DB.
+                _ = self.notify.notified() => {
+                    match self.mode {
+                        ActorMode::TransactionInflight(awaited_id) => {
+                            // Check DB: is the inflight tx still pending?
+                            let resolved = self.db
+                                .is_transaction_resolved(account_id, awaited_id)
+                                .await
+                                .expect("should be able to check tx status");
+                            if resolved {
+                                self.mode = ActorMode::NotesAvailable;
+                            }
+                        },
+                        _ => {
                             self.mode = ActorMode::NotesAvailable;
                         }
-                    } else {
-                        self.mode = ActorMode::NotesAvailable;
                     }
                 },
                 // Execute transactions.
@@ -395,25 +387,31 @@ impl AccountActor {
         }
     }
 
-    /// Sends notifications to the coordinator to cache note scripts fetched from the remote store.
+    /// Sends requests to the coordinator to cache note scripts fetched from the remote store.
     async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
         for (script_root, script) in scripts {
             let _ = self
-                .notification_tx
-                .send(ActorNotification::CacheNoteScript { script_root, script })
+                .request_tx
+                .send(ActorRequest::CacheNoteScript { script_root, script })
                 .await;
         }
     }
 
-    /// Sends a notification to the coordinator to mark notes as failed.
+    /// Sends a request to the coordinator to mark notes as failed and waits for the DB write to
+    /// complete. This prevents a race condition where the actor could re-select the same notes
+    /// before the failure counts are updated in the database.
     async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         let _ = self
-            .notification_tx
-            .send(ActorNotification::NotesFailed {
+            .request_tx
+            .send(ActorRequest::NotesFailed {
                 nullifiers: nullifiers.to_vec(),
                 block_num,
+                ack_tx,
             })
             .await;
+        // Wait for the coordinator to confirm the DB write.
+        let _ = ack_rx.await;
     }
 }
 

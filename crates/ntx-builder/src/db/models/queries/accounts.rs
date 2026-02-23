@@ -4,6 +4,7 @@ use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::Account;
+use miden_protocol::transaction::TransactionId;
 
 use crate::db::models::conv as conversions;
 use crate::db::schema;
@@ -99,4 +100,31 @@ pub fn get_account(
 
     row.map(|AccountRow { account_data, .. }| conversions::account_from_bytes(&account_data))
         .transpose()
+}
+
+/// Returns `true` when no inflight account row exists with the given `transaction_id`, meaning
+/// the transaction was committed or reverted.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT COUNT(*)
+/// FROM accounts
+/// WHERE account_id = ?1 AND transaction_id = ?2
+/// ```
+pub fn is_transaction_resolved(
+    conn: &mut SqliteConnection,
+    account_id: NetworkAccountId,
+    tx_id: &TransactionId,
+) -> Result<bool, DatabaseError> {
+    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
+    let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
+
+    let count: i64 = schema::accounts::table
+        .filter(schema::accounts::account_id.eq(&account_id_bytes))
+        .filter(schema::accounts::transaction_id.eq(&tx_id_bytes))
+        .count()
+        .get_result(conn)?;
+
+    Ok(count == 0)
 }

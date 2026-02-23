@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::NtxBuilderConfig;
-use crate::actor::{AccountActorContext, AccountOrigin, ActorNotification};
+use crate::actor::{AccountActorContext, AccountOrigin, ActorRequest};
 use crate::coordinator::Coordinator;
 use crate::db::Db;
 use crate::store::StoreClient;
@@ -98,8 +98,8 @@ pub struct NetworkTransactionBuilder {
     actor_context: AccountActorContext,
     /// Stream of mempool events from the block producer.
     mempool_events: MempoolEventStream,
-    /// Receiver for notifications from account actors (e.g., note failures).
-    notification_rx: mpsc::Receiver<ActorNotification>,
+    /// Receiver for requests from account actors (note failures, script caching).
+    actor_request_rx: mpsc::Receiver<ActorRequest>,
 }
 
 impl NetworkTransactionBuilder {
@@ -112,7 +112,7 @@ impl NetworkTransactionBuilder {
         chain_state: Arc<RwLock<ChainState>>,
         actor_context: AccountActorContext,
         mempool_events: MempoolEventStream,
-        notification_rx: mpsc::Receiver<ActorNotification>,
+        actor_request_rx: mpsc::Receiver<ActorRequest>,
     ) -> Self {
         Self {
             config,
@@ -122,7 +122,7 @@ impl NetworkTransactionBuilder {
             chain_state,
             actor_context,
             mempool_events,
-            notification_rx,
+            actor_request_rx,
         }
     }
 
@@ -164,7 +164,7 @@ impl NetworkTransactionBuilder {
                         .context("mempool event stream ended")?
                         .context("mempool event stream failed")?;
 
-                    self.handle_mempool_event(event.into()).await?;
+                    self.handle_mempool_event(event).await?;
                 },
                 // Handle account batches loaded from the store.
                 // Once all accounts are loaded, the channel closes and this branch
@@ -172,9 +172,9 @@ impl NetworkTransactionBuilder {
                 Some(account_id) = account_rx.recv() => {
                     self.handle_loaded_account(account_id).await?;
                 },
-                // Handle actor notifications (DB writes delegated from actors).
-                Some(notification) = self.notification_rx.recv() => {
-                    self.handle_actor_notification(notification).await;
+                // Handle requests from actors.
+                Some(request) = self.actor_request_rx.recv() => {
+                    self.handle_actor_request(request).await;
                 },
                 // Handle account loader task completion/failure.
                 // If the task fails, we abort since the builder would be in a degraded state
@@ -227,18 +227,14 @@ impl NetworkTransactionBuilder {
             .context("failed to sync account to DB")?;
 
         self.coordinator
-            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context)
-            .await?;
+            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
         Ok(())
     }
 
-    /// Handles mempool events by writing to DB first, then routing to actors.
+    /// Handles mempool events by writing to DB first, then notifying actors.
     #[tracing::instrument(name = "ntx.builder.handle_mempool_event", skip(self, event))]
-    async fn handle_mempool_event(
-        &mut self,
-        event: Arc<MempoolEvent>,
-    ) -> Result<(), anyhow::Error> {
-        match event.as_ref() {
+    async fn handle_mempool_event(&mut self, event: MempoolEvent) -> Result<(), anyhow::Error> {
+        match &event {
             MempoolEvent::TransactionAdded { account_delta, .. } => {
                 // Write event effects to DB first.
                 self.coordinator
@@ -253,13 +249,11 @@ impl NetworkTransactionBuilder {
                         // Spawn new actors if a transaction creates a new network account.
                         let is_creating_account = delta.is_full_state();
                         if is_creating_account {
-                            self.coordinator
-                                .spawn_actor(network_account, &self.actor_context)
-                                .await?;
+                            self.coordinator.spawn_actor(network_account, &self.actor_context);
                         }
                     }
                 }
-                self.coordinator.send_targeted(&event).await?;
+                self.coordinator.send_targeted(&event);
                 Ok(())
             },
             // Update chain state and broadcast.
@@ -271,7 +265,7 @@ impl NetworkTransactionBuilder {
                     .context("failed to write BlockCommitted to DB")?;
 
                 self.update_chain_tip(header.as_ref().clone()).await;
-                self.coordinator.broadcast(event.clone()).await;
+                self.coordinator.broadcast();
                 Ok(())
             },
             // Broadcast to all actors.
@@ -283,7 +277,7 @@ impl NetworkTransactionBuilder {
                     .await
                     .context("failed to write TransactionsReverted to DB")?;
 
-                self.coordinator.broadcast(event.clone()).await;
+                self.coordinator.broadcast();
 
                 // Cancel actors for reverted account creations.
                 for account_id in &reverted_accounts {
@@ -294,15 +288,16 @@ impl NetworkTransactionBuilder {
         }
     }
 
-    /// Processes a notification from an account actor by performing the corresponding DB write.
-    async fn handle_actor_notification(&mut self, notification: ActorNotification) {
-        match notification {
-            ActorNotification::NotesFailed { nullifiers, block_num } => {
+    /// Processes a request from an account actor.
+    async fn handle_actor_request(&mut self, request: ActorRequest) {
+        match request {
+            ActorRequest::NotesFailed { nullifiers, block_num, ack_tx } => {
                 if let Err(err) = self.db.notes_failed(nullifiers, block_num).await {
                     tracing::error!(err = %err, "failed to mark notes as failed");
                 }
+                let _ = ack_tx.send(());
             },
-            ActorNotification::CacheNoteScript { script_root, script } => {
+            ActorRequest::CacheNoteScript { script_root, script } => {
                 if let Err(err) = self.db.insert_note_script(script_root, &script).await {
                     tracing::error!(err = %err, "failed to cache note script");
                 }
