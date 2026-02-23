@@ -37,13 +37,12 @@ mod tests;
 
 /// Raw row type for account state delta queries.
 ///
-/// Fields: (`nonce`, `code_commitment`, `storage_header`, `vault_root`)
+/// Fields: (`nonce`, `code_commitment`, `storage_header`)
 #[derive(diesel::prelude::Queryable)]
 struct AccountStateDeltaRow {
     nonce: Option<i64>,
     code_commitment: Option<Vec<u8>>,
     storage_header: Option<Vec<u8>>,
-    vault_root: Option<Vec<u8>>,
 }
 
 /// Data needed for applying a delta update to an existing account.
@@ -53,7 +52,6 @@ pub(super) struct AccountStateHeadersForDelta {
     pub nonce: Felt,
     pub code_commitment: Word,
     pub storage_header: AccountStorageHeader,
-    pub vault_root: Word,
 }
 
 /// Minimal account state computed from a partial delta update.
@@ -86,12 +84,11 @@ pub(super) enum AccountStateForInsert {
 /// - `nonce` (to add `nonce_delta`)
 /// - `code_commitment` (unchanged in partial deltas)
 /// - `storage_header` (to apply storage delta)
-/// - `vault_root` (to apply vault delta)
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT nonce, code_commitment, storage_header, vault_root
+/// SELECT nonce, code_commitment, storage_header
 /// FROM accounts
 /// WHERE account_id = ?1 AND is_latest = 1
 /// ```
@@ -105,7 +102,6 @@ pub(super) fn select_minimal_account_state_headers(
             schema::accounts::nonce,
             schema::accounts::code_commitment,
             schema::accounts::storage_header,
-            schema::accounts::vault_root,
         ),
     )
     .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
@@ -133,17 +129,10 @@ pub(super) fn select_minimal_account_state_headers(
         None => AccountStorageHeader::new(Vec::new())?,
     };
 
-    let vault_root = row
-        .vault_root
-        .map(|bytes| Word::read_from_bytes(&bytes))
-        .transpose()?
-        .unwrap_or(Word::default());
-
     Ok(AccountStateHeadersForDelta {
         nonce,
         code_commitment,
         storage_header,
-        vault_root,
     })
 }
 
