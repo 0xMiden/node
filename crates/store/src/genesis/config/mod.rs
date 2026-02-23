@@ -43,6 +43,10 @@ use self::errors::GenesisConfigError;
 #[cfg(test)]
 mod tests;
 
+const DEFAULT_NATIVE_FAUCET_SYMBOL: &str = "MIDEN";
+const DEFAULT_NATIVE_FAUCET_DECIMALS: u8 = 6;
+const DEFAULT_NATIVE_FAUCET_MAX_SUPPLY: u64 = 100_000_000_000_000_000;
+
 // GENESIS CONFIG
 // ================================================================================================
 
@@ -64,7 +68,17 @@ struct GenericAccountConfig {
 pub struct GenesisConfig {
     version: u32,
     timestamp: u32,
-    native_faucet: NativeFaucetConfig,
+    /// Override the native faucet with a custom faucet account.
+    ///
+    /// If unspecified, a default native faucet will be used with:
+    ///
+    /// ```toml
+    /// symbol     = "MIDEN"
+    /// decimals   = 6
+    /// max_supply = 100_000_000_000_000_000
+    /// ```
+    #[serde(default)]
+    native_faucet: Option<PathBuf>,
     fee_parameters: FeeParameterConfig,
     #[serde(default)]
     wallet: Vec<WalletConfig>,
@@ -78,7 +92,6 @@ pub struct GenesisConfig {
 
 impl Default for GenesisConfig {
     fn default() -> Self {
-        let miden = TokenSymbolStr::from_str("MIDEN").unwrap();
         Self {
             version: 1_u32,
             timestamp: u32::try_from(
@@ -89,11 +102,7 @@ impl Default for GenesisConfig {
             )
             .expect("Timestamp should fit into u32"),
             wallet: vec![],
-            native_faucet: NativeFaucetConfig::Parameters {
-                max_supply: 100_000_000_000_000_000u64,
-                decimals: 6u8,
-                symbol: miden,
-            },
+            native_faucet: None,
             fee_parameters: FeeParameterConfig { verification_base_fee: 0 },
             fungible_faucet: vec![],
             account: vec![],
@@ -165,9 +174,9 @@ impl GenesisConfig {
         // accounts/sign transactions
         let mut secrets = Vec::new();
 
-        // Handle native faucet: build from parameters or load from file
+        // Handle native faucet: build from defaults or load from file
         let (native_faucet_account, symbol, native_secret) =
-            native_faucet.build_account(&config_dir)?;
+            NativeFaucetConfig(native_faucet).build_account(&config_dir)?;
         if let Some(secret_key) = native_secret {
             secrets.push((
                 format!("faucet_{symbol}.mac", symbol = symbol.to_string().to_lowercase()),
@@ -346,41 +355,33 @@ pub struct FeeParameterConfig {
 // NATIVE FAUCET CONFIG
 // ================================================================================================
 
-/// Native faucet can be specified as inline parameters or as a path to a pre-built account file.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(untagged)]
-enum NativeFaucetConfig {
-    /// Build from parameters (dev/testing)
-    Parameters {
-        symbol: TokenSymbolStr,
-        decimals: u8,
-        max_supply: u64,
-    },
-    /// Load from pre-built account file (production/multisig)
-    File { path: PathBuf },
-}
+/// Wraps an optional path to a pre-built faucet account file.
+///
+/// When no path is provided, a default native faucet is built using hardcoded MIDEN defaults.
+struct NativeFaucetConfig(Option<PathBuf>);
 
 impl NativeFaucetConfig {
     /// Build or load the native faucet account.
     ///
-    /// For `Parameters`, builds a new faucet and returns the generated secret key.
-    /// For `File`, loads the account from disk and validates it is a fungible faucet.
+    /// For `None`, builds a new faucet from defaults and returns the generated secret key.
+    /// For `Some(path)`, loads the account from disk and validates it is a fungible faucet.
     fn build_account(
         self,
         config_dir: &Path,
     ) -> Result<(Account, TokenSymbolStr, Option<RpoSecretKey>), GenesisConfigError> {
-        match self {
-            NativeFaucetConfig::Parameters { symbol, decimals, max_supply } => {
+        match self.0 {
+            None => {
+                let symbol = TokenSymbolStr::from_str(DEFAULT_NATIVE_FAUCET_SYMBOL).unwrap();
                 let faucet_config = FungibleFaucetConfig {
                     symbol: symbol.clone(),
-                    decimals,
-                    max_supply,
+                    decimals: DEFAULT_NATIVE_FAUCET_DECIMALS,
+                    max_supply: DEFAULT_NATIVE_FAUCET_MAX_SUPPLY,
                     storage_mode: StorageMode::Public,
                 };
                 let (account, secret_key) = faucet_config.build_account()?;
                 Ok((account, symbol, Some(secret_key)))
             },
-            NativeFaucetConfig::File { path } => {
+            Some(path) => {
                 let full_path = config_dir.join(&path);
                 let account_file = AccountFile::read(&full_path)
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;

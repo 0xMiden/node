@@ -23,9 +23,9 @@ fn main() {
 /// Generates sample agglayer account files for the `02-with-account-files` genesis config sample.
 ///
 /// Creates:
-/// - `bridge.mac` - agglayer bridge account
-/// - `agglayer_faucet_eth.mac` - agglayer faucet for wrapped ETH
-/// - `agglayer_faucet_usdc.mac` - agglayer faucet for wrapped USDC
+/// - `02-with-account-files/bridge.mac` - agglayer bridge account
+/// - `02-with-account-files/agglayer_faucet_eth.mac` - agglayer faucet for wrapped ETH
+/// - `02-with-account-files/agglayer_faucet_usdc.mac` - agglayer faucet for wrapped USDC
 fn generate_agglayer_sample_accounts() {
     // Use CARGO_MANIFEST_DIR to get the absolute path to the crate root
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");

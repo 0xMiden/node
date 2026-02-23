@@ -45,8 +45,8 @@ fn parsing_yields_expected_default_values() -> TestResult {
     {
         let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
 
-        assert_eq!(faucet.max_supply(), Felt::new(100_000_000));
-        assert_eq!(faucet.decimals(), 3);
+        assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
+        assert_eq!(faucet.decimals(), 6);
         assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
@@ -121,11 +121,6 @@ fn parsing_account_from_file() -> TestResult {
 timestamp = 1717344256
 version   = 1
 
-[native_faucet]
-decimals   = 6
-max_supply = 100_000_000
-symbol     = "TEST"
-
 [fee_parameters]
 verification_base_fee = 0
 
@@ -184,8 +179,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
 timestamp = 1717344256
 version   = 1
 
-[native_faucet]
-path = "native_faucet.mac"
+native_faucet = "native_faucet.mac"
 
 [fee_parameters]
 verification_base_fee = 0
@@ -241,8 +235,7 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
 timestamp = 1717344256
 version   = 1
 
-[native_faucet]
-path = "not_a_faucet.mac"
+native_faucet = "not_a_faucet.mac"
 
 [fee_parameters]
 verification_base_fee = 0
@@ -271,11 +264,6 @@ fn missing_account_file_returns_error() {
 timestamp = 1717344256
 version   = 1
 
-[native_faucet]
-decimals   = 6
-max_supply = 100_000_000
-symbol     = "TEST"
-
 [fee_parameters]
 verification_base_fee = 0
 
@@ -298,31 +286,6 @@ path = "does_not_exist.mac"
         matches!(err, GenesisConfigError::AccountFileRead(..)),
         "Expected AccountFileRead error, got: {err:?}"
     );
-}
-
-#[test]
-fn missing_native_faucet_not_allowed() -> TestResult {
-    let toml_content = r"
-timestamp = 1717344256
-version   = 1
-
-[fee_parameters]
-verification_base_fee = 0
-";
-
-    let temp_dir = tempfile::tempdir()?;
-    let config_path = write_toml_file(temp_dir.path(), toml_content);
-    let result = GenesisConfig::read_toml_file(&config_path);
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_matches!(err, GenesisConfigError::Toml(toml_err) => {
-        let msg = toml_err.message();
-        assert!(
-            msg.contains("missing field `native_faucet`"),
-            "Expected error message to mention 'native_faucet', got: {msg}"
-        );
-    });
-    Ok(())
 }
 
 #[test]
