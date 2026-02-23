@@ -50,7 +50,10 @@ tracing           = { workspace = true }
 url               = { workspace = true }
 
 [build-dependencies]
+fs-err                             = { workspace = true }
+miden-agglayer                     = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
+miden-protocol                     = { features = ["std"], workspace = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }
@@ -62,6 +65,7 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
 regex                 = { version = "1.11" }
+tempfile              = { workspace = true }
 termtree              = { version = "0.5" }
 
 [features]
