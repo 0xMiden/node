@@ -19,6 +19,9 @@ pub use accounts::*;
 mod chain_state;
 pub use chain_state::*;
 
+mod note_scripts;
+pub use note_scripts::*;
+
 mod notes;
 pub use notes::*;
 

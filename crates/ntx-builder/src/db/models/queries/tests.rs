@@ -426,39 +426,6 @@ fn available_notes_only_returns_notes_for_specified_account() {
     assert_eq!(result[0].to_inner().nullifier(), note_acct1.nullifier());
 }
 
-// DROP FAILING NOTES TESTS
-// ================================================================================================
-
-#[test]
-fn drop_failing_notes_scoped_to_account() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id_1 = mock_network_account_id();
-    let account_id_2 = mock_network_account_id_seeded(42);
-
-    let note_acct1 = mock_single_target_note(account_id_1, 10);
-    let note_acct2 = mock_single_target_note(account_id_2, 20);
-
-    // Insert both as committed.
-    insert_committed_notes(conn, &[note_acct1.clone(), note_acct2.clone()]).unwrap();
-
-    // Fail both notes enough times to exceed max_attempts=2.
-    let block_num = BlockNumber::from(100u32);
-    notes_failed(conn, &[note_acct1.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_acct1.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_acct2.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_acct2.nullifier()], block_num).unwrap();
-
-    // Drop failing notes for account_id_1 only.
-    drop_failing_notes(conn, account_id_1, 2).unwrap();
-
-    // note_acct1 should be deleted, note_acct2 should remain.
-    assert_eq!(count_notes(conn), 1);
-    let remaining: Vec<Vec<u8>> =
-        schema::notes::table.select(schema::notes::nullifier).load(conn).unwrap();
-    assert_eq!(remaining[0], conversions::nullifier_to_bytes(&note_acct2.nullifier()));
-}
-
 // NOTES FAILED TESTS
 // ================================================================================================
 
@@ -511,6 +478,55 @@ fn upsert_chain_state_updates_singleton() {
         .first(conn)
         .unwrap();
     assert_eq!(stored_block_num, conversions::block_num_to_i64(block_num_2));
+}
+
+// NOTE SCRIPT TESTS
+// ================================================================================================
+
+#[test]
+fn note_script_insert_and_lookup() {
+    let (conn, _dir) = &mut test_conn();
+
+    // Extract a NoteScript from a mock note.
+    let account_id = mock_network_account_id();
+    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into();
+    let script = note.script().clone();
+    let root = script.root();
+
+    // Insert the script.
+    insert_note_script(conn, &root, &script).unwrap();
+
+    // Look it up — should match the original.
+    let found = lookup_note_script(conn, &root).unwrap();
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().root(), script.root());
+}
+
+#[test]
+fn note_script_lookup_returns_none_for_missing() {
+    let (conn, _dir) = &mut test_conn();
+
+    let missing_root = Word::default();
+    let found = lookup_note_script(conn, &missing_root).unwrap();
+    assert!(found.is_none());
+}
+
+#[test]
+fn note_script_insert_is_idempotent() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_id = mock_network_account_id();
+    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into();
+    let script = note.script().clone();
+    let root = script.root();
+
+    // Insert the same script twice — should not error.
+    insert_note_script(conn, &root, &script).unwrap();
+    insert_note_script(conn, &root, &script).unwrap();
+
+    // Should still be retrievable.
+    let found = lookup_note_script(conn, &root).unwrap();
+    assert!(found.is_some());
 }
 
 // HELPERS (domain type construction)

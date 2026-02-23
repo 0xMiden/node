@@ -4,10 +4,11 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::note::SingleTargetNetworkNote;
+use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use tracing::{info, instrument};
 
@@ -72,19 +73,6 @@ impl Db {
             .query("has_available_notes", move |conn| {
                 let notes = queries::available_notes(conn, account_id, block_num, max_attempts)?;
                 Ok(!notes.is_empty())
-            })
-            .await
-    }
-
-    /// Drops notes for the given account that have exceeded the maximum attempt count.
-    pub async fn drop_failing_notes(
-        &self,
-        account_id: NetworkAccountId,
-        max_attempts: usize,
-    ) -> Result<()> {
-        self.inner
-            .transact("drop_failing_notes", move |conn| {
-                queries::drop_failing_notes(conn, account_id, max_attempts)
             })
             .await
     }
@@ -192,6 +180,25 @@ impl Db {
                 queries::upsert_committed_account(conn, account_id, &account)?;
                 queries::insert_committed_notes(conn, &notes)?;
                 Ok(())
+            })
+            .await
+    }
+
+    /// Looks up a cached note script by root hash.
+    pub async fn lookup_note_script(&self, script_root: Word) -> Result<Option<NoteScript>> {
+        self.inner
+            .query("lookup_note_script", move |conn| {
+                queries::lookup_note_script(conn, &script_root)
+            })
+            .await
+    }
+
+    /// Persists a note script to the local cache.
+    pub async fn insert_note_script(&self, script_root: Word, script: &NoteScript) -> Result<()> {
+        let script = script.clone();
+        self.inner
+            .transact("insert_note_script", move |conn| {
+                queries::insert_note_script(conn, &script_root, &script)
             })
             .await
     }
