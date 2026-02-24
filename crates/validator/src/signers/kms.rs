@@ -3,7 +3,6 @@ use aws_sdk_kms::error::SdkError;
 use aws_sdk_kms::operation::sign::SignError;
 use aws_sdk_kms::types::SigningAlgorithmSpec;
 use k256::PublicKey as K256PublicKey;
-use k256::ecdsa::Signature as K256Signature;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::pkcs8::DecodePublicKey as _;
 use miden_node_utils::signer::BlockSigner;
@@ -19,16 +18,16 @@ use miden_tx::utils::{Deserializable, DeserializationError, Serializable};
 pub enum KmsSignerError {
     /// The KMS backend errored out.
     #[error("KMS service failure")]
-    KmsServiceError(#[from] Box<SdkError<SignError>>),
+    KmsServiceError(#[source] Box<SdkError<SignError>>),
     /// The KMS backend did not error but returned an empty signature.
     #[error("KMS request returned an empty result")]
     EmptyBlob,
     /// The KMS backend returned a signature with an invalid format.
     #[error("k256 signature error")]
-    K256Error(#[from] k256::ecdsa::Error),
+    K256Error(#[source] k256::ecdsa::Error),
     /// The KMS backend returned a signature with an invalid format.
     #[error("invalid signature format")]
-    SignatureFormatError(#[from] DeserializationError),
+    SignatureFormatError(#[source] DeserializationError),
 }
 
 // KMS SIGNER
@@ -42,6 +41,29 @@ pub struct KmsSigner {
 }
 
 impl KmsSigner {
+    /// Constructs a new KMS signer and retrieves the corresponding public key from the AWS backend.
+    ///
+    /// The supplied `key_id` must be a valid AWS KMS key ID in the AWS region corresponding to the
+    /// typical `AWS_REGION` env var.
+    ///
+    /// A policy statement such as the following is required to allow a process on an EC2 instance
+    /// to use this signer:
+    /// ```json
+    /// {
+    ///   "Sid": "AllowEc2RoleUseOfKey",
+    ///   "Effect": "Allow",
+    ///   "Principal": {
+    ///     "AWS": "arn:aws:iam::<account_id>:role/<role_name>"
+    ///   },
+    ///   "Action": [
+    ///     "kms:Sign",
+    ///     "kms:Verify",
+    ///     "kms:DescribeKey"
+    ///     "kms:GetPublicKey"
+    ///   ],
+    ///   "Resource": "*"
+    /// },
+    /// ```
     pub async fn new(key_id: impl Into<String>) -> anyhow::Result<Self> {
         let version = aws_config::BehaviorVersion::v2026_01_12();
         let config = aws_config::load_defaults(version).await;
@@ -69,7 +91,11 @@ impl BlockSigner for KmsSigner {
     type Error = KmsSignerError;
 
     async fn sign(&self, header: &BlockHeader) -> Result<Signature, Self::Error> {
-        // AWS KMS does not support SHA3 (Keccak-256), so we need to produce the digest ourselves.
+        // The Validator produces Ethereum-style ECDSA (secp256k1) signatures over Keccak-256
+        // digests. AWS KMS does not support SHA-3 hashing for ECDSA keys
+        // (ECC_SECG_P256K1 being the corresponding AWS key-spec), so we pre-hash the
+        // message and pass MessageType::Digest. KMS signs the provided 32-byte digest
+        // verbatim.
         let msg = header.commitment().to_bytes();
         let digest = Keccak256::hash(&msg);
 
@@ -83,23 +109,15 @@ impl BlockSigner for KmsSigner {
             .message(digest.to_bytes().into())
             .send()
             .await
-            .map_err(Box::from)?;
+            .map_err(Box::from)
+            .map_err(KmsSignerError::KmsServiceError)?;
 
-        // Convert DER -> 64-byte r||s, and normalize s to low-S.
+        // Decode DER-encoded signature.
         let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
-        let sig = K256Signature::from_der(sig_der.as_ref())?;
-        let rs = if let Some(norm) = sig.normalize_s() {
-            norm.to_bytes()
-        } else {
-            sig.to_bytes()
-        }; // 64 bytes.
-
-        // Append a recovery byte `v` to make 65 bytes (r||s||v).
-        let mut sig65 = [0u8; 65];
-        sig65[..64].copy_from_slice(&rs);
-        sig65[64] = 0; // Recovery id is not used by verify(pk), so 0 is fine.
-
-        Ok(Signature::read_from_bytes(&sig65)?)
+        // Recovery id is not used by verify(pk), so 0 is fine.
+        let recovery_id = 0;
+        Signature::from_der(sig_der.as_ref(), recovery_id)
+            .map_err(KmsSignerError::SignatureFormatError)
     }
 
     fn public_key(&self) -> PublicKey {

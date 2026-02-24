@@ -67,7 +67,7 @@ impl<S> GenesisState<S> {
 }
 
 impl<S: BlockSigner> GenesisState<S> {
-    /// Returns the block header and the account SMT
+    /// Returns the block header and the account SMT.
     pub async fn into_block(self) -> anyhow::Result<GenesisBlock> {
         let accounts: Vec<BlockAccountUpdate> = self
             .accounts
