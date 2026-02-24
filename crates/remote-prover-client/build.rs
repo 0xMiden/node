@@ -1,7 +1,7 @@
-use fs_err as fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use fs_err as fs;
 use miden_node_proto_build::remote_prover_api_descriptor;
 use miette::{Context, IntoDiagnostic};
 use tonic_prost_build::FileDescriptorSet;
