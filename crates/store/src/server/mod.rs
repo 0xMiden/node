@@ -54,8 +54,8 @@ impl Store {
         skip_all,
         err,
     )]
-    pub fn bootstrap<S: BlockSigner>(
-        genesis: GenesisState<S>,
+    pub fn bootstrap(
+        genesis: GenesisState<SecretKey>,
         data_directory: &Path,
     ) -> anyhow::Result<()> {
         let genesis = genesis
