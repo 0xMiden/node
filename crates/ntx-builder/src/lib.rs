@@ -11,7 +11,7 @@ use db::Db;
 use futures::TryStreamExt;
 use miden_node_utils::lru_cache::LruCache;
 use store::StoreClient;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use url::Url;
 
 mod actor;
@@ -249,6 +249,8 @@ impl NtxBuilderConfig {
 
         let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
 
+        let (notification_tx, notification_rx) = mpsc::channel(1);
+
         let actor_context = AccountActorContext {
             block_producer_url: self.block_producer_url.clone(),
             validator_url: self.validator_url.clone(),
@@ -259,6 +261,7 @@ impl NtxBuilderConfig {
             max_notes_per_tx: self.max_notes_per_tx,
             max_note_attempts: self.max_note_attempts,
             db: db.clone(),
+            notification_tx,
         };
 
         Ok(NetworkTransactionBuilder::new(
@@ -269,6 +272,7 @@ impl NtxBuilderConfig {
             chain_state,
             actor_context,
             mempool_events,
+            notification_rx,
         ))
     }
 }

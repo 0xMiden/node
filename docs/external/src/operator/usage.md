@@ -50,8 +50,8 @@ miden-node bundled bootstrap \
   --genesis-config-file genesis.toml
 ```
 
-The genesis configuration file should contain fee parameters, the native faucet, optionally other
-fungible faucets, and also optionally, wallet definitions with assets, for example:
+The genesis configuration file should contain fee parameters, optionally a custom native faucet,
+optionally other fungible faucets, and also optionally, wallet definitions with assets, for example:
 
 ```toml
 # The UNIX timestamp of the genesis block. It will influence the hash of the genesis block.
@@ -59,11 +59,13 @@ timestamp = 1717344256
 # Defines the format of the block protocol to use for the genesis block.
 version   = 1
 
-# The native faucet to use for fees.
-[native_faucet]
-symbol     = "MIDEN"
-decimals   = 6
-max_supply = 100_000_000_000_000_000
+# The native faucet defaults to a MIDEN token (symbol="MIDEN", decimals=6,
+# max_supply=100_000_000_000_000_000). To override it with a pre-built account
+# file, specify the path:
+#
+#   native_faucet = "path/to/faucet.mac"
+#
+# The path is relative to this configuration file.
 
 # The fee parameters to use for the genesis block.
 [fee_parameters]
@@ -93,6 +95,17 @@ assets       = [{ amount = 999_000_000, symbol = "FUZZY" }]
 storage_mode = "private"
 # The code of the account can be updated or not.
 # has_updatable_code = false # default value
+```
+
+To include pre-built accounts (e.g. bridge or wrapped-asset faucets) in the genesis block, use
+`[[account]]` entries with paths to `.mac` files:
+
+```toml
+[[account]]
+path = "bridge.mac"
+
+[[account]]
+path = "eth_faucet.mac"
 ```
 
 ## Operation

@@ -52,6 +52,6 @@ pretty_assertions     = "1.4"
 rand_chacha           = { default-features = false, version = "0.9" }
 rstest                = { workspace = true }
 serial_test           = "3.2"
-tempfile              = { version = "3.20" }
+tempfile              = { workspace = true }
 tokio                 = { features = ["test-util"], workspace = true }
 winterfell            = { version = "0.13" }

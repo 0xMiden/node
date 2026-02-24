@@ -17,7 +17,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteScript};
+use miden_protocol::note::{Note, NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
@@ -28,6 +28,21 @@ use crate::block_producer::BlockProducerClient;
 use crate::builder::ChainState;
 use crate::db::Db;
 use crate::store::StoreClient;
+
+// ACTOR NOTIFICATION
+// ================================================================================================
+
+/// A notification sent from an account actor to the coordinator.
+pub enum ActorNotification {
+    /// One or more notes failed during transaction execution and should have their attempt
+    /// counters incremented.
+    NotesFailed {
+        nullifiers: Vec<Nullifier>,
+        block_num: BlockNumber,
+    },
+    /// A note script was fetched from the remote store and should be persisted to the local DB.
+    CacheNoteScript { script_root: Word, script: NoteScript },
+}
 
 // ACTOR SHUTDOWN REASON
 // ================================================================================================
@@ -72,6 +87,8 @@ pub struct AccountActorContext {
     pub max_note_attempts: usize,
     /// Database for persistent state.
     pub db: Db,
+    /// Channel for sending notifications to the coordinator (via the builder event loop).
+    pub notification_tx: mpsc::Sender<ActorNotification>,
 }
 
 // ACCOUNT ORIGIN
@@ -173,6 +190,8 @@ pub struct AccountActor {
     max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
+    /// Channel for sending notifications to the coordinator.
+    notification_tx: mpsc::Sender<ActorNotification>,
 }
 
 impl AccountActor {
@@ -207,6 +226,7 @@ impl AccountActor {
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
+            notification_tx: actor_context.notification_tx.clone(),
         }
     }
 
@@ -271,11 +291,6 @@ impl AccountActor {
                         Ok(_permit) => {
                             // Read the chain state.
                             let chain_state = self.chain_state.read().await.clone();
-
-                            // Drop notes that have failed too many times.
-                            if let Err(err) = self.db.drop_failing_notes(account_id, self.max_note_attempts).await {
-                                tracing::error!(err = %err, "failed to drop failing notes");
-                            }
 
                             // Query DB for latest account and available notes.
                             let tx_candidate = self.select_candidate_from_db(
@@ -348,17 +363,20 @@ impl AccountActor {
             self.prover.clone(),
             self.store.clone(),
             self.script_cache.clone(),
+            self.db.clone(),
         );
 
         let notes = tx_candidate.notes.clone();
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
             // Execution completed without failed notes.
-            Ok((tx_id, failed)) if failed.is_empty() => {
+            Ok((tx_id, failed, scripts_to_cache)) if failed.is_empty() => {
+                self.cache_note_scripts(scripts_to_cache).await;
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Execution completed with some failed notes.
-            Ok((tx_id, failed)) => {
+            Ok((tx_id, failed, scripts_to_cache)) => {
+                self.cache_note_scripts(scripts_to_cache).await;
                 let nullifiers: Vec<_> =
                     failed.into_iter().map(|note| note.note.nullifier()).collect();
                 self.mark_notes_failed(&nullifiers, block_num).await;
@@ -377,15 +395,25 @@ impl AccountActor {
         }
     }
 
-    /// Marks notes as failed in the DB.
-    async fn mark_notes_failed(
-        &self,
-        nullifiers: &[miden_protocol::note::Nullifier],
-        block_num: BlockNumber,
-    ) {
-        if let Err(err) = self.db.notes_failed(nullifiers.to_vec(), block_num).await {
-            tracing::error!(err = %err, "failed to mark notes as failed");
+    /// Sends notifications to the coordinator to cache note scripts fetched from the remote store.
+    async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
+        for (script_root, script) in scripts {
+            let _ = self
+                .notification_tx
+                .send(ActorNotification::CacheNoteScript { script_root, script })
+                .await;
         }
+    }
+
+    /// Sends a notification to the coordinator to mark notes as failed.
+    async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
+        let _ = self
+            .notification_tx
+            .send(ActorNotification::NotesFailed {
+                nullifiers: nullifiers.to_vec(),
+                block_num,
+            })
+            .await;
     }
 }
 

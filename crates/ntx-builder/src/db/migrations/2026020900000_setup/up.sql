@@ -60,3 +60,12 @@ CREATE TABLE notes (
 CREATE INDEX idx_notes_account ON notes(account_id);
 CREATE INDEX idx_notes_created_by ON notes(created_by) WHERE created_by IS NOT NULL;
 CREATE INDEX idx_notes_consumed_by ON notes(consumed_by) WHERE consumed_by IS NOT NULL;
+
+-- Persistent cache of note scripts, keyed by script root hash.
+-- Survives restarts so scripts don't need to be re-fetched from the store.
+CREATE TABLE note_scripts (
+    -- Script root hash (Word serialized to 32 bytes).
+    script_root BLOB PRIMARY KEY,
+    -- Serialized NoteScript bytes.
+    script_data BLOB NOT NULL
+) WITHOUT ROWID;
