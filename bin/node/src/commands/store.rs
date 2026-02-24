@@ -192,8 +192,7 @@ impl StoreCommand {
         // Parse genesis config (or default if not given).
         let config = genesis_config
             .map(|file_path| {
-                let toml_str = fs_err::read_to_string(file_path)?;
-                GenesisConfig::read_toml(toml_str.as_str()).with_context(|| {
+                GenesisConfig::read_toml_file(file_path).with_context(|| {
                     format!("failed to parse genesis config from file {}", file_path.display())
                 })
             })

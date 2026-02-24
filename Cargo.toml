@@ -36,6 +36,10 @@ version      = "0.14.0"
 [profile.test.package.miden-crypto]
 opt-level = 2
 
+# Avoid running the expensive debug assertion in winter-prover
+[profile.test.package.winter-prover]
+debug-assertions = false
+
 [profile.release]
 debug = true
 
@@ -98,6 +102,7 @@ rand               = { version = "0.9" }
 rand_chacha        = { version = "0.9" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
+tempfile           = { version = "3" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
@@ -132,3 +137,7 @@ must_use_candidate           = "allow" # This marks many fn's which isn't helpfu
 needless_for_each            = "allow" # Context dependent if that's useful.
 should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
+
+# Configure `cargo-typos`
+[workspace.metadata.typos]
+files.extend-exclude = ["*.svg"] # Ignore SVG files.
