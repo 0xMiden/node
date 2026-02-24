@@ -36,6 +36,13 @@ use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
 use crate::genesis::GenesisBlock;
 
+const ROW_OVERHEAD_BYTES: usize =
+    2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
+
+fn default_storage_map_entries_limit() -> usize {
+    MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES
+}
+
 pub(crate) mod manager;
 
 mod migrations;
@@ -604,13 +611,7 @@ impl Db {
         block_range: RangeInclusive<BlockNumber>,
         entries_limit: Option<usize>,
     ) -> Result<StorageMapValuesPage> {
-        let entries_limit = entries_limit.unwrap_or_else(|| {
-            // TODO: These limits should be given by the protocol.
-            // See miden-base/issues/1770 for more details
-            pub const ROW_OVERHEAD_BYTES: usize =
-                2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>(); // key + value + block_num + slot_idx
-            MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES
-        });
+        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
 
         self.transact("select storage map sync values", move |conn| {
             models::queries::select_account_storage_map_values_paged(
@@ -645,13 +646,7 @@ impl Db {
         // columns
         let mut values = Vec::new();
         let mut block_range_start = BlockNumber::GENESIS;
-        let entries_limit = entries_limit.unwrap_or_else(|| {
-            // TODO: These limits should be given by the protocol.
-            // See miden-base/issues/1770 for more details
-            pub const ROW_OVERHEAD_BYTES: usize =
-                2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>(); // key + value + block_num + slot_idx
-            MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES
-        });
+        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
 
         let mut page = self
             .select_storage_map_sync_values(
@@ -662,6 +657,7 @@ impl Db {
             .await?;
 
         values.extend(page.values);
+        let mut last_block_included = page.last_block_included;
 
         loop {
             if page.last_block_included == block_num || page.last_block_included < block_range_start
@@ -678,6 +674,11 @@ impl Db {
                 )
                 .await?;
 
+            if page.last_block_included <= last_block_included {
+                return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+            }
+
+            last_block_included = page.last_block_included;
             values.extend(page.values);
         }
 

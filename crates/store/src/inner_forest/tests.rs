@@ -350,10 +350,9 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     forest.update_account(block_at_51, &delta_2_update).unwrap();
 
     let block_at_52 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
-    let (vault_removed, storage_roots_removed) = forest.prune(block_at_52);
+    let vault_removed = forest.prune(block_at_52);
 
     assert_eq!(vault_removed, 0);
-    assert_eq!(storage_roots_removed, 0);
     assert!(forest.get_vault_root(account1, block_1).is_some());
     assert!(forest.get_vault_root(account2, block_1).is_some());
 
@@ -601,10 +600,9 @@ const TEST_PRUNE_CHAIN_TIP: u32 = HISTORICAL_BLOCK_RETENTION + 5;
 fn prune_handles_empty_forest() {
     let mut forest = InnerForest::new();
 
-    let (vault_removed, storage_roots_removed) = forest.prune(BlockNumber::GENESIS);
+    let vault_removed = forest.prune(BlockNumber::GENESIS);
 
     assert_eq!(vault_removed, 0);
-    assert_eq!(storage_roots_removed, 0);
 }
 
 #[test]
@@ -639,9 +637,7 @@ fn prune_removes_smt_roots_from_forest() {
     let retained_block = BlockNumber::from(TEST_PRUNE_CHAIN_TIP);
     let pruned_block = BlockNumber::from(3u32);
 
-    let (_roots_removed, storage_roots_removed) = forest.prune(retained_block);
-
-    assert_eq!(storage_roots_removed, 0);
+    let _roots_removed = forest.prune(retained_block);
     assert!(forest.get_vault_root(account_id, retained_block).is_some());
     assert!(forest.get_vault_root(account_id, pruned_block).is_none());
     assert!(forest.get_storage_map_root(account_id, &slot_name, pruned_block).is_none());
@@ -674,11 +670,9 @@ fn prune_respects_retention_boundary() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    let (roots_removed, storage_roots_removed) =
-        forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
+    let roots_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
 
     assert_eq!(roots_removed, 0);
-    assert_eq!(storage_roots_removed, 0);
     assert_eq!(forest.forest.tree_count(), 11);
 }
 
@@ -711,10 +705,9 @@ fn prune_roots_removes_old_entries() {
 
     assert_eq!(forest.forest.tree_count(), 22);
 
-    let (roots_removed, storage_roots_removed) = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
+    let roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
     assert_eq!(roots_removed, 0);
-    assert_eq!(storage_roots_removed, 0);
 
     assert_eq!(forest.forest.tree_count(), 22);
 }
@@ -743,7 +736,7 @@ fn prune_handles_multiple_accounts() {
 
     assert_eq!(forest.forest.tree_count(), 22);
 
-    let (vault_removed, _) = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
+    let vault_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
     let expected_removed_per_account = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize;
     assert_eq!(vault_removed, 0);
@@ -781,10 +774,9 @@ fn prune_handles_multiple_slots() {
     assert_eq!(forest.forest.tree_count(), 22);
 
     let chain_tip = BlockNumber::from(TEST_CHAIN_LENGTH);
-    let (roots_removed, storage_roots_removed) = forest.prune(chain_tip);
+    let roots_removed = forest.prune(chain_tip);
 
     assert_eq!(roots_removed, 0);
-    assert_eq!(storage_roots_removed, 0);
 
     assert_eq!(forest.forest.tree_count(), 22);
 }
@@ -834,10 +826,9 @@ fn prune_preserves_most_recent_state_per_entity() {
 
     // Block 100: Prune
     let block_100 = BlockNumber::from(100);
-    let (vault_removed, storage_roots_removed) = forest.prune(block_100);
+    let vault_removed = forest.prune(block_100);
 
     assert_eq!(vault_removed, 0);
-    assert_eq!(storage_roots_removed, 0);
 
     assert!(forest.get_storage_map_root(account_id, &slot_map_a, block_at_51).is_some());
     assert!(forest.get_storage_map_root(account_id, &slot_map_a, block_1).is_some());
@@ -876,11 +867,10 @@ fn prune_preserves_entries_within_retention_window() {
 
     // Block 100: Prune (retention window = 50 blocks, cutoff = 50)
     let block_100 = BlockNumber::from(100);
-    let (vault_removed, storage_roots_removed) = forest.prune(block_100);
+    let vault_removed = forest.prune(block_100);
 
     // Blocks 1 and 25 pruned (outside retention, have newer entries)
     assert_eq!(vault_removed, 4);
-    assert_eq!(storage_roots_removed, 0);
 
     assert!(forest.get_vault_root(account_id, BlockNumber::from(1)).is_none());
     assert!(forest.get_vault_root(account_id, BlockNumber::from(25)).is_none());

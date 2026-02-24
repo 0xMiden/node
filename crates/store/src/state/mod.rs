@@ -1108,19 +1108,27 @@ impl State {
 
         for StorageMapRequest { slot_name, slot_data } in storage_requests {
             let details = match &slot_data {
-                SlotData::MapKeys(keys) => forest_guard
-                    .get_storage_map_details_for_keys(
-                        account_id,
-                        slot_name.clone(),
-                        block_num,
-                        keys,
-                    )
-                    .ok_or_else(|| DatabaseError::StorageRootNotFound {
-                        account_id,
-                        slot_name: slot_name.to_string(),
-                        block_num,
-                    })?
-                    .map_err(DatabaseError::MerkleError)?,
+                SlotData::MapKeys(keys) => {
+                    let result = forest_guard
+                        .get_storage_map_details_for_keys(
+                            account_id,
+                            slot_name.clone(),
+                            block_num,
+                            keys,
+                        )
+                        .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                            account_id,
+                            slot_name: slot_name.to_string(),
+                            block_num,
+                        })?;
+                    match result {
+                        Ok(details) => details,
+                        Err(err) => {
+                            drop(forest_guard);
+                            return Err(DatabaseError::MerkleError(err));
+                        },
+                    }
+                },
                 SlotData::All => {
                     // we don't want to hold the forest guard for a prolonged time
                     drop(forest_guard);

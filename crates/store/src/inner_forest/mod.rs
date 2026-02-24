@@ -335,7 +335,7 @@ impl InnerForest {
             );
         }
 
-        let _ = self.prune(block_num);
+        self.prune(block_num);
 
         Ok(())
     }
@@ -652,8 +652,8 @@ impl InnerForest {
     /// Prunes old entries from the in-memory forest data structures.
     ///
     /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
-    #[instrument(target = COMPONENT, skip_all, fields(block.number = %chain_tip), ret)]
-    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> (usize, usize) {
+    #[instrument(target = COMPONENT, skip_all, fields(block.number = %chain_tip))]
+    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
         let cutoff_block =
             BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
         let before = self.forest.roots().count();
@@ -663,6 +663,6 @@ impl InnerForest {
         let after = self.forest.roots().count();
         let removed = before.saturating_sub(after);
 
-        (removed, 0)
+        removed
     }
 }
