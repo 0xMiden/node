@@ -1,13 +1,11 @@
-pub(crate) mod account_effect;
-pub mod account_state;
+pub mod candidate;
 mod execute;
-pub(crate) mod inflight_note;
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use account_state::TransactionCandidate;
+use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
@@ -23,10 +21,9 @@ use tokio::sync::{AcquireError, Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::block_producer::BlockProducerClient;
-use crate::builder::ChainState;
+use crate::chain_state::ChainState;
+use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
-use crate::store::StoreClient;
 
 /// Converts a database result into an `ActorShutdownReason` error, logging the error on failure.
 fn db_query<T>(
@@ -444,71 +441,5 @@ impl AccountActor {
         }
         // Wait for the coordinator to confirm the DB write.
         let _ = ack_rx.await;
-    }
-}
-
-// HELPERS
-// ================================================================================================
-
-/// Checks if the backoff block period has passed.
-///
-/// The number of blocks passed since the last attempt must be greater than or equal to
-/// e^(0.25 * `attempt_count`) rounded to the nearest integer.
-///
-/// This evaluates to the following:
-/// - After 1 attempt, the backoff period is 1 block.
-/// - After 3 attempts, the backoff period is 2 blocks.
-/// - After 10 attempts, the backoff period is 12 blocks.
-/// - After 20 attempts, the backoff period is 148 blocks.
-/// - etc...
-#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
-fn has_backoff_passed(
-    chain_tip: BlockNumber,
-    last_attempt: Option<BlockNumber>,
-    attempts: usize,
-) -> bool {
-    if attempts == 0 {
-        return true;
-    }
-    // Compute the number of blocks passed since the last attempt.
-    let blocks_passed = last_attempt
-        .and_then(|last| chain_tip.checked_sub(last.as_u32()))
-        .unwrap_or_default();
-
-    // Compute the exponential backoff threshold: Δ = e^(0.25 * n).
-    let backoff_threshold = (0.25 * attempts as f64).exp().round() as usize;
-
-    // Check if the backoff period has passed.
-    blocks_passed.as_usize() > backoff_threshold
-}
-
-#[cfg(test)]
-mod tests {
-    use miden_protocol::block::BlockNumber;
-
-    use super::has_backoff_passed;
-
-    #[rstest::rstest]
-    #[test]
-    #[case::all_zero(Some(BlockNumber::GENESIS), BlockNumber::GENESIS, 0, true)]
-    #[case::no_attempts(None, BlockNumber::GENESIS, 0, true)]
-    #[case::one_attempt(Some(BlockNumber::GENESIS), BlockNumber::from(2), 1, true)]
-    #[case::three_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(3), 3, true)]
-    #[case::ten_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(13), 10, true)]
-    #[case::twenty_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(149), 20, true)]
-    #[case::one_attempt_false(Some(BlockNumber::GENESIS), BlockNumber::from(1), 1, false)]
-    #[case::three_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(2), 3, false)]
-    #[case::ten_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(12), 10, false)]
-    #[case::twenty_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(148), 20, false)]
-    fn backoff_has_passed(
-        #[case] last_attempt_block_num: Option<BlockNumber>,
-        #[case] current_block_num: BlockNumber,
-        #[case] attempt_count: usize,
-        #[case] backoff_should_have_passed: bool,
-    ) {
-        assert_eq!(
-            backoff_should_have_passed,
-            has_backoff_passed(current_block_num, last_attempt_block_num, attempt_count)
-        );
     }
 }

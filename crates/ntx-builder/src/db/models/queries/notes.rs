@@ -7,9 +7,9 @@ use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
-use crate::actor::inflight_note::InflightNetworkNote;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
+use crate::inflight_note::InflightNetworkNote;
 
 // MODELS
 // ================================================================================================
