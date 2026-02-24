@@ -354,7 +354,7 @@ fn sql_unconsumed_network_notes() {
                 NoteType::Public,
                 NoteTag::with_account_target(account_note.0),
             )
-                .with_attachment(attachment.clone()),
+            .with_attachment(attachment.clone()),
             details: None,
             inclusion_path: SparseMerklePath::default(),
         };
@@ -1407,8 +1407,7 @@ fn genesis_with_account_assets() {
         .build_existing()
         .unwrap();
 
-    let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::new());
+    let genesis_state = GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::new());
     let genesis_block = genesis_state.into_block().unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
@@ -2115,12 +2114,9 @@ fn db_roundtrip_note_metadata_attachment() {
     let attachment: NoteAttachment = target.into();
 
     // Create NoteMetadata with the attachment
-    let metadata = NoteMetadata::new(
-        account_id,
-        NoteType::Public,
-        NoteTag::with_account_target(account_id),
-    )
-        .with_attachment(attachment.clone());
+    let metadata =
+        NoteMetadata::new(account_id, NoteType::Public, NoteTag::with_account_target(account_id))
+            .with_attachment(attachment.clone());
 
     let note = NoteRecord {
         block_num,

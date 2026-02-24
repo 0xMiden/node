@@ -6,11 +6,11 @@ use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountStorageMode, AccountType};
 use miden_protocol::block::BlockNumber;
+use miden_protocol::note::NoteExecutionHint;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
-use miden_protocol::note::NoteExecutionHint;
 use miden_protocol::transaction::TransactionId;
 use miden_standards::note::NetworkAccountTarget;
 use miden_standards::testing::note::NoteBuilder;
@@ -544,9 +544,8 @@ fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Accou
         .compile_component_code("test::interface", "pub proc test_proc push.1.2 add end")
         .unwrap();
 
-    let component = AccountComponent::new(component_code, vec![])
-        .unwrap()
-        .with_supports_all_types();
+    let component =
+        AccountComponent::new(component_code, vec![]).unwrap().with_supports_all_types();
 
     AccountBuilder::new([0u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
