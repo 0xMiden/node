@@ -1,6 +1,6 @@
-# miden-large-smt
+# miden-large-smt-backend-rocksdb
 
-Large-scale Sparse Merkle Tree backed by pluggable storage (RocksDB, memory).
+Large-scale Sparse Merkle Tree backed by pluggable storage - RocksDB backend implementation.
 
 This crate provides `LargeSmt`, a hybrid SMT implementation that stores the top of the tree
 (depths 0–23) in memory and persists the lower depths (24–64) in storage as fixed-size subtrees.
@@ -37,7 +37,7 @@ let smt = LargeSmt::new(storage).unwrap();
 This crate re-exports the following types from `miden-protocol`:
 
 - `LargeSmt` - The large-scale SMT implementation
-- `LargeSmtError` - Error type for LargeSmt operations  
+- `LargeSmtError` - Error type for LargeSmt operations
 - `MemoryStorage` - In-memory storage backend
 - `SmtStorage` - Storage backend trait
 - `Subtree` - Serializable subtree representation

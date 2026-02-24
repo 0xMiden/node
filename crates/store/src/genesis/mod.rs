@@ -9,10 +9,10 @@ use miden_protocol::block::{
     BlockNoteTree,
     BlockNumber,
     BlockProof,
-    BlockSigner,
     FeeParameters,
     ProvenBlock,
 };
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
 use miden_protocol::note::Nullifier;
@@ -67,7 +67,7 @@ impl<S> GenesisState<S> {
     }
 }
 
-impl<S: BlockSigner> GenesisState<S> {
+impl GenesisState<SecretKey> {
     /// Returns the block header and the account SMT
     pub fn into_block(self) -> Result<GenesisBlock, GenesisError> {
         let accounts: Vec<BlockAccountUpdate> = self

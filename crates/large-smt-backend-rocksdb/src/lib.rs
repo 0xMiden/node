@@ -23,11 +23,8 @@
 //! let smt = LargeSmt::new(storage).unwrap();
 //! ```
 
-#![cfg_attr(not(feature = "concurrent"), allow(unused_imports))]
-
 extern crate alloc;
 
-#[cfg(feature = "rocksdb")]
 mod rocksdb;
 // Re-export from miden-protocol.
 pub use miden_protocol::crypto::merkle::smt::{
@@ -59,5 +56,4 @@ pub use miden_protocol::{
         merkle::{EmptySubtreeRoots, InnerNodeInfo, MerkleError, NodeIndex, SparseMerklePath},
     },
 };
-#[cfg(feature = "rocksdb")]
 pub use rocksdb::{RocksDbConfig, RocksDbStorage};
