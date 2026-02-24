@@ -36,6 +36,18 @@
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
+- [BREAKING] Removed obsolete `SyncState` RPC endpoint; clients should use `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, or `SyncChainMmr` instead ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
+- Added account ID limits for `SyncTransactions`, `SyncAccountVault`, and `SyncAccountStorageMaps` to `GetLimits` responses ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
+- [BREAKING] Added typed `GetAccountError` for `GetAccount` endpoint, splitting `BlockNotAvailable` into `UnknownBlock` and `BlockPruned`. `AccountNotFound` and `AccountNotPublic` now return `InvalidArgument` gRPC status instead of `NotFound`; clients should parse the error details discriminant rather than branching on status codes ([#1646](https://github.com/0xMiden/miden-node/pull/1646)).
+- Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
+- Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
+- Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).
+- Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/miden-node/pull/1651)).
+- Added support for generic account loading at genesis ([#1624](https://github.com/0xMiden/miden-node/pull/1624)).
+- Improved tracing span fields ([#1650](https://github.com/0xMiden/miden-node/pull/1650))
+ - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/miden-node/pull/1662)).
+- [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
+- NTX Builder actors now deactivate after being idle for a configurable sterility timeout (`--ntx-builder.sterility-timeout`, default 5 min) and are re-activated when new notes target their account ([#1705](https://github.com/0xMiden/node/pull/1705)).
 
 ## v0.13.7 (2026-02-25)
 
