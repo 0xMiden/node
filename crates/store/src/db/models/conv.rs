@@ -32,12 +32,14 @@
     on relevant platforms"
 )]
 
+use miden_crypto::Word;
+use miden_crypto::utils::Deserializable;
 use miden_protocol::Felt;
 use miden_protocol::account::{StorageSlotName, StorageSlotType};
-use miden_protocol::block::BlockNumber;
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteTag;
 
-use crate::db::models::queries::NetworkAccountType;
+use crate::db::models::queries::{BlockHeaderCommitment, NetworkAccountType};
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from database type {from_type} into {into_type}")]
@@ -64,6 +66,32 @@ pub trait SqlTypeConvert: Sized {
             from_type: std::any::type_name::<Self::Raw>(),
             into_type: std::any::type_name::<Self>(),
         }
+    }
+}
+
+impl SqlTypeConvert for BlockHeaderCommitment {
+    type Raw = Vec<u8>;
+    fn from_raw_sql(
+        raw: Self::Raw,
+    ) -> Result<Self, crate::db::models::conv::DatabaseTypeConversionError> {
+        let inner =
+            <Word as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)?;
+        Ok(BlockHeaderCommitment(inner))
+    }
+    fn to_raw_sql(self) -> Self::Raw {
+        self.0.as_bytes().to_vec()
+    }
+}
+
+impl SqlTypeConvert for BlockHeader {
+    type Raw = Vec<u8>;
+
+    fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
+        <Self as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)
+    }
+
+    fn to_raw_sql(self) -> Self::Raw {
+        miden_crypto::utils::Serializable::to_bytes(&self)
     }
 }
 

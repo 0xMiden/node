@@ -1,6 +1,6 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use miden_protocol::note::Nullifier;
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::Serializable;
 
 use crate::errors::DatabaseError;
 
@@ -11,16 +11,6 @@ pub(crate) fn vec_raw_try_into<D, R: TryInto<D>>(
 ) -> std::result::Result<Vec<D>, <R as TryInto<D>>::Error> {
     std::result::Result::<Vec<D>, <R as TryInto<D>>::Error>::from_iter(
         raw.into_iter().map(<R as std::convert::TryInto<D>>::try_into),
-    )
-}
-
-#[expect(dead_code)]
-/// Deserialize an iterable container full of byte blobs `B` to types `T`
-pub(crate) fn deserialize_raw_vec<B: AsRef<[u8]>, T: Deserializable>(
-    raw: impl IntoIterator<Item = B>,
-) -> Result<Vec<T>, DeserializationError> {
-    Result::<Vec<_>, DeserializationError>::from_iter(
-        raw.into_iter().map(|raw| T::read_from_bytes(raw.as_ref())),
     )
 }
 

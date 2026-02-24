@@ -11,6 +11,7 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
+use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -125,6 +126,44 @@ pub fn select_all_block_headers(
     vec_raw_try_into(raw_block_headers)
 }
 
+/// Select all block headers from the DB using the given [`SqliteConnection`].
+///
+/// # Returns
+///
+/// A vector of [`BlockHeader`] or an error.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT commitment
+/// FROM block_headers
+/// ORDER BY block_num ASC
+/// ```
+pub fn select_all_block_header_commitments(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<BlockHeaderCommitment>, DatabaseError> {
+    let raw_commitments =
+        QueryDsl::select(schema::block_headers::table, schema::block_headers::commitment)
+            .order(schema::block_headers::block_num.asc())
+            .load::<Vec<u8>>(conn)?;
+    let commitments =
+        Result::from_iter(raw_commitments.into_iter().map(BlockHeaderCommitment::from_raw_sql))?;
+    Ok(commitments)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct BlockHeaderCommitment(pub(crate) Word);
+
+impl BlockHeaderCommitment {
+    pub fn new(header: &BlockHeader) -> Self {
+        Self(header.commitment())
+    }
+    pub fn word(self) -> Word {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Queryable, QueryableByName, Selectable)]
 #[diesel(table_name = schema::block_headers)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -133,11 +172,18 @@ pub struct BlockHeaderRawRow {
     pub block_num: i64,
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,
+    pub commitment: Vec<u8>,
 }
 impl TryInto<BlockHeader> for BlockHeaderRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<BlockHeader, Self::Error> {
-        let block_header = BlockHeader::read_from_bytes(&self.block_header[..])?;
+        let block_header = BlockHeader::from_raw_sql(self.block_header)?;
+        // we're bust if this invariant doesn't hold
+        debug_assert_eq!(
+            BlockHeaderCommitment::new(&block_header),
+            BlockHeaderCommitment::from_raw_sql(self.commitment)
+                .expect("Database always contains valid format commitments")
+        );
         Ok(block_header)
     }
 }
@@ -158,13 +204,15 @@ pub struct BlockHeaderInsert {
     pub block_num: i64,
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,
+    pub commitment: Vec<u8>,
 }
 impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
-    fn from(from: (&BlockHeader, &Signature)) -> Self {
+    fn from((header, signature): (&BlockHeader, &Signature)) -> Self {
         Self {
-            block_num: from.0.block_num().to_raw_sql(),
-            block_header: from.0.to_bytes(),
-            signature: from.1.to_bytes(),
+            block_num: header.block_num().to_raw_sql(),
+            block_header: header.to_bytes(),
+            signature: signature.to_bytes(),
+            commitment: header.commitment().to_bytes(),
         }
     }
 }
