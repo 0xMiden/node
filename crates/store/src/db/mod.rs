@@ -36,8 +36,7 @@ use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
 use crate::genesis::GenesisBlock;
 
-const ROW_OVERHEAD_BYTES: usize =
-    2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
+const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
 
 fn default_storage_map_entries_limit() -> usize {
     MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES
