@@ -28,6 +28,18 @@ use crate::builder::ChainState;
 use crate::db::Db;
 use crate::store::StoreClient;
 
+/// Converts a database result into an `ActorShutdownReason` error, logging the error on failure.
+fn db_query<T>(
+    account_id: NetworkAccountId,
+    result: Result<T, miden_node_db::DatabaseError>,
+    context: &str,
+) -> Result<T, ActorShutdownReason> {
+    result.map_err(|err| {
+        tracing::error!(err = err.as_report(), account_id = %account_id, "{context}");
+        ActorShutdownReason::DbError(account_id)
+    })
+}
+
 // ACTOR REQUESTS
 // ================================================================================================
 
@@ -237,16 +249,13 @@ impl AccountActor {
 
         // Determine initial mode by checking DB for available notes.
         let block_num = self.chain_state.read().await.chain_tip_header.block_num();
-        let has_notes = match self
-            .db
-            .has_available_notes(account_id, block_num, self.max_note_attempts)
-            .await
-        {
-            Ok(has_notes) => has_notes,
-            Err(err) => {
-                tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check for available notes");
-                return ActorShutdownReason::DbError(account_id);
-            },
+        let has_notes = match db_query(
+            account_id,
+            self.db.has_available_notes(account_id, block_num, self.max_note_attempts).await,
+            "failed to check for available notes",
+        ) {
+            Ok(v) => v,
+            Err(reason) => return reason,
         };
 
         if has_notes {
@@ -272,15 +281,15 @@ impl AccountActor {
                     match self.mode {
                         ActorMode::TransactionInflight(awaited_id) => {
                             // Check DB: is the inflight tx still pending?
-                            let resolved = match self.db
-                                .is_transaction_resolved(account_id, awaited_id)
-                                .await
-                            {
-                                Ok(resolved) => resolved,
-                                Err(err) => {
-                                    tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check transaction status");
-                                    return ActorShutdownReason::DbError(account_id);
-                                },
+                            let resolved = match db_query(
+                                account_id,
+                                self.db
+                                    .is_transaction_resolved(account_id, awaited_id)
+                                    .await,
+                                "failed to check transaction status",
+                            ) {
+                                Ok(v) => v,
+                                Err(reason) => return reason,
                             };
                             if resolved {
                                 self.mode = ActorMode::NotesAvailable;
@@ -332,14 +341,11 @@ impl AccountActor {
         let block_num = chain_state.chain_tip_header.block_num();
         let max_notes = self.max_notes_per_tx.get();
 
-        let (latest_account, notes) = self
-            .db
-            .select_candidate(account_id, block_num, self.max_note_attempts)
-            .await
-            .map_err(|err| {
-                tracing::error!(err = err.as_report(), account_id = %account_id, "failed to query DB for transaction candidate");
-                ActorShutdownReason::DbError(account_id)
-            })?;
+        let (latest_account, notes) = db_query(
+            account_id,
+            self.db.select_candidate(account_id, block_num, self.max_note_attempts).await,
+            "failed to query DB for transaction candidate",
+        )?;
 
         let Some(account) = latest_account else {
             return Ok(None);
@@ -383,17 +389,13 @@ impl AccountActor {
         let notes = tx_candidate.notes.clone();
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
-            // Execution completed without failed notes.
-            Ok((tx_id, failed, scripts_to_cache)) if failed.is_empty() => {
-                self.cache_note_scripts(scripts_to_cache).await;
-                self.mode = ActorMode::TransactionInflight(tx_id);
-            },
-            // Execution completed with some failed notes.
             Ok((tx_id, failed, scripts_to_cache)) => {
                 self.cache_note_scripts(scripts_to_cache).await;
-                let nullifiers: Vec<_> =
-                    failed.into_iter().map(|note| note.note.nullifier()).collect();
-                self.mark_notes_failed(&nullifiers, block_num).await;
+                if !failed.is_empty() {
+                    let nullifiers: Vec<_> =
+                        failed.into_iter().map(|note| note.note.nullifier()).collect();
+                    self.mark_notes_failed(&nullifiers, block_num).await;
+                }
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
