@@ -23,6 +23,9 @@ mod coordinator;
 pub(crate) mod db;
 pub(crate) mod inflight_note;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 pub use builder::NetworkTransactionBuilder;
 
 // CONSTANTS

@@ -289,9 +289,7 @@ impl AccountActor {
             // Sterility timer: only ticks when in NoViableNotes mode.
             // Mode changes cause the next loop iteration to create a fresh sleep or pending.
             let sterility_sleep = match self.mode {
-                ActorMode::NoViableNotes => {
-                    tokio::time::sleep(self.sterility_timeout).boxed()
-                },
+                ActorMode::NoViableNotes => tokio::time::sleep(self.sterility_timeout).boxed(),
                 _ => std::future::pending().boxed(),
             };
 

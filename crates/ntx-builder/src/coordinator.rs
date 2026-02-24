@@ -314,4 +314,123 @@ impl Coordinator {
             handle.cancel_token.cancel();
         }
     }
+
+    /// Returns `true` if an actor is registered for the given account ID.
+    #[cfg(test)]
+    pub fn has_actor(&self, account_id: &NetworkAccountId) -> bool {
+        self.actor_registry.contains_key(account_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_proto::domain::mempool::MempoolEvent;
+    use miden_node_proto::domain::note::NetworkNote;
+    use miden_protocol::block::BlockNumber;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::test_utils::*;
+
+    /// Creates a coordinator with default settings backed by a temp DB.
+    async fn test_coordinator() -> (Coordinator, tempfile::TempDir) {
+        let (db, dir) = Db::test_setup().await;
+        (Coordinator::new(4, db), dir)
+    }
+
+    /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
+    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
+        let notify = Arc::new(Notify::new());
+        let cancel_token = CancellationToken::new();
+        coordinator
+            .actor_registry
+            .insert(account_id, ActorHandle::new(notify, cancel_token));
+    }
+
+    // HANDLE SHUTDOWN REQUEST TESTS
+    // ============================================================================================
+
+    #[tokio::test]
+    async fn shutdown_approved_when_no_notes() {
+        let (mut coordinator, _dir) = test_coordinator().await;
+        let account_id = mock_network_account_id();
+
+        register_dummy_actor(&mut coordinator, account_id);
+        assert!(coordinator.has_actor(&account_id));
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let block_num = BlockNumber::from(1u32);
+        let max_note_attempts = 30;
+
+        coordinator
+            .handle_shutdown_request(account_id, block_num, max_note_attempts, ack_tx)
+            .await;
+
+        // Ack should be received (shutdown approved).
+        assert!(ack_rx.await.is_ok());
+        // Actor should be deregistered.
+        assert!(!coordinator.has_actor(&account_id));
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejected_when_notes_available() {
+        let (mut coordinator, _dir) = test_coordinator().await;
+        let account_id = mock_network_account_id();
+
+        // Insert a committed note for this account.
+        let note = mock_single_target_note(account_id, 10);
+        coordinator
+            .db
+            .sync_account_from_store(account_id, mock_account(account_id), vec![note])
+            .await
+            .unwrap();
+
+        register_dummy_actor(&mut coordinator, account_id);
+        assert!(coordinator.has_actor(&account_id));
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let block_num = BlockNumber::from(1u32);
+        let max_note_attempts = 30;
+
+        coordinator
+            .handle_shutdown_request(account_id, block_num, max_note_attempts, ack_tx)
+            .await;
+
+        // Ack_tx should have been dropped (shutdown rejected).
+        assert!(ack_rx.await.is_err());
+        // Actor should still be registered.
+        assert!(coordinator.has_actor(&account_id));
+    }
+
+    // SEND TARGETED TESTS
+    // ============================================================================================
+
+    #[tokio::test]
+    async fn send_targeted_returns_inactive_targets() {
+        let (mut coordinator, _dir) = test_coordinator().await;
+
+        let active_id = mock_network_account_id();
+        let inactive_id = mock_network_account_id_seeded(42);
+
+        // Only register the active account.
+        register_dummy_actor(&mut coordinator, active_id);
+
+        let note_active = mock_single_target_note(active_id, 10);
+        let note_inactive = mock_single_target_note(inactive_id, 20);
+
+        let event = MempoolEvent::TransactionAdded {
+            id: mock_tx_id(1),
+            nullifiers: vec![],
+            network_notes: vec![
+                NetworkNote::SingleTarget(note_active),
+                NetworkNote::SingleTarget(note_inactive),
+            ],
+            account_delta: None,
+        };
+
+        let inactive_targets = coordinator.send_targeted(&event);
+
+        assert_eq!(inactive_targets.len(), 1);
+        assert_eq!(inactive_targets[0], inactive_id);
+    }
 }
