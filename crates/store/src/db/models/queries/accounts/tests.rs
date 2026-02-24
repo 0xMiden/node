@@ -13,7 +13,7 @@ use diesel::{
 };
 use diesel_migrations::MigrationHarness;
 use miden_node_utils::fee::test_fee_params;
-use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -36,7 +36,7 @@ use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
-use miden_standards::account::auth::AuthFalcon512Rpo;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
 use super::*;
@@ -156,7 +156,10 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -422,7 +425,10 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component_2)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -519,7 +525,10 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -546,11 +555,11 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         "Storage commitment mismatch"
     );
 
-    // Note: Auth component adds 1 storage slot, so 3 component slots + 1 auth = 4 total
+    // Note: Auth component adds 2 storage slots, so 3 component slots + 2 auth = 5 total
     assert_eq!(
         queried_storage.slots().len(),
-        4,
-        "Expected 4 storage slots (3 component + 1 auth)"
+        5,
+        "Expected 5 storage slots (3 component + 2 auth)"
     );
 
     // The storage commitment matching proves that all values are correctly preserved.
@@ -585,7 +594,10 @@ fn test_upsert_accounts_with_empty_storage() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -612,8 +624,8 @@ fn test_upsert_accounts_with_empty_storage() {
         "Storage commitment mismatch for empty storage"
     );
 
-    // Note: Auth component adds 1 storage slot, so even "empty" accounts have 1 slot
-    assert_eq!(queried_storage.slots().len(), 1, "Expected 1 storage slot (auth component)");
+    // Note: Auth component adds 2 storage slots, so even "empty" accounts have 2 slots
+    assert_eq!(queried_storage.slots().len(), 2, "Expected 2 storage slots (auth component)");
 
     // Verify the storage header blob exists in database
     let storage_header_exists: Option<bool> = SelectDsl::select(

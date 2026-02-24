@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
+use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::note::NoteType;
@@ -60,7 +61,9 @@ impl ProofRequest {
     async fn mock_tx() -> ExecutedTransaction {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
-        let account = mock_chain_builder.add_existing_wallet(Auth::BasicAuth).unwrap();
+        let account = mock_chain_builder
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::EcdsaK256Keccak })
+            .unwrap();
 
         let fungible_asset_1: Asset =
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
@@ -90,7 +93,9 @@ impl ProofRequest {
     async fn mock_batch() -> ProposedBatch {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
-        let account = mock_chain_builder.add_existing_wallet(Auth::BasicAuth).unwrap();
+        let account = mock_chain_builder
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::EcdsaK256Keccak })
+            .unwrap();
 
         let fungible_asset_1: Asset =
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)

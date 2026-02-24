@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::AccountSummary;
 use miden_node_utils::fee::{test_fee, test_fee_params};
-use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -62,7 +62,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
-use miden_standards::account::auth::AuthFalcon512Rpo;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 use pretty_assertions::assert_eq;
@@ -1148,7 +1148,10 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap()
 }
@@ -1246,7 +1249,10 @@ fn mock_account_code_and_storage(
         .storage_mode(storage_mode)
         .with_assets(assets)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap()
 }
@@ -1410,7 +1416,10 @@ async fn genesis_with_account_assets() {
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1462,7 +1471,10 @@ async fn genesis_with_account_storage_map() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1512,7 +1524,10 @@ async fn genesis_with_account_assets_and_storage() {
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1546,7 +1561,10 @@ async fn genesis_with_multiple_accounts() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component1)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1568,7 +1586,10 @@ async fn genesis_with_multiple_accounts() {
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component2)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1594,7 +1615,10 @@ async fn genesis_with_multiple_accounts() {
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component3)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -2058,7 +2082,10 @@ fn db_roundtrip_account_storage_with_maps() {
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
