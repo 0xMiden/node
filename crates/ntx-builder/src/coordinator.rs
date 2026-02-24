@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
-use indexmap::IndexMap;
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_proto::domain::note::NetworkNote;
+use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::transaction::TransactionId;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::actor::{AccountActor, AccountActorContext, AccountOrigin, ActorShutdownReason};
+use crate::db::Db;
 
 // ACTOR HANDLE
 // ================================================================================================
@@ -87,9 +87,8 @@ pub struct Coordinator {
     /// ensuring fair resource allocation and system stability under load.
     semaphore: Arc<Semaphore>,
 
-    /// Cache of events received from the mempool that predate corresponding network accounts.
-    /// Grouped by network account ID to allow targeted event delivery to actors upon creation.
-    predating_events: HashMap<NetworkAccountId, IndexMap<TransactionId, Arc<MempoolEvent>>>,
+    /// Database for persistent state.
+    db: Db,
 
     /// Channel size for each actor's event channel.
     actor_channel_size: usize,
@@ -98,12 +97,12 @@ pub struct Coordinator {
 impl Coordinator {
     /// Creates a new coordinator with the specified maximum number of inflight transactions
     /// and actor channel size.
-    pub fn new(max_inflight_transactions: usize, actor_channel_size: usize) -> Self {
+    pub fn new(max_inflight_transactions: usize, actor_channel_size: usize, db: Db) -> Self {
         Self {
             actor_registry: HashMap::new(),
             actor_join_set: JoinSet::new(),
             semaphore: Arc::new(Semaphore::new(max_inflight_transactions)),
-            predating_events: HashMap::new(),
+            db,
             actor_channel_size,
         }
     }
@@ -135,16 +134,9 @@ impl Coordinator {
         let actor = AccountActor::new(origin, actor_context, event_rx, cancel_token.clone());
         let handle = ActorHandle::new(event_tx, cancel_token);
 
-        // Run the actor.
+        // Run the actor. Actor reads state from DB on startup.
         let semaphore = self.semaphore.clone();
         self.actor_join_set.spawn(Box::pin(actor.run(semaphore)));
-
-        // Send the new actor any events that contain notes that predate account creation.
-        if let Some(predating_events) = self.predating_events.remove(&account_id) {
-            for event in predating_events.values() {
-                Self::send(&handle, event.clone()).await?;
-            }
-        }
 
         self.actor_registry.insert(account_id, handle);
         tracing::info!(account_id = %account_id, "Created actor for account prefix");
@@ -202,11 +194,6 @@ impl Coordinator {
                     tracing::info!(account_id = %account_id, "Account actor cancelled");
                     Ok(())
                 },
-                ActorShutdownReason::AccountReverted(account_id) => {
-                    tracing::info!(account_id = %account_id, "Account reverted");
-                    self.actor_registry.remove(&account_id);
-                    Ok(())
-                },
                 ActorShutdownReason::EventChannelClosed => {
                     anyhow::bail!("event channel closed");
                 },
@@ -226,19 +213,15 @@ impl Coordinator {
     /// Sends a mempool event to all network account actors that are found in the corresponding
     /// transaction's notes.
     ///
-    /// Caches the mempool event for each network account found in the transaction's notes that does
-    /// not currently have a corresponding actor. If an actor does not exist for the account, it is
-    /// assumed that the account has not been created on the chain yet.
-    ///
-    /// Cached events will be fed to the corresponding actor when the account creation transaction
-    /// is processed.
+    /// Events are sent only to actors that are currently active. Since event effects are already
+    /// persisted in the DB by `write_event()`, actors that spawn later read their state from the
+    /// DB and do not need predating events.
     pub async fn send_targeted(
         &mut self,
         event: &Arc<MempoolEvent>,
     ) -> Result<(), SendError<Arc<MempoolEvent>>> {
         let mut target_actors = HashMap::new();
-        if let MempoolEvent::TransactionAdded { id, network_notes, account_delta, .. } =
-            event.as_ref()
+        if let MempoolEvent::TransactionAdded { network_notes, account_delta, .. } = event.as_ref()
         {
             // We need to inform the account if it was updated. This lets it know that its own
             // transaction has been applied, and in the future also resolves race conditions with
@@ -259,14 +242,7 @@ impl Coordinator {
                 let NetworkNote::SingleTarget(note) = note;
                 let network_account_id = note.account_id();
                 if let Some(actor) = self.actor_registry.get(&network_account_id) {
-                    // Register actor as target.
                     target_actors.insert(network_account_id, actor);
-                } else {
-                    // Cache event for every note that doesn't have a corresponding actor.
-                    self.predating_events
-                        .entry(network_account_id)
-                        .or_default()
-                        .insert(*id, event.clone());
                 }
             }
         }
@@ -277,16 +253,55 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Removes any cached events for a given transaction ID from all account caches.
-    pub fn drain_predating_events(&mut self, tx_id: &TransactionId) {
-        // Remove the transaction from all account caches.
-        // This iterates over all predating events which is fine because the count is expected to be
-        // low.
-        self.predating_events.retain(|_, account_events| {
-            account_events.shift_remove(tx_id);
-            // Remove entries for accounts with no more cached events.
-            !account_events.is_empty()
-        });
+    /// Writes mempool event effects to the database.
+    ///
+    /// This must be called BEFORE sending notifications to actors. For `TransactionsReverted`,
+    /// returns the list of account IDs whose creation was reverted.
+    pub async fn write_event(
+        &self,
+        event: &MempoolEvent,
+    ) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+        match event {
+            MempoolEvent::TransactionAdded {
+                id,
+                nullifiers,
+                network_notes,
+                account_delta,
+            } => {
+                let notes: Vec<SingleTargetNetworkNote> = network_notes
+                    .iter()
+                    .map(|n| {
+                        let NetworkNote::SingleTarget(note) = n;
+                        note.clone()
+                    })
+                    .collect();
+
+                self.db
+                    .handle_transaction_added(*id, account_delta.clone(), notes, nullifiers.clone())
+                    .await?;
+                Ok(Vec::new())
+            },
+            MempoolEvent::BlockCommitted { header, txs } => {
+                self.db
+                    .handle_block_committed(
+                        txs.clone(),
+                        header.block_num(),
+                        header.as_ref().clone(),
+                    )
+                    .await?;
+                Ok(Vec::new())
+            },
+            MempoolEvent::TransactionsReverted(tx_ids) => {
+                self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await
+            },
+        }
+    }
+
+    /// Cancels an actor by its account ID.
+    pub fn cancel_actor(&mut self, account_id: &NetworkAccountId) {
+        if let Some(handle) = self.actor_registry.remove(account_id) {
+            handle.cancel_token.cancel();
+        }
     }
 
     /// Helper function to send an event to a single account actor.
