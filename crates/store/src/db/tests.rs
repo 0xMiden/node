@@ -68,7 +68,6 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
-
 use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
@@ -2906,7 +2905,11 @@ fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
         .expect("Should be able to get witness for key1");
 
     let proof: SmtProof = witness.into();
-    assert_eq!(proof.compute_root(), storage_root_at_51, "Witness must verify against storage root");
+    assert_eq!(
+        proof.compute_root(),
+        storage_root_at_51,
+        "Witness must verify against storage root"
+    );
 
     let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
     assert!(vault_root_at_1.is_some());
@@ -3183,9 +3186,8 @@ fn inner_forest_preserves_mixed_slots_independently() {
     );
 
     // Verify vault is still accessible
-    let vault_root_at_1 = forest
-        .get_vault_root(account_id, block_1)
-        .expect("Vault should be accessible");
+    let vault_root_at_1 =
+        forest.get_vault_root(account_id, block_1).expect("Vault should be accessible");
     assert_eq!(vault_root_at_1, initial_vault_root, "Vault should be from block 1");
 
     // Verify map_a is accessible (from block 51)

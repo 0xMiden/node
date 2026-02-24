@@ -1,8 +1,8 @@
 use assert_matches::assert_matches;
+use miden_node_proto::domain::account::StorageMapEntries;
 use miden_protocol::account::AccountCode;
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::crypto::merkle::smt::SmtProof;
-use miden_node_proto::domain::account::StorageMapEntries;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
@@ -277,7 +277,9 @@ fn witness_queries_work_with_sparse_lineage_updates() {
 
     let vault_root_at_3 = forest.get_vault_root(account_id, block_3).unwrap();
     assert_matches!(
-        forest.forest.open(forest.tree_id_for_vault_root(account_id, block_3), asset_key.into()),
+        forest
+            .forest
+            .open(forest.tree_id_for_vault_root(account_id, block_3), asset_key.into()),
         Ok(_)
     );
     assert_ne!(vault_root_at_3, InnerForest::empty_smt_root());
@@ -358,8 +360,9 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     let vault_root_at_52 = forest.get_vault_root(account1, block_at_52);
     assert_eq!(vault_root_at_52, Some(root1));
 
-    let witnesses =
-        forest.get_vault_asset_witnesses(account1, block_at_52, [asset_key].into()).unwrap();
+    let witnesses = forest
+        .get_vault_asset_witnesses(account1, block_at_52, [asset_key].into())
+        .unwrap();
     assert_eq!(witnesses.len(), 1);
     let proof: SmtProof = witnesses[0].clone().into();
     assert_eq!(proof.compute_root(), root1);
@@ -457,11 +460,13 @@ fn storage_map_state_is_not_available_for_block_gaps() {
     forest.update_account(block_4, &delta_4).unwrap();
 
     assert!(
-        forest.get_storage_map_root(account_id, &slot_name, BlockNumber::from(BLOCK_QUERY_ONE))
+        forest
+            .get_storage_map_root(account_id, &slot_name, BlockNumber::from(BLOCK_QUERY_ONE))
             .is_some()
     );
     assert!(
-        forest.get_storage_map_root(account_id, &slot_name, BlockNumber::from(BLOCK_QUERY_TWO))
+        forest
+            .get_storage_map_root(account_id, &slot_name, BlockNumber::from(BLOCK_QUERY_TWO))
             .is_some()
     );
     assert!(forest.get_storage_map_root(account_id, &slot_name, block_4).is_some());
@@ -583,7 +588,6 @@ fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     assert_eq!(proof.get(&hashed_key), Some(value));
     // Raw keys never appear in SMT proofs, only their hashed counterparts.
     assert_eq!(proof.get(&raw_key), None);
-
 }
 
 // PRUNING TESTS
@@ -680,9 +684,10 @@ fn prune_respects_retention_boundary() {
 
 #[test]
 fn prune_roots_removes_old_entries() {
+    use miden_protocol::account::delta::StorageMapDelta;
+
     let mut forest = InnerForest::new();
     let account_id = dummy_account();
-    use miden_protocol::account::delta::StorageMapDelta;
 
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(3);
@@ -697,7 +702,8 @@ fn prune_roots_removes_old_entries() {
         let value = Word::from([0, 0, i * i * i, 77]);
         let mut map_delta = StorageMapDelta::default();
         map_delta.insert(key, value);
-        let storage_delta = AccountStorageDelta::new().add_updated_maps([(slot_name.clone(), map_delta)]);
+        let storage_delta =
+            AccountStorageDelta::new().add_updated_maps([(slot_name.clone(), map_delta)]);
 
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block_num, &delta).unwrap();

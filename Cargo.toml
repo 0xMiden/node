@@ -61,7 +61,7 @@ miden-tx-batch-prover = { version = "0.13" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
 miden-air    = { features = ["std", "testing"], version = "0.20" }
-miden-crypto = { path = "../miden-crypto/miden-crypto", version = "0.19" }
+miden-crypto = { version = "0.19.5" }
 
 # External dependencies
 anyhow            = { version = "1.0" }
@@ -102,10 +102,6 @@ tower-http         = { features = ["cors", "trace"], version = "0.6" }
 tracing            = { version = "0.1" }
 tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 url                = { features = ["serde"], version = "2.5" }
-
-# Ensure all crates use the local miden-crypto.
-[patch.crates-io]
-miden-crypto = { path = "../miden-crypto/miden-crypto" }
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]

@@ -1,4 +1,18 @@
 use std::collections::BTreeSet;
+
+use miden_crypto::hash::rpo::Rpo256;
+use miden_crypto::merkle::smt::{
+    ForestInMemoryBackend,
+    ForestOperation,
+    LargeSmtForest,
+    LargeSmtForestError,
+    LineageId,
+    RootInfo,
+    SMT_DEPTH,
+    SmtUpdateBatch,
+    TreeId,
+};
+use miden_crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_node_proto::domain::account::AccountStorageMapDetails;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
@@ -10,14 +24,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
-use miden_crypto::hash::rpo::Rpo256;
-use miden_crypto::merkle::smt::{
-    ForestInMemoryBackend, ForestOperation, LargeSmtForest, LargeSmtForestError, LineageId,
-    RootInfo, SMT_DEPTH, SmtUpdateBatch, TreeId,
-};
-use miden_crypto::merkle::{EmptySubtreeRoots, MerkleError};
-use miden_protocol::utils::Serializable;
 use miden_protocol::errors::{AssetError, StorageMapError};
+use miden_protocol::utils::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 use tracing::instrument;
@@ -75,9 +83,7 @@ pub(crate) struct InnerForest {
 
 impl InnerForest {
     pub(crate) fn new() -> Self {
-        Self {
-            forest: Self::create_forest(),
-        }
+        Self { forest: Self::create_forest() }
     }
 
     fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
@@ -93,6 +99,7 @@ impl InnerForest {
         *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
     }
 
+    #[cfg(test)]
     fn tree_id_for_root(
         &self,
         account_id: AccountId,
@@ -103,11 +110,13 @@ impl InnerForest {
         self.lookup_tree_id(lineage, block_num)
     }
 
+    #[cfg(test)]
     fn tree_id_for_vault_root(&self, account_id: AccountId, block_num: BlockNumber) -> TreeId {
         let lineage = Self::vault_lineage_id(account_id);
         self.lookup_tree_id(lineage, block_num)
     }
 
+    #[expect(clippy::unused_self)]
     fn lookup_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> TreeId {
         TreeId::new(lineage, block_num.as_u64())
     }
@@ -176,7 +185,6 @@ impl InnerForest {
         }
     }
 
-
     // ACCESSORS
     // --------------------------------------------------------------------------------------------
 
@@ -191,10 +199,11 @@ impl InnerForest {
                 } else {
                     None
                 }
-            }
+            },
         }
     }
 
+    #[cfg(test)]
     fn tree_root(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
         let tree = self.tree_id_for_lookup(lineage, block_num)?;
         match self.forest.root_info(tree) {
@@ -204,6 +213,7 @@ impl InnerForest {
     }
 
     /// Retrieves a vault root for the specified account and block.
+    #[cfg(test)]
     pub(crate) fn get_vault_root(
         &self,
         account_id: AccountId,
@@ -214,6 +224,7 @@ impl InnerForest {
     }
 
     /// Retrieves the storage map root for an account slot at the specified block.
+    #[cfg(test)]
     pub(crate) fn get_storage_map_root(
         &self,
         account_id: AccountId,
@@ -239,14 +250,9 @@ impl InnerForest {
         raw_key: Word,
     ) -> Result<StorageMapWitness, WitnessError> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        let tree = self
-            .tree_id_for_lookup(lineage, block_num)
-            .ok_or(WitnessError::RootNotFound)?;
+        let tree = self.tree_id_for_lookup(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let key = StorageMap::hash_key(raw_key);
-        let proof = self
-            .forest
-            .open(tree, key)
-            .map_err(Self::map_forest_error_to_witness)?;
+        let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
     }
@@ -260,9 +266,7 @@ impl InnerForest {
         asset_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
-        let tree = self
-            .tree_id_for_lookup(lineage, block_num)
-            .ok_or(WitnessError::RootNotFound)?;
+        let tree = self.tree_id_for_lookup(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let witnessees: Result<Vec<_>, WitnessError> =
             Result::from_iter(asset_keys.into_iter().map(|key| {
                 let proof = self
@@ -378,9 +382,7 @@ impl InnerForest {
     /// account, returns an empty SMT root.
     fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
         let lineage = Self::vault_lineage_id(account_id);
-        self.forest
-            .latest_root(lineage)
-            .map_or_else(Self::empty_smt_root, |root| root)
+        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
     }
 
     /// Inserts asset vault data into the forest for the specified account. Assumes that asset
@@ -446,7 +448,6 @@ impl InnerForest {
         );
     }
 
-
     /// Updates the forest with vault changes from a delta. The vault delta is assumed to be
     /// non-empty.
     ///
@@ -466,10 +467,8 @@ impl InnerForest {
 
         // get the previous vault root; the root could be for an empty or non-empty SMT
         let lineage = Self::vault_lineage_id(account_id);
-        let prev_tree = self
-            .forest
-            .latest_version(lineage)
-            .map(|version| TreeId::new(lineage, version));
+        let prev_tree =
+            self.forest.latest_version(lineage).map(|version| TreeId::new(lineage, version));
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
@@ -542,11 +541,8 @@ impl InnerForest {
         slot_name: &StorageSlotName,
     ) -> Word {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.forest
-            .latest_root(lineage)
-            .map_or_else(Self::empty_smt_root, |root| root)
+        self.forest.latest_root(lineage).map_or_else(Self::empty_smt_root, |root| root)
     }
-
 
     /// Inserts all storage maps from the provided storage delta into the forest.
     ///
@@ -607,7 +603,6 @@ impl InnerForest {
             );
         }
     }
-
 
     /// Updates the forest with storage map changes from a delta.
     ///
