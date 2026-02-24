@@ -189,14 +189,15 @@ async fn perform_faucet_test(
     debug!("Generated account ID: {} (length: {})", account_id, account_id.len());
 
     // Step 1: Request PoW challenge
-    let pow_url = faucet_url.join("/pow")?;
-    let response = client
-        .get(pow_url)
-        .query(&[("account_id", &account_id), ("amount", &MINT_AMOUNT.to_string())])
-        .send()
-        .await?;
+    let mut pow_url = faucet_url.join("/pow")?;
+    pow_url
+        .query_pairs_mut()
+        .append_pair("account_id", &account_id)
+        .append_pair("amount", &MINT_AMOUNT.to_string());
 
-    let response_text = response.text().await?;
+    let response = client.get(pow_url).send().await?;
+
+    let response_text: String = response.text().await?;
     debug!("Faucet PoW response: {}", response_text);
 
     let challenge_response: PowChallengeResponse = serde_json::from_str(&response_text)
@@ -215,21 +216,18 @@ async fn perform_faucet_test(
     debug!("Solved PoW challenge with nonce: {}", nonce);
 
     // Step 3: Request tokens with the solution
-    let tokens_url = faucet_url.join("/get_tokens")?;
+    let mut tokens_url = faucet_url.join("/get_tokens")?;
+    tokens_url
+        .query_pairs_mut()
+        .append_pair("account_id", account_id.as_str())
+        .append_pair("is_private_note", "false")
+        .append_pair("asset_amount", &MINT_AMOUNT.to_string())
+        .append_pair("challenge", &challenge_response.challenge)
+        .append_pair("nonce", &nonce.to_string());
 
-    let response = client
-        .get(tokens_url)
-        .query(&[
-            ("account_id", account_id.as_str()),
-            ("is_private_note", "false"),
-            ("asset_amount", &MINT_AMOUNT.to_string()),
-            ("challenge", &challenge_response.challenge),
-            ("nonce", &nonce.to_string()),
-        ])
-        .send()
-        .await?;
+    let response = client.get(tokens_url).send().await?;
 
-    let response_text = response.text().await?;
+    let response_text: String = response.text().await?;
 
     let tokens_response: GetTokensResponse = serde_json::from_str(&response_text)
         .with_context(|| format!("Failed to parse tokens response: {response_text}"))?;

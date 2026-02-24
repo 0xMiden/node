@@ -14,10 +14,8 @@
 //! let smt = LargeSmt::new(storage).unwrap();
 //! ```
 //!
-//! With RocksDB (requires `rocksdb` feature):
-//!
 //! ```ignore
-//! use miden_large_smt::{LargeSmt, RocksDbConfig, RocksDbStorage};
+//! use miden_large_smt_backend_rocksdb::{LargeSmt, RocksDbConfig, RocksDbStorage};
 //!
 //! let storage = RocksDbStorage::open(RocksDbConfig::new("/path/to/db")).unwrap();
 //! let smt = LargeSmt::new(storage).unwrap();
