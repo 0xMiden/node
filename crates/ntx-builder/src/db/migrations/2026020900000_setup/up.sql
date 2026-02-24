@@ -2,7 +2,7 @@
 -- The chain MMR is reconstructed on startup from the store and maintained in memory.
 CREATE TABLE chain_state (
     -- Singleton constraint: only one row allowed.
-    id              INTEGER PRIMARY KEY CHECK (id = 0),
+    id              INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
     -- Block number of the chain tip.
     block_num       INTEGER NOT NULL,
     -- Serialized BlockHeader.
@@ -16,7 +16,7 @@ CREATE TABLE chain_state (
 -- The auto-incrementing order_id preserves insertion order (VecDeque semantics).
 CREATE TABLE accounts (
     -- Auto-incrementing ID preserves insertion order.
-    order_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id        INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     -- AccountId serialized bytes (8 bytes).
     account_id      BLOB    NOT NULL,
     -- Serialized Account state.
@@ -27,6 +27,9 @@ CREATE TABLE accounts (
 
 -- At most one committed row per account.
 CREATE UNIQUE INDEX idx_accounts_committed ON accounts(account_id) WHERE transaction_id IS NULL;
+-- At most one inflight row per (account, transaction) pair.
+CREATE UNIQUE INDEX idx_accounts_inflight ON accounts(account_id, transaction_id)
+    WHERE transaction_id IS NOT NULL;
 CREATE INDEX idx_accounts_account ON accounts(account_id);
 CREATE INDEX idx_accounts_tx ON accounts(transaction_id) WHERE transaction_id IS NOT NULL;
 
@@ -57,3 +60,12 @@ CREATE TABLE notes (
 CREATE INDEX idx_notes_account ON notes(account_id);
 CREATE INDEX idx_notes_created_by ON notes(created_by) WHERE created_by IS NOT NULL;
 CREATE INDEX idx_notes_consumed_by ON notes(consumed_by) WHERE consumed_by IS NOT NULL;
+
+-- Persistent cache of note scripts, keyed by script root hash.
+-- Survives restarts so scripts don't need to be re-fetched from the store.
+CREATE TABLE note_scripts (
+    -- Script root hash (Word serialized to 32 bytes).
+    script_root BLOB PRIMARY KEY,
+    -- Serialized NoteScript bytes.
+    script_data BLOB NOT NULL
+) WITHOUT ROWID;

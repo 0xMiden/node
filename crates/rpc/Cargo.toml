@@ -44,4 +44,4 @@ miden-protocol   = { default-features = true, features = ["testing"], workspace 
 miden-standards  = { workspace = true }
 reqwest          = { version = "0.13" }
 rstest           = { workspace = true }
-tempfile         = { version = "3.20" }
+tempfile         = { workspace = true }

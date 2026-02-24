@@ -682,9 +682,14 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         {
             let storage = NoteStorage::read_from_bytes(&storage[..])?;
             let serial_num = Word::read_from_bytes(&serial_num[..])?;
-            let script = script.ok_or_else(|| {
-                DatabaseError::conversiont_from_sql::<NoteRecipient, DatabaseError, _>(None)
-            })?;
+            let script =
+                script.ok_or_else(|| {
+                    miden_node_db::DatabaseError::conversiont_from_sql::<
+                        NoteRecipient,
+                        DatabaseError,
+                        _,
+                    >(None)
+                })?;
             let recipient = NoteRecipient::new(serial_num, script, storage);
             let assets = NoteAssets::read_from_bytes(&assets[..])?;
             Some(NoteDetails::new(assets, recipient))
@@ -744,7 +749,7 @@ impl TryInto<NoteMetadata> for NoteMetadataRawRow {
     fn try_into(self) -> Result<NoteMetadata, Self::Error> {
         let sender = AccountId::read_from_bytes(&self.sender[..])?;
         let note_type = NoteType::try_from(self.note_type as u32)
-            .map_err(DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
+            .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
         let attachment = NoteAttachment::read_from_bytes(&self.attachment)?;
         Ok(NoteMetadata::new(sender, note_type, tag).with_attachment(attachment))
@@ -766,7 +771,9 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
         let batch_index = self.batch_index as usize;
         let note_index = self.note_index as usize;
         let index = BlockNoteIndex::new(batch_index, note_index).ok_or_else(|| {
-            DatabaseError::conversiont_from_sql::<BlockNoteIndex, DatabaseError, _>(None)
+            miden_node_db::DatabaseError::conversiont_from_sql::<BlockNoteIndex, DatabaseError, _>(
+                None,
+            )
         })?;
         Ok(index)
     }

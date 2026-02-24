@@ -1,9 +1,10 @@
-//! A minimal connection manager wrapper.
+//! A minimal connection manager wrapper
 //!
 //! Only required to setup connection parameters, specifically `WAL`.
 
 use deadpool_sync::InteractError;
-use diesel::{RunQueryDsl, SqliteConnection};
+
+use super::{Result, RunQueryDsl, SqliteConnection};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectionManagerError {
@@ -18,25 +19,29 @@ pub enum ConnectionManagerError {
 }
 
 impl ConnectionManagerError {
-    /// Converts from `InteractError`.
+    /// Converts from `InteractError`
     ///
-    /// Required since `InteractError` has at least one enum variant that is _not_ `Send +
-    /// Sync` and hence prevents the `Sync` auto implementation.
+    /// Note: Required since `InteractError` has at least one enum variant that is _not_ `Send +
+    /// Sync` and hence prevents the `Sync` auto implementation. This does an internal
+    /// conversion to string while maintaining convenience.
+    ///
+    /// Using `MSG` as const so it can be called as `.map_err(DatabaseError::interact::<"Your
+    /// message">)`
     pub fn interact(msg: &(impl ToString + ?Sized), e: &InteractError) -> Self {
         let msg = msg.to_string();
         Self::InteractError(format!("{msg} failed: {e:?}"))
     }
 }
 
-/// Create a connection manager with per-connection setup.
+/// Create a connection manager with per-connection setup
 ///
 /// Particularly, `foreign_key` checks are enabled and using a write-append-log for journaling.
-pub(crate) struct ConnectionManager {
+pub struct ConnectionManager {
     pub(crate) manager: deadpool_diesel::sqlite::Manager,
 }
 
 impl ConnectionManager {
-    pub(crate) fn new(database_path: &str) -> Self {
+    pub fn new(database_path: &str) -> Self {
         let manager = deadpool_diesel::sqlite::Manager::new(
             database_path.to_owned(),
             deadpool_diesel::sqlite::Runtime::Tokio1,
@@ -70,16 +75,28 @@ impl deadpool::managed::Manager for ConnectionManager {
     }
 }
 
-pub(crate) fn configure_connection_on_creation(
+pub fn configure_connection_on_creation(
     conn: &mut SqliteConnection,
 ) -> Result<(), ConnectionManagerError> {
-    // Enable the WAL mode. This allows concurrent reads while a write is in progress.
+    // Wait up to 3 seconds for writer locks before erroring.
+    diesel::sql_query("PRAGMA busy_timeout=3000")
+        .execute(conn)
+        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
+    // Enable the WAL mode. This allows concurrent reads while the transaction is being written,
+    // this is required for proper synchronization of the servers in-memory and on-disk
+    // representations (see [State::apply_block])
     diesel::sql_query("PRAGMA journal_mode=WAL")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
 
     // Enable foreign key checks.
     diesel::sql_query("PRAGMA foreign_keys=ON")
+        .execute(conn)
+        .map_err(ConnectionManagerError::ConnectionParamSetup)?;
+
+    // Set busy timeout so concurrent writers wait instead of immediately failing.
+    diesel::sql_query("PRAGMA busy_timeout=5000")
         .execute(conn)
         .map_err(ConnectionManagerError::ConnectionParamSetup)?;
     Ok(())

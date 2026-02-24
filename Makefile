@@ -107,7 +107,7 @@ install-node: ## Installs node
 
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
-	$(BUILD_PROTO) cargo install --path bin/remote-prover --bin miden-remote-prover --features concurrent --locked
+	$(BUILD_PROTO) cargo install --path bin/remote-prover --bin miden-remote-prover --locked
 
 .PHONY: stress-test-smoke
 stress-test: ## Runs stress-test benchmarks

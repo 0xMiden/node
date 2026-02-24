@@ -9,6 +9,7 @@
 - Validator now persists validated transactions ([#1614](https://github.com/0xMiden/miden-node/pull/1614)).
 - [BREAKING] Remove `SynState` and introduce `SyncChainMmr` ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
+- Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/miden-node/issues/1701)).
 
 ### Changes
 
@@ -19,7 +20,10 @@
 - Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
 - Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).
 - Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/miden-node/pull/1651)).
+- Added support for generic account loading at genesis ([#1624](https://github.com/0xMiden/miden-node/pull/1624)).
 - Improved tracing span fields ([#1650](https://github.com/0xMiden/miden-node/pull/1650))
+ - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/miden-node/pull/1662)).
+- [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
 
 ## v0.13.5 (TBD)
 

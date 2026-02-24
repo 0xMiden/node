@@ -292,6 +292,7 @@ impl BundledCommand {
                 store_ntx_builder_url,
                 block_producer_url,
                 validator_url,
+                &data_directory,
             );
 
             let id = join_set
