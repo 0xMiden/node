@@ -85,6 +85,8 @@ pub struct ValidatorKey {
 }
 
 impl ValidatorKey {
+    /// Consumes the validator key configuration and returns a KMS or local key signer depending on
+    /// the supplied configuration.
     pub async fn into_signer(self) -> anyhow::Result<ValidatorSigner> {
         if let Some(kms_key_id) = self.validator_kms_key_id {
             // Use KMS key ID to create a ValidatorSigner.

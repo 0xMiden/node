@@ -41,6 +41,29 @@ pub struct KmsSigner {
 }
 
 impl KmsSigner {
+    /// Constructs a new KMS signer and retrieves the corresponding public key from the AWS backend.
+    ///
+    /// The supplied `key_id` must be a valid AWS KMS key ID in the AWS region corresponding to the
+    /// typical `AWS_REGION` env var.
+    ///
+    /// A policy statement such as the following is required to allow a process on an EC2 instance
+    /// to use this signer:
+    /// ```json
+    /// {
+    ///   "Sid": "AllowEc2RoleUseOfKey",
+    ///   "Effect": "Allow",
+    ///   "Principal": {
+    ///     "AWS": "arn:aws:iam::<account_id>:role/<role_name>"
+    ///   },
+    ///   "Action": [
+    ///     "kms:Sign",
+    ///     "kms:Verify",
+    ///     "kms:DescribeKey"
+    ///     "kms:GetPublicKey"
+    ///   ],
+    ///   "Resource": "*"
+    /// },
+    /// ```
     pub async fn new(key_id: impl Into<String>) -> anyhow::Result<Self> {
         let version = aws_config::BehaviorVersion::v2026_01_12();
         let config = aws_config::load_defaults(version).await;

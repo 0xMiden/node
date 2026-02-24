@@ -225,17 +225,28 @@ impl StoreCommand {
         let signer = validator_key.into_signer().await?;
         match signer {
             ValidatorSigner::Kms(signer) => {
-                Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
-                    .await
+                Self::bootstrap_accounts_and_store(
+                    config,
+                    signer,
+                    accounts_directory,
+                    data_directory,
+                )
+                .await
             },
             ValidatorSigner::Local(signer) => {
-                Self::bootstrap_with_signer(config, signer, accounts_directory, data_directory)
-                    .await
+                Self::bootstrap_accounts_and_store(
+                    config,
+                    signer,
+                    accounts_directory,
+                    data_directory,
+                )
+                .await
             },
         }
     }
 
-    async fn bootstrap_with_signer(
+    /// Builds the genesis state of the chain, writes accounts to file, and bootstraps the store.
+    async fn bootstrap_accounts_and_store(
         config: GenesisConfig,
         signer: impl BlockSigner,
         accounts_directory: &Path,
