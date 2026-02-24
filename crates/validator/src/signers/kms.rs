@@ -3,7 +3,6 @@ use aws_sdk_kms::error::SdkError;
 use aws_sdk_kms::operation::sign::SignError;
 use aws_sdk_kms::types::SigningAlgorithmSpec;
 use k256::PublicKey as K256PublicKey;
-use k256::ecdsa::Signature as K256Signature;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::pkcs8::DecodePublicKey as _;
 use miden_node_utils::signer::BlockSigner;
@@ -90,21 +89,12 @@ impl BlockSigner for KmsSigner {
             .map_err(Box::from)
             .map_err(KmsSignerError::KmsServiceError)?;
 
-        // Convert DER -> 64-byte r||s, and normalize s to low-S.
+        // Decode DER-encoded signature.
         let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
-        let sig = K256Signature::from_der(sig_der.as_ref()).map_err(KmsSignerError::K256Error)?;
-        let rs = if let Some(norm) = sig.normalize_s() {
-            norm.to_bytes()
-        } else {
-            sig.to_bytes()
-        }; // 64 bytes.
-
-        // Append a recovery byte `v` to make 65 bytes (r||s||v).
-        let mut sig65 = [0u8; 65];
-        sig65[..64].copy_from_slice(&rs);
-        sig65[64] = 0; // Recovery id is not used by verify(pk), so 0 is fine.
-
-        Ok(Signature::read_from_bytes(&sig65).map_err(KmsSignerError::SignatureFormatError)?)
+        // Recovery id is not used by verify(pk), so 0 is fine.
+        let recovery_id = 0;
+        Signature::from_der(sig_der.as_ref(), recovery_id)
+            .map_err(KmsSignerError::SignatureFormatError)
     }
 
     fn public_key(&self) -> PublicKey {
