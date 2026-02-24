@@ -2712,7 +2712,7 @@ dependencies = [
 
 [[package]]
 name = "miden-network-monitor"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "clap 4.5.54",
@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-block-producer"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2797,7 +2797,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-grpc-error-macro"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -2805,7 +2805,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-ntx-builder"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "futures",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2854,7 +2854,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto-build"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "fs-err",
  "miette",
@@ -2864,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-rpc"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "futures",
@@ -2896,7 +2896,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-store"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2936,7 +2936,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-stress-test"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "clap 4.5.54",
  "fs-err",
@@ -2966,7 +2966,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-utils"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-validator"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "miden-node-proto",
@@ -3089,7 +3089,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover-client"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "fs-err",
  "getrandom 0.3.4",
