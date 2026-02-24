@@ -2910,7 +2910,6 @@ dependencies = [
  "hex",
  "indexmap 2.13.0",
  "libsqlite3-sys",
- "lru 0.16.3",
  "miden-crypto",
  "miden-node-proto",
  "miden-node-proto-build",
