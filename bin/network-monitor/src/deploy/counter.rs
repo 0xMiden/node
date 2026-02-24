@@ -7,7 +7,6 @@ use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountComponent,
-    AccountComponentMetadata,
     AccountFile,
     AccountId,
     AccountStorageMode,
@@ -54,12 +53,8 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     let component_code =
         CodeBuilder::default().compile_component_code("counter::program", script)?;
 
-    let account_code = AccountComponent::new(
-        component_code,
-        vec![counter_slot, owner_id_slot],
-        AccountComponentMetadata::default().with_supports_all_types(),
-    )?
-    .with_supports_all_types();
+    let account_code = AccountComponent::new(component_code, vec![counter_slot, owner_id_slot])?
+        .with_supports_all_types();
 
     let incr_nonce_auth: AccountComponent = IncrNonceAuthComponent.into();
 

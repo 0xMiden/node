@@ -355,7 +355,7 @@ fn sql_unconsumed_network_notes() {
                 NoteType::Public,
                 NoteTag::with_account_target(account_note.0),
             )
-            .with_attachment(attachment.clone()),
+                .with_attachment(attachment.clone()),
             details: None,
             inclusion_path: SparseMerklePath::default(),
         };
@@ -2118,9 +2118,12 @@ fn db_roundtrip_note_metadata_attachment() {
     let attachment: NoteAttachment = target.into();
 
     // Create NoteMetadata with the attachment
-    let metadata =
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::with_account_target(account_id))
-            .with_attachment(attachment.clone());
+    let metadata = NoteMetadata::new(
+        account_id,
+        NoteType::Public,
+        NoteTag::with_account_target(account_id),
+    )
+        .with_attachment(attachment.clone());
 
     let note = NoteRecord {
         block_num,

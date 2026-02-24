@@ -134,7 +134,7 @@ impl GenesisState<SecretKey> {
 
         let block_proof = BlockProof::new_dummy();
 
-        let signature = self.block_signer.sign(&header);
+        let signature = self.block_signer.sign(header.commitment());
         // SAFETY: Header and accounts should be valid by construction.
         // No notes or nullifiers are created at genesis, which is consistent with the above empty
         // block note tree root and empty nullifier tree root.

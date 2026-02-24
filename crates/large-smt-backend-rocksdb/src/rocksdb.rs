@@ -2,31 +2,37 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rocksdb::{
+use ::rocksdb::{
     BlockBasedOptions,
     Cache,
+    ColumnFamily,
     ColumnFamilyDescriptor,
     DB,
     DBCompactionStyle,
     DBCompressionType,
     DBIteratorWithThreadMode,
+    Error as RocksDbError,
     FlushOptions,
     IteratorMode,
     Options,
     ReadOptions,
     WriteBatch,
+    WriteOptions,
 };
+use miden_crypto::Map;
+use miden_crypto::merkle::smt::MAX_LEAF_ENTRIES;
 use winter_utils::{Deserializable, Serializable};
 
 use crate::{
     EMPTY_WORD,
     InnerNode,
-    Map,
     NodeIndex,
     SmtLeaf,
+    SmtLeafError,
     SmtStorage,
     StorageError,
     StorageUpdateParts,
@@ -56,6 +62,16 @@ const ROOT_KEY: &[u8] = b"smt_root";
 const LEAF_COUNT_KEY: &[u8] = b"leaf_count";
 /// The key used in the `METADATA_CF` column family to store the total count of key-value entries.
 const ENTRY_COUNT_KEY: &[u8] = b"entry_count";
+
+trait RocksDbResultExt<T> {
+    fn map_rocksdb_err(self) -> Result<T, StorageError>;
+}
+
+impl<T> RocksDbResultExt<T> for Result<T, RocksDbError> {
+    fn map_rocksdb_err(self) -> Result<T, StorageError> {
+        self.map_err(rocksdb_error_to_storage_error)
+    }
+}
 
 /// A RocksDB-backed persistent storage implementation for a Sparse Merkle Tree (SMT).
 ///
@@ -160,7 +176,7 @@ impl RocksDbStorage {
             ColumnFamilyDescriptor::new(DEPTH_24_CF, depth24_opts),
         ];
 
-        let db = DB::open_cf_descriptors(&db_opts, config.path, cfs)?;
+        let db = DB::open_cf_descriptors(&db_opts, config.path, cfs).map_rocksdb_err()?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -181,10 +197,10 @@ impl RocksDbStorage {
             DEPTH_24_CF,
         ] {
             let cf = self.cf_handle(name)?;
-            self.db.flush_cf_opt(cf, &fopts)?;
+            self.db.flush_cf_opt(cf, &fopts).map_rocksdb_err()?;
         }
 
-        self.db.flush_wal(true)?;
+        self.db.flush_wal(true).map_rocksdb_err()?;
         Ok(())
     }
 
@@ -206,14 +222,14 @@ impl RocksDbStorage {
         KeyBytes::new(index.value(), keep)
     }
 
-    fn cf_handle(&self, name: &str) -> Result<&rocksdb::ColumnFamily, StorageError> {
+    fn cf_handle(&self, name: &str) -> Result<&ColumnFamily, StorageError> {
         self.db
             .cf_handle(name)
             .ok_or_else(|| StorageError::Unsupported(format!("unknown column family `{name}`")))
     }
 
     #[inline(always)]
-    fn subtree_cf(&self, index: NodeIndex) -> &rocksdb::ColumnFamily {
+    fn subtree_cf(&self, index: NodeIndex) -> &ColumnFamily {
         let name = cf_for_depth(index.depth());
         self.cf_handle(name).expect("CF handle missing")
     }
@@ -222,7 +238,7 @@ impl RocksDbStorage {
 impl SmtStorage for RocksDbStorage {
     fn get_root(&self) -> Result<Option<Word>, StorageError> {
         let cf = self.cf_handle(METADATA_CF)?;
-        match self.db.get_cf(cf, ROOT_KEY)? {
+        match self.db.get_cf(cf, ROOT_KEY).map_rocksdb_err()? {
             Some(bytes) => {
                 let digest = Word::read_from_bytes(&bytes)?;
                 Ok(Some(digest))
@@ -233,13 +249,13 @@ impl SmtStorage for RocksDbStorage {
 
     fn set_root(&self, root: Word) -> Result<(), StorageError> {
         let cf = self.cf_handle(METADATA_CF)?;
-        self.db.put_cf(cf, ROOT_KEY, root.to_bytes())?;
+        self.db.put_cf(cf, ROOT_KEY, root.to_bytes()).map_rocksdb_err()?;
         Ok(())
     }
 
     fn leaf_count(&self) -> Result<usize, StorageError> {
         let cf = self.cf_handle(METADATA_CF)?;
-        self.db.get_cf(cf, LEAF_COUNT_KEY)?.map_or(Ok(0), |bytes| {
+        self.db.get_cf(cf, LEAF_COUNT_KEY).map_rocksdb_err()?.map_or(Ok(0), |bytes| {
             let arr: [u8; 8] =
                 bytes.as_slice().try_into().map_err(|_| StorageError::BadValueLen {
                     what: "leaf count",
@@ -252,7 +268,7 @@ impl SmtStorage for RocksDbStorage {
 
     fn entry_count(&self) -> Result<usize, StorageError> {
         let cf = self.cf_handle(METADATA_CF)?;
-        self.db.get_cf(cf, ENTRY_COUNT_KEY)?.map_or(Ok(0), |bytes| {
+        self.db.get_cf(cf, ENTRY_COUNT_KEY).map_rocksdb_err()?.map_or(Ok(0), |bytes| {
             let arr: [u8; 8] =
                 bytes.as_slice().try_into().map_err(|_| StorageError::BadValueLen {
                     what: "entry count",
@@ -282,12 +298,12 @@ impl SmtStorage for RocksDbStorage {
         let maybe_leaf = self.get_leaf(index)?;
 
         let (old_value, new_leaf) = match maybe_leaf {
-            Some(mut existing_leaf) => {
-                let old_val = existing_leaf.insert(key, value)?;
+            Some(existing_leaf) => {
+                let (old_val, updated_leaf) = insert_leaf_entry(existing_leaf, key, value)?;
                 if old_val.is_none() {
                     current_entry_count += 1;
                 }
-                (old_val, existing_leaf)
+                (old_val, updated_leaf)
             },
             None => {
                 let new_leaf = SmtLeaf::new_single(key, value);
@@ -303,7 +319,7 @@ impl SmtStorage for RocksDbStorage {
         batch.put_cf(metadata_cf, LEAF_COUNT_KEY, current_leaf_count.to_be_bytes());
         batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, current_entry_count.to_be_bytes());
 
-        self.db.write(batch)?;
+        self.db.write(batch).map_rocksdb_err()?;
 
         Ok(old_value)
     }
@@ -311,11 +327,11 @@ impl SmtStorage for RocksDbStorage {
     fn remove_value(&self, index: u64, key: Word) -> Result<Option<Word>, StorageError> {
         let maybe_leaf = self.get_leaf(index)?;
 
-        let Some(mut existing_leaf) = maybe_leaf else {
+        let Some(existing_leaf) = maybe_leaf else {
             return Ok(None);
         };
 
-        let (old_value, is_empty) = existing_leaf.remove(key);
+        let (old_value, is_empty, updated_leaf) = remove_leaf_entry(existing_leaf, key);
         if old_value.is_none() {
             return Ok(None);
         }
@@ -331,7 +347,7 @@ impl SmtStorage for RocksDbStorage {
             batch.delete_cf(leaves_cf, db_key);
             current_leaf_count = current_leaf_count.saturating_sub(1);
         } else {
-            batch.put_cf(leaves_cf, db_key, existing_leaf.to_bytes());
+            batch.put_cf(leaves_cf, db_key, updated_leaf.to_bytes());
         }
         current_entry_count = current_entry_count.saturating_sub(1);
 
@@ -339,7 +355,7 @@ impl SmtStorage for RocksDbStorage {
         batch.put_cf(metadata_cf, LEAF_COUNT_KEY, current_leaf_count.to_be_bytes());
         batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, current_entry_count.to_be_bytes());
 
-        self.db.write(batch)?;
+        self.db.write(batch).map_rocksdb_err()?;
 
         Ok(old_value)
     }
@@ -348,7 +364,7 @@ impl SmtStorage for RocksDbStorage {
         let cf = self.cf_handle(LEAVES_CF)?;
         let db_key = Self::index_db_key(index);
 
-        match self.db.get_cf(cf, db_key)? {
+        match self.db.get_cf(cf, db_key).map_rocksdb_err()? {
             Some(bytes) => Ok(Some(SmtLeaf::read_from_bytes(&bytes)?)),
             None => Ok(None),
         }
@@ -363,7 +379,7 @@ impl SmtStorage for RocksDbStorage {
             batch.put_cf(leaves_cf, db_key, leaf.to_bytes());
         }
 
-        self.db.write(batch)?;
+        self.db.write(batch).map_rocksdb_err()?;
         Ok(())
     }
 
@@ -371,13 +387,13 @@ impl SmtStorage for RocksDbStorage {
         let cf = self.cf_handle(LEAVES_CF)?;
         let db_key = Self::index_db_key(index);
 
-        let old_leaf = match self.db.get_cf(cf, &db_key)? {
+        let old_leaf = match self.db.get_cf(cf, &db_key).map_rocksdb_err()? {
             Some(bytes) => Some(SmtLeaf::read_from_bytes(&bytes)?),
             None => None,
         };
 
         if old_leaf.is_some() {
-            self.db.delete_cf(cf, db_key)?;
+            self.db.delete_cf(cf, db_key).map_rocksdb_err()?;
         }
 
         Ok(old_leaf)
@@ -386,13 +402,13 @@ impl SmtStorage for RocksDbStorage {
     fn get_leaves(&self, indices: &[u64]) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
         let cf = self.cf_handle(LEAVES_CF)?;
         let keys: Vec<[u8; 8]> = indices.iter().map(|idx| Self::index_db_key(*idx)).collect();
-        let key_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+        let key_refs: Vec<(&ColumnFamily, &[u8])> =
             keys.iter().map(|k| (cf, k.as_slice())).collect();
 
         let results = self.db.multi_get_cf(key_refs);
         let mut out = Vec::with_capacity(indices.len());
         for res in results {
-            match res? {
+            match res.map_rocksdb_err()? {
                 Some(bytes) => out.push(Some(SmtLeaf::read_from_bytes(&bytes)?)),
                 None => out.push(None),
             }
@@ -408,7 +424,7 @@ impl SmtStorage for RocksDbStorage {
         let cf = self.subtree_cf(index);
         let key = Self::subtree_db_key(index);
 
-        match self.db.get_cf(cf, key)? {
+        match self.db.get_cf(cf, key).map_rocksdb_err()? {
             Some(bytes) => Ok(Some(Subtree::from_vec(index, &bytes)?)),
             None => Ok(None),
         }
@@ -418,14 +434,14 @@ impl SmtStorage for RocksDbStorage {
         let keys: Vec<(NodeIndex, KeyBytes)> =
             indices.iter().map(|&idx| (idx, Self::subtree_db_key(idx))).collect();
 
-        let key_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+        let key_refs: Vec<(&ColumnFamily, &[u8])> =
             keys.iter().map(|(idx, k)| (self.subtree_cf(*idx), k.as_slice())).collect();
 
         let results = self.db.multi_get_cf(key_refs);
         let mut out = Vec::with_capacity(indices.len());
 
         for (res, &idx) in results.into_iter().zip(indices.iter()) {
-            match res? {
+            match res.map_rocksdb_err()? {
                 Some(bytes) => out.push(Some(Subtree::from_vec(idx, &bytes)?)),
                 None => out.push(None),
             }
@@ -439,7 +455,7 @@ impl SmtStorage for RocksDbStorage {
         let key = Self::subtree_db_key(index);
         let data = subtree.to_vec();
 
-        self.db.put_cf(cf, key, data)?;
+        self.db.put_cf(cf, key, data).map_rocksdb_err()?;
         Ok(())
     }
 
@@ -454,14 +470,14 @@ impl SmtStorage for RocksDbStorage {
             batch.put_cf(cf, key, data);
         }
 
-        self.db.write(batch)?;
+        self.db.write(batch).map_rocksdb_err()?;
         Ok(())
     }
 
     fn remove_subtree(&self, index: NodeIndex) -> Result<(), StorageError> {
         let cf = self.subtree_cf(index);
         let key = Self::subtree_db_key(index);
-        self.db.delete_cf(cf, key)?;
+        self.db.delete_cf(cf, key).map_rocksdb_err()?;
         Ok(())
     }
 
@@ -523,19 +539,25 @@ impl SmtStorage for RocksDbStorage {
             .into_iter()
             .map(|update| {
                 let (index, maybe_bytes, depth24_op) = match update {
-                    SubtreeUpdate::Set(subtree) => {
-                        let index = subtree.root_index();
+                    SubtreeUpdate::Store { index, subtree } => {
                         let bytes = subtree.to_vec();
                         let depth24_op = if index.depth() == 24 {
                             let hash_key = Self::index_db_key(index.value());
-                            let root_hash = subtree.root_hash();
+                            let root_hash = subtree
+                                .get_inner_node(index)
+                                .ok_or_else(|| {
+                                    StorageError::Unsupported(
+                                        "Subtree root node not found".to_string(),
+                                    )
+                                })?
+                                .hash();
                             Some((hash_key, Some(root_hash.to_bytes())))
                         } else {
                             None
                         };
                         (index, Some(bytes), depth24_op)
                     },
-                    SubtreeUpdate::Remove(index) => {
+                    SubtreeUpdate::Delete { index } => {
                         let depth24_op = if index.depth() == 24 {
                             let hash_key = Self::index_db_key(index.value());
                             Some((hash_key, None))
@@ -580,9 +602,9 @@ impl SmtStorage for RocksDbStorage {
 
         batch.put_cf(metadata_cf, ROOT_KEY, new_root.to_bytes());
 
-        let mut write_opts = rocksdb::WriteOptions::default();
+        let mut write_opts = WriteOptions::default();
         write_opts.set_sync(false);
-        self.db.write_opt(batch, &write_opts)?;
+        self.db.write_opt(batch, &write_opts).map_rocksdb_err()?;
 
         Ok(())
     }
@@ -614,7 +636,7 @@ impl SmtStorage for RocksDbStorage {
         let mut hashes = Vec::new();
 
         for item in iter {
-            let (key_bytes, value_bytes) = item?;
+            let (key_bytes, value_bytes) = item.map_rocksdb_err()?;
 
             let index = index_from_key_bytes(&key_bytes)?;
             let hash = Word::read_from_bytes(&value_bytes)?;
@@ -656,13 +678,13 @@ impl Iterator for RocksDbDirectLeafIterator<'_> {
 
 struct RocksDbSubtreeIterator<'a> {
     db: &'a DB,
-    cf_handles: Vec<&'a rocksdb::ColumnFamily>,
+    cf_handles: Vec<&'a ColumnFamily>,
     current_cf_index: usize,
     current_iter: Option<DBIteratorWithThreadMode<'a, DB>>,
 }
 
 impl<'a> RocksDbSubtreeIterator<'a> {
-    fn new(db: &'a DB, cf_handles: Vec<&'a rocksdb::ColumnFamily>) -> Self {
+    fn new(db: &'a DB, cf_handles: Vec<&'a ColumnFamily>) -> Self {
         let mut iterator = Self {
             db,
             cf_handles,
@@ -826,8 +848,83 @@ fn cf_for_depth(depth: u8) -> &'static str {
     }
 }
 
-impl From<rocksdb::Error> for StorageError {
-    fn from(e: rocksdb::Error) -> Self {
-        StorageError::Backend(Box::new(e))
+fn insert_leaf_entry(
+    leaf: SmtLeaf,
+    key: Word,
+    value: Word,
+) -> Result<(Option<Word>, SmtLeaf), StorageError> {
+    match leaf {
+        SmtLeaf::Empty(_) => Ok((None, SmtLeaf::new_single(key, value))),
+        SmtLeaf::Single((key_at_leaf, value_at_leaf)) => {
+            if key_at_leaf == key {
+                Ok((Some(value_at_leaf), SmtLeaf::Single((key_at_leaf, value))))
+            } else {
+                let mut pairs = vec![(key_at_leaf, value_at_leaf), (key, value)];
+                pairs.sort_by(|(key_1, _), (key_2, _)| cmp_keys(*key_1, *key_2));
+                Ok((None, SmtLeaf::Multiple(pairs)))
+            }
+        },
+        SmtLeaf::Multiple(mut kv_pairs) => {
+            match kv_pairs.binary_search_by(|kv_pair| cmp_keys(kv_pair.0, key)) {
+                Ok(pos) => {
+                    let old_value = kv_pairs[pos].1;
+                    kv_pairs[pos].1 = value;
+                    Ok((Some(old_value), SmtLeaf::Multiple(kv_pairs)))
+                },
+                Err(pos) => {
+                    if kv_pairs.len() >= MAX_LEAF_ENTRIES {
+                        return Err(SmtLeafError::TooManyLeafEntries {
+                            actual: kv_pairs.len() + 1,
+                        }
+                        .into());
+                    }
+                    kv_pairs.insert(pos, (key, value));
+                    Ok((None, SmtLeaf::Multiple(kv_pairs)))
+                },
+            }
+        },
     }
+}
+
+fn remove_leaf_entry(leaf: SmtLeaf, key: Word) -> (Option<Word>, bool, SmtLeaf) {
+    match leaf {
+        SmtLeaf::Empty(_) => (None, false, leaf),
+        SmtLeaf::Single((key_at_leaf, value_at_leaf)) => {
+            if key_at_leaf == key {
+                (Some(value_at_leaf), true, SmtLeaf::new_empty(key.into()))
+            } else {
+                (None, false, SmtLeaf::Single((key_at_leaf, value_at_leaf)))
+            }
+        },
+        SmtLeaf::Multiple(mut kv_pairs) => {
+            match kv_pairs.binary_search_by(|kv_pair| cmp_keys(kv_pair.0, key)) {
+                Ok(pos) => {
+                    let old_value = kv_pairs[pos].1;
+                    kv_pairs.remove(pos);
+                    if kv_pairs.len() == 1 {
+                        (Some(old_value), false, SmtLeaf::Single(kv_pairs[0]))
+                    } else {
+                        (Some(old_value), false, SmtLeaf::Multiple(kv_pairs))
+                    }
+                },
+                Err(_) => (None, false, SmtLeaf::Multiple(kv_pairs)),
+            }
+        },
+    }
+}
+
+fn cmp_keys(key_1: Word, key_2: Word) -> Ordering {
+    for (v1, v2) in key_1.iter().zip(key_2.iter()).rev() {
+        let v1 = v1.as_int();
+        let v2 = v2.as_int();
+        if v1 != v2 {
+            return v1.cmp(&v2);
+        }
+    }
+
+    Ordering::Equal
+}
+
+fn rocksdb_error_to_storage_error(err: RocksDbError) -> StorageError {
+    StorageError::Backend(Box::new(err))
 }

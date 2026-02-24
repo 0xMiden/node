@@ -18,5 +18,5 @@ workspace = true
 miden-protocol = { features = ["std"], workspace = true }
 miden-crypto   = { features = ["std", "concurrent"], workspace = true }
 rayon          = { version = "1.10" }
-rocksdb        = { default-features = false, features = ["bindgen-runtime", "lz4"], optional = true, version = "0.24" }
+rocksdb        = { default-features = false, features = ["bindgen-runtime", "lz4"], version = "0.24" }
 winter-utils   = { version = "0.13" }
