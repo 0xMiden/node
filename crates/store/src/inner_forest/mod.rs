@@ -661,8 +661,6 @@ impl InnerForest {
         self.forest.truncate(cutoff_block.as_u64());
 
         let after = self.forest.roots().count();
-        let removed = before.saturating_sub(after);
-
-        removed
+        before.saturating_sub(after)
     }
 }
