@@ -7,6 +7,7 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
 use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::block::BlockNumber;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -166,6 +167,10 @@ impl Coordinator {
                     tracing::error!(account_id = %account_id, "Account actor shut down due to DB error");
                     Ok(())
                 },
+                ActorShutdownReason::Sterile(account_id) => {
+                    tracing::info!(account_id = %account_id, "Account actor shut down due to sterility");
+                    Ok(())
+                },
             },
             Some(Err(err)) => {
                 tracing::error!(err = %err, "actor task failed");
@@ -183,8 +188,14 @@ impl Coordinator {
     /// Only actors that are currently active are notified. Since event effects are already
     /// persisted in the DB by `write_event()`, actors that spawn later read their state from the
     /// DB and do not need predating events.
-    pub fn send_targeted(&self, event: &MempoolEvent) {
+    ///
+    /// Returns account IDs of note targets that do not have active actors (e.g. previously
+    /// deactivated due to sterility). The caller can use this to re-activate actors for those
+    /// accounts.
+    pub fn send_targeted(&self, event: &MempoolEvent) -> Vec<NetworkAccountId> {
         let mut target_account_ids = HashSet::new();
+        let mut inactive_targets = Vec::new();
+
         if let MempoolEvent::TransactionAdded { network_notes, account_delta, .. } = event {
             // We need to inform the account if it was updated. This lets it know that its own
             // transaction has been applied, and in the future also resolves race conditions with
@@ -206,6 +217,8 @@ impl Coordinator {
                 let network_account_id = note.account_id();
                 if self.actor_registry.contains_key(&network_account_id) {
                     target_account_ids.insert(network_account_id);
+                } else {
+                    inactive_targets.push(network_account_id);
                 }
             }
         }
@@ -215,6 +228,8 @@ impl Coordinator {
                 handle.notify.notify_one();
             }
         }
+
+        inactive_targets
     }
 
     /// Writes mempool event effects to the database.
@@ -258,6 +273,38 @@ impl Coordinator {
             MempoolEvent::TransactionsReverted(tx_ids) => {
                 self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await
             },
+        }
+    }
+
+    /// Handles a shutdown request from an actor that has been idle for longer than the sterility
+    /// timeout.
+    ///
+    /// Validates the request by checking the DB for available notes. If notes are available, the
+    /// shutdown is rejected by dropping `ack_tx` (the actor detects the `RecvError` and resumes).
+    /// If no notes are available, the actor is deregistered and the ack is sent, allowing the
+    /// actor to exit gracefully.
+    pub async fn handle_shutdown_request(
+        &mut self,
+        account_id: NetworkAccountId,
+        block_num: BlockNumber,
+        max_note_attempts: usize,
+        ack_tx: tokio::sync::oneshot::Sender<()>,
+    ) {
+        let has_notes = self
+            .db
+            .has_available_notes(account_id, block_num, max_note_attempts)
+            .await
+            .unwrap_or(false);
+
+        if has_notes {
+            // Reject: drop ack_tx → actor detects RecvError, resumes.
+            tracing::debug!(
+                %account_id,
+                "Rejected actor shutdown: notes available in DB"
+            );
+        } else {
+            self.actor_registry.remove(&account_id);
+            let _ = ack_tx.send(());
         }
     }
 

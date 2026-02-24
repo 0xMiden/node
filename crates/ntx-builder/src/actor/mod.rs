@@ -53,6 +53,14 @@ pub enum ActorRequest {
     },
     /// A note script was fetched from the remote store and should be persisted to the local DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
+    /// The actor has been idle (in `NoViableNotes` mode) for longer than the sterility timeout
+    /// and is requesting to shut down. The builder validates the request against the DB before
+    /// approving. If approved (ack received), the actor exits. If rejected (`ack_tx` dropped), the
+    /// actor resumes in `NotesAvailable` mode.
+    Shutdown {
+        account_id: NetworkAccountId,
+        ack_tx: tokio::sync::oneshot::Sender<()>,
+    },
 }
 
 // ACTOR SHUTDOWN REASON
@@ -68,6 +76,9 @@ pub enum ActorShutdownReason {
     Cancelled(NetworkAccountId),
     /// Occurs when the actor encounters a database error it cannot recover from.
     DbError(NetworkAccountId),
+    /// Occurs when the actor has been idle for longer than the sterility timeout and the builder
+    /// has confirmed there are no available notes in the DB.
+    Sterile(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -95,6 +106,8 @@ pub struct AccountActorContext {
     pub max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     pub max_note_attempts: usize,
+    /// Duration an actor must remain in `NoViableNotes` mode before requesting shutdown.
+    pub sterility_timeout: Duration,
     /// Database for persistent state.
     pub db: Db,
     /// Channel for sending requests to the coordinator (via the builder event loop).
@@ -200,6 +213,8 @@ pub struct AccountActor {
     max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
+    /// Duration an actor must remain in `NoViableNotes` mode before requesting shutdown.
+    sterility_timeout: Duration,
     /// Channel for sending requests to the coordinator.
     request_tx: mpsc::Sender<ActorRequest>,
 }
@@ -235,6 +250,7 @@ impl AccountActor {
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
+            sterility_timeout: actor_context.sterility_timeout,
             request_tx: actor_context.request_tx.clone(),
         }
     }
@@ -269,6 +285,16 @@ impl AccountActor {
                 // Enable transaction execution.
                 ActorMode::NotesAvailable => semaphore.acquire().boxed(),
             };
+
+            // Sterility timer: only ticks when in NoViableNotes mode.
+            // Mode changes cause the next loop iteration to create a fresh sleep or pending.
+            let sterility_sleep = match self.mode {
+                ActorMode::NoViableNotes => {
+                    tokio::time::sleep(self.sterility_timeout).boxed()
+                },
+                _ => std::future::pending().boxed(),
+            };
+
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
                     return ActorShutdownReason::Cancelled(account_id);
@@ -325,8 +351,29 @@ impl AccountActor {
                         }
                     }
                 }
+                // Sterility timeout: actor has been idle too long, request shutdown.
+                _ = sterility_sleep => {
+                    match self.initiate_shutdown(account_id).await {
+                        Ok(()) => return ActorShutdownReason::Sterile(account_id),
+                        Err(()) => self.mode = ActorMode::NotesAvailable,
+                    }
+                }
             }
         }
+    }
+
+    /// Sends a shutdown request to the builder and waits for acknowledgment.
+    ///
+    /// Returns `Ok(())` if the builder approved the shutdown (actor should exit).
+    /// Returns `Err(())` if the builder rejected the shutdown or the channel was dropped
+    /// (actor should resume as `NotesAvailable`).
+    async fn initiate_shutdown(&self, account_id: NetworkAccountId) -> Result<(), ()> {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        self.request_tx
+            .send(ActorRequest::Shutdown { account_id, ack_tx })
+            .await
+            .map_err(|_| ())?;
+        ack_rx.await.map_err(|_| ())
     }
 
     /// Selects a transaction candidate by querying the DB.

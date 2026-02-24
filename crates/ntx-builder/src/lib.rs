@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use actor::AccountActorContext;
 use anyhow::Context;
@@ -52,6 +53,10 @@ const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
     NonZeroUsize::new(1_000).expect("literal is non-zero");
 
+/// Default duration an actor must remain idle (in `NoViableNotes` mode) before requesting
+/// shutdown.
+const DEFAULT_STERILITY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 // CONFIGURATION
 // =================================================================================================
 
@@ -93,6 +98,11 @@ pub struct NtxBuilderConfig {
     /// Channel capacity for loading accounts from the store during startup.
     pub account_channel_capacity: usize,
 
+    /// Duration an actor must remain idle (in `NoViableNotes` mode) before requesting shutdown.
+    /// When an actor has no viable notes for this duration, it will request to be deactivated
+    /// to free resources.
+    pub sterility_timeout: Duration,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -115,6 +125,7 @@ impl NtxBuilderConfig {
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
+            sterility_timeout: DEFAULT_STERILITY_TIMEOUT,
             database_filepath,
         }
     }
@@ -177,6 +188,16 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_account_channel_capacity(mut self, capacity: usize) -> Self {
         self.account_channel_capacity = capacity;
+        self
+    }
+
+    /// Sets the sterility timeout for actors.
+    ///
+    /// Actors that remain idle (in `NoViableNotes` mode) for this duration will request to be
+    /// deactivated.
+    #[must_use]
+    pub fn with_sterility_timeout(mut self, timeout: Duration) -> Self {
+        self.sterility_timeout = timeout;
         self
     }
 
@@ -246,6 +267,7 @@ impl NtxBuilderConfig {
             script_cache,
             max_notes_per_tx: self.max_notes_per_tx,
             max_note_attempts: self.max_note_attempts,
+            sterility_timeout: self.sterility_timeout,
             db: db.clone(),
             request_tx,
         };

@@ -211,7 +211,11 @@ impl NetworkTransactionBuilder {
                         }
                     }
                 }
-                self.coordinator.send_targeted(&event);
+                let inactive_targets = self.coordinator.send_targeted(&event);
+                for account_id in inactive_targets {
+                    self.coordinator
+                        .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                }
                 Ok(())
             },
             // Update chain state and broadcast.
@@ -259,6 +263,17 @@ impl NetworkTransactionBuilder {
                 if let Err(err) = self.db.insert_note_script(script_root, &script).await {
                     tracing::error!(err = %err, "failed to cache note script");
                 }
+            },
+            ActorRequest::Shutdown { account_id, ack_tx } => {
+                let block_num = self.chain_state.read().await.chain_tip_header.block_num();
+                self.coordinator
+                    .handle_shutdown_request(
+                        account_id,
+                        block_num,
+                        self.config.max_note_attempts,
+                        ack_tx,
+                    )
+                    .await;
             },
         }
     }
