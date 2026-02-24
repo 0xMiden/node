@@ -162,6 +162,10 @@ impl Coordinator {
                     Ok(())
                 },
                 ActorShutdownReason::SemaphoreFailed(err) => Err(err).context("semaphore failed"),
+                ActorShutdownReason::DbError(account_id) => {
+                    tracing::error!(account_id = %account_id, "Account actor shut down due to DB error");
+                    Ok(())
+                },
             },
             Some(Err(err)) => {
                 tracing::error!(err = %err, "actor task failed");

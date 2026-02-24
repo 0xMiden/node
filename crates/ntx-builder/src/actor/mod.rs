@@ -57,6 +57,8 @@ pub enum ActorShutdownReason {
     /// by the coordinator. Cancellation tokens are triggered by the coordinator to initiate
     /// graceful shutdown of actors.
     Cancelled(NetworkAccountId),
+    /// Occurs when the actor encounters a database error it cannot recover from.
+    DbError(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -235,11 +237,17 @@ impl AccountActor {
 
         // Determine initial mode by checking DB for available notes.
         let block_num = self.chain_state.read().await.chain_tip_header.block_num();
-        let has_notes = self
+        let has_notes = match self
             .db
             .has_available_notes(account_id, block_num, self.max_note_attempts)
             .await
-            .expect("actor should be able to check for available notes");
+        {
+            Ok(has_notes) => has_notes,
+            Err(err) => {
+                tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check for available notes");
+                return ActorShutdownReason::DbError(account_id);
+            },
+        };
 
         if has_notes {
             self.mode = ActorMode::NotesAvailable;
@@ -264,10 +272,16 @@ impl AccountActor {
                     match self.mode {
                         ActorMode::TransactionInflight(awaited_id) => {
                             // Check DB: is the inflight tx still pending?
-                            let resolved = self.db
+                            let resolved = match self.db
                                 .is_transaction_resolved(account_id, awaited_id)
                                 .await
-                                .expect("should be able to check tx status");
+                            {
+                                Ok(resolved) => resolved,
+                                Err(err) => {
+                                    tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check transaction status");
+                                    return ActorShutdownReason::DbError(account_id);
+                                },
+                            };
                             if resolved {
                                 self.mode = ActorMode::NotesAvailable;
                             }
@@ -285,10 +299,13 @@ impl AccountActor {
                             let chain_state = self.chain_state.read().await.clone();
 
                             // Query DB for latest account and available notes.
-                            let tx_candidate = self.select_candidate_from_db(
+                            let tx_candidate = match self.select_candidate_from_db(
                                 account_id,
                                 chain_state,
-                            ).await;
+                            ).await {
+                                Ok(candidate) => candidate,
+                                Err(shutdown_reason) => return shutdown_reason,
+                            };
 
                             if let Some(tx_candidate) = tx_candidate {
                                 self.execute_transactions(account_id, tx_candidate).await;
@@ -311,7 +328,7 @@ impl AccountActor {
         &self,
         account_id: NetworkAccountId,
         chain_state: ChainState,
-    ) -> Option<TransactionCandidate> {
+    ) -> Result<Option<TransactionCandidate>, ActorShutdownReason> {
         let block_num = chain_state.chain_tip_header.block_num();
         let max_notes = self.max_notes_per_tx.get();
 
@@ -319,22 +336,27 @@ impl AccountActor {
             .db
             .select_candidate(account_id, block_num, self.max_note_attempts)
             .await
-            .expect("actor should be able to query DB for candidate");
+            .map_err(|err| {
+                tracing::error!(err = err.as_report(), account_id = %account_id, "failed to query DB for transaction candidate");
+                ActorShutdownReason::DbError(account_id)
+            })?;
 
-        let account = latest_account?;
+        let Some(account) = latest_account else {
+            return Ok(None);
+        };
 
         let notes: Vec<_> = notes.into_iter().take(max_notes).collect();
         if notes.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let (chain_tip_header, chain_mmr) = chain_state.into_parts();
-        Some(TransactionCandidate {
+        Ok(Some(TransactionCandidate {
             account,
             notes,
             chain_tip_header,
             chain_mmr,
-        })
+        }))
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.
@@ -390,10 +412,17 @@ impl AccountActor {
     /// Sends requests to the coordinator to cache note scripts fetched from the remote store.
     async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
         for (script_root, script) in scripts {
-            let _ = self
+            if self
                 .request_tx
                 .send(ActorRequest::CacheNoteScript { script_root, script })
-                .await;
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "failed to send cache note script request, coordinator is shutting down"
+                );
+                break;
+            }
         }
     }
 
@@ -402,16 +431,23 @@ impl AccountActor {
     /// before the failure counts are updated in the database.
     async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let _ = self
+        if self
             .request_tx
             .send(ActorRequest::NotesFailed {
                 nullifiers: nullifiers.to_vec(),
                 block_num,
                 ack_tx,
             })
-            .await;
+            .await
+            .is_err()
+        {
+            tracing::warn!("failed to send notes failed request, coordinator is shutting down");
+            return;
+        }
         // Wait for the coordinator to confirm the DB write.
-        let _ = ack_rx.await;
+        if ack_rx.await.is_err() {
+            tracing::warn!("failed to receive notes failed ack from coordinator");
+        }
     }
 }
 
