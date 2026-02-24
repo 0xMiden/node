@@ -125,11 +125,25 @@ impl TransactionSummaryRowInsert {
     ) -> Self {
         const HEADER_BASE_SIZE: usize = 4 + 32 + 16 + 64; // block_num + tx_id + account_id + commitments
 
-        // Serialize input notes using binary format (store nullifiers)
-        let nullifiers_binary = transaction_header.input_notes().to_bytes();
+        // Extract nullifiers from input notes and serialize them.
+        // We only store the nullifiers (not the full `InputNoteCommitment`) since
+        // that's all that's needed when reading back `TransactionRecords`.
+        let nullifiers: Vec<Nullifier> = transaction_header
+            .input_notes()
+            .iter()
+            .map(miden_protocol::transaction::InputNoteCommitment::nullifier)
+            .collect();
+        let nullifiers_binary = nullifiers.to_bytes();
 
-        // Serialize output notes using binary format (store note IDs)
-        let output_notes_binary = transaction_header.output_notes().to_bytes();
+        // Extract note IDs from output note headers and serialize them.
+        // We only store the `NoteId`s (not the full `NoteHeader` with metadata) since
+        // that's all that's needed when reading back `TransactionRecords`.
+        let output_note_ids: Vec<NoteId> = transaction_header
+            .output_notes()
+            .iter()
+            .map(miden_protocol::note::NoteHeader::id)
+            .collect();
+        let output_notes_binary = output_note_ids.to_bytes();
 
         // Manually calculate the estimated size of the transaction header to avoid
         // the cost of serialization. The size estimation includes:
@@ -269,24 +283,18 @@ pub fn select_transactions_records(
 
         // Add transactions from this chunk one by one until we hit the limit
         let mut added_from_chunk = 0;
-        let mut last_added_tx: Option<TransactionRecordRaw> = None;
 
         for tx in chunk {
             if total_size + tx.size_in_bytes <= max_payload_bytes {
                 total_size += tx.size_in_bytes;
-                last_added_tx = Some(tx);
+                last_block_num = Some(tx.block_num);
+                last_transaction_id = Some(tx.transaction_id.clone());
+                all_transactions.push(tx);
                 added_from_chunk += 1;
             } else {
                 // Can't fit this transaction, stop here
                 break;
             }
-        }
-
-        // Update cursor position only for the last transaction that was actually added
-        if let Some(tx) = last_added_tx {
-            last_block_num = Some(tx.block_num);
-            last_transaction_id = Some(tx.transaction_id.clone());
-            all_transactions.push(tx);
         }
 
         // Break if chunk incomplete (size limit hit or data exhausted)
