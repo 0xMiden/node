@@ -50,3 +50,4 @@ miden-node-proto-build             = { features = ["internal"], workspace = true
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 miette                             = { features = ["fancy"], version = "7.5" }
 tonic-prost-build                  = { workspace = true }
+fs-err                             = { workspace = true }

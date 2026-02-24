@@ -2733,6 +2733,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "fs-err",
  "http",
  "humantime",
  "miden-block-prover",
