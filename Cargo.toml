@@ -46,19 +46,19 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-node-block-producer   = { path = "crates/block-producer", version = "0.14" }
-miden-node-db               = { path = "crates/db", version = "0.14" }
-miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.14" }
-miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.14" }
-miden-node-proto            = { path = "crates/proto", version = "0.14" }
-miden-node-proto-build      = { path = "proto", version = "0.14" }
-miden-node-rpc              = { path = "crates/rpc", version = "0.14" }
-miden-node-store            = { path = "crates/store", version = "0.14" }
-miden-node-test-macro       = { path = "crates/test-macro" }
-miden-node-utils            = { path = "crates/utils", version = "0.14" }
-miden-node-validator        = { path = "crates/validator", version = "0.14" }
-miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.14" }
-miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.14"}
+miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.14" }
+miden-node-block-producer       = { path = "crates/block-producer", version = "0.14" }
+miden-node-db                   = { path = "crates/db", version = "0.14" }
+miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.14" }
+miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "0.14" }
+miden-node-proto                = { path = "crates/proto", version = "0.14" }
+miden-node-proto-build          = { path = "proto", version = "0.14" }
+miden-node-rpc                  = { path = "crates/rpc", version = "0.14" }
+miden-node-store                = { path = "crates/store", version = "0.14" }
+miden-node-test-macro           = { path = "crates/test-macro" }
+miden-node-utils                = { path = "crates/utils", version = "0.14" }
+miden-node-validator            = { path = "crates/validator", version = "0.14" }
+miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.14" }
 
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
@@ -73,7 +73,7 @@ miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", 
 # miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
-miden-air    = { features = ["std", "testing"], version = "0.20" }
+miden-air = { features = ["std", "testing"], version = "0.20" }
 # miden-crypto = { default-features = false,  version = "0.19.4" }
 miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
 miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
@@ -154,4 +154,5 @@ should_panic_without_expect  = "allow" # We don't care about the specific panic 
 files.extend-exclude = ["*.svg"] # Ignore SVG files.
 
 [patch.crates-io]
-miden-crypto = { path = "../miden-crypto-bernhard-migrate-rocksdb-from-crypto/miden-crypto/" }
+#miden-crypto = { path = "../miden-crypto-bernhard-migrate-rocksdb-from-crypto/miden-crypto/" }
+miden-crypto = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/crypto/pull/850" }
