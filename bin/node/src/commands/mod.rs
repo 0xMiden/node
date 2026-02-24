@@ -43,6 +43,7 @@ const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE"
 const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
+const DEFAULT_NTX_STERILITY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 
@@ -125,6 +126,18 @@ pub struct NtxBuilderConfig {
     )]
     pub script_cache_size: NonZeroUsize,
 
+    /// Duration an actor must remain idle before requesting shutdown.
+    ///
+    /// When an actor has no viable notes for this duration, it will be deactivated to free
+    /// resources. It will be re-activated when new notes target it.
+    #[arg(
+        long = "ntx-builder.sterility-timeout",
+        default_value = &duration_to_human_readable_string(DEFAULT_NTX_STERILITY_TIMEOUT),
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION"
+    )]
+    pub sterility_timeout: Duration,
+
     /// Directory for the ntx-builder's persistent database.
     ///
     /// If not set, defaults to the node's data directory.
@@ -155,6 +168,7 @@ impl NtxBuilderConfig {
         )
         .with_tx_prover_url(self.tx_prover_url)
         .with_script_cache_size(self.script_cache_size)
+        .with_sterility_timeout(self.sterility_timeout)
     }
 }
 

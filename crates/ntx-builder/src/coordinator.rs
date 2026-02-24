@@ -57,6 +57,14 @@ impl ActorHandle {
 /// - Controls transaction concurrency across all network accounts using a semaphore.
 /// - Prevents resource exhaustion by limiting simultaneous transaction processing.
 ///
+/// ## Actor Lifecycle
+/// - Actors that have been idle for longer than the sterility timeout request shutdown from the
+///   coordinator.
+/// - The coordinator validates shutdown requests against the DB: if notes are still available for
+///   the account, the request is rejected and the actor resumes processing.
+/// - Deactivated actors are re-spawned when [`Coordinator::send_targeted`] detects notes targeting
+///   an account without an active actor.
+///
 /// The coordinator operates in an event-driven manner:
 /// 1. Network accounts are registered and actors spawned as needed.
 /// 2. Mempool events are written to DB, then actors are notified.
@@ -297,7 +305,7 @@ impl Coordinator {
             .unwrap_or(false);
 
         if has_notes {
-            // Reject: drop ack_tx → actor detects RecvError, resumes.
+            // Reject: drop ack_tx -> actor detects RecvError, resumes.
             tracing::debug!(
                 %account_id,
                 "Rejected actor shutdown: notes available in DB"
