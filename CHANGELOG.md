@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.13.7 (2026-02-25)
+
+- Updated `SyncAccountStorageMaps` and `SyncAccountVault` to allow all accounts with public state, including network accounts ([#1711](https://github.com/0xMiden/node/pull/1711)).
+
 ## v0.13.6 (2026-02-25)
 
 - Fixed CORS headers missing from version-rejection responses ([#1707](https://github.com/0xMiden/node/pull/1707)).
