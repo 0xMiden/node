@@ -112,9 +112,12 @@ impl NetworkTransactionBuilder {
         // Main event loop.
         loop {
             tokio::select! {
-                // Handle actor result.
+                // Handle actor result. If a timed-out actor needs respawning, do so.
                 result = self.coordinator.next() => {
-                    result?;
+                    if let Some(account_id) = result? {
+                        self.coordinator
+                            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                    }
                 },
                 // Handle mempool events.
                 event = self.mempool_events.next() => {
@@ -263,17 +266,6 @@ impl NetworkTransactionBuilder {
                 if let Err(err) = self.db.insert_note_script(script_root, &script).await {
                     tracing::error!(err = %err, "failed to cache note script");
                 }
-            },
-            ActorRequest::Shutdown { account_id, ack_tx } => {
-                let block_num = self.chain_state.read().await.chain_tip_header.block_num();
-                self.coordinator
-                    .handle_shutdown_request(
-                        account_id,
-                        block_num,
-                        self.config.max_note_attempts,
-                        ack_tx,
-                    )
-                    .await;
             },
         }
     }

@@ -53,14 +53,6 @@ pub enum ActorRequest {
     },
     /// A note script was fetched from the remote store and should be persisted to the local DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
-    /// The actor has been idle (in `NoViableNotes` mode) for longer than the idle timeout
-    /// and is requesting to shut down. The builder validates the request against the DB before
-    /// approving. If approved (ack received), the actor exits. If rejected (`ack_tx` dropped), the
-    /// actor resumes in `NotesAvailable` mode.
-    Shutdown {
-        account_id: NetworkAccountId,
-        ack_tx: tokio::sync::oneshot::Sender<()>,
-    },
 }
 
 // ACTOR SHUTDOWN REASON
@@ -349,29 +341,12 @@ impl AccountActor {
                         }
                     }
                 }
-                // Idle timeout: actor has been idle too long, request shutdown.
+                // Idle timeout: actor has been idle too long, deactivate account.
                 _ = idle_timeout_sleep => {
-                    match self.initiate_shutdown(account_id).await {
-                        Ok(()) => return ActorShutdownReason::IdleTimeout(account_id),
-                        Err(()) => self.mode = ActorMode::NotesAvailable,
-                    }
+                    return ActorShutdownReason::IdleTimeout(account_id);
                 }
             }
         }
-    }
-
-    /// Sends a shutdown request to the builder and waits for acknowledgment.
-    ///
-    /// Returns `Ok(())` if the builder approved the shutdown (actor should exit).
-    /// Returns `Err(())` if the builder rejected the shutdown or the channel was dropped
-    /// (actor should resume as `NotesAvailable`).
-    async fn initiate_shutdown(&self, account_id: NetworkAccountId) -> Result<(), ()> {
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        self.request_tx
-            .send(ActorRequest::Shutdown { account_id, ack_tx })
-            .await
-            .map_err(|_| ())?;
-        ack_rx.await.map_err(|_| ())
     }
 
     /// Selects a transaction candidate by querying the DB.

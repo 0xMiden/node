@@ -7,7 +7,6 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::block::BlockNumber;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -58,10 +57,9 @@ impl ActorHandle {
 /// - Prevents resource exhaustion by limiting simultaneous transaction processing.
 ///
 /// ## Actor Lifecycle
-/// - Actors that have been idle for longer than the idle timeout request shutdown from the
-///   coordinator.
-/// - The coordinator validates shutdown requests against the DB: if notes are still available for
-///   the account, the request is rejected and the actor resumes processing.
+/// - Actors that have been idle for longer than the idle timeout deactivate themselves.
+/// - When an actor deactivates, the coordinator checks if a notification arrived just as the actor
+///   timed out. If so, the actor is respawned immediately.
 /// - Deactivated actors are re-spawned when [`Coordinator::send_targeted`] detects notes targeting
 ///   an account without an active actor.
 ///
@@ -160,7 +158,10 @@ impl Coordinator {
     ///
     /// If no actors are currently running, this method will wait indefinitely until
     /// new actors are spawned. This prevents busy-waiting when the coordinator is idle.
-    pub async fn next(&mut self) -> anyhow::Result<()> {
+    ///
+    /// Returns `Some(account_id)` if a timed-out actor should be respawned (because a
+    /// notification arrived just as it timed out), or `None` otherwise.
+    pub async fn next(&mut self) -> anyhow::Result<Option<NetworkAccountId>> {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok(shutdown_reason)) => match shutdown_reason {
@@ -168,21 +169,31 @@ impl Coordinator {
                     // Do not remove the actor from the registry, as it may be re-spawned.
                     // The coordinator should always remove actors immediately after cancellation.
                     tracing::info!(account_id = %account_id, "Account actor cancelled");
-                    Ok(())
+                    Ok(None)
                 },
                 ActorShutdownReason::SemaphoreFailed(err) => Err(err).context("semaphore failed"),
                 ActorShutdownReason::DbError(account_id) => {
                     tracing::error!(account_id = %account_id, "Account actor shut down due to DB error");
-                    Ok(())
+                    Ok(None)
                 },
                 ActorShutdownReason::IdleTimeout(account_id) => {
                     tracing::info!(account_id = %account_id, "Account actor shut down due to idle timeout");
-                    Ok(())
+
+                    // Remove the actor from the registry, but check if a notification arrived
+                    // just as the actor timed out. If so, the caller should respawn it.
+                    let should_respawn =
+                        self.actor_registry.remove(&account_id).is_some_and(|handle| {
+                            let notified = handle.notify.notified();
+                            tokio::pin!(notified);
+                            notified.enable()
+                        });
+
+                    Ok(should_respawn.then_some(account_id))
                 },
             },
             Some(Err(err)) => {
                 tracing::error!(err = %err, "actor task failed");
-                Ok(())
+                Ok(None)
             },
             None => {
                 // There are no actors to wait for. Wait indefinitely until actors are spawned.
@@ -284,49 +295,11 @@ impl Coordinator {
         }
     }
 
-    /// Handles a shutdown request from an actor that has been idle for longer than the idle
-    /// timeout.
-    ///
-    /// Validates the request by checking the DB for available notes. If notes are available, the
-    /// shutdown is rejected by dropping `ack_tx` (the actor detects the `RecvError` and resumes).
-    /// If no notes are available, the actor is deregistered and the ack is sent, allowing the
-    /// actor to exit gracefully.
-    pub async fn handle_shutdown_request(
-        &mut self,
-        account_id: NetworkAccountId,
-        block_num: BlockNumber,
-        max_note_attempts: usize,
-        ack_tx: tokio::sync::oneshot::Sender<()>,
-    ) {
-        let has_notes = self
-            .db
-            .has_available_notes(account_id, block_num, max_note_attempts)
-            .await
-            .unwrap_or(false);
-
-        if has_notes {
-            // Reject: drop ack_tx -> actor detects RecvError, resumes.
-            tracing::debug!(
-                %account_id,
-                "Rejected actor shutdown: notes available in DB"
-            );
-        } else {
-            self.actor_registry.remove(&account_id);
-            let _ = ack_tx.send(());
-        }
-    }
-
     /// Cancels an actor by its account ID.
     pub fn cancel_actor(&mut self, account_id: &NetworkAccountId) {
         if let Some(handle) = self.actor_registry.remove(account_id) {
             handle.cancel_token.cancel();
         }
-    }
-
-    /// Returns `true` if an actor is registered for the given account ID.
-    #[cfg(test)]
-    pub fn has_actor(&self, account_id: &NetworkAccountId) -> bool {
-        self.actor_registry.contains_key(account_id)
     }
 }
 
@@ -334,7 +307,6 @@ impl Coordinator {
 mod tests {
     use miden_node_proto::domain::mempool::MempoolEvent;
     use miden_node_proto::domain::note::NetworkNote;
-    use miden_protocol::block::BlockNumber;
 
     use super::*;
     use crate::db::Db;
@@ -353,61 +325,6 @@ mod tests {
         coordinator
             .actor_registry
             .insert(account_id, ActorHandle::new(notify, cancel_token));
-    }
-
-    // HANDLE SHUTDOWN REQUEST TESTS
-    // ============================================================================================
-
-    #[tokio::test]
-    async fn shutdown_approved_when_no_notes() {
-        let (mut coordinator, _dir) = test_coordinator().await;
-        let account_id = mock_network_account_id();
-
-        register_dummy_actor(&mut coordinator, account_id);
-        assert!(coordinator.has_actor(&account_id));
-
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let block_num = BlockNumber::from(1u32);
-        let max_note_attempts = 30;
-
-        coordinator
-            .handle_shutdown_request(account_id, block_num, max_note_attempts, ack_tx)
-            .await;
-
-        // Ack should be received (shutdown approved).
-        assert!(ack_rx.await.is_ok());
-        // Actor should be deregistered.
-        assert!(!coordinator.has_actor(&account_id));
-    }
-
-    #[tokio::test]
-    async fn shutdown_rejected_when_notes_available() {
-        let (mut coordinator, _dir) = test_coordinator().await;
-        let account_id = mock_network_account_id();
-
-        // Insert a committed note for this account.
-        let note = mock_single_target_note(account_id, 10);
-        coordinator
-            .db
-            .sync_account_from_store(account_id, mock_account(account_id), vec![note])
-            .await
-            .unwrap();
-
-        register_dummy_actor(&mut coordinator, account_id);
-        assert!(coordinator.has_actor(&account_id));
-
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let block_num = BlockNumber::from(1u32);
-        let max_note_attempts = 30;
-
-        coordinator
-            .handle_shutdown_request(account_id, block_num, max_note_attempts, ack_tx)
-            .await;
-
-        // Ack_tx should have been dropped (shutdown rejected).
-        assert!(ack_rx.await.is_err());
-        // Actor should still be registered.
-        assert!(coordinator.has_actor(&account_id));
     }
 
     // SEND TARGETED TESTS
