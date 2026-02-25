@@ -14,6 +14,7 @@ use miden_crypto::merkle::smt::{
 };
 use miden_crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_node_proto::domain::account::AccountStorageMapDetails;
+use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
@@ -47,16 +48,8 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 
 #[derive(Debug, Error)]
 pub enum InnerForestError {
-    #[error(
-        "balance underflow: account {account_id}, faucet {faucet_id}, \
-         previous balance {prev_balance}, delta {delta}"
-    )]
-    BalanceUnderflow {
-        account_id: AccountId,
-        faucet_id: AccountId,
-        prev_balance: u64,
-        delta: i64,
-    },
+    #[error(transparent)]
+    Asset(#[source] AssetError),
 }
 
 #[derive(Debug, Error)]
@@ -174,21 +167,21 @@ impl InnerForest {
     fn map_forest_error(error: LargeSmtForestError) -> MerkleError {
         match error {
             LargeSmtForestError::Merkle(merkle) => merkle,
-            other => MerkleError::InternalError(other.to_string()),
+            other => MerkleError::InternalError(other.as_report()),
         }
     }
 
     fn map_forest_error_to_witness(error: LargeSmtForestError) -> WitnessError {
         match error {
             LargeSmtForestError::Merkle(merkle) => WitnessError::MerkleError(merkle),
-            other => WitnessError::MerkleError(MerkleError::InternalError(other.to_string())),
+            other => WitnessError::MerkleError(MerkleError::InternalError(other.as_report())),
         }
     }
 
     // ACCESSORS
     // --------------------------------------------------------------------------------------------
 
-    fn tree_id_for_lookup(&self, lineage: LineageId, block_num: BlockNumber) -> Option<TreeId> {
+    fn get_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> Option<TreeId> {
         let tree = self.lookup_tree_id(lineage, block_num);
         match self.forest.root_info(tree) {
             RootInfo::LatestVersion(_) | RootInfo::HistoricalVersion(_) => Some(tree),
@@ -204,8 +197,8 @@ impl InnerForest {
     }
 
     #[cfg(test)]
-    fn tree_root(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
-        let tree = self.tree_id_for_lookup(lineage, block_num)?;
+    fn get_tree_root(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
+        let tree = self.get_tree_id(lineage, block_num)?;
         match self.forest.root_info(tree) {
             RootInfo::LatestVersion(root) | RootInfo::HistoricalVersion(root) => Some(root),
             RootInfo::Missing => None,
@@ -220,7 +213,7 @@ impl InnerForest {
         block_num: BlockNumber,
     ) -> Option<Word> {
         let lineage = Self::vault_lineage_id(account_id);
-        self.tree_root(lineage, block_num)
+        self.get_tree_root(lineage, block_num)
     }
 
     /// Retrieves the storage map root for an account slot at the specified block.
@@ -232,7 +225,7 @@ impl InnerForest {
         block_num: BlockNumber,
     ) -> Option<Word> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.tree_root(lineage, block_num)
+        self.get_tree_root(lineage, block_num)
     }
 
     // WITNESSES and PROOFS
@@ -250,7 +243,7 @@ impl InnerForest {
         raw_key: Word,
     ) -> Result<StorageMapWitness, WitnessError> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        let tree = self.tree_id_for_lookup(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let key = StorageMap::hash_key(raw_key);
         let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
 
@@ -266,7 +259,7 @@ impl InnerForest {
         asset_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
-        let tree = self.tree_id_for_lookup(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let witnessees: Result<Vec<_>, WitnessError> =
             Result::from_iter(asset_keys.into_iter().map(|key| {
                 let proof = self
@@ -291,7 +284,7 @@ impl InnerForest {
         raw_keys: &[Word],
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, &slot_name);
-        let tree = self.tree_id_for_lookup(lineage, block_num)?;
+        let tree = self.get_tree_id(lineage, block_num)?;
 
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
             let key = StorageMap::hash_key(*raw_key);
@@ -404,12 +397,13 @@ impl InnerForest {
 
         if delta.is_empty() {
             let lineage = Self::vault_lineage_id(account_id);
-            let _new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
+            let new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
 
             tracing::debug!(
                 target: crate::COMPONENT,
                 %account_id,
                 %block_num,
+                %new_root,
                 vault_entries = 0,
                 "Inserted vault into forest"
             );
@@ -428,8 +422,11 @@ impl InnerForest {
 
         // process non-fungible assets
         for (&asset, _action) in delta.non_fungible().iter() {
-            // TODO: assert that action is addition
-            entries.push((asset.vault_key().into(), asset.into()));
+            let asset_vault_key = asset.vault_key().into();
+            match _action {
+                NonFungibleDeltaAction::Add => entries.push((asset_vault_key, asset.into())),
+                NonFungibleDeltaAction::Remove => entries.push((asset_vault_key, EMPTY_WORD)),
+            }
         }
 
         assert!(!entries.is_empty(), "non-empty delta should contain entries");
@@ -474,33 +471,26 @@ impl InnerForest {
 
         // Process fungible assets
         for (faucet_id, amount_delta) in delta.fungible().iter() {
-            let key: Word =
-                FungibleAsset::new(*faucet_id, 0).expect("valid faucet id").vault_key().into();
+            let delta = FungibleAsset::new(*faucet_id, *amount_delta)?;
+            let key: Word = delta.expect("valid faucet id").vault_key().into();
 
-            let new_amount = {
-                // amount delta is a change that must be applied to previous balance.
-                //
-                // TODO: SmtForest only exposes `fn open()` which computes a full Merkle proof. We
-                // only need the leaf, so a direct `fn get()` method would be faster.
-                let prev_amount = prev_tree
-                    .and_then(|tree| self.forest.open(tree, key).ok())
-                    .and_then(|proof| proof.get(&key))
-                    .and_then(|word| FungibleAsset::try_from(word).ok())
-                    .map_or(0, |asset| asset.amount());
-
-                let new_balance = i128::from(prev_amount) + i128::from(*amount_delta);
-                u64::try_from(new_balance).map_err(|_| InnerForestError::BalanceUnderflow {
-                    account_id,
-                    faucet_id: *faucet_id,
-                    prev_balance: prev_amount,
-                    delta: *amount_delta,
-                })?
+            let empty = FungibleAsset::new(*faucet_id, 0)?;
+            let mut asset = if let Some(prev_tree) = prev_tree {
+                self.forest
+                    .get(tree, key)?
+                    .map(|asset_key| FungibleAsset::try_from(asset_key))
+                    .transpose()?
+                    .unwrap_or_else(|| empty)
+            } else {
+                empty
             };
 
-            let value = if new_amount == 0 {
+            let updated = asset.add(delta).map_err(InnerForestError::Asset)?;
+
+            let value = if updated.amount() == 0 {
                 EMPTY_WORD
             } else {
-                FungibleAsset::new(*faucet_id, new_amount).expect("valid fungible asset").into()
+                Word::from(updated)
             };
             entries.push((key, value));
         }
@@ -514,17 +504,18 @@ impl InnerForest {
             entries.push((asset.vault_key().into(), value));
         }
 
-        let num_entries = entries.len();
+        let vault_entries = entries.len();
 
         let lineage = Self::vault_lineage_id(account_id);
         let operations = Self::build_forest_operations(entries);
-        let _new_root = self.apply_forest_updates(lineage, block_num, operations);
+        let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
             %account_id,
             %block_num,
-            vault_entries = num_entries,
+            %new_root,
+            %vault_entries,
             "Updated vault in forest"
         );
         Ok(())
