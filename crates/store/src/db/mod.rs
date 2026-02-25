@@ -630,7 +630,7 @@ impl Db {
     ///
     /// Returns:
     ///     - `::LimitExceeded` when too many entries are present
-    ///     - `::AllEntries` if the size is sufficiently small
+    ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
     pub(crate) async fn reconstruct_storage_map_from_db(
         &self,
         account_id: AccountId,
