@@ -155,4 +155,4 @@ files.extend-exclude = ["*.svg"] # Ignore SVG files.
 
 [patch.crates-io]
 #miden-crypto = { path = "../miden-crypto-bernhard-migrate-rocksdb-from-crypto/miden-crypto/" }
-miden-crypto = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/crypto/pull/850" }
+miden-crypto = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/crypto.git" }
