@@ -2,7 +2,7 @@
 
 ## v0.13.6 (TBD)
 
-- Fixed CORS headers missing from version-rejection responses by reordering the CORS middleware above `AcceptHeaderLayer` ([#1707](https://github.com/0xMiden/node/pull/1707)).
+- Fixed CORS headers missing from version-rejection responses ([#1707](https://github.com/0xMiden/node/pull/1707)).
 
 ## v0.13.5 (2026-02-19)
 
