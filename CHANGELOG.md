@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.13.6 (TBD)
+
+- Fixed CORS headers missing from version-rejection responses ([#1707](https://github.com/0xMiden/node/pull/1707)).
+
 ## v0.13.5 (2026-02-19)
 
 - OpenTelemetry traces are now flushed before program termination on panic ([#1643](https://github.com/0xMiden/miden-node/pull/1643)).
