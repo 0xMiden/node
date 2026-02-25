@@ -17,7 +17,6 @@ use tonic_prost_build::FileDescriptorSet;
 /// Generates Rust protobuf bindings using `miden-node-proto-build`.
 fn main() -> miette::Result<()> {
     println!("cargo::rerun-if-changed=../../proto/proto");
-    println!("cargo::rerun-if-changed=build.rs");
 
     miden_node_rocksdb_cxx_linkage_fix::configure();
 

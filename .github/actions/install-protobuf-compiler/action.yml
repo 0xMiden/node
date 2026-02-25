@@ -1,0 +1,12 @@
+
+name: "Install protobuf compiler"
+description: "Install compiler for protobuf compilation"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install protobuf compiler
+      shell: bash
+      run: |
+        set -eux
+        sudo apt-get update
