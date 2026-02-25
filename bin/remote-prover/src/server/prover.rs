@@ -31,8 +31,8 @@ impl Prover {
         }
     }
 
-    /// Proves a [`proto::ProofRequest`] using the appropriate prover implementation as specified during
-    /// construction.
+    /// Proves a [`proto::ProofRequest`] using the appropriate prover implementation as specified
+    /// during construction.
     pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
         match self {
             Prover::Transaction(prover) => prover.prove_request(request),
