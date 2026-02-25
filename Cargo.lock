@@ -2607,7 +2607,6 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "bytes",
- "figment",
  "http",
  "http-body-util",
  "itertools 0.14.0",
