@@ -323,6 +323,7 @@ impl InnerForest {
         }
 
         for (&asset, _action) in vault_delta.non_fungible().iter() {
+            debug_assert_eq!(_action, &NonFungibleDeltaAction::Add);
             entries.push((asset.vault_key().into(), asset.into()));
         }
 
@@ -352,15 +353,14 @@ impl InnerForest {
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
 
-            let raw_map_entries: Vec<(Word, Word)> = Vec::from_iter(
-                map_delta.entries().iter().filter_map(|(&key, &value)| {
+            let raw_map_entries: Vec<(Word, Word)> =
+                Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
                     if value == EMPTY_WORD {
                         None
                     } else {
                         Some((Word::from(key), value))
                     }
-                }),
-            );
+                }));
 
             if raw_map_entries.is_empty() {
                 self.storage_map_roots
@@ -372,9 +372,7 @@ impl InnerForest {
             }
 
             let hashed_entries: Vec<(Word, Word)> = Vec::from_iter(
-                raw_map_entries
-                    .iter()
-                    .map(|(key, value)| (StorageMap::hash_key(*key), *value)),
+                raw_map_entries.iter().map(|(key, value)| (StorageMap::hash_key(*key), *value)),
             );
 
             let new_root = self.forest.batch_insert(prev_root, hashed_entries.iter().copied())?;

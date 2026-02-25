@@ -446,6 +446,56 @@ fn test_storage_map_incremental_updates() {
 }
 
 #[test]
+fn test_storage_map_removals() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    const SLOT_INDEX: usize = 3;
+    const KEY_1: [u32; 4] = [1, 0, 0, 0];
+    const KEY_2: [u32; 4] = [2, 0, 0, 0];
+    const VALUE_1: [u32; 4] = [10, 0, 0, 0];
+    const VALUE_2: [u32; 4] = [20, 0, 0, 0];
+
+    let mut forest = InnerForest::new();
+    let account_id = dummy_account();
+    let slot_name = StorageSlotName::mock(SLOT_INDEX);
+    let key_1 = Word::from(KEY_1);
+    let key_2 = Word::from(KEY_2);
+    let value_1 = Word::from(VALUE_1);
+    let value_2 = Word::from(VALUE_2);
+
+    let block_1 = BlockNumber::GENESIS.child();
+    let mut map_delta_1 = StorageMapDelta::default();
+    map_delta_1.insert(key_1, value_1);
+    map_delta_1.insert(key_2, value_2);
+    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_1))]);
+    let storage_delta_1 = AccountStorageDelta::from_raw(raw_1);
+    let delta_1 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_1);
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let block_2 = block_1.child();
+    let map_delta_2 = StorageMapDelta::from_iters([key_1], []);
+    let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_2))]);
+    let storage_delta_2 = AccountStorageDelta::from_raw(raw_2);
+    let delta_2 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_2);
+    forest.update_account(block_2, &delta_2).unwrap();
+
+    let entries = forest
+        .storage_map_entries(account_id, slot_name, block_2)
+        .expect("storage entries should be available");
+
+    let StorageMapEntries::AllEntries(entries) = entries.entries else {
+        panic!("expected entries without proofs");
+    };
+
+    let entries_by_key = BTreeMap::from_iter(entries);
+    assert_eq!(entries_by_key.len(), 1);
+    assert_eq!(entries_by_key.get(&key_2), Some(&value_2));
+    assert!(!entries_by_key.contains_key(&key_1));
+}
+
+#[test]
 fn test_empty_storage_map_entries_query() {
     use miden_protocol::account::auth::PublicKeyCommitment;
     use miden_protocol::account::{

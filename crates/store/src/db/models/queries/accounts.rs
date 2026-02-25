@@ -1069,9 +1069,11 @@ pub(crate) fn upsert_accounts(
 
             // New account is always a full account, but also comes as an update
             AccountUpdateDetails::Delta(delta) if delta.is_full_state() => {
-                let account = Account::try_from(delta)?;
+                let account = Account::try_from(delta)
+                    .expect("Delta to full account always works for full state deltas");
                 debug_assert_eq!(account_id, account.id());
 
+                // sanity check the commitment of account matches the final state commitment
                 if account.commitment() != update.final_state_commitment() {
                     return Err(DatabaseError::AccountCommitmentsMismatch {
                         calculated: account.commitment(),
@@ -1115,32 +1117,32 @@ pub(crate) fn upsert_accounts(
 
                 // --- process asset updates ----------------------------------
                 // Only query balances for faucet_ids that are being updated
-                let faucet_ids = Vec::from_iter(delta.vault().fungible().iter().map(|(id, _)| *id));
+                let faucet_ids = Vec::from_iter(
+                    delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id),
+                );
                 let prev_balances =
                     select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
 
+                // encode `Some` as update, `None` as removal
                 let mut assets = Vec::new();
 
                 // update fungible assets
                 for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
-                    let prev_balance = prev_balances.get(faucet_id).copied().unwrap_or(0);
-                    let new_balance = amount_delta
-                        .checked_abs()
-                        .and_then(|abs_delta| u64::try_from(abs_delta).ok())
-                        .and_then(|abs_delta| match amount_delta.cmp(&0) {
-                            std::cmp::Ordering::Greater => prev_balance.checked_add(abs_delta),
-                            std::cmp::Ordering::Less => prev_balance.checked_sub(abs_delta),
-                            std::cmp::Ordering::Equal => Some(prev_balance),
-                        })
-                        .ok_or_else(|| {
-                            DatabaseError::DataCorrupted(format!(
-                                "Balance underflow for account {account_id}, faucet {faucet_id}"
-                            ))
-                        })?;
-
-                    let asset: Asset = FungibleAsset::new(*faucet_id, new_balance)?.into();
-                    let update_or_remove = if new_balance == 0 { None } else { Some(asset) };
-                    assets.push((account_id, asset.vault_key(), update_or_remove));
+                    let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
+                    let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
+                    let amount_abs = amount_delta.unsigned_abs();
+                    let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
+                    let new_balance = if *amount_delta < 0 {
+                        prev_asset.sub(delta)?
+                    } else {
+                        prev_asset.add(delta)?
+                    };
+                    let update_or_remove = if new_balance.amount() == 0 {
+                        None
+                    } else {
+                        Some(Asset::from(new_balance))
+                    };
+                    assets.push((account_id, new_balance.vault_key(), update_or_remove));
                 }
 
                 // update non-fungible assets
@@ -1161,27 +1163,27 @@ pub(crate) fn upsert_accounts(
                     }
                 }
 
-                let slot_names: Vec<StorageSlotName> = delta
-                    .storage()
-                    .maps()
-                    .filter_map(|(slot_name, map_delta)| {
+                // first collect entries that have associated changes
+                let slot_names =
+                    Vec::from_iter(delta.storage().maps().filter_map(|(slot_name, map_delta)| {
                         if map_delta.is_empty() {
                             None
                         } else {
                             Some(slot_name.clone())
                         }
-                    })
-                    .collect();
+                    }));
 
                 let map_entries =
                     select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
 
+                // apply the delta storage to the given storage header
                 let new_storage_header = apply_storage_delta(
                     &state_headers.storage_header,
                     delta.storage(),
                     &map_entries,
                 )?;
 
+                // --- update the vault root by constructing the asset vault from DB
                 let new_vault_root = {
                     let (_last_block, assets) = select_account_vault_assets(
                         conn,
