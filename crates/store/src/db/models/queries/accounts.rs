@@ -1287,6 +1287,9 @@ pub(crate) fn upsert_accounts(
 
         diesel::insert_into(schema::accounts::table)
             .values(&account_value)
+            .on_conflict((schema::accounts::account_id, schema::accounts::block_num))
+            .do_update()
+            .set(&account_value)
             .execute(conn)?;
 
         // insert pending storage map entries

@@ -81,6 +81,7 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
             block_headers::block_num.eq(i64::from(block_num.as_u32())),
             block_headers::block_header.eq(block_header.to_bytes()),
             block_headers::signature.eq(signature.to_bytes()),
+            block_headers::commitment.eq(block_header.commitment().to_bytes()),
         ))
         .execute(conn)
         .expect("Failed to insert block header");

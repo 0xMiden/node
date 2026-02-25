@@ -11,10 +11,10 @@
 
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use diesel_migrations::MigrationHarness;
+use miden_node_db::SchemaVerificationError;
 use tracing::instrument;
 
 use crate::COMPONENT;
-use crate::db::errors::SchemaVerificationError;
 use crate::db::migrations::MIGRATIONS;
 
 /// Represents a schema object for comparison.
@@ -131,8 +131,9 @@ pub fn verify_schema(conn: &mut SqliteConnection) -> Result<(), SchemaVerificati
 
 #[cfg(test)]
 mod tests {
+    use miden_node_db::DatabaseError;
+
     use super::*;
-    use crate::db::errors::DatabaseError;
     use crate::db::migrations::apply_migrations;
 
     #[test]

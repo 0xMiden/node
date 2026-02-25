@@ -491,8 +491,10 @@ impl InnerForest {
                 continue;
             }
 
-            let updated_root =
-                self.forest.batch_insert(prev_root, delta_entries.iter().copied())?;
+            let hashed_entries =
+                delta_entries.iter().map(|(key, value)| (StorageMap::hash_key(*key), *value));
+
+            let updated_root = self.forest.batch_insert(prev_root, hashed_entries)?;
 
             self.storage_map_roots
                 .insert((account_id, slot_name.clone(), block_num), updated_root);

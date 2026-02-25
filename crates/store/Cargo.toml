@@ -15,25 +15,24 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-anyhow                             = { workspace = true }
-deadpool                           = { features = ["managed", "rt_tokio_1"], workspace = true }
-deadpool-diesel                    = { features = ["sqlite"], workspace = true }
-deadpool-sync                      = { features = ["tracing"], workspace = true }
-diesel                             = { features = ["numeric", "sqlite"], workspace = true }
-diesel_migrations                  = { features = ["sqlite"], workspace = true }
-fs-err                             = { workspace = true }
-futures                            = { workspace = true }
-hex                                = { version = "0.4" }
-indexmap                           = { workspace = true }
-libsqlite3-sys                     = { workspace = true }
-miden-block-prover                 = { workspace = true }
-miden-crypto                       = { features = ["concurrent", "hashmaps"], workspace = true }
-miden-node-proto                   = { workspace = true }
-miden-node-proto-build             = { features = ["internal"], workspace = true }
-miden-node-rocksdb-cxx-linkage-fix = { optional = true, workspace = true }
-miden-node-utils                   = { workspace = true }
-miden-remote-prover-client         = { features = ["block-prover"], workspace = true }
-miden-standards                    = { workspace = true }
+anyhow                     = { workspace = true }
+deadpool                   = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
+deadpool-diesel            = { features = ["sqlite"], version = "0.6" }
+diesel                     = { features = ["numeric", "sqlite"], version = "2.3" }
+diesel_migrations          = { features = ["sqlite"], version = "2.3" }
+fs-err                     = { workspace = true }
+futures                    = { workspace = true }
+hex                        = { version = "0.4" }
+indexmap                   = { workspace = true }
+libsqlite3-sys             = { workspace = true }
+miden-block-prover         = { workspace = true }
+miden-crypto               = { features = ["concurrent", "hashmaps"], workspace = true }
+miden-node-db              = { workspace = true }
+miden-node-proto           = { workspace = true }
+miden-node-proto-build     = { features = ["internal"], workspace = true }
+miden-node-utils           = { workspace = true }
+miden-remote-prover-client = { features = ["block-prover"], workspace = true }
+miden-standards            = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -51,7 +50,10 @@ tracing           = { workspace = true }
 url               = { workspace = true }
 
 [build-dependencies]
+fs-err                             = { workspace = true }
+miden-agglayer                     = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
+miden-protocol                     = { features = ["std"], workspace = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }
@@ -63,11 +65,12 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
 regex                 = { version = "1.11" }
+tempfile              = { workspace = true }
 termtree              = { version = "0.5" }
 
 [features]
 default = ["rocksdb"]
-rocksdb = ["miden-crypto/rocksdb", "miden-node-rocksdb-cxx-linkage-fix"]
+rocksdb = ["miden-crypto/rocksdb"]
 
 [[bench]]
 harness           = false
@@ -78,4 +81,4 @@ required-features = ["rocksdb"]
 # This is an indirect dependency for which we need to enable optimisations/features
 # via feature flags. Because we don't use it directly in code, machete
 # identifies it as unused.
-ignored = ["libsqlite3-sys", "miden-crypto", "miden-node-rocksdb-cxx-linkage-fix"]
+ignored = ["libsqlite3-sys", "miden-crypto"]

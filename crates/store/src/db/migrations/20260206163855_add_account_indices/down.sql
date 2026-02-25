@@ -1,3 +1,0 @@
-DROP INDEX IF EXISTS idx_account_storage_map_latest_by_account_slot_key;
-DROP INDEX IF EXISTS idx_account_vault_assets_by_account_key_block;
-DROP INDEX IF EXISTS idx_account_vault_assets_latest_by_account_key;
