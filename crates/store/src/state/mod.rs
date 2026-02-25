@@ -1051,6 +1051,7 @@ impl State {
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
+    #[allow(clippy::too_many_lines)]
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,
@@ -1141,6 +1142,7 @@ impl State {
             }
         }
 
+        // TODO parallelize the read requests
         for (index, slot_name) in all_entries_requests {
             let details = self
                 .db
