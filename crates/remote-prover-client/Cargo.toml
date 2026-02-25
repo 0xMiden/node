@@ -21,7 +21,7 @@ std          = ["miden-protocol/std", "miden-tx/std"]
 tx-prover    = ["dep:miden-protocol", "dep:miden-tx", "dep:tokio"]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom             = { features = ["wasm_js"], version = "0.3" }
+getrandom             = { features = ["wasm_js"], version = "0.4" }
 tonic                 = { features = ["codegen"], workspace = true }
 tonic-web-wasm-client = { default-features = false, version = "0.8" }
 
