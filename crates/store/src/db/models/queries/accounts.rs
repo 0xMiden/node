@@ -1023,6 +1023,170 @@ pub(crate) fn insert_account_storage_map_value(
     Ok(update_count + insert_count)
 }
 
+type PendingStorageInserts = Vec<(AccountId, StorageSlotName, Word, Word)>;
+type PendingAssetInserts = Vec<(AccountId, AssetVaultKey, Option<Asset>)>;
+
+fn prepare_full_account_update(
+    update: &BlockAccountUpdate,
+    account: Account,
+) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
+    let account_id = account.id();
+
+    // sanity check the commitment of account matches the final state commitment
+    if account.commitment() != update.final_state_commitment() {
+        return Err(DatabaseError::AccountCommitmentsMismatch {
+            calculated: account.commitment(),
+            expected: update.final_state_commitment(),
+        });
+    }
+
+    // collect storage-map inserts to apply after account upsert
+    let mut storage = Vec::new();
+    for slot in account.storage().slots() {
+        if let StorageSlotContent::Map(storage_map) = slot.content() {
+            for (key, value) in storage_map.entries() {
+                storage.push((account_id, slot.name().clone(), *key, *value));
+            }
+        }
+    }
+
+    // collect vault-asset inserts to apply after account upsert
+    let mut assets = Vec::new();
+    for asset in account.vault().assets() {
+        // Only insert assets with non-zero values for fungible assets
+        let should_insert = match asset {
+            Asset::Fungible(fungible) => fungible.amount() > 0,
+            Asset::NonFungible(_) => true,
+        };
+        if should_insert {
+            assets.push((account_id, asset.vault_key(), Some(asset)));
+        }
+    }
+
+    Ok((AccountStateForInsert::FullAccount(account), storage, assets))
+}
+
+fn prepare_partial_account_update(
+    conn: &mut SqliteConnection,
+    update: &BlockAccountUpdate,
+    account_id: AccountId,
+    delta: &miden_protocol::account::delta::AccountDelta,
+    block_num: BlockNumber,
+) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
+    // Load only the minimal data needed. Only load those storage map entries and vault
+    // entries that will receive updates.
+    // The next line fetches the header, which will always change with the exception of
+    // an empty delta.
+    let state_headers = select_minimal_account_state_headers(conn, account_id)?;
+
+    // --- process asset updates ----------------------------------
+    // Only query balances for faucet_ids that are being updated
+    let faucet_ids =
+        Vec::from_iter(delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id));
+    let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
+
+    // encode `Some` as update, `None` as removal
+    let mut assets = Vec::new();
+
+    // update fungible assets
+    for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
+        let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
+        let amount_abs = amount_delta.unsigned_abs();
+        let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
+        let new_balance = if *amount_delta < 0 {
+            prev_asset.sub(delta)?
+        } else {
+            prev_asset.add(delta)?
+        };
+        let update_or_remove = if new_balance.amount() == 0 {
+            None
+        } else {
+            Some(Asset::from(new_balance))
+        };
+        assets.push((account_id, new_balance.vault_key(), update_or_remove));
+    }
+
+    // update non-fungible assets
+    for (asset, delta_action) in delta.vault().non_fungible().iter() {
+        let asset_update = match delta_action {
+            NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
+            NonFungibleDeltaAction::Remove => None,
+        };
+        assets.push((account_id, asset.vault_key(), asset_update));
+    }
+
+    // --- collect storage map updates ----------------------------
+
+    let mut storage = Vec::new();
+    for (slot_name, map_delta) in delta.storage().maps() {
+        for (key, value) in map_delta.entries() {
+            storage.push((account_id, slot_name.clone(), (*key).into(), *value));
+        }
+    }
+
+    // first collect entries that have associated changes
+    let slot_names = Vec::from_iter(delta.storage().maps().filter_map(|(slot_name, map_delta)| {
+        if map_delta.is_empty() {
+            None
+        } else {
+            Some(slot_name.clone())
+        }
+    }));
+
+    let map_entries = select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
+
+    // apply the delta storage to the given storage header
+    let new_storage_header =
+        apply_storage_delta(&state_headers.storage_header, delta.storage(), &map_entries)?;
+
+    // --- update the vault root by constructing the asset vault from DB
+    let new_vault_root = {
+        let (_last_block, assets) =
+            select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
+        let assets: Vec<Asset> = assets.into_iter().filter_map(|entry| entry.asset).collect();
+        let mut vault = AssetVault::new(&assets)?;
+        vault.apply_delta(delta.vault())?;
+        vault.root()
+    };
+
+    // --- compute updated account state for the accounts row ---
+    // Apply nonce delta
+    let new_nonce_value = state_headers
+        .nonce
+        .as_int()
+        .checked_add(delta.nonce_delta().as_int())
+        .ok_or_else(|| {
+            DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
+        })?;
+    let new_nonce = Felt::new(new_nonce_value);
+
+    // Create minimal account state data for the row insert
+    let account_state = PartialAccountState {
+        nonce: new_nonce,
+        code_commitment: state_headers.code_commitment,
+        storage_header: new_storage_header,
+        vault_root: new_vault_root,
+    };
+
+    let account_header = miden_protocol::account::AccountHeader::new(
+        account_id,
+        account_state.nonce,
+        account_state.vault_root,
+        account_state.storage_header.to_commitment(),
+        account_state.code_commitment,
+    );
+
+    if account_header.commitment() != update.final_state_commitment() {
+        return Err(DatabaseError::AccountCommitmentsMismatch {
+            calculated: account_header.commitment(),
+            expected: update.final_state_commitment(),
+        });
+    }
+
+    Ok((AccountStateForInsert::PartialState(account_state), storage, assets))
+}
+
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
 #[expect(clippy::too_many_lines)]
 #[tracing::instrument(
@@ -1076,171 +1240,16 @@ pub(crate) fn upsert_accounts(
                     .expect("Delta to full account always works for full state deltas");
                 debug_assert_eq!(account_id, account.id());
 
-                // sanity check the commitment of account matches the final state commitment
-                if account.commitment() != update.final_state_commitment() {
-                    return Err(DatabaseError::AccountCommitmentsMismatch {
-                        calculated: account.commitment(),
-                        expected: update.final_state_commitment(),
-                    });
-                }
-
-                // collect storage-map inserts to apply after account upsert
-                let mut storage = Vec::new();
-                for slot in account.storage().slots() {
-                    if let StorageSlotContent::Map(storage_map) = slot.content() {
-                        for (key, value) in storage_map.entries() {
-                            storage.push((account_id, slot.name().clone(), *key, *value));
-                        }
-                    }
-                }
-
-                // collect vault-asset inserts to apply after account upsert
-                let mut assets = Vec::new();
-                for asset in account.vault().assets() {
-                    // Only insert assets with non-zero values for fungible assets
-                    let should_insert = match asset {
-                        Asset::Fungible(fungible) => fungible.amount() > 0,
-                        Asset::NonFungible(_) => true,
-                    };
-                    if should_insert {
-                        assets.push((account_id, asset.vault_key(), Some(asset)));
-                    }
-                }
-
-                (AccountStateForInsert::FullAccount(account), storage, assets)
+                prepare_full_account_update(update, account)?
             },
 
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                // Load only the minimal data needed. Only load those storage map entries and vault
-                // entries that will receive updates.
-                // The next line fetches the header, which will always change with the exception of
-                // an empty delta.
-                let state_headers = select_minimal_account_state_headers(conn, account_id)?;
-
-                // --- process asset updates ----------------------------------
-                // Only query balances for faucet_ids that are being updated
-                let faucet_ids = Vec::from_iter(
-                    delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id),
-                );
-                let prev_balances =
-                    select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
-
-                // encode `Some` as update, `None` as removal
-                let mut assets = Vec::new();
-
-                // update fungible assets
-                for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
-                    let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
-                    let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
-                    let amount_abs = amount_delta.unsigned_abs();
-                    let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
-                    let new_balance = if *amount_delta < 0 {
-                        prev_asset.sub(delta)?
-                    } else {
-                        prev_asset.add(delta)?
-                    };
-                    let update_or_remove = if new_balance.amount() == 0 {
-                        None
-                    } else {
-                        Some(Asset::from(new_balance))
-                    };
-                    assets.push((account_id, new_balance.vault_key(), update_or_remove));
-                }
-
-                // update non-fungible assets
-                for (asset, delta_action) in delta.vault().non_fungible().iter() {
-                    let asset_update = match delta_action {
-                        NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
-                        NonFungibleDeltaAction::Remove => None,
-                    };
-                    assets.push((account_id, asset.vault_key(), asset_update));
-                }
-
-                // --- collect storage map updates ----------------------------
-
-                let mut storage = Vec::new();
-                for (slot_name, map_delta) in delta.storage().maps() {
-                    for (key, value) in map_delta.entries() {
-                        storage.push((account_id, slot_name.clone(), (*key).into(), *value));
-                    }
-                }
-
-                // first collect entries that have associated changes
-                let slot_names =
-                    Vec::from_iter(delta.storage().maps().filter_map(|(slot_name, map_delta)| {
-                        if map_delta.is_empty() {
-                            None
-                        } else {
-                            Some(slot_name.clone())
-                        }
-                    }));
-
-                let map_entries =
-                    select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
-
-                // apply the delta storage to the given storage header
-                let new_storage_header = apply_storage_delta(
-                    &state_headers.storage_header,
-                    delta.storage(),
-                    &map_entries,
-                )?;
-
-                // --- update the vault root by constructing the asset vault from DB
-                let new_vault_root = {
-                    let (_last_block, assets) = select_account_vault_assets(
-                        conn,
-                        account_id,
-                        BlockNumber::GENESIS..=block_num,
-                    )?;
-                    let assets: Vec<Asset> =
-                        assets.into_iter().filter_map(|entry| entry.asset).collect();
-                    let mut vault = AssetVault::new(&assets)?;
-                    vault.apply_delta(delta.vault())?;
-                    vault.root()
-                };
-
-                // --- compute updated account state for the accounts row ---
-                // Apply nonce delta
-                let new_nonce_value = state_headers
-                    .nonce
-                    .as_int()
-                    .checked_add(delta.nonce_delta().as_int())
-                    .ok_or_else(|| {
-                        DatabaseError::DataCorrupted(format!(
-                            "Nonce overflow for account {account_id}"
-                        ))
-                    })?;
-                let new_nonce = Felt::new(new_nonce_value);
-
-                // Create minimal account state data for the row insert
-                let account_state = PartialAccountState {
-                    nonce: new_nonce,
-                    code_commitment: state_headers.code_commitment,
-                    storage_header: new_storage_header,
-                    vault_root: new_vault_root,
-                };
-
-                let account_header = miden_protocol::account::AccountHeader::new(
-                    account_id,
-                    account_state.nonce,
-                    account_state.vault_root,
-                    account_state.storage_header.to_commitment(),
-                    account_state.code_commitment,
-                );
-
-                if account_header.commitment() != update.final_state_commitment() {
-                    return Err(DatabaseError::AccountCommitmentsMismatch {
-                        calculated: account_header.commitment(),
-                        expected: update.final_state_commitment(),
-                    });
-                }
-
-                (AccountStateForInsert::PartialState(account_state), storage, assets)
+                prepare_partial_account_update(conn, update, account_id, delta, block_num)?
             },
         };
 
-        // Insert account code for full accounts (new account creation)
+        // Insert account _code_ for full accounts (new account creation)
         if let AccountStateForInsert::FullAccount(ref account) = account_state {
             let code = account.code();
             let code_value = AccountCodeRowInsert {
