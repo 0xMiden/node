@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.13.6 (TBD)
+## v0.13.6 (2026-02-25)
 
 - Fixed CORS headers missing from version-rejection responses ([#1707](https://github.com/0xMiden/node/pull/1707)).
 
