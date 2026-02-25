@@ -212,7 +212,7 @@ impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
             block_num: header.block_num().to_raw_sql(),
             block_header: header.to_bytes(),
             signature: signature.to_bytes(),
-            commitment: header.commitment().to_bytes(),
+            commitment: BlockHeaderCommitment::new(header).to_raw_sql(),
         }
     }
 }
