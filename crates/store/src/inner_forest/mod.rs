@@ -49,7 +49,9 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 #[derive(Debug, Error)]
 pub enum InnerForestError {
     #[error(transparent)]
-    Asset(#[source] AssetError),
+    Asset(#[from] AssetError),
+    #[error(transparent)]
+    Forest(#[from] LargeSmtForestError),
 }
 
 #[derive(Debug, Error)]
@@ -421,9 +423,9 @@ impl InnerForest {
         }
 
         // process non-fungible assets
-        for (&asset, _action) in delta.non_fungible().iter() {
+        for (&asset, action) in delta.non_fungible().iter() {
             let asset_vault_key = asset.vault_key().into();
-            match _action {
+            match action {
                 NonFungibleDeltaAction::Add => entries.push((asset_vault_key, asset.into())),
                 NonFungibleDeltaAction::Remove => entries.push((asset_vault_key, EMPTY_WORD)),
             }
@@ -434,12 +436,13 @@ impl InnerForest {
 
         let lineage = Self::vault_lineage_id(account_id);
         let operations = Self::build_forest_operations(entries);
-        let _new_root = self.apply_forest_updates(lineage, block_num, operations);
+        let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
             %account_id,
             %block_num,
+            %new_root,
             vault_entries = num_entries,
             "Inserted vault into forest"
         );
@@ -471,21 +474,26 @@ impl InnerForest {
 
         // Process fungible assets
         for (faucet_id, amount_delta) in delta.fungible().iter() {
-            let delta = FungibleAsset::new(*faucet_id, *amount_delta)?;
-            let key: Word = delta.expect("valid faucet id").vault_key().into();
+            let delta_abs = amount_delta.unsigned_abs();
+            let delta = FungibleAsset::new(*faucet_id, delta_abs)?;
+            let key = Word::from(delta.vault_key());
 
             let empty = FungibleAsset::new(*faucet_id, 0)?;
-            let mut asset = if let Some(prev_tree) = prev_tree {
+            let asset = if let Some(tree) = prev_tree {
                 self.forest
                     .get(tree, key)?
-                    .map(|asset_key| FungibleAsset::try_from(asset_key))
+                    .map(FungibleAsset::try_from)
                     .transpose()?
-                    .unwrap_or_else(|| empty)
+                    .unwrap_or(empty)
             } else {
                 empty
             };
 
-            let updated = asset.add(delta).map_err(InnerForestError::Asset)?;
+            let updated = if *amount_delta < 0 {
+                asset.sub(delta)?
+            } else {
+                asset.add(delta)?
+            };
 
             let value = if updated.amount() == 0 {
                 EMPTY_WORD
@@ -580,7 +588,7 @@ impl InnerForest {
                 "account should not be in the forest"
             );
             let operations = Self::build_forest_operations(hashed_entries);
-            let _new_root = self.apply_forest_updates(lineage, block_num, operations);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             let num_entries = raw_map_entries.len();
 
@@ -589,6 +597,7 @@ impl InnerForest {
                 %account_id,
                 %block_num,
                 ?slot_name,
+                %new_root,
                 delta_entries = num_entries,
                 "Inserted storage map into forest"
             );
@@ -624,13 +633,14 @@ impl InnerForest {
             );
 
             let operations = Self::build_forest_operations(hashed_entries);
-            let _new_root = self.apply_forest_updates(lineage, block_num, operations);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             tracing::debug!(
                 target: crate::COMPONENT,
                 %account_id,
                 %block_num,
                 ?slot_name,
+                %new_root,
                 delta_entries = delta_entries.len(),
                 "Updated storage map in forest"
             );
@@ -643,10 +653,13 @@ impl InnerForest {
     /// Prunes old entries from the in-memory forest data structures.
     ///
     /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
-    #[instrument(target = COMPONENT, skip_all, fields(block.number = %chain_tip))]
+    ///
+    /// Returns the number of _roots_ that got pruned.
+    #[instrument(target = COMPONENT, skip_all, ret, fields(block.number = %chain_tip))]
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
-        let cutoff_block =
-            BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+        let cutoff_block = chain_tip
+            .checked_sub(HISTORICAL_BLOCK_RETENTION)
+            .unwrap_or(BlockNumber::GENESIS);
         let before = self.forest.roots().count();
 
         self.forest.truncate(cutoff_block.as_u64());
