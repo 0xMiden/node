@@ -44,10 +44,8 @@ For each network account that has available notes, the coordinator spawns a dedi
 that consume network notes targeting its account. Actors read their state from the database and
 re-evaluate whenever notified by the coordinator.
 
-Actors that have been idle (no available notes to consume) for longer than the **sterility
-timeout** will request shutdown from the coordinator. The coordinator validates the request against
-the database before approving: if notes are still available, the request is rejected and the actor
-resumes. The sterility timeout is configurable via the `--ntx-builder.sterility-timeout` CLI
+Actors that have been idle (no available notes to consume) for longer than the **idle timeout**
+will be deactivated. The idle timeout is configurable via the `--ntx-builder.idle-timeout` CLI
 argument (default: 5 minutes).
 
 Deactivated actors are re-spawned when new notes targeting their account are detected by the

@@ -42,7 +42,7 @@ pub enum ActorRequest {
     },
     /// A note script was fetched from the remote store and should be persisted to the local DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
-    /// The actor has been idle (in `NoViableNotes` mode) for longer than the sterility timeout
+    /// The actor has been idle (in `NoViableNotes` mode) for longer than the idle timeout
     /// and is requesting to shut down. The builder validates the request against the DB before
     /// approving. If approved (ack received), the actor exits. If rejected (`ack_tx` dropped), the
     /// actor resumes in `NotesAvailable` mode.
@@ -68,9 +68,9 @@ pub enum ActorShutdownReason {
     /// Occurs when an account actor detects that its account has been removed from the database
     /// (e.g. due to a reverted account creation).
     AccountRemoved(NetworkAccountId),
-    /// Occurs when the actor has been idle for longer than the sterility timeout and the builder
+    /// Occurs when the actor has been idle for longer than the idle timeout and the builder
     /// has confirmed there are no available notes in the DB.
-    Sterile(NetworkAccountId),
+    IdleTimeout(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -98,8 +98,8 @@ pub struct AccountActorContext {
     pub max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     pub max_note_attempts: usize,
-    /// Duration an actor must remain in `NoViableNotes` mode before requesting shutdown.
-    pub sterility_timeout: Duration,
+    /// Duration after which an idle actor will deactivate.
+    pub idle_timeout: Duration,
     /// Database for persistent state.
     pub db: Db,
     /// Channel for sending requests to the coordinator (via the builder event loop).
@@ -205,8 +205,8 @@ pub struct AccountActor {
     max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
-    /// Duration an actor must remain in `NoViableNotes` mode before requesting shutdown.
-    sterility_timeout: Duration,
+    /// Duration after which an idle actor will deactivate.
+    idle_timeout: Duration,
     /// Channel for sending requests to the coordinator.
     request_tx: mpsc::Sender<ActorRequest>,
 }
@@ -242,7 +242,7 @@ impl AccountActor {
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
-            sterility_timeout: actor_context.sterility_timeout,
+            idle_timeout: actor_context.idle_timeout,
             request_tx: actor_context.request_tx.clone(),
         }
     }
@@ -278,10 +278,10 @@ impl AccountActor {
                 ActorMode::NotesAvailable => semaphore.acquire().boxed(),
             };
 
-            // Sterility timer: only ticks when in NoViableNotes mode.
+            // Idle timeout timer: only ticks when in NoViableNotes mode.
             // Mode changes cause the next loop iteration to create a fresh sleep or pending.
-            let sterility_sleep = match self.mode {
-                ActorMode::NoViableNotes => tokio::time::sleep(self.sterility_timeout).boxed(),
+            let idle_timeout_sleep = match self.mode {
+                ActorMode::NoViableNotes => tokio::time::sleep(self.idle_timeout).boxed(),
                 _ => std::future::pending().boxed(),
             };
 
@@ -333,10 +333,10 @@ impl AccountActor {
                         self.mode = ActorMode::NoViableNotes;
                     }
                 }
-                // Sterility timeout: actor has been idle too long, request shutdown.
-                _ = sterility_sleep => {
+                // Idle timeout: actor has been idle too long, request shutdown.
+                _ = idle_timeout_sleep => {
                     match self.initiate_shutdown(account_id).await {
-                        Ok(()) => return Err(ActorShutdownReason::Sterile(account_id)),
+                        Ok(()) => return Err(ActorShutdownReason::IdleTimeout(account_id)),
                         Err(()) => self.mode = ActorMode::NotesAvailable,
                     }
                 }

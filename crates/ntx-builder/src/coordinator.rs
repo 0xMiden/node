@@ -67,7 +67,7 @@ impl ActorHandle {
 /// - Prevents resource exhaustion by limiting simultaneous transaction processing.
 ///
 /// ## Actor Lifecycle
-/// - Actors that have been idle for longer than the sterility timeout request shutdown from the
+/// - Actors that have been idle for longer than the idle timeout request shutdown from the
 ///   coordinator.
 /// - The coordinator validates shutdown requests against the DB: if notes are still available for
 ///   the account, the request is rejected and the actor resumes processing.
@@ -195,8 +195,8 @@ impl Coordinator {
                     tracing::info!(account_id = %account_id, "Account actor shut down: account removed");
                     Ok(())
                 },
-                ActorShutdownReason::Sterile(account_id) => {
-                    tracing::info!(account_id = %account_id, "Account actor shut down due to sterility");
+                ActorShutdownReason::IdleTimeout(account_id) => {
+                    tracing::info!(account_id = %account_id, "Account actor shut down due to idle timeout");
                     Ok(())
                 },
             },
@@ -306,7 +306,7 @@ impl Coordinator {
         }
     }
 
-    /// Handles a shutdown request from an actor that has been idle for longer than the sterility
+    /// Handles a shutdown request from an actor that has been idle for longer than the idle
     /// timeout.
     ///
     /// Validates the request by checking the DB for available notes. If notes are available, the
