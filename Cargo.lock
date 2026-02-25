@@ -2255,6 +2255,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto"
 version = "0.19.6"
+source = "git+https://github.com/0xMiden/crypto.git?branch=bernhard-migrate-rocksdb-from-crypto#9224fe8ef0f9249d47f7904564d8f5ce6991b337"
 dependencies = [
  "blake3",
  "cc",
@@ -2287,6 +2288,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto-derive"
 version = "0.19.6"
+source = "git+https://github.com/0xMiden/crypto.git?branch=bernhard-migrate-rocksdb-from-crypto#9224fe8ef0f9249d47f7904564d8f5ce6991b337"
 dependencies = [
  "quote",
  "syn 2.0.114",
