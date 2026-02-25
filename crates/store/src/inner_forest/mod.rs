@@ -305,7 +305,40 @@ impl InnerForest {
         account_id: AccountId,
         vault_delta: &AccountVaultDelta,
     ) -> Result<(), InnerForestError> {
-        self.update_account_vault(block_num, account_id, vault_delta, true)?;
+        let prev_root = self.get_latest_vault_root(account_id);
+        assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+
+        if vault_delta.is_empty() {
+            self.vault_roots.insert((account_id, block_num), prev_root);
+            return Ok(());
+        }
+
+        let mut entries: Vec<(Word, Word)> = Vec::new();
+
+        for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
+            let amount =
+                (*amount_delta).try_into().expect("full-state amount should be non-negative");
+            let asset = FungibleAsset::new(*faucet_id, amount)?;
+            entries.push((asset.vault_key().into(), asset.into()));
+        }
+
+        for (&asset, _action) in vault_delta.non_fungible().iter() {
+            entries.push((asset.vault_key().into(), asset.into()));
+        }
+
+        let num_entries = entries.len();
+
+        let new_root = self.forest.batch_insert(prev_root, entries)?;
+
+        self.vault_roots.insert((account_id, block_num), new_root);
+
+        tracing::debug!(
+            target: crate::COMPONENT,
+            %account_id,
+            %block_num,
+            vault_entries = num_entries,
+            "Inserted vault into forest"
+        );
         Ok(())
     }
 
@@ -315,7 +348,55 @@ impl InnerForest {
         account_id: AccountId,
         storage_delta: &AccountStorageDelta,
     ) -> Result<(), InnerForestError> {
-        self.update_account_storage(block_num, account_id, storage_delta, true)?;
+        for (slot_name, map_delta) in storage_delta.maps() {
+            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
+            assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+
+            let raw_map_entries: Vec<(Word, Word)> = Vec::from_iter(
+                map_delta.entries().iter().filter_map(|(&key, &value)| {
+                    if value == EMPTY_WORD {
+                        None
+                    } else {
+                        Some((Word::from(key), value))
+                    }
+                }),
+            );
+
+            if raw_map_entries.is_empty() {
+                self.storage_map_roots
+                    .insert((account_id, slot_name.clone(), block_num), prev_root);
+                self.storage_entries
+                    .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
+
+                continue;
+            }
+
+            let hashed_entries: Vec<(Word, Word)> = Vec::from_iter(
+                raw_map_entries
+                    .iter()
+                    .map(|(key, value)| (StorageMap::hash_key(*key), *value)),
+            );
+
+            let new_root = self.forest.batch_insert(prev_root, hashed_entries.iter().copied())?;
+
+            self.storage_map_roots
+                .insert((account_id, slot_name.clone(), block_num), new_root);
+
+            let num_entries = raw_map_entries.len();
+
+            let map_entries = BTreeMap::from_iter(raw_map_entries);
+            self.storage_entries
+                .insert((account_id, slot_name.clone(), block_num), map_entries);
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                %account_id,
+                %block_num,
+                ?slot_name,
+                delta_entries = num_entries,
+                "Inserted storage map into forest"
+            );
+        }
         Ok(())
     }
 
