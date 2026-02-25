@@ -281,17 +281,17 @@ impl AccountActor {
                     match self.mode {
                         ActorMode::TransactionInflight(awaited_id) => {
                             // Check DB: is the inflight tx still pending?
-                            let resolved = match db_query(
+                            let exists = match db_query(
                                 account_id,
                                 self.db
-                                    .is_transaction_resolved(account_id, awaited_id)
+                                    .transaction_exists(awaited_id)
                                     .await,
                                 "failed to check transaction status",
                             ) {
                                 Ok(v) => v,
                                 Err(reason) => return reason,
                             };
-                            if resolved {
+                            if !exists {
                                 self.mode = ActorMode::NotesAvailable;
                             }
                         },
@@ -420,9 +420,6 @@ impl AccountActor {
                 .await
                 .is_err()
             {
-                tracing::warn!(
-                    "failed to send cache note script request, coordinator is shutting down"
-                );
                 break;
             }
         }
@@ -443,13 +440,10 @@ impl AccountActor {
             .await
             .is_err()
         {
-            tracing::warn!("failed to send notes failed request, coordinator is shutting down");
             return;
         }
         // Wait for the coordinator to confirm the DB write.
-        if ack_rx.await.is_err() {
-            tracing::warn!("failed to receive notes failed ack from coordinator");
-        }
+        let _ = ack_rx.await;
     }
 }
 

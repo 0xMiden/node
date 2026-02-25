@@ -1,5 +1,6 @@
 //! Account-related queries and models.
 
+use diesel::dsl::exists;
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
@@ -102,29 +103,23 @@ pub fn get_account(
         .transpose()
 }
 
-/// Returns `true` when no inflight account row exists with the given `transaction_id`, meaning
-/// the transaction was committed or reverted.
+/// Returns `true` when an inflight account row exists with the given `transaction_id`.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT COUNT(*)
-/// FROM accounts
-/// WHERE account_id = ?1 AND transaction_id = ?2
+/// SELECT EXISTS (SELECT 1 FROM accounts WHERE transaction_id = ?1)
 /// ```
-pub fn is_transaction_resolved(
+pub fn transaction_exists(
     conn: &mut SqliteConnection,
-    account_id: NetworkAccountId,
     tx_id: &TransactionId,
 ) -> Result<bool, DatabaseError> {
-    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
     let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
 
-    let count: i64 = schema::accounts::table
-        .filter(schema::accounts::account_id.eq(&account_id_bytes))
-        .filter(schema::accounts::transaction_id.eq(&tx_id_bytes))
-        .count()
-        .get_result(conn)?;
+    let result: bool = diesel::select(exists(
+        schema::accounts::table.filter(schema::accounts::transaction_id.eq(&tx_id_bytes)),
+    ))
+    .get_result(conn)?;
 
-    Ok(count == 0)
+    Ok(result)
 }

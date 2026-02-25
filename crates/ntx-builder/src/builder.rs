@@ -98,7 +98,7 @@ pub struct NetworkTransactionBuilder {
     actor_context: AccountActorContext,
     /// Stream of mempool events from the block producer.
     mempool_events: MempoolEventStream,
-    /// Receiver for requests from account actors (note failures, script caching).
+    /// Database update requests from account actors.
     actor_request_rx: mpsc::Receiver<ActorRequest>,
 }
 

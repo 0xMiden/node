@@ -77,17 +77,10 @@ impl Db {
             .await
     }
 
-    /// Returns `true` when the given transaction has been resolved (committed or reverted) for the
-    /// given account, i.e. no inflight account row exists with that transaction ID.
-    pub async fn is_transaction_resolved(
-        &self,
-        account_id: NetworkAccountId,
-        tx_id: TransactionId,
-    ) -> Result<bool> {
+    /// Returns `true` when an inflight account row exists with the given transaction ID.
+    pub async fn transaction_exists(&self, tx_id: TransactionId) -> Result<bool> {
         self.inner
-            .query("is_transaction_resolved", move |conn| {
-                queries::is_transaction_resolved(conn, account_id, &tx_id)
-            })
+            .query("transaction_exists", move |conn| queries::transaction_exists(conn, &tx_id))
             .await
     }
 
