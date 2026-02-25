@@ -30,7 +30,6 @@ opentelemetry         = { version = "0.31" }
 opentelemetry-otlp    = { default-features = false, features = ["grpc-tonic", "tls-roots", "trace"], version = "0.31" }
 opentelemetry_sdk     = { features = ["rt-tokio", "testing"], version = "0.31" }
 rand                  = { workspace = true }
-serde                 = { features = ["derive"], version = "1.0" }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
 tonic                 = { default-features = true, workspace = true }
