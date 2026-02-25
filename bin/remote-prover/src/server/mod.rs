@@ -15,10 +15,10 @@ use tower_http::trace::TraceLayer;
 use crate::generated::api_server::ApiServer;
 use crate::server::service::ProverService;
 
-mod proof_kind;
-mod prover;
-mod service;
-mod status;
+pub mod proof_kind;
+pub mod prover;
+pub mod service;
+pub mod status;
 
 #[cfg(test)]
 mod tests;
@@ -99,5 +99,23 @@ impl Server {
             tokio::spawn(async move { server.await.context("failed while serving proof server") });
 
         Ok((server, port))
+    }
+}
+
+/// A bundle of gRPC services and a TCP listener, ready to be served.
+pub struct RpcListener {
+    pub api_service: ApiServer<service::ProverService>,
+    pub status_service:
+        crate::generated::worker_status_api_server::WorkerStatusApiServer<status::StatusService>,
+    pub listener: TcpListener,
+}
+
+impl RpcListener {
+    pub fn new(listener: TcpListener, kind: ProofKind) -> Self {
+        let capacity = NonZeroUsize::new(1).unwrap();
+        let prover_service = service::ProverService::with_capacity(kind, capacity);
+        let api_service = ApiServer::new(prover_service);
+        let status_service = status::StatusService::new(kind);
+        Self { api_service, status_service, listener }
     }
 }
