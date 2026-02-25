@@ -57,7 +57,7 @@ miden-protocol                     = { features = ["std"], workspace = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }
-criterion             = { version = "0.5" }
+criterion             = "0.8"
 fs-err                = { workspace = true }
 miden-node-test-macro = { workspace = true }
 miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = true }
