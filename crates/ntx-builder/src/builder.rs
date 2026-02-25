@@ -99,6 +99,9 @@ pub struct NetworkTransactionBuilder {
     /// Stream of mempool events from the block producer.
     mempool_events: MempoolEventStream,
     /// Database update requests from account actors.
+    ///
+    /// We keep database writes centralized so this is how actors communicate
+    /// items to write.
     actor_request_rx: mpsc::Receiver<ActorRequest>,
 }
 
