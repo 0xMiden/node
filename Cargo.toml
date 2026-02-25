@@ -99,7 +99,7 @@ pretty_assertions = { version = "1.4" }
 prost              = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
 rand               = { version = "0.9" }
-rand_chacha        = { version = "0.9" }
+rand_chacha        = { default-features = false, version = "0.9" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
 tempfile           = { version = "3" }

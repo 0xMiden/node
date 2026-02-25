@@ -26,8 +26,8 @@ miden-protocol   = { features = ["std", "testing"], workspace = true }
 miden-standards  = { workspace = true }
 miden-testing    = { workspace = true }
 miden-tx         = { features = ["std"], workspace = true }
-rand             = { version = "0.9" }
-rand_chacha      = { version = "0.9" }
+rand             = { workspace = true }
+rand_chacha      = { workspace = true }
 reqwest          = { features = ["json"], version = "0.12" }
 serde            = { features = ["derive"], version = "1.0" }
 serde_json       = { version = "1.0" }
