@@ -314,7 +314,7 @@ impl rpc_server::Rpc for StoreApi {
 
         let account_id = read_account_id::<SyncAccountStorageMapsError>(request.account_id)?;
 
-        if !account_id.is_public() {
+        if !account_id.has_public_state() {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
         }
 
