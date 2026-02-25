@@ -654,7 +654,7 @@ impl InnerForest {
     ///
     /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
     ///
-    /// Returns the number of _roots_ that got pruned.
+    /// Returns the number of pruned roots for observability.
     #[instrument(target = COMPONENT, skip_all, ret, fields(block.number = %chain_tip))]
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
         let cutoff_block = chain_tip

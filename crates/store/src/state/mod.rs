@@ -1101,57 +1101,72 @@ impl State {
 
         let mut storage_map_details =
             Vec::<AccountStorageMapDetails>::with_capacity(storage_requests.len());
+        let mut map_keys_requests = Vec::new();
+        let mut all_entries_requests = Vec::new();
+        let mut storage_request_slots = Vec::with_capacity(storage_requests.len());
 
-        // Use forest for storage map queries
-        let mut forest_guard = self.forest.write().await;
-
-        for StorageMapRequest { slot_name, slot_data } in storage_requests {
-            let details = match &slot_data {
+        for (index, StorageMapRequest { slot_name, slot_data }) in
+            storage_requests.into_iter().enumerate()
+        {
+            storage_request_slots.push(slot_name.clone());
+            match slot_data {
                 SlotData::MapKeys(keys) => {
-                    let result = forest_guard
-                        .get_storage_map_details_for_keys(
-                            account_id,
-                            slot_name.clone(),
-                            block_num,
-                            keys,
-                        )
-                        .ok_or_else(|| DatabaseError::StorageRootNotFound {
-                            account_id,
-                            slot_name: slot_name.to_string(),
-                            block_num,
-                        })?;
-                    match result {
-                        Ok(details) => details,
-                        Err(err) => {
-                            drop(forest_guard);
-                            return Err(DatabaseError::MerkleError(err));
-                        },
-                    }
+                    map_keys_requests.push((index, slot_name, keys));
                 },
                 SlotData::All => {
-                    // we don't want to hold the forest guard for a prolonged time
-                    drop(forest_guard);
-                    // we collect all storage items, if the account is small enough or
-                    // return `AccountStorageMapDetails::LimitExceeded`
-                    let details = self
-                        .db
-                        .reconstruct_storage_map_from_db(
-                            account_id,
-                            slot_name.clone(),
-                            block_num,
-                            Some(
-                                // TODO unify this with
-                                // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                                // and accumulated the limits
-                                <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                            ),
-                        )
-                        .await?;
-                    forest_guard = self.forest.write().await;
-                    details
+                    all_entries_requests.push((index, slot_name));
                 },
-            };
+            }
+        }
 
+        let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
+
+        if !map_keys_requests.is_empty() {
+            let forest_guard = self.forest.read().await;
+            for (index, slot_name, keys) in map_keys_requests {
+                let details = forest_guard
+                    .get_storage_map_details_for_keys(
+                        account_id,
+                        slot_name.clone(),
+                        block_num,
+                        &keys,
+                    )
+                    .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                        account_id,
+                        slot_name: slot_name.to_string(),
+                        block_num,
+                    })?
+                    .map_err(DatabaseError::MerkleError)?;
+                storage_map_details_by_index[index] = Some(details);
+            }
+        }
+
+        for (index, slot_name) in all_entries_requests {
+            let details = self
+                .db
+                .reconstruct_storage_map_from_db(
+                    account_id,
+                    slot_name.clone(),
+                    block_num,
+                    Some(
+                        // TODO unify this with
+                        // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
+                        // and accumulated the limits
+                        <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
+                    ),
+                )
+                .await?;
+            storage_map_details_by_index[index] = Some(details);
+        }
+
+        for (details, slot_name) in
+            storage_map_details_by_index.into_iter().zip(storage_request_slots)
+        {
+            let details = details.ok_or_else(|| DatabaseError::StorageRootNotFound {
+                account_id,
+                slot_name: slot_name.to_string(),
+                block_num,
+            })?;
             storage_map_details.push(details);
         }
 
