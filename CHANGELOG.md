@@ -25,7 +25,7 @@
  - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/miden-node/pull/1662)).
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
 
-## v0.13.5 (TBD)
+## v0.13.5 (2026-02-19)
 
 - OpenTelemetry traces are now flushed before program termination on panic ([#1643](https://github.com/0xMiden/miden-node/pull/1643)).
 - Added support for the note transport layer in the network monitor ([#1660](https://github.com/0xMiden/miden-node/pull/1660)).
