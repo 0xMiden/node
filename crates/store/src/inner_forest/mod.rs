@@ -272,6 +272,18 @@ impl InnerForest {
         let account_id = delta.id();
         let is_full_state = delta.is_full_state();
 
+        #[cfg(debug_assertions)]
+        if is_full_state {
+            let has_vault_root = self.vault_roots.keys().any(|(id, _)| *id == account_id);
+            let has_storage_root = self.storage_map_roots.keys().any(|(id, ..)| *id == account_id);
+            let has_storage_entries = self.storage_entries.keys().any(|(id, ..)| *id == account_id);
+
+            assert!(
+                !has_vault_root && !has_storage_root && !has_storage_entries,
+                "full-state delta should not be applied to existing account"
+            );
+        }
+
         if is_full_state || !delta.vault().is_empty() {
             self.update_account_vault(block_num, account_id, delta.vault(), is_full_state)?;
         }
@@ -288,11 +300,7 @@ impl InnerForest {
 
     /// Retrieves the most recent vault SMT root for an account.
     /// If `is_full_state` is true, returns an empty SMT root.
-    fn get_latest_vault_root(&self, account_id: AccountId, is_full_state: bool) -> Word {
-        if is_full_state {
-            return Self::empty_smt_root();
-        }
-
+    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
         self.vault_roots
             .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::MAX))
             .next_back()
@@ -323,7 +331,7 @@ impl InnerForest {
         vault_delta: &AccountVaultDelta,
         is_full_state: bool,
     ) -> Result<Word, InnerForestError> {
-        let prev_root = self.get_latest_vault_root(account_id, is_full_state);
+        let prev_root = self.get_latest_vault_root(account_id);
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
@@ -402,12 +410,7 @@ impl InnerForest {
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
-        is_full_state: bool,
     ) -> Word {
-        if is_full_state {
-            return Self::empty_smt_root();
-        }
-
         self.storage_map_roots
             .range(
                 (account_id, slot_name.clone(), BlockNumber::GENESIS)
@@ -457,14 +460,7 @@ impl InnerForest {
         let mut updated_roots = BTreeMap::new();
 
         for (slot_name, map_delta) in storage_delta.maps() {
-            let prev_root = self.get_latest_storage_map_root(account_id, slot_name, is_full_state);
-            if is_full_state {
-                assert_eq!(
-                    prev_root,
-                    Self::empty_smt_root(),
-                    "account should not be in the forest"
-                );
-            }
+            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
 
             let delta_entries = if is_full_state {
                 Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
