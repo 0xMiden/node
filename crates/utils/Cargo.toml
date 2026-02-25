@@ -35,7 +35,7 @@ tokio                 = { workspace = true }
 tonic                 = { default-features = true, workspace = true }
 tower-http            = { features = ["catch-panic"], workspace = true }
 tracing               = { workspace = true }
-tracing-forest        = { features = ["chrono"], optional = true, version = "0.2" }
+tracing-forest        = { features = ["chrono"], optional = true, version = "0.3" }
 tracing-opentelemetry = { version = "0.32" }
 tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
