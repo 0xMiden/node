@@ -322,8 +322,8 @@ impl InnerForest {
             entries.push((asset.vault_key().into(), asset.into()));
         }
 
-        for (&asset, _action) in vault_delta.non_fungible().iter() {
-            debug_assert_eq!(_action, &NonFungibleDeltaAction::Add);
+        for (&asset, action) in vault_delta.non_fungible().iter() {
+            debug_assert_eq!(action, &NonFungibleDeltaAction::Add);
             entries.push((asset.vault_key().into(), asset.into()));
         }
 

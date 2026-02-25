@@ -748,6 +748,8 @@ pub(crate) fn select_account_storage_map_values(
 /// Select latest account storage by querying `accounts.storage_header` where `is_latest=true`
 /// and reconstructing full storage from the header plus map values from
 /// `account_storage_map_values`.
+///
+/// Attention: For large accounts it is prohibitively expensive!
 pub(crate) fn select_latest_account_storage(
     conn: &mut SqliteConnection,
     account_id: AccountId,
@@ -776,6 +778,7 @@ pub(crate) fn select_latest_account_storage(
     Ok(AccountStorage::new(slots)?)
 }
 
+/// Fetch account storage header and all storage maps
 pub(crate) fn select_latest_account_storage_components(
     conn: &mut SqliteConnection,
     account_id: AccountId,
@@ -1059,8 +1062,8 @@ pub(crate) fn upsert_accounts(
         .unwrap_or(block_num_raw);
         let created_at_block = BlockNumber::from_raw_sql(created_at_block_raw)?;
 
-        // NOTE: we collect storage / asset inserts to apply them only after the  account row is
-        // written. The storage and vault tables have FKs pointing to `accounts (account_id,
+        // NOTE: we collect storage / asset inserts to apply them only after the account row is
+        // written. The storage and vault tables have FKs pointing to accounts `(account_id,
         // block_num)`, so inserting them earlier would violate those constraints when inserting a
         // brand-new account.
         let (account_state, pending_storage_inserts, pending_asset_inserts) = match update.details()
@@ -1295,6 +1298,7 @@ pub(crate) fn upsert_accounts(
             .execute(conn)?;
 
         // insert pending storage map entries
+        // TODO consider batching
         for (acc_id, slot_name, key, value) in pending_storage_inserts {
             insert_account_storage_map_value(conn, acc_id, block_num, slot_name, key, value)?;
         }

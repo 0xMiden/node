@@ -14,7 +14,13 @@ use diesel::{
 use diesel_migrations::MigrationHarness;
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::PublicKeyCommitment;
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::account::delta::{
+    AccountStorageDelta,
+    AccountUpdateDetails,
+    AccountVaultDelta,
+    StorageMapDelta,
+    StorageSlotDelta,
+};
 use miden_protocol::account::{
     Account,
     AccountBuilder,
@@ -28,13 +34,14 @@ use miden_protocol::account::{
     AccountType,
     StorageMap,
     StorageSlot,
+    StorageSlotContent,
     StorageSlotName,
     StorageSlotType,
 };
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::{Deserializable, Serializable};
-use miden_protocol::{EMPTY_WORD, Felt, Word};
+use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
 use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::code_builder::CodeBuilder;
 
@@ -187,6 +194,49 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         ))
         .execute(conn)
         .expect("Failed to insert block header");
+}
+
+fn create_account_with_map_storage(
+    slot_name: StorageSlotName,
+    entries: Vec<(Word, Word)>,
+) -> Account {
+    let storage_map = StorageMap::with_entries(entries).unwrap();
+    let component_storage = vec![StorageSlot::with_map(slot_name, storage_map)];
+
+    let account_component_code = CodeBuilder::default()
+        .compile_component_code("test::interface", "pub proc map push.1 end")
+        .unwrap();
+
+    let component = AccountComponent::new(account_component_code, component_storage)
+        .unwrap()
+        .with_supported_type(AccountType::RegularAccountImmutableCode);
+
+    AccountBuilder::new([9u8; 32])
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_component(component)
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .build_existing()
+        .unwrap()
+}
+
+fn assert_storage_map_slot_entries(
+    storage: &AccountStorage,
+    slot_name: &StorageSlotName,
+    expected: &BTreeMap<Word, Word>,
+) {
+    let slot = storage
+        .slots()
+        .iter()
+        .find(|slot| slot.name() == slot_name)
+        .expect("expected storage slot");
+
+    let StorageSlotContent::Map(storage_map) = slot.content() else {
+        panic!("expected map slot");
+    };
+
+    let entries = BTreeMap::from_iter(storage_map.entries().map(|(key, value)| (*key, *value)));
+    assert_eq!(&entries, expected, "map entries mismatch");
 }
 
 // ACCOUNT HEADER AT BLOCK TESTS
@@ -617,6 +667,167 @@ fn test_upsert_accounts_with_empty_storage() {
     );
 }
 
+// STORAGE MAP LATEST ACCOUNT QUERY TESTS
+// ================================================================================================
+
+#[test]
+fn test_select_latest_account_storage_ordering_semantics() {
+    let mut conn = setup_test_db();
+    let block_num = BlockNumber::from_epoch(0);
+    insert_block_header(&mut conn, block_num);
+
+    let slot_name = StorageSlotName::mock(0);
+    let key_1 = Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_2 = Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_3 = Word::from([Felt::new(3), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+
+    let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_3 = Word::from([Felt::new(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+
+    let mut entries = vec![(key_2, value_2), (key_1, value_1), (key_3, value_3)];
+    entries.reverse();
+
+    let account = create_account_with_map_storage(slot_name.clone(), entries.clone());
+    let account_id = account.id();
+    let account_commitment = account.commitment();
+
+    let mut reversed_entries = entries.clone();
+    reversed_entries.reverse();
+    let reordered_account = create_account_with_map_storage(slot_name.clone(), reversed_entries);
+    assert_eq!(
+        account.storage().to_commitment(),
+        reordered_account.storage().to_commitment(),
+        "storage commitments should be order-independent"
+    );
+
+    let delta = AccountDelta::try_from(account).unwrap();
+    let account_update =
+        BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Delta(delta));
+
+    upsert_accounts(&mut conn, &[account_update], block_num).expect("upsert_accounts failed");
+
+    let storage =
+        select_latest_account_storage(&mut conn, account_id).expect("Failed to query storage");
+
+    let expected = BTreeMap::from_iter(entries);
+    assert_storage_map_slot_entries(&storage, &slot_name, &expected);
+}
+
+#[test]
+fn test_select_latest_account_storage_multiple_slots() {
+    let mut conn = setup_test_db();
+    let block_num = BlockNumber::from_epoch(0);
+    insert_block_header(&mut conn, block_num);
+
+    let slot_name_1 = StorageSlotName::mock(0);
+    let slot_name_2 = StorageSlotName::mock(1);
+
+    let key_a = Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_b = Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+
+    let value_a = Word::from([Felt::new(11), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_b = Word::from([Felt::new(22), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+
+    let map_a = StorageMap::with_entries(vec![(key_a, value_a)]).unwrap();
+    let map_b = StorageMap::with_entries(vec![(key_b, value_b)]).unwrap();
+
+    let component_storage = vec![
+        StorageSlot::with_map(slot_name_2.clone(), map_b),
+        StorageSlot::with_map(slot_name_1.clone(), map_a),
+    ];
+
+    let account_component_code = CodeBuilder::default()
+        .compile_component_code("test::interface", "pub proc map push.1 end")
+        .unwrap();
+
+    let component = AccountComponent::new(account_component_code, component_storage)
+        .unwrap()
+        .with_supported_type(AccountType::RegularAccountImmutableCode);
+
+    let account = AccountBuilder::new([9u8; 32])
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_component(component)
+        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .build_existing()
+        .unwrap();
+
+    let account_id = account.id();
+    let account_commitment = account.commitment();
+    let delta = AccountDelta::try_from(account).unwrap();
+    let account_update =
+        BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Delta(delta));
+
+    upsert_accounts(&mut conn, &[account_update], block_num).expect("upsert_accounts failed");
+
+    let storage =
+        select_latest_account_storage(&mut conn, account_id).expect("Failed to query storage");
+
+    let expected_slot_1 = BTreeMap::from_iter([(key_a, value_a)]);
+    let expected_slot_2 = BTreeMap::from_iter([(key_b, value_b)]);
+
+    assert_storage_map_slot_entries(&storage, &slot_name_1, &expected_slot_1);
+    assert_storage_map_slot_entries(&storage, &slot_name_2, &expected_slot_2);
+}
+
+#[test]
+fn test_select_latest_account_storage_slot_updates() {
+    let mut conn = setup_test_db();
+    let block_1 = BlockNumber::from_epoch(0);
+    let block_2 = BlockNumber::from_epoch(1);
+    insert_block_header(&mut conn, block_1);
+    insert_block_header(&mut conn, block_2);
+
+    let slot_name = StorageSlotName::mock(0);
+    let key_1 = Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_2 = Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+
+    let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_3 = Word::from([Felt::new(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+
+    let account = create_account_with_map_storage(slot_name.clone(), vec![(key_1, value_1)]);
+    let account_id = account.id();
+    let account_commitment = account.commitment();
+
+    let delta = AccountDelta::try_from(account.clone()).unwrap();
+    let account_update =
+        BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Delta(delta));
+
+    upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
+
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key_1, value_2);
+    map_delta.insert(key_2, value_3);
+    let storage_delta = AccountStorageDelta::from_raw(BTreeMap::from_iter([(
+        slot_name.clone(),
+        StorageSlotDelta::Map(map_delta),
+    )]));
+
+    let partial_delta =
+        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::new(1))
+            .unwrap();
+
+    let mut expected_account = account.clone();
+    expected_account.apply_delta(&partial_delta).unwrap();
+    let expected_commitment = expected_account.commitment();
+
+    let account_update = BlockAccountUpdate::new(
+        account_id,
+        expected_commitment,
+        AccountUpdateDetails::Delta(partial_delta),
+    );
+
+    upsert_accounts(&mut conn, &[account_update], block_2).expect("upsert_accounts failed");
+
+    let storage =
+        select_latest_account_storage(&mut conn, account_id).expect("Failed to query storage");
+
+    let expected = BTreeMap::from_iter([(key_1, value_2), (key_2, value_3)]);
+    assert_storage_map_slot_entries(&storage, &slot_name, &expected);
+}
+
 // VAULT AT BLOCK HISTORICAL QUERY TESTS
 // ================================================================================================
 
@@ -662,9 +873,9 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     // Insert vault asset at block 1: vault_key_1 = 1000 tokens
     let vault_key_1 = AssetVaultKey::new_unchecked(Word::from([
         Felt::new(1),
-        Felt::new(0),
-        Felt::new(0),
-        Felt::new(0),
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
     ]));
     let asset_v1 = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
 
@@ -679,9 +890,9 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     // Add a second vault_key at block 2
     let vault_key_2 = AssetVaultKey::new_unchecked(Word::from([
         Felt::new(2),
-        Felt::new(0),
-        Felt::new(0),
-        Felt::new(0),
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
     ]));
     let asset_key2 = Asset::Fungible(FungibleAsset::new(faucet_id, 500).unwrap());
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_2, Some(asset_key2))
@@ -764,9 +975,9 @@ fn test_select_account_vault_at_block_exponential_updates() {
 
     let vault_key = AssetVaultKey::new_unchecked(Word::from([
         Felt::new(3),
-        Felt::new(0),
-        Felt::new(0),
-        Felt::new(0),
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
     ]));
 
     for (index, block) in blocks.iter().enumerate() {
@@ -828,9 +1039,9 @@ fn test_select_account_vault_at_block_with_deletion() {
     // Insert vault asset at block 1
     let vault_key = AssetVaultKey::new_unchecked(Word::from([
         Felt::new(1),
-        Felt::new(0),
-        Felt::new(0),
-        Felt::new(0),
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
     ]));
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
 
