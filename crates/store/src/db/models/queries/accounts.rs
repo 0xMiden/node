@@ -443,7 +443,7 @@ pub(crate) fn select_account_vault_assets(
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
-    if !account_id.is_public() {
+    if !account_id.has_public_state() {
         return Err(DatabaseError::AccountNotPublic(account_id));
     }
 
@@ -696,7 +696,7 @@ pub(crate) fn select_account_storage_map_values(
         2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>(); // key + value + block_num + slot_idx
     pub const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
-    if !account_id.is_public() {
+    if !account_id.has_public_state() {
         return Err(DatabaseError::AccountNotPublic(account_id));
     }
 
