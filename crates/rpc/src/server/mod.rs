@@ -84,12 +84,15 @@ impl Rpc {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
+            // Note: must come before the accept layer, as otherwise accept rejections
+            // do _not_ get CORS headers applied, masking the accept error in
+            // web-clients (which would experience CORS rejection).
+            .layer(cors_for_grpc_web_layer())
             .layer(
                 AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
                     .with_genesis_enforced_method("SubmitProvenTransaction")
                     .with_genesis_enforced_method("SubmitProvenBatch"),
             )
-            .layer(cors_for_grpc_web_layer())
             // Enables gRPC-web support.
             .layer(GrpcWebLayer::new())
             .add_service(api_service)
