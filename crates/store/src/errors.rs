@@ -17,7 +17,6 @@ use miden_protocol::errors::{
     AccountTreeError,
     AssetError,
     AssetVaultError,
-    FeeError,
     NoteError,
     NullifierTreeError,
     StorageMapError,
@@ -137,22 +136,6 @@ pub enum StateInitializationError {
     PublicAccountMissingDetails(AccountId),
     #[error("failed to convert account to delta: {0}")]
     AccountToDeltaConversionFailed(String),
-}
-
-#[derive(Debug, Error)]
-pub enum GenesisError {
-    // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
-    // ---------------------------------------------------------------------------------------------
-    #[error("database error")]
-    Database(#[from] DatabaseError),
-    #[error("failed to build genesis account tree")]
-    AccountTree(#[source] AccountTreeError),
-    #[error("failed to deserialize genesis file")]
-    GenesisFileDeserialization(#[from] DeserializationError),
-    #[error("fee cannot be created")]
-    Fee(#[from] FeeError),
-    #[error("failed to build account delta from account")]
-    AccountDelta(AccountError),
 }
 
 // ENDPOINT ERRORS
@@ -582,7 +565,6 @@ mod compile_tests {
         AccountError,
         DatabaseError,
         DeserializationError,
-        GenesisError,
         NetworkAccountError,
         NoteError,
         RecvError,
@@ -613,7 +595,6 @@ mod compile_tests {
 
         ensure_is_error::<DatabaseError>(PhantomData);
         ensure_is_error::<diesel::result::Error>(PhantomData);
-        ensure_is_error::<GenesisError>(PhantomData);
         ensure_is_error::<StateInitializationError>(PhantomData);
         ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);
     }

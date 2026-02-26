@@ -1,12 +1,12 @@
 use miden_node_db::{DatabaseError, Db};
-use miden_protocol::block::{BlockSigner, ProposedBlock};
+use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use tracing::{info_span, instrument};
 
-use crate::COMPONENT;
 use crate::db::find_unvalidated_transactions;
+use crate::{COMPONENT, ValidatorSigner};
 
 // BLOCK VALIDATION ERROR
 // ================================================================================================
@@ -17,6 +17,8 @@ pub enum BlockValidationError {
     UnvalidatedTransactions(Vec<TransactionId>),
     #[error("failed to build block")]
     BlockBuildingFailed(#[source] ProposedBlockError),
+    #[error("failed to sign block: {0}")]
+    BlockSigningFailed(String),
     #[error("failed to select transactions")]
     DatabaseError(#[source] DatabaseError),
 }
@@ -27,9 +29,9 @@ pub enum BlockValidationError {
 /// Validates a block by checking that all transactions in the proposed block have been processed by
 /// the validator in the past.
 #[instrument(target = COMPONENT, skip_all, err)]
-pub async fn validate_block<S: BlockSigner>(
+pub async fn validate_block(
     proposed_block: ProposedBlock,
-    signer: &S,
+    signer: &ValidatorSigner,
     db: &Db,
 ) -> Result<Signature, BlockValidationError> {
     // Search for any proposed transactions that have not previously been validated.
@@ -53,7 +55,10 @@ pub async fn validate_block<S: BlockSigner>(
         .map_err(BlockValidationError::BlockBuildingFailed)?;
 
     // Sign the header.
-    let signature = info_span!("sign_block").in_scope(|| signer.sign(&header));
+    let signature = info_span!("sign_block")
+        .in_scope(async move || signer.sign(&header).await)
+        .await
+        .map_err(|err| BlockValidationError::BlockSigningFailed(err.to_string()))?;
 
     Ok(signature)
 }

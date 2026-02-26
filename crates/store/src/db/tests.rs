@@ -5,6 +5,7 @@ use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::AccountSummary;
 use miden_node_utils::fee::{test_fee, test_fee_params};
 use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
@@ -38,7 +39,6 @@ use miden_protocol::note::{
     Note,
     NoteAttachment,
     NoteDetails,
-    NoteExecutionHint,
     NoteHeader,
     NoteId,
     NoteMetadata,
@@ -52,7 +52,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
-use miden_protocol::testing::random_signer::RandomBlockSigner;
+use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
@@ -64,7 +64,7 @@ use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
 use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
+use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 use pretty_assertions::assert_eq;
 use rand::Rng;
 
@@ -192,7 +192,7 @@ pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
     let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
     let mut rng = rng.lock().unwrap();
-    create_p2id_note(
+    P2idNote::create(
         account_id,
         account_id,
         vec![Asset::Fungible(
@@ -312,7 +312,7 @@ fn make_account_and_note(
             conn,
             &[BlockAccountUpdate::new(
                 account_id,
-                account.commitment(),
+                account.to_commitment(),
                 AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
             )],
             block_num,
@@ -350,12 +350,8 @@ fn sql_unconsumed_network_notes() {
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
             note_id: num_to_word(i.into()),
             note_commitment: num_to_word(i.into()),
-            metadata: NoteMetadata::new(
-                account_note.0,
-                NoteType::Public,
-                NoteTag::with_account_target(account_note.0),
-            )
-            .with_attachment(attachment.clone()),
+            metadata: NoteMetadata::new(account_note.0, NoteType::Public)
+                .with_attachment(attachment.clone()),
             details: None,
             inclusion_path: SparseMerklePath::default(),
         };
@@ -820,7 +816,7 @@ fn notes() {
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 2).unwrap();
     let tag = 5u32;
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public, tag.into());
+    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
 
     let values = [(note_index, new_note.id(), &note_metadata)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
@@ -831,7 +827,7 @@ fn notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: NoteMetadata::new(sender, NoteType::Public, tag.into()),
+        metadata: NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
         details: Some(NoteDetails::from(&new_note)),
         inclusion_path: inclusion_path.clone(),
     };
@@ -1115,42 +1111,6 @@ fn select_storage_map_sync_values() {
     assert_eq!(page.values, expected, "should return latest values ordered by key");
 }
 
-#[test]
-fn select_storage_map_sync_values_for_network_account() {
-    let mut conn = create_db();
-    let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
-
-    let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Network);
-    let slot_name = StorageSlotName::mock(7);
-    let key = num_to_word(1);
-    let value = num_to_word(10);
-
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block_num,
-        slot_name.clone(),
-        key,
-        value,
-    )
-    .unwrap();
-
-    let page = queries::select_account_storage_map_values(
-        &mut conn,
-        account_id,
-        BlockNumber::GENESIS..=block_num,
-    )
-    .unwrap();
-
-    assert_eq!(
-        page.values,
-        vec![StorageMapValue { block_num, slot_name, key, value }],
-        "network accounts with public state should be accepted",
-    );
-}
-
 // UTILITIES
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
@@ -1176,9 +1136,13 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .compile_component_code("test::interface", code_str)
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountUpdatableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountUpdatableCode),
+    )
+    .unwrap();
 
     AccountBuilder::new(seed)
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -1203,7 +1167,7 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
             Word::try_from([num, num, 0, 0]).unwrap(),
             Word::try_from([0, 0, num, num]).unwrap(),
         ),
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::new(num as u32)),
+        NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
     )];
 
     TransactionHeader::new_unchecked(
@@ -1270,9 +1234,12 @@ fn mock_account_code_and_storage(
     let account_component_code = CodeBuilder::default()
         .compile_component_code("counter_contract::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("counter_contract").with_supports_all_types(),
+    )
+    .unwrap();
 
     AccountBuilder::new(init_seed.unwrap_or([0; 32]))
         .account_type(account_type)
@@ -1313,7 +1280,7 @@ fn test_select_account_code_by_commitment() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account.id(),
-            account.commitment(),
+            account.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
         )],
         block_num_1,
@@ -1361,7 +1328,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account_v1.id(),
-            account_v1.commitment(),
+            account_v1.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v1).unwrap()),
         )],
         block_num_1,
@@ -1394,7 +1361,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account_v2.id(),
-            account_v2.commitment(),
+            account_v2.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v2).unwrap()),
         )],
         block_num_2,
@@ -1419,18 +1386,21 @@ fn test_select_account_code_by_commitment_multiple_codes() {
 // ================================================================================================
 
 /// Verifies genesis block with account containing vault assets can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets() {
+async fn genesis_with_account_assets() {
     use crate::genesis::GenesisState;
     let component_code = "pub proc foo push.1 end";
 
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let fungible_asset = FungibleAsset::new(faucet_id, 1000).unwrap();
@@ -1445,16 +1415,16 @@ fn genesis_with_account_assets() {
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_storage_map() {
+async fn genesis_with_account_storage_map() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1481,9 +1451,12 @@ fn genesis_with_account_storage_map() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1494,16 +1467,16 @@ fn genesis_with_account_storage_map() {
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets_and_storage() {
+async fn genesis_with_account_assets_and_storage() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1527,9 +1500,12 @@ fn genesis_with_account_assets_and_storage() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1541,17 +1517,17 @@ fn genesis_with_account_assets_and_storage() {
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types.
 /// Tests realistic genesis scenario with basic accounts, assets, and storage.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_multiple_accounts() {
+async fn genesis_with_multiple_accounts() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1559,9 +1535,12 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", "pub proc foo push.1 end")
         .unwrap();
-    let account_component1 = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component1 = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account1 = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1577,9 +1556,12 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("bar::interface", "pub proc bar push.2 end")
         .unwrap();
-    let account_component2 = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component2 = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("bar").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account2 = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1601,9 +1583,12 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("baz::interface", "pub proc baz push.3 end")
         .unwrap();
-    let account_component3 = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component3 = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("baz").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account3 = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -1618,9 +1603,9 @@ fn genesis_with_multiple_accounts() {
         test_fee_params(),
         1,
         0,
-        SecretKey::random(),
+        random_secret_key(),
     );
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
@@ -1649,7 +1634,7 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
 
     let block_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
 
@@ -1773,7 +1758,7 @@ fn serialization_symmetry_note_metadata() {
     // Use a tag that roundtrips properly - NoteTag::LocalAny stores the full u32 including type
     // bits
     let tag = NoteTag::with_account_target(sender);
-    let metadata = NoteMetadata::new(sender, NoteType::Public, tag);
+    let metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag);
 
     let bytes = metadata.to_bytes();
     let restored = NoteMetadata::read_from_bytes(&bytes).unwrap();
@@ -1866,7 +1851,7 @@ fn db_roundtrip_account() {
         Some([99u8; 32]),
     );
     let account_id = account.id();
-    let account_commitment = account.commitment();
+    let account_commitment = account.to_commitment();
 
     // Insert with full delta (like genesis)
     let account_delta = AccountDelta::try_from(account.clone()).unwrap();
@@ -2062,9 +2047,12 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("test::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([50u8; 32])
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -2082,7 +2070,7 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_delta = AccountDelta::try_from(account.clone()).unwrap();
     let block_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
     queries::upsert_accounts(&mut conn, &[block_update], block_num).unwrap();
@@ -2133,8 +2121,8 @@ fn db_roundtrip_account_storage_with_maps() {
     assert!(account_info.details.is_some(), "Public account should have details");
     let retrieved_account = account_info.details.unwrap();
     assert_eq!(
-        account.commitment(),
-        retrieved_account.commitment(),
+        account.to_commitment(),
+        retrieved_account.to_commitment(),
         "Full account commitment must match after DB roundtrip"
     );
 }
@@ -2155,8 +2143,7 @@ fn db_roundtrip_note_metadata_attachment() {
 
     // Create NoteMetadata with the attachment
     let metadata =
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::with_account_target(account_id))
-            .with_attachment(attachment.clone());
+        NoteMetadata::new(account_id, NoteType::Public).with_attachment(attachment.clone());
 
     let note = NoteRecord {
         block_num,

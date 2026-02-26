@@ -18,8 +18,11 @@ workspace = true
 
 [dependencies]
 anyhow                 = { workspace = true }
+aws-config             = { version = "1.8.14" }
+aws-sdk-kms            = { version = "1.100" }
 diesel                 = { workspace = true }
 diesel_migrations      = { workspace = true }
+k256                   = "0.13.4"
 miden-node-db          = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
