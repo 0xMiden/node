@@ -224,4 +224,15 @@ impl Db {
         apply_migrations(&mut conn).expect("migrations should apply on empty database");
         (conn, dir)
     }
+
+    /// Creates an async `Db` instance backed by a temp file for testing.
+    ///
+    /// Returns `(Db, TempDir)` — the `TempDir` must be kept alive for the DB's lifetime.
+    #[cfg(test)]
+    pub async fn test_setup() -> (Db, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("test.sqlite3");
+        let db = Db::setup(db_path).await.expect("test DB setup should succeed");
+        (db, dir)
+    }
 }

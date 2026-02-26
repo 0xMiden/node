@@ -112,9 +112,12 @@ impl NetworkTransactionBuilder {
         // Main event loop.
         loop {
             tokio::select! {
-                // Handle actor result.
+                // Handle actor result. If a timed-out actor needs respawning, do so.
                 result = self.coordinator.next() => {
-                    result?;
+                    if let Some(account_id) = result? {
+                        self.coordinator
+                            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                    }
                 },
                 // Handle mempool events.
                 event = self.mempool_events.next() => {
@@ -211,7 +214,11 @@ impl NetworkTransactionBuilder {
                         }
                     }
                 }
-                self.coordinator.send_targeted(&event);
+                let inactive_targets = self.coordinator.send_targeted(&event);
+                for account_id in inactive_targets {
+                    self.coordinator
+                        .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                }
                 Ok(())
             },
             // Update chain state and broadcast.

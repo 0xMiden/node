@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use actor::AccountActorContext;
 use anyhow::Context;
@@ -21,6 +22,9 @@ mod clients;
 mod coordinator;
 pub(crate) mod db;
 pub(crate) mod inflight_note;
+
+#[cfg(test)]
+pub(crate) mod test_utils;
 
 pub use builder::NetworkTransactionBuilder;
 
@@ -51,6 +55,9 @@ const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 /// Default script cache size.
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
     NonZeroUsize::new(1_000).expect("literal is non-zero");
+
+/// Default duration after which an idle network account actor will deactivate.
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 // CONFIGURATION
 // =================================================================================================
@@ -93,6 +100,12 @@ pub struct NtxBuilderConfig {
     /// Channel capacity for loading accounts from the store during startup.
     pub account_channel_capacity: usize,
 
+    /// Duration after which an idle network account will deactivate.
+    ///
+    /// An account is considered idle once it has no viable notes to consume.
+    /// A deactivated account will reactivate if targeted with new notes.
+    pub idle_timeout: Duration,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -115,6 +128,7 @@ impl NtxBuilderConfig {
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
             database_filepath,
         }
     }
@@ -177,6 +191,15 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_account_channel_capacity(mut self, capacity: usize) -> Self {
         self.account_channel_capacity = capacity;
+        self
+    }
+
+    /// Sets the idle timeout for actors.
+    ///
+    /// Actors that remain idle (no viable notes) for this duration will be deactivated.
+    #[must_use]
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = timeout;
         self
     }
 
@@ -246,6 +269,7 @@ impl NtxBuilderConfig {
             script_cache,
             max_notes_per_tx: self.max_notes_per_tx,
             max_note_attempts: self.max_note_attempts,
+            idle_timeout: self.idle_timeout,
             db: db.clone(),
             request_tx,
         };
