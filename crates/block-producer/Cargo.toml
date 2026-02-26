@@ -29,7 +29,7 @@ miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
 miden-standards            = { workspace = true }
 miden-tx-batch-prover      = { workspace = true }
-rand                       = { version = "0.9" }
+rand                       = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream               = { features = ["net"], workspace = true }
@@ -49,7 +49,7 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 miden-tx              = { features = ["testing"], workspace = true }
 pretty_assertions     = "1.4"
-rand_chacha           = { default-features = false, version = "0.9" }
+rand_chacha           = { default-features = false, workspace = true }
 rstest                = { workspace = true }
 serial_test           = "3.2"
 tempfile              = { workspace = true }
