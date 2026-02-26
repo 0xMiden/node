@@ -45,3 +45,9 @@ fs-err                 = { workspace = true }
 miden-node-proto-build = { workspace = true }
 miette                 = { features = ["fancy"], version = "7.5" }
 tonic-prost-build      = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = [
+  "prost",
+  "tonic-prost", # used in generated OUT_DIR code
+]

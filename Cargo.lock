@@ -3275,8 +3275,10 @@ name = "miden-remote-prover"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "assert_matches",
  "async-trait",
  "clap",
+ "fs-err",
  "http 1.4.0",
  "humantime",
  "miden-block-prover",
