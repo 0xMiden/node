@@ -61,7 +61,7 @@ miden-tx-batch-prover = { version = "0.13" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
 miden-air    = { features = ["std", "testing"], version = "0.20" }
-miden-crypto = { default-features = false, version = "0.19" }
+miden-crypto = { version = "0.19.5" }
 
 # External dependencies
 anyhow            = { version = "1.0" }
@@ -87,6 +87,7 @@ rand               = { version = "0.9" }
 rand_chacha        = { version = "0.9" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
+tempfile           = { version = "3.12" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
