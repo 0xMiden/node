@@ -3301,6 +3301,7 @@ dependencies = [
  "miette",
  "proptest",
  "prost",
+ "prost-types",
  "thiserror 2.0.18",
  "tonic",
  "tonic-prost",

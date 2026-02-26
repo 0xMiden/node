@@ -38,6 +38,7 @@ build-rs               = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miette                 = { version = "7.6" }
+prost-types            = { workspace = true }
 tonic-prost-build      = { workspace = true }
 
 [package.metadata.cargo-machete]
