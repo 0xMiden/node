@@ -28,12 +28,12 @@ use tracing::{info, instrument};
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::queries::StorageMapValuesPage;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
     NullifiersPage,
     PublicAccountIdsPage,
 };
+use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
 use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
@@ -266,7 +266,7 @@ impl Db {
 
     /// Open a connection to the DB and apply any pending migrations.
     #[instrument(target = COMPONENT, skip_all)]
-    pub async fn load(database_filepath: PathBuf) -> Result<Self, miden_node_db::DatabaseError> {
+    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
         let db = miden_node_db::Db::new(&database_filepath)?;
         info!(
             target: COMPONENT,
@@ -354,6 +354,16 @@ impl Db {
     pub async fn select_all_block_headers(&self) -> Result<Vec<BlockHeader>> {
         self.transact("all block headers", |conn| {
             let raw = queries::select_all_block_headers(conn)?;
+            Ok(raw)
+        })
+        .await
+    }
+
+    /// Loads all the block headers from the DB.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
+        self.transact("all block headers", |conn| {
+            let raw = queries::select_all_block_header_commitments(conn)?;
             Ok(raw)
         })
         .await

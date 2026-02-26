@@ -37,5 +37,4 @@ url                       = { workspace = true }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 
 [dev-dependencies]
-figment          = { features = ["env", "test", "toml"], version = "0.10" }
 miden-node-utils = { features = ["tracing-forest"], workspace = true }

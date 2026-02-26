@@ -86,7 +86,6 @@ impl KmsSigner {
     }
 }
 
-#[async_trait::async_trait]
 impl BlockSigner for KmsSigner {
     type Error = KmsSignerError;
 
