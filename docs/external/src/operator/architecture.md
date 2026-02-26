@@ -58,3 +58,7 @@ Internally, the builder spawns a dedicated actor for each network account that h
 idle (no notes to consume) for a configurable duration are automatically deactivated to conserve resources, and are
 re-activated when new notes arrive. The idle timeout can be tuned with the `--ntx-builder.idle-timeout` CLI
 argument (default: 5 minutes).
+
+Accounts whose actors crash repeatedly (due to database errors) are automatically blacklisted after a configurable
+number of failures, preventing resource exhaustion. The threshold can be set with
+`--ntx-builder.max-actor-crashes` (default: 10).
