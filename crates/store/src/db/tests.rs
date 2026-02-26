@@ -1249,10 +1249,11 @@ fn select_storage_map_sync_values_for_network_account() {
     )
     .unwrap();
 
-    let page = queries::select_account_storage_map_values(
+    let page = queries::select_account_storage_map_values_paged(
         &mut conn,
         account_id,
         BlockNumber::GENESIS..=block_num,
+        1024,
     )
     .unwrap();
 
