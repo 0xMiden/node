@@ -3015,6 +3015,7 @@ dependencies = [
  "assert_matches",
  "build-rs",
  "fs-err",
+ "futures",
  "hex",
  "http 1.4.0",
  "miden-node-grpc-error-macro",

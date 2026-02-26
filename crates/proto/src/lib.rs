@@ -1,6 +1,7 @@
 pub mod clients;
 pub mod domain;
 pub mod errors;
+pub mod server;
 
 #[rustfmt::skip]
 pub mod generated;
