@@ -89,10 +89,9 @@ pub(crate) fn insert_transactions(
     block_num: BlockNumber,
     transactions: &OrderedTransactionHeaders,
 ) -> Result<usize, DatabaseError> {
-    #[expect(clippy::into_iter_on_ref)] // false positive
     let rows: Vec<_> = transactions
         .as_slice()
-        .into_iter()
+        .iter()
         .map(|tx| TransactionSummaryRowInsert::new(tx, block_num))
         .collect();
 

@@ -12,11 +12,12 @@ use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbStorage};
 use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
 use miden_protocol::block::nullifier_tree::NullifierTree;
-use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
+use miden_protocol::block::{BlockNumber, Blockchain};
 #[cfg(not(feature = "rocksdb"))]
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
@@ -27,6 +28,7 @@ use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::Db;
+use crate::db::models::queries::BlockHeaderCommitment;
 use crate::errors::{DatabaseError, StateInitializationError};
 use crate::inner_forest::InnerForest;
 
@@ -328,16 +330,13 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// Loads the blockchain MMR from all block headers in the database.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
-    let block_commitments: Vec<miden_protocol::Word> = db
-        .select_all_block_headers()
-        .await?
-        .iter()
-        .map(BlockHeader::commitment)
-        .collect();
+    let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX
     // entries.
-    let chain_mmr = Blockchain::from_mmr_unchecked(block_commitments.into());
+    let chain_mmr = Blockchain::from_mmr_unchecked(Mmr::from(
+        block_commitments.iter().copied().map(BlockHeaderCommitment::word),
+    ));
 
     Ok(chain_mmr)
 }
