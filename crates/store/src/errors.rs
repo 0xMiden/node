@@ -118,7 +118,7 @@ pub enum StateInitializationError {
     #[error("failed to load block store")]
     BlockStoreLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
-    DatabaseLoadError(#[from] miden_node_db::DatabaseError),
+    DatabaseLoadError(#[source] DatabaseError),
     #[error("inner forest error")]
     InnerForestError(#[from] InnerForestError),
     #[error(

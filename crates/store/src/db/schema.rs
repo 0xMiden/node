@@ -48,6 +48,7 @@ diesel::table! {
         block_num -> BigInt,
         block_header -> Binary,
         signature -> Binary,
+        commitment -> Binary,
     }
 }
 
