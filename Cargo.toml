@@ -99,7 +99,8 @@ pretty_assertions = { version = "1.4" }
 prost              = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
 rand               = { version = "0.9" }
-rand_chacha        = { version = "0.9" }
+rand_chacha        = { default-features = false, version = "0.9" }
+reqwest            = { version = "0.13" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
 tempfile           = { version = "3" }
@@ -107,7 +108,7 @@ thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
 tokio-util         = { version = "0.7" }
-toml               = { version = "0.9" }
+toml               = "1.0"
 tonic              = { default-features = false, version = "0.14" }
 tonic-health       = { version = "0.14" }
 tonic-prost        = { version = "0.14" }
