@@ -3117,7 +3117,6 @@ name = "miden-node-utils"
 version = "0.14.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "bytes",
  "figment",
  "http 1.4.0",

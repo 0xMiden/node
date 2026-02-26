@@ -11,17 +11,18 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signa
 ///
 /// Production-level implementations will involve some sort of secure remote backend. The trait also
 /// allows for testing with local and ephemeral signers.
-#[async_trait::async_trait]
 pub trait BlockSigner {
     type Error: error::Error + Send + Sync + 'static;
-    async fn sign(&self, header: &BlockHeader) -> Result<Signature, Self::Error>;
+    fn sign(
+        &self,
+        header: &BlockHeader,
+    ) -> impl Future<Output = Result<Signature, Self::Error>> + Send;
     fn public_key(&self) -> PublicKey;
 }
 
 // SECRET KEY BLOCK SIGNER
 // ================================================================================================
 
-#[async_trait::async_trait]
 impl BlockSigner for SecretKey {
     type Error = Infallible;
 
