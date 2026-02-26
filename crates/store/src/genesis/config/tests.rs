@@ -68,9 +68,9 @@ fn parsing_yields_expected_default_values() -> TestResult {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_accounts_have_nonce_one() -> TestResult {
+async fn genesis_accounts_have_nonce_one() -> TestResult {
     let gcfg = GenesisConfig::default();
     let (state, secrets) = gcfg.into_state(SecretKey::new()).unwrap();
     let mut iter = secrets.as_account_files(&state);
@@ -79,7 +79,7 @@ fn genesis_accounts_have_nonce_one() -> TestResult {
 
     assert_eq!(status_quo.account.nonce(), ONE);
 
-    let _block = state.into_block()?;
+    let _block = state.into_block().await?;
     Ok(())
 }
 
@@ -288,9 +288,9 @@ path = "does_not_exist.mac"
     );
 }
 
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn parsing_agglayer_sample_with_account_files() -> TestResult {
+async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     use miden_protocol::account::AccountType;
 
     // Use the actual sample file path since it references relative .mac files
@@ -350,7 +350,7 @@ fn parsing_agglayer_sample_with_account_files() -> TestResult {
     assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
 
     // Verify the genesis state can be converted to a block
-    let _block = state.into_block()?;
+    let _block = state.into_block().await?;
 
     Ok(())
 }
