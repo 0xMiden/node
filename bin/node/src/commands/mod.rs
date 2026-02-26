@@ -138,6 +138,13 @@ pub struct NtxBuilderConfig {
     )]
     pub idle_timeout: Duration,
 
+    /// Maximum number of crashes before an account actor is blacklisted.
+    ///
+    /// Once an actor for a given account exceeds this crash count, no new actor will be
+    /// spawned for that account.
+    #[arg(long = "ntx-builder.max-actor-crashes", default_value_t = 10, value_name = "NUM")]
+    pub max_actor_crashes: usize,
+
     /// Directory for the ntx-builder's persistent database.
     ///
     /// If not set, defaults to the node's data directory.
@@ -169,6 +176,7 @@ impl NtxBuilderConfig {
         .with_tx_prover_url(self.tx_prover_url)
         .with_script_cache_size(self.script_cache_size)
         .with_idle_timeout(self.idle_timeout)
+        .with_max_actor_crashes(self.max_actor_crashes)
     }
 }
 
