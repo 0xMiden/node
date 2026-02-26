@@ -81,7 +81,7 @@ impl<S: BlockSigner> GenesisState<S> {
 
                 Ok(BlockAccountUpdate::new(
                     account.id(),
-                    account.commitment(),
+                    account.to_commitment(),
                     account_update_details,
                 ))
             })

@@ -59,11 +59,8 @@ fn parsing_yields_expected_default_values() -> TestResult {
     });
 
     // check total issuance of the faucet
-    assert_eq!(
-        native_faucet.storage().get_item(AccountStorage::faucet_sysdata_slot()).unwrap()[3],
-        Felt::new(999_777),
-        "Issuance mismatch"
-    );
+    let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
+    assert_eq!(metadata.token_supply(), Felt::new(999_777), "Issuance mismatch");
 
     Ok(())
 }

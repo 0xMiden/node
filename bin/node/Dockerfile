@@ -1,4 +1,4 @@
-FROM rust:1.91-slim-bullseye AS chef
+FROM rust:1.91-slim-bookworm AS chef
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
     apt-get -y upgrade && \
