@@ -42,9 +42,10 @@ fn main() -> miette::Result<()> {
         .wrap_err("creating server destination folder")?;
 
     generate_server_modules(&descriptor_sets, &server_dst_dir)?;
-    generate_mod_rs(dst_dir)
+    generate_mod_rs(&server_dst_dir)
         .into_diagnostic()
         .wrap_err("generating server mod.rs")?;
+    generate_mod_rs(dst_dir).into_diagnostic().wrap_err("generating mod.rs")?;
 
     Ok(())
 }
@@ -152,68 +153,20 @@ fn render_service_module(
     } else {
         format!("crate::generated::{package_module}")
     };
-    scope.import(&package_use, server_module);
+    add_server_imports(&mut scope, &package_use, server_module);
 
-    for import in [
-        "GrpcDecode",
-        "GrpcEncode",
-        "GrpcInterface",
-        "GrpcServerStream",
-        "GrpcUnary",
-        "handle_streaming",
-        "handle_unary",
-    ] {
-        scope.import("crate::server", import);
-    }
-
-    let mut unary_methods = Vec::new();
-    let mut streaming_methods = Vec::new();
-
-    for method in &service.method {
-        let method_name = method.name.as_deref().unwrap_or("Method");
-        let method_struct = format!("{method_name}Method");
-        let request_type = proto_type_to_rust_path(method.input_type.as_deref().unwrap_or(""));
-        let response_type = proto_type_to_rust_path(method.output_type.as_deref().unwrap_or(""));
-
-        if method.client_streaming() {
-            continue;
-        }
-
-        scope.new_struct(&method_struct).vis("pub");
-
-        let method_impl = scope.new_impl(&method_struct);
-        method_impl.impl_trait("GrpcInterface");
-        method_impl.associate_type("Request", request_type);
-        method_impl.associate_type("Response", response_type);
-
-        if method.server_streaming() {
-            streaming_methods.push((method_name.to_string(), method_struct));
-        } else {
-            unary_methods.push((method_name.to_string(), method_struct));
-        }
-    }
-
+    let (unary_methods, streaming_methods) = collect_methods(&mut scope, service);
     let service_trait_name = format!("{service_name}Service");
-    let mut trait_bounds = Vec::new();
-    for (_, method_struct) in &unary_methods {
-        trait_bounds.push(format!("GrpcUnary<{method_struct}>"));
-    }
-    for (_, method_struct) in &streaming_methods {
-        trait_bounds.push(format!("GrpcServerStream<{method_struct}>"));
-    }
+    let trait_bounds = build_trait_bounds(&unary_methods, &streaming_methods);
 
     let service_trait = scope.new_trait(&service_trait_name);
     service_trait.vis("pub");
-    for bound in &trait_bounds {
-        service_trait.parent(bound);
-    }
+    apply_trait_bounds(service_trait, &trait_bounds);
 
     let service_trait_impl = scope.new_impl("T");
     service_trait_impl.generic("T");
     service_trait_impl.impl_trait(&service_trait_name);
-    for bound in &trait_bounds {
-        service_trait_impl.bound("T", bound);
-    }
+    apply_trait_impl_bounds(service_trait_impl, &trait_bounds);
 
     let service_impl = scope.new_impl("T");
     service_impl.generic("T");
@@ -221,101 +174,11 @@ fn render_service_module(
     service_impl.r#macro("#[tonic::async_trait]");
     service_impl.bound("T", &service_trait_name);
 
-    for (method_name, method_struct) in &unary_methods {
-        let request_type = proto_type_to_rust_path(
-            service
-                .method
-                .iter()
-                .find(|m| m.name.as_deref() == Some(method_name))
-                .and_then(|m| m.input_type.as_deref())
-                .unwrap_or(""),
-        );
-        let response_type = proto_type_to_rust_path(
-            service
-                .method
-                .iter()
-                .find(|m| m.name.as_deref() == Some(method_name))
-                .and_then(|m| m.output_type.as_deref())
-                .unwrap_or(""),
-        );
-
-        service_impl
-            .bound(request_type, format!("GrpcDecode<<T as GrpcUnary<{method_struct}>>::Input>"));
-        service_impl.bound(
-            format!("<T as GrpcUnary<{method_struct}>>::Output"),
-            format!("GrpcEncode<{response_type}>"),
-        );
-    }
-
-    for (method_name, method_struct) in &streaming_methods {
-        let request_type = proto_type_to_rust_path(
-            service
-                .method
-                .iter()
-                .find(|m| m.name.as_deref() == Some(method_name))
-                .and_then(|m| m.input_type.as_deref())
-                .unwrap_or(""),
-        );
-        service_impl.bound(
-            request_type,
-            format!("GrpcDecode<<T as GrpcServerStream<{method_struct}>>::Input>"),
-        );
-    }
-
-    for (method_name, method_struct) in &streaming_methods {
-        let stream_name = format!("{method_name}Stream");
-        service_impl.associate_type(
-            stream_name,
-            format!("<T as GrpcServerStream<{method_struct}>>::Stream"),
-        );
-    }
-
-    for (method_name, method_struct) in &unary_methods {
-        let method_fn = to_snake_case(method_name);
-        let request_type = proto_type_to_rust_path(
-            service
-                .method
-                .iter()
-                .find(|m| m.name.as_deref() == Some(method_name))
-                .and_then(|m| m.input_type.as_deref())
-                .unwrap_or(""),
-        );
-        let response_type = proto_type_to_rust_path(
-            service
-                .method
-                .iter()
-                .find(|m| m.name.as_deref() == Some(method_name))
-                .and_then(|m| m.output_type.as_deref())
-                .unwrap_or(""),
-        );
-
-        let func = service_impl.new_fn(method_fn);
-        func.set_async(true);
-        func.arg_ref_self();
-        func.arg("request", format!("Request<{request_type}>"));
-        func.ret(format!("Result<Response<{response_type}>, Status>"));
-        func.line(format!("handle_unary::<{method_struct}, _>(self, request).await"));
-    }
-
-    for (method_name, method_struct) in &streaming_methods {
-        let method_fn = to_snake_case(method_name);
-        let request_type = proto_type_to_rust_path(
-            service
-                .method
-                .iter()
-                .find(|m| m.name.as_deref() == Some(method_name))
-                .and_then(|m| m.input_type.as_deref())
-                .unwrap_or(""),
-        );
-        let stream_name = format!("{method_name}Stream");
-
-        let func = service_impl.new_fn(method_fn);
-        func.set_async(true);
-        func.arg_ref_self();
-        func.arg("request", format!("Request<{request_type}>"));
-        func.ret(format!("Result<Response<Self::{stream_name}>, Status>"));
-        func.line(format!("handle_streaming::<{method_struct}, _>(self, request).await"));
-    }
+    add_unary_bounds(service_impl, service, &unary_methods);
+    add_streaming_bounds(service_impl, service, &streaming_methods);
+    add_streaming_assoc_types(service_impl, &streaming_methods);
+    add_unary_methods(service_impl, service, &unary_methods);
+    add_streaming_methods(service_impl, service, &streaming_methods);
 
     let server_struct = scope.new_struct(format!("{service_name}Server"));
     server_struct.vis("pub");
@@ -395,6 +258,187 @@ fn render_service_module(
     );
 
     scope
+}
+
+fn add_server_imports(scope: &mut Scope, package_use: &str, server_module: &str) {
+    scope.import(package_use, server_module);
+
+    for import in [
+        "GrpcDecode",
+        "GrpcEncode",
+        "GrpcInterface",
+        "GrpcServerStream",
+        "GrpcUnary",
+        "handle_streaming",
+        "handle_unary",
+    ] {
+        scope.import("crate::server", import);
+    }
+}
+
+fn collect_methods(
+    scope: &mut Scope,
+    service: &prost_types::ServiceDescriptorProto,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let mut unary_methods = Vec::new();
+    let mut streaming_methods = Vec::new();
+
+    for method in &service.method {
+        let method_name = method.name.as_deref().unwrap_or("Method");
+        let method_struct = format!("{method_name}Method");
+        let request_type = proto_type_to_rust_path(method.input_type.as_deref().unwrap_or(""));
+        let response_type = proto_type_to_rust_path(method.output_type.as_deref().unwrap_or(""));
+
+        if method.client_streaming() {
+            continue;
+        }
+
+        scope.new_struct(&method_struct).vis("pub");
+
+        let method_impl = scope.new_impl(&method_struct);
+        method_impl.impl_trait("GrpcInterface");
+        method_impl.associate_type("Request", request_type);
+        method_impl.associate_type("Response", response_type);
+
+        if method.server_streaming() {
+            streaming_methods.push((method_name.to_string(), method_struct));
+        } else {
+            unary_methods.push((method_name.to_string(), method_struct));
+        }
+    }
+
+    (unary_methods, streaming_methods)
+}
+
+fn build_trait_bounds(
+    unary_methods: &[(String, String)],
+    streaming_methods: &[(String, String)],
+) -> Vec<String> {
+    let mut trait_bounds = Vec::new();
+    for (_, method_struct) in unary_methods {
+        trait_bounds.push(format!("GrpcUnary<{method_struct}>"));
+    }
+    for (_, method_struct) in streaming_methods {
+        trait_bounds.push(format!("GrpcServerStream<{method_struct}>"));
+    }
+    trait_bounds
+}
+
+fn apply_trait_bounds(service_trait: &mut codegen::Trait, trait_bounds: &[String]) {
+    for bound in trait_bounds {
+        service_trait.parent(bound);
+    }
+}
+
+fn apply_trait_impl_bounds(service_trait_impl: &mut codegen::Impl, trait_bounds: &[String]) {
+    for bound in trait_bounds {
+        service_trait_impl.bound("T", bound);
+    }
+}
+
+fn add_unary_bounds(
+    service_impl: &mut codegen::Impl,
+    service: &prost_types::ServiceDescriptorProto,
+    unary_methods: &[(String, String)],
+) {
+    for (method_name, method_struct) in unary_methods {
+        let (request_type, response_type) = method_types(service, method_name);
+
+        service_impl
+            .bound(request_type, format!("GrpcDecode<<T as GrpcUnary<{method_struct}>>::Input>"));
+        service_impl.bound(
+            format!("<T as GrpcUnary<{method_struct}>>::Output"),
+            format!("GrpcEncode<{response_type}>"),
+        );
+    }
+}
+
+fn add_streaming_bounds(
+    service_impl: &mut codegen::Impl,
+    service: &prost_types::ServiceDescriptorProto,
+    streaming_methods: &[(String, String)],
+) {
+    for (method_name, method_struct) in streaming_methods {
+        let (request_type, _) = method_types(service, method_name);
+        service_impl.bound(
+            request_type,
+            format!("GrpcDecode<<T as GrpcServerStream<{method_struct}>>::Input>"),
+        );
+    }
+}
+
+fn add_streaming_assoc_types(
+    service_impl: &mut codegen::Impl,
+    streaming_methods: &[(String, String)],
+) {
+    for (method_name, method_struct) in streaming_methods {
+        let stream_name = format!("{method_name}Stream");
+        service_impl.associate_type(
+            stream_name,
+            format!("<T as GrpcServerStream<{method_struct}>>::Stream"),
+        );
+    }
+}
+
+fn add_unary_methods(
+    service_impl: &mut codegen::Impl,
+    service: &prost_types::ServiceDescriptorProto,
+    unary_methods: &[(String, String)],
+) {
+    for (method_name, method_struct) in unary_methods {
+        let method_fn = to_snake_case(method_name);
+        let (request_type, response_type) = method_types(service, method_name);
+
+        let func = service_impl.new_fn(method_fn);
+        func.set_async(true);
+        func.arg_ref_self();
+        func.arg("request", format!("Request<{request_type}>"));
+        func.ret(format!("Result<Response<{response_type}>, Status>"));
+        func.line(format!("handle_unary::<{method_struct}, _>(self, request).await"));
+    }
+}
+
+fn add_streaming_methods(
+    service_impl: &mut codegen::Impl,
+    service: &prost_types::ServiceDescriptorProto,
+    streaming_methods: &[(String, String)],
+) {
+    for (method_name, method_struct) in streaming_methods {
+        let method_fn = to_snake_case(method_name);
+        let (request_type, _) = method_types(service, method_name);
+        let stream_name = format!("{method_name}Stream");
+
+        let func = service_impl.new_fn(method_fn);
+        func.set_async(true);
+        func.arg_ref_self();
+        func.arg("request", format!("Request<{request_type}>"));
+        func.ret(format!("Result<Response<Self::{stream_name}>, Status>"));
+        func.line(format!("handle_streaming::<{method_struct}, _>(self, request).await"));
+    }
+}
+
+fn method_types(
+    service: &prost_types::ServiceDescriptorProto,
+    method_name: &str,
+) -> (String, String) {
+    let request_type = proto_type_to_rust_path(
+        service
+            .method
+            .iter()
+            .find(|m| m.name.as_deref() == Some(method_name))
+            .and_then(|m| m.input_type.as_deref())
+            .unwrap_or(""),
+    );
+    let response_type = proto_type_to_rust_path(
+        service
+            .method
+            .iter()
+            .find(|m| m.name.as_deref() == Some(method_name))
+            .and_then(|m| m.output_type.as_deref())
+            .unwrap_or(""),
+    );
+
+    (request_type, response_type)
 }
 
 fn service_module_name(package: &str, service: &str) -> String {
