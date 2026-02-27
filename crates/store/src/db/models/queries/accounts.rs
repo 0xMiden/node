@@ -19,12 +19,10 @@ use diesel::{
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
-use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
     AccountCode,
-    AccountDelta,
     AccountId,
     AccountStorage,
     AccountStorageHeader,
@@ -38,6 +36,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::{Felt, Word};
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
@@ -52,10 +51,21 @@ pub(crate) use at_block::{
     select_account_vault_at_block,
 };
 
+mod delta;
+use delta::{
+    AccountStateForInsert,
+    PartialAccountState,
+    apply_storage_delta,
+    select_minimal_account_state_headers,
+    select_vault_balances_by_faucet_ids,
+};
+
 #[cfg(test)]
 mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
+type StorageHeaderWithEntries =
+    (AccountStorageHeader, BTreeMap<StorageSlotName, BTreeMap<Word, Word>>);
 
 // NETWORK ACCOUNT TYPE
 // ================================================================================================
@@ -162,7 +172,7 @@ pub(crate) fn select_account(
 /// `State` which contains an `SmtForest` to serve the latest and most recent
 /// historical data.
 // TODO: remove eventually once refactoring is complete
-fn select_full_account(
+pub(crate) fn select_full_account(
     conn: &mut SqliteConnection,
     account_id: AccountId,
 ) -> Result<Account, DatabaseError> {
@@ -738,12 +748,41 @@ pub(crate) fn select_account_storage_map_values(
 /// Select latest account storage by querying `accounts.storage_header` where `is_latest=true`
 /// and reconstructing full storage from the header plus map values from
 /// `account_storage_map_values`.
+///
+/// Attention: For large accounts it is prohibitively expensive!
 pub(crate) fn select_latest_account_storage(
     conn: &mut SqliteConnection,
     account_id: AccountId,
 ) -> Result<AccountStorage, DatabaseError> {
-    use schema::account_storage_map_values as t;
+    let (storage_header, map_entries_by_slot) =
+        select_latest_account_storage_components(conn, account_id)?;
+    // Reconstruct StorageSlots from header slots + map entries
+    let slots =
+        Result::<Vec<_>, DatabaseError>::from_iter(storage_header.slots().map(|slot_header| {
+            let slot = match slot_header.slot_type() {
+                StorageSlotType::Value => {
+                    // For value slots, the header value IS the slot value
+                    StorageSlot::with_value(slot_header.name().clone(), slot_header.value())
+                },
+                StorageSlotType::Map => {
+                    // For map slots, reconstruct from map entries
+                    let entries =
+                        map_entries_by_slot.get(slot_header.name()).cloned().unwrap_or_default();
+                    let storage_map = StorageMap::with_entries(entries.into_iter())?;
+                    StorageSlot::with_map(slot_header.name().clone(), storage_map)
+                },
+            };
+            Ok(slot)
+        }))?;
 
+    Ok(AccountStorage::new(slots)?)
+}
+
+/// Fetch account storage header and all storage maps
+pub(crate) fn select_latest_account_storage_components(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+) -> Result<StorageHeaderWithEntries, DatabaseError> {
     let account_id_bytes = account_id.to_bytes();
 
     // Query storage header blob for this account where is_latest = true
@@ -755,51 +794,95 @@ pub(crate) fn select_latest_account_storage(
             .optional()?
             .flatten();
 
-    let Some(blob) = storage_blob else {
-        // No storage means empty storage
-        return Ok(AccountStorage::new(Vec::new())?);
+    let header = match storage_blob {
+        Some(blob) => AccountStorageHeader::read_from_bytes(&blob)?,
+        None => AccountStorageHeader::new(Vec::new())?,
     };
 
-    // Deserialize the AccountStorageHeader from the blob
-    let header = AccountStorageHeader::read_from_bytes(&blob)?;
+    let entries = select_latest_storage_map_entries_all(conn, &account_id)?;
+    Ok((header, entries))
+}
 
-    // Query all latest map values for this account
+// TODO this is expensive and should only be called from tests
+fn select_latest_storage_map_entries_all(
+    conn: &mut SqliteConnection,
+    account_id: &AccountId,
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
         SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
-            .filter(t::account_id.eq(&account_id_bytes))
+            .filter(t::account_id.eq(&account_id.to_bytes()))
             .filter(t::is_latest.eq(true))
             .load(conn)?;
 
-    // Group map values by slot name
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+    group_storage_map_entries(map_values)
+}
+
+fn select_latest_storage_map_entries_for_slots(
+    conn: &mut SqliteConnection,
+    account_id: &AccountId,
+    slot_names: &[StorageSlotName],
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
+    if slot_names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    if let [slot_name] = slot_names {
+        let entries = select_latest_storage_map_entries_for_slot(conn, account_id, slot_name)?;
+        if entries.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut map_entries = BTreeMap::new();
+        map_entries.insert(slot_name.clone(), entries);
+        return Ok(map_entries);
+    }
+
+    let slot_names = Vec::from_iter(slot_names.iter().cloned().map(StorageSlotName::to_raw_sql));
+    let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
+        SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
+            .filter(t::account_id.eq(&account_id.to_bytes()))
+            .filter(t::is_latest.eq(true))
+            .filter(t::slot_name.eq_any(slot_names))
+            .load(conn)?;
+
+    group_storage_map_entries(map_values)
+}
+
+fn select_latest_storage_map_entries_for_slot(
+    conn: &mut SqliteConnection,
+    account_id: &AccountId,
+    slot_name: &StorageSlotName,
+) -> Result<BTreeMap<Word, Word>, DatabaseError> {
+    use schema::account_storage_map_values as t;
+
+    let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
+        SelectDsl::select(t::table, (t::slot_name, t::key, t::value))
+            .filter(t::account_id.eq(&account_id.to_bytes()))
+            .filter(t::is_latest.eq(true))
+            .filter(t::slot_name.eq(slot_name.clone().to_raw_sql()))
+            .load(conn)?;
+
+    Ok(group_storage_map_entries(map_values)?.remove(slot_name).unwrap_or_default())
+}
+
+fn group_storage_map_entries(
+    map_values: Vec<(String, Vec<u8>, Vec<u8>)>,
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, BTreeMap<Word, Word>> = BTreeMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
         let key = Word::read_from_bytes(&key_bytes)?;
         let value = Word::read_from_bytes(&value_bytes)?;
-        map_entries_by_slot.entry(slot_name).or_default().push((key, value));
+        map_entries_by_slot.entry(slot_name).or_default().insert(key, value);
     }
 
-    // Reconstruct StorageSlots from header slots + map entries
-    let mut slots = Vec::new();
-    for slot_header in header.slots() {
-        let slot = match slot_header.slot_type() {
-            StorageSlotType::Value => {
-                // For value slots, the header value IS the slot value
-                StorageSlot::with_value(slot_header.name().clone(), slot_header.value())
-            },
-            StorageSlotType::Map => {
-                // For map slots, reconstruct from map entries
-                let entries = map_entries_by_slot.remove(slot_header.name()).unwrap_or_default();
-                let storage_map = StorageMap::with_entries(entries)?;
-                StorageSlot::with_map(slot_header.name().clone(), storage_map)
-            },
-        };
-        slots.push(slot);
-    }
-
-    Ok(AccountStorage::new(slots)?)
+    Ok(map_entries_by_slot)
 }
 
 // ACCOUNT MUTATION
@@ -940,8 +1023,171 @@ pub(crate) fn insert_account_storage_map_value(
     Ok(update_count + insert_count)
 }
 
+type PendingStorageInserts = Vec<(AccountId, StorageSlotName, Word, Word)>;
+type PendingAssetInserts = Vec<(AccountId, AssetVaultKey, Option<Asset>)>;
+
+fn prepare_full_account_update(
+    update: &BlockAccountUpdate,
+    account: Account,
+) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
+    let account_id = account.id();
+
+    // sanity check the commitment of account matches the final state commitment
+    if account.to_commitment() != update.final_state_commitment() {
+        return Err(DatabaseError::AccountCommitmentsMismatch {
+            calculated: account.to_commitment(),
+            expected: update.final_state_commitment(),
+        });
+    }
+
+    // collect storage-map inserts to apply after account upsert
+    let mut storage = Vec::new();
+    for slot in account.storage().slots() {
+        if let StorageSlotContent::Map(storage_map) = slot.content() {
+            for (key, value) in storage_map.entries() {
+                storage.push((account_id, slot.name().clone(), *key, *value));
+            }
+        }
+    }
+
+    // collect vault-asset inserts to apply after account upsert
+    let mut assets = Vec::new();
+    for asset in account.vault().assets() {
+        // Only insert assets with non-zero values for fungible assets
+        let should_insert = match asset {
+            Asset::Fungible(fungible) => fungible.amount() > 0,
+            Asset::NonFungible(_) => true,
+        };
+        if should_insert {
+            assets.push((account_id, asset.vault_key(), Some(asset)));
+        }
+    }
+
+    Ok((AccountStateForInsert::FullAccount(account), storage, assets))
+}
+
+fn prepare_partial_account_update(
+    conn: &mut SqliteConnection,
+    update: &BlockAccountUpdate,
+    account_id: AccountId,
+    delta: &miden_protocol::account::delta::AccountDelta,
+    block_num: BlockNumber,
+) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
+    // Load only the minimal data needed. Only load those storage map entries and vault
+    // entries that will receive updates.
+    // The next line fetches the header, which will always change with the exception of
+    // an empty delta.
+    let state_headers = select_minimal_account_state_headers(conn, account_id)?;
+
+    // --- process asset updates ----------------------------------
+    // Only query balances for faucet_ids that are being updated
+    let faucet_ids =
+        Vec::from_iter(delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id));
+    let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
+
+    // encode `Some` as update, `None` as removal
+    let mut assets = Vec::new();
+
+    // update fungible assets
+    for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
+        let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
+        let amount_abs = amount_delta.unsigned_abs();
+        let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
+        let new_balance = if *amount_delta < 0 {
+            prev_asset.sub(delta)?
+        } else {
+            prev_asset.add(delta)?
+        };
+        let update_or_remove = if new_balance.amount() == 0 {
+            None
+        } else {
+            Some(Asset::from(new_balance))
+        };
+        assets.push((account_id, new_balance.vault_key(), update_or_remove));
+    }
+
+    // update non-fungible assets
+    for (asset, delta_action) in delta.vault().non_fungible().iter() {
+        let asset_update = match delta_action {
+            NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
+            NonFungibleDeltaAction::Remove => None,
+        };
+        assets.push((account_id, asset.vault_key(), asset_update));
+    }
+
+    // --- collect storage map updates ----------------------------
+
+    let mut storage = Vec::new();
+    for (slot_name, map_delta) in delta.storage().maps() {
+        for (key, value) in map_delta.entries() {
+            storage.push((account_id, slot_name.clone(), (*key).into(), *value));
+        }
+    }
+
+    // first collect entries that have associated changes
+    let slot_names = Vec::from_iter(delta.storage().maps().filter_map(|(slot_name, map_delta)| {
+        if map_delta.is_empty() {
+            None
+        } else {
+            Some(slot_name.clone())
+        }
+    }));
+
+    let map_entries = select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
+
+    // apply the delta storage to the given storage header
+    let new_storage_header =
+        apply_storage_delta(&state_headers.storage_header, delta.storage(), &map_entries)?;
+
+    // --- update the vault root by constructing the asset vault from DB
+    let new_vault_root = {
+        let (_last_block, assets) =
+            select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
+        let assets: Vec<Asset> = assets.into_iter().filter_map(|entry| entry.asset).collect();
+        let mut vault = AssetVault::new(&assets)?;
+        vault.apply_delta(delta.vault())?;
+        vault.root()
+    };
+
+    // --- compute updated account state for the accounts row ---
+    // Apply nonce delta
+    let new_nonce_value = state_headers
+        .nonce
+        .as_int()
+        .checked_add(delta.nonce_delta().as_int())
+        .ok_or_else(|| {
+            DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
+        })?;
+    let new_nonce = Felt::new(new_nonce_value);
+
+    // Create minimal account state data for the row insert
+    let account_state = PartialAccountState {
+        nonce: new_nonce,
+        code_commitment: state_headers.code_commitment,
+        storage_header: new_storage_header,
+        vault_root: new_vault_root,
+    };
+
+    let account_header = miden_protocol::account::AccountHeader::new(
+        account_id,
+        account_state.nonce,
+        account_state.vault_root,
+        account_state.storage_header.to_commitment(),
+        account_state.code_commitment,
+    );
+
+    if account_header.to_commitment() != update.final_state_commitment() {
+        return Err(DatabaseError::AccountCommitmentsMismatch {
+            calculated: account_header.to_commitment(),
+            expected: update.final_state_commitment(),
+        });
+    }
+
+    Ok((AccountStateForInsert::PartialState(account_state), storage, assets))
+}
+
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -965,7 +1211,7 @@ pub(crate) fn upsert_accounts(
         };
 
         // Preserve the original creation block when updating existing accounts.
-        let created_at_block = QueryDsl::select(
+        let created_at_block_raw = QueryDsl::select(
             schema::accounts::table.filter(
                 schema::accounts::account_id
                     .eq(&account_id_bytes)
@@ -977,95 +1223,34 @@ pub(crate) fn upsert_accounts(
         .optional()
         .map_err(DatabaseError::Diesel)?
         .unwrap_or(block_num_raw);
+        let created_at_block = BlockNumber::from_raw_sql(created_at_block_raw)?;
 
-        // NOTE: we collect storage / asset inserts to apply them only after the  account row is
-        // written. The storage and vault tables have FKs pointing to `accounts (account_id,
+        // NOTE: we collect storage / asset inserts to apply them only after the account row is
+        // written. The storage and vault tables have FKs pointing to accounts `(account_id,
         // block_num)`, so inserting them earlier would violate those constraints when inserting a
         // brand-new account.
-        let (full_account, pending_storage_inserts, pending_asset_inserts) = match update.details()
+        let (account_state, pending_storage_inserts, pending_asset_inserts) = match update.details()
         {
-            AccountUpdateDetails::Private => (None, vec![], vec![]),
+            AccountUpdateDetails::Private => (AccountStateForInsert::Private, vec![], vec![]),
 
+            // New account is always a full account, but also comes as an update
             AccountUpdateDetails::Delta(delta) if delta.is_full_state() => {
-                let account = Account::try_from(delta)?;
+                let account = Account::try_from(delta)
+                    .expect("Delta to full account always works for full state deltas");
                 debug_assert_eq!(account_id, account.id());
 
-                if account.to_commitment() != update.final_state_commitment() {
-                    return Err(DatabaseError::AccountCommitmentsMismatch {
-                        calculated: account.to_commitment(),
-                        expected: update.final_state_commitment(),
-                    });
-                }
-
-                // collect storage-map inserts to apply after account upsert
-                let mut storage = Vec::new();
-                for slot in account.storage().slots() {
-                    if let StorageSlotContent::Map(storage_map) = slot.content() {
-                        for (key, value) in storage_map.entries() {
-                            storage.push((account_id, slot.name().clone(), *key, *value));
-                        }
-                    }
-                }
-
-                // collect vault-asset inserts to apply after account upsert
-                let mut assets = Vec::new();
-                for asset in account.vault().assets() {
-                    // Only insert assets with non-zero values for fungible assets
-                    let should_insert = match asset {
-                        Asset::Fungible(fungible) => fungible.amount() > 0,
-                        Asset::NonFungible(_) => true,
-                    };
-                    if should_insert {
-                        assets.push((account_id, asset.vault_key(), Some(asset)));
-                    }
-                }
-
-                (Some(account), storage, assets)
+                prepare_full_account_update(update, account)?
             },
 
+            // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                // Reconstruct the full account from database tables
-                let account = select_full_account(conn, account_id)?;
-
-                // --- collect storage map updates ----------------------------
-
-                let mut storage = Vec::new();
-                for (slot_name, map_delta) in delta.storage().maps() {
-                    for (key, value) in map_delta.entries() {
-                        storage.push((account_id, slot_name.clone(), (*key).into(), *value));
-                    }
-                }
-
-                // apply delta to the account; we need to do this before we process asset updates
-                // because we currently need to get the current value of fungible assets from the
-                // account
-                let account_after = apply_delta(account, delta, &update.final_state_commitment())?;
-
-                // --- process asset updates ----------------------------------
-
-                let mut assets = Vec::new();
-
-                for (faucet_id, _) in delta.vault().fungible().iter() {
-                    let current_amount = account_after.vault().get_balance(*faucet_id).unwrap();
-                    let asset: Asset = FungibleAsset::new(*faucet_id, current_amount)?.into();
-                    let update_or_remove = if current_amount == 0 { None } else { Some(asset) };
-
-                    assets.push((account_id, asset.vault_key(), update_or_remove));
-                }
-
-                for (asset, delta_action) in delta.vault().non_fungible().iter() {
-                    let asset_update = match delta_action {
-                        NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
-                        NonFungibleDeltaAction::Remove => None,
-                    };
-                    assets.push((account_id, asset.vault_key(), asset_update));
-                }
-
-                (Some(account_after), storage, assets)
+                prepare_partial_account_update(conn, update, account_id, delta, block_num)?
             },
         };
 
-        if let Some(code) = full_account.as_ref().map(Account::code) {
+        // Insert account _code_ for full accounts (new account creation)
+        if let AccountStateForInsert::FullAccount(ref account) = account_state {
+            let code = account.code();
             let code_value = AccountCodeRowInsert {
                 code_commitment: code.commitment().to_bytes(),
                 code: code.to_bytes(),
@@ -1087,22 +1272,30 @@ pub(crate) fn upsert_accounts(
             .set(schema::accounts::is_latest.eq(false))
             .execute(conn)?;
 
-        let account_value = AccountRowInsert {
-            account_id: account_id_bytes,
-            network_account_type: network_account_type.to_raw_sql(),
-            account_commitment: update.final_state_commitment().to_bytes(),
-            block_num: block_num_raw,
-            nonce: full_account.as_ref().map(|account| nonce_to_raw_sql(account.nonce())),
-            code_commitment: full_account
-                .as_ref()
-                .map(|account| account.code().commitment().to_bytes()),
-            // Store only the header (slot metadata + map roots), not full storage with map contents
-            storage_header: full_account
-                .as_ref()
-                .map(|account| account.storage().to_header().to_bytes()),
-            vault_root: full_account.as_ref().map(|account| account.vault().root().to_bytes()),
-            is_latest: true,
-            created_at_block,
+        let account_value = match &account_state {
+            AccountStateForInsert::Private => AccountRowInsert::new_private(
+                account_id,
+                network_account_type,
+                update.final_state_commitment(),
+                block_num,
+                created_at_block,
+            ),
+            AccountStateForInsert::FullAccount(account) => AccountRowInsert::new_from_account(
+                account_id,
+                network_account_type,
+                update.final_state_commitment(),
+                block_num,
+                created_at_block,
+                account,
+            ),
+            AccountStateForInsert::PartialState(state) => AccountRowInsert::new_from_partial(
+                account_id,
+                network_account_type,
+                update.final_state_commitment(),
+                block_num,
+                created_at_block,
+                state,
+            ),
         };
 
         diesel::insert_into(schema::accounts::table)
@@ -1113,6 +1306,7 @@ pub(crate) fn upsert_accounts(
             .execute(conn)?;
 
         // insert pending storage map entries
+        // TODO consider batching
         for (acc_id, slot_name, key, value) in pending_storage_inserts {
             insert_account_storage_map_value(conn, acc_id, block_num, slot_name, key, value)?;
         }
@@ -1125,25 +1319,6 @@ pub(crate) fn upsert_accounts(
     }
 
     Ok(count)
-}
-
-/// Deserializes account and applies account delta.
-pub(crate) fn apply_delta(
-    mut account: Account,
-    delta: &AccountDelta,
-    final_state_commitment: &Word,
-) -> crate::db::Result<Account, DatabaseError> {
-    account.apply_delta(delta)?;
-
-    let actual_commitment = account.to_commitment();
-    if &actual_commitment != final_state_commitment {
-        return Err(DatabaseError::AccountCommitmentsMismatch {
-            calculated: actual_commitment,
-            expected: *final_state_commitment,
-        });
-    }
-
-    Ok(account)
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -1166,6 +1341,76 @@ pub(crate) struct AccountRowInsert {
     pub(crate) vault_root: Option<Vec<u8>>,
     pub(crate) is_latest: bool,
     pub(crate) created_at_block: i64,
+}
+
+impl AccountRowInsert {
+    /// Creates an insert row for a private account (no public state).
+    fn new_private(
+        account_id: AccountId,
+        network_account_type: NetworkAccountType,
+        account_commitment: Word,
+        block_num: BlockNumber,
+        created_at_block: BlockNumber,
+    ) -> Self {
+        Self {
+            account_id: account_id.to_bytes(),
+            network_account_type: network_account_type.to_raw_sql(),
+            account_commitment: account_commitment.to_bytes(),
+            block_num: block_num.to_raw_sql(),
+            nonce: None,
+            code_commitment: None,
+            storage_header: None,
+            vault_root: None,
+            is_latest: true,
+            created_at_block: created_at_block.to_raw_sql(),
+        }
+    }
+
+    /// Creates an insert row from a full account (new account creation).
+    fn new_from_account(
+        account_id: AccountId,
+        network_account_type: NetworkAccountType,
+        account_commitment: Word,
+        block_num: BlockNumber,
+        created_at_block: BlockNumber,
+        account: &Account,
+    ) -> Self {
+        Self {
+            account_id: account_id.to_bytes(),
+            network_account_type: network_account_type.to_raw_sql(),
+            account_commitment: account_commitment.to_bytes(),
+            block_num: block_num.to_raw_sql(),
+            nonce: Some(nonce_to_raw_sql(account.nonce())),
+            code_commitment: Some(account.code().commitment().to_bytes()),
+            storage_header: Some(account.storage().to_header().to_bytes()),
+            vault_root: Some(account.vault().root().to_bytes()),
+            is_latest: true,
+            created_at_block: created_at_block.to_raw_sql(),
+        }
+    }
+
+    /// Creates an insert row from a partial account state (delta update).
+    fn new_from_partial(
+        account_id: AccountId,
+        network_account_type: NetworkAccountType,
+        account_commitment: Word,
+        block_num: BlockNumber,
+        created_at_block: BlockNumber,
+        state: &PartialAccountState,
+    ) -> Self {
+        Self {
+            account_id: account_id.to_bytes(),
+            network_account_type: network_account_type.to_raw_sql(),
+            account_commitment: account_commitment.to_bytes(),
+            block_num: block_num.to_raw_sql(),
+            nonce: Some(nonce_to_raw_sql(state.nonce)),
+            code_commitment: Some(state.code_commitment.to_bytes()),
+            storage_header: Some(state.storage_header.to_bytes()),
+            vault_root: Some(state.vault_root.to_bytes()),
+            is_latest: true,
+            created_at_block: created_at_block.to_raw_sql(),
+        }
+    }
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]

@@ -2429,13 +2429,12 @@ fn db_roundtrip_transactions() {
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
 
-    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
-        .unwrap();
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
 
     // Build two transaction headers with distinct data
-    let tx1 = mock_block_transaction(account_id, 1);
-    let tx2 = mock_block_transaction(account_id, 2);
+    let tx1 = mock_block_transaction(bob, 1);
+    let tx2 = mock_block_transaction(bob, 2);
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx1.clone(), tx2.clone()]);
 
     // Insert
@@ -2443,12 +2442,9 @@ fn db_roundtrip_transactions() {
     assert_eq!(count, 2, "Should insert 2 transactions");
 
     // Retrieve
-    let (last_block, records) = queries::select_transactions_records(
-        &mut conn,
-        &[account_id],
-        BlockNumber::GENESIS..=block_num,
-    )
-    .unwrap();
+    let (last_block, records) =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
     assert_eq!(last_block, block_num, "Last block should match");
     assert_eq!(records.len(), 2, "Should retrieve 2 transactions");
 
@@ -2460,42 +2456,21 @@ fn db_roundtrip_transactions() {
             .iter()
             .find(|tx| tx.id() == record.transaction_id)
             .expect("Retrieved transaction should match one of the originals");
-        assert_eq!(
-            record.transaction_id,
-            original.id(),
-            "TransactionId DB roundtrip must be symmetric"
-        );
-        assert_eq!(
-            record.account_id,
-            original.account_id(),
-            "AccountId DB roundtrip must be symmetric"
-        );
-        assert_eq!(record.block_num, block_num, "Block number must match");
-        assert_eq!(
-            record.initial_state_commitment,
-            original.initial_state_commitment(),
-            "Initial state commitment DB roundtrip must be symmetric"
-        );
-        assert_eq!(
-            record.final_state_commitment,
-            original.final_state_commitment(),
-            "Final state commitment DB roundtrip must be symmetric"
-        );
+        // Asset symmetry
+        assert_eq!(record.transaction_id, original.id(),);
+        assert_eq!(record.account_id, original.account_id(),);
+        assert_eq!(record.block_num, block_num);
+        assert_eq!(record.initial_state_commitment, original.initial_state_commitment(),);
+        assert_eq!(record.final_state_commitment, original.final_state_commitment(),);
 
         // Input notes are stored as nullifiers only
         let expected_nullifiers: Vec<Nullifier> =
             original.input_notes().iter().map(InputNoteCommitment::nullifier).collect();
-        assert_eq!(
-            record.nullifiers, expected_nullifiers,
-            "Nullifiers (from input notes) DB roundtrip must be symmetric"
-        );
+        assert_eq!(record.nullifiers, expected_nullifiers,);
 
         // Output notes are stored as note IDs only
         let expected_note_ids: Vec<NoteId> =
             original.output_notes().iter().map(NoteHeader::id).collect();
-        assert_eq!(
-            record.output_notes, expected_note_ids,
-            "Output note IDs DB roundtrip must be symmetric"
-        );
+        assert_eq!(record.output_notes, expected_note_ids,);
     }
 }

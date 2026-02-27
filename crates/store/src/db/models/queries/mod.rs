@@ -48,6 +48,8 @@ pub(crate) use notes::*;
 
 /// Apply a new block to the state
 ///
+/// # Arguments
+///
 /// # Returns
 ///
 /// Number of records inserted and/or updated.
