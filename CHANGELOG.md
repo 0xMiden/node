@@ -25,7 +25,6 @@
 - Improved tracing span fields ([#1650](https://github.com/0xMiden/miden-node/pull/1650))
  - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/miden-node/pull/1662)).
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
-- Cleaned up RPC `api.rs` with section separators, method grouping, doc comments, and extracted duplicated decorator stripping logic ([#1713](https://github.com/0xMiden/miden-node/pull/1713)).
 
 ## v0.13.7 (2026-02-25)
 
