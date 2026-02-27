@@ -2736,8 +2736,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto"
-version = "0.19.6"
-source = "git+https://github.com/0xMiden/crypto.git?branch=bernhard-migrate-rocksdb-from-crypto#9224fe8ef0f9249d47f7904564d8f5ce6991b337"
+version = "0.19.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab800d547e4a09ed8f6306e6b8f51f4c26c4c4fc32c88be6f1be84392e6fa790"
 dependencies = [
  "blake3",
  "cc",
@@ -2769,8 +2770,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto-derive"
-version = "0.19.6"
-source = "git+https://github.com/0xMiden/crypto.git?branch=bernhard-migrate-rocksdb-from-crypto#9224fe8ef0f9249d47f7904564d8f5ce6991b337"
+version = "0.19.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccd9786df82cf7bdb93bb64330a0c5644c07478a57250e19018518a598c80367"
 dependencies = [
  "quote",
  "syn 2.0.114",

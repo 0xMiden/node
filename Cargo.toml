@@ -82,7 +82,7 @@ miden-testing         = { branch = "next", git = "https://github.com/0xMiden/mid
 miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
 miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
 
-miden-crypto = { version = "0.19.6" }
+miden-crypto = { version = "0.19.7" }
 
 # External dependencies
 anyhow            = { version = "1.0" }
@@ -154,7 +154,3 @@ should_panic_without_expect  = "allow" # We don't care about the specific panic 
 # Configure `cargo-typos`
 [workspace.metadata.typos]
 files.extend-exclude = ["*.svg"] # Ignore SVG files.
-
-[patch.crates-io]
-#miden-crypto = { path = "../miden-crypto-bernhard-migrate-rocksdb-from-crypto/miden-crypto/" }
-miden-crypto = { branch = "bernhard-migrate-rocksdb-from-crypto", git = "https://github.com/0xMiden/crypto.git" }
