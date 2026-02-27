@@ -47,6 +47,7 @@ miden-testing   = { workspace = true }
 miden-tx        = { features = ["testing"], workspace = true }
 
 [build-dependencies]
+build-rs                           = { workspace = true }
 fs-err                             = { workspace = true }
 miden-node-proto-build             = { features = ["internal"], workspace = true }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
