@@ -702,7 +702,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -753,6 +753,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "build-rs"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffc87f52297187fb5d25bde3d368f0480f88ac1d8f3cf4c80ac5575435511114"
+dependencies = [
+ "unicode-ident",
 ]
 
 [[package]]
@@ -2268,15 +2277,6 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -2972,6 +2972,7 @@ name = "miden-node-ntx-builder"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "build-rs",
  "diesel",
  "diesel_migrations",
  "futures",
@@ -3003,6 +3004,7 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "build-rs",
  "fs-err",
  "hex",
  "http 1.4.0",
@@ -3026,6 +3028,7 @@ dependencies = [
 name = "miden-node-proto-build"
 version = "0.14.0"
 dependencies = [
+ "build-rs",
  "fs-err",
  "miette",
  "protox",
@@ -3074,6 +3077,7 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "build-rs",
  "criterion",
  "deadpool",
  "deadpool-diesel",
@@ -3178,6 +3182,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-sdk-kms",
+ "build-rs",
  "diesel",
  "diesel_migrations",
  "k256",
@@ -3275,8 +3280,11 @@ name = "miden-remote-prover"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "assert_matches",
  "async-trait",
+ "build-rs",
  "clap",
+ "fs-err",
  "http 1.4.0",
  "humantime",
  "miden-block-prover",
@@ -3308,6 +3316,7 @@ dependencies = [
 name = "miden-remote-prover-client"
 version = "0.14.0"
 dependencies = [
+ "build-rs",
  "fs-err",
  "getrandom 0.4.1",
  "miden-node-proto-build",

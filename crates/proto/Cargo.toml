@@ -33,8 +33,14 @@ assert_matches = { workspace = true }
 proptest       = { version = "1.7" }
 
 [build-dependencies]
+build-rs                           = { workspace = true }
 fs-err                             = { workspace = true }
 miden-node-proto-build             = { features = ["internal"], workspace = true }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 miette                             = { version = "7.6" }
 tonic-prost-build                  = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = [
+  "tonic-prost", # used in generated OUT_DIR code
+]
