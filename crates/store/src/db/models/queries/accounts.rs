@@ -1188,7 +1188,6 @@ fn prepare_partial_account_update(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
