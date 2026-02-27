@@ -23,6 +23,8 @@
 
 extern crate alloc;
 
+mod helpers;
+#[expect(clippy::doc_markdown, clippy::inline_always)]
 mod rocksdb;
 // Re-export from miden-protocol.
 pub use miden_protocol::crypto::merkle::smt::{
