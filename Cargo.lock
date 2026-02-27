@@ -3014,6 +3014,7 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "build-rs",
+ "codegen",
  "fs-err",
  "futures",
  "hex",

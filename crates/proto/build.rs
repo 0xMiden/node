@@ -1,6 +1,6 @@
-use std::fmt::Write;
 use std::path::Path;
 
+use codegen::Scope;
 use fs_err as fs;
 use miden_node_proto_build::{
     block_producer_api_descriptor,
@@ -95,10 +95,12 @@ fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
 
     submodules.sort();
 
-    let modules = submodules.iter().map(|f| format!("pub mod {f};\n"));
-    let contents = modules.into_iter().collect::<String>();
+    let mut scope = Scope::new();
+    for module in submodules {
+        scope.raw(format!("pub mod {module};\n"));
+    }
 
-    fs::write(mod_filepath, contents)
+    fs::write(mod_filepath, scope.to_string())
 }
 
 /// Generate server facade modules (one per service) from the provided descriptor sets.
@@ -118,7 +120,8 @@ fn generate_server_modules(
                 let server_module = format!("{}_server", to_snake_case(service_name));
 
                 let contents =
-                    render_service_module(&package_module, service_name, &server_module, service);
+                    render_service_module(&package_module, service_name, &server_module, service)
+                        .to_string();
 
                 let path = dst_dir.join(format!("{module_name}.rs"));
                 fs::write(path, contents).into_diagnostic().wrap_err("writing server module")?;
@@ -135,26 +138,33 @@ fn render_service_module(
     service_name: &str,
     server_module: &str,
     service: &prost_types::ServiceDescriptorProto,
-) -> String {
-    let mut out = String::new();
+) -> Scope {
+    let mut scope = Scope::new();
 
-    writeln!(out, "use std::task::{{Context, Poll}};").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "use tonic::{{Request, Response, Status}};").unwrap();
-    writeln!(out).unwrap();
+    scope.import("std::task", "Context");
+    scope.import("std::task", "Poll");
+    scope.import("tonic", "Request");
+    scope.import("tonic", "Response");
+    scope.import("tonic", "Status");
 
     let package_use = if package_module.is_empty() {
         "crate::generated".to_string()
     } else {
         format!("crate::generated::{package_module}")
     };
-    writeln!(out, "use {package_use}::{{{server_module}}};").unwrap();
-    writeln!(
-        out,
-        "use crate::server::{{GrpcDecode, GrpcEncode, GrpcInterface, GrpcServerStream, GrpcUnary, handle_streaming, handle_unary}};"
-    )
-    .unwrap();
-    writeln!(out).unwrap();
+    scope.import(&package_use, server_module);
+
+    for import in [
+        "GrpcDecode",
+        "GrpcEncode",
+        "GrpcInterface",
+        "GrpcServerStream",
+        "GrpcUnary",
+        "handle_streaming",
+        "handle_unary",
+    ] {
+        scope.import("crate::server", import);
+    }
 
     let mut unary_methods = Vec::new();
     let mut streaming_methods = Vec::new();
@@ -166,21 +176,15 @@ fn render_service_module(
         let response_type = proto_type_to_rust_path(method.output_type.as_deref().unwrap_or(""));
 
         if method.client_streaming() {
-            writeln!(
-                out,
-                "// NOTE: client-streaming and bidi methods are not generated ({method_name})."
-            )
-            .unwrap();
             continue;
         }
 
-        writeln!(out, "pub struct {method_struct};").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "impl GrpcInterface for {method_struct} {{").unwrap();
-        writeln!(out, "    type Request = {request_type};").unwrap();
-        writeln!(out, "    type Response = {response_type};").unwrap();
-        writeln!(out, "}}").unwrap();
-        writeln!(out).unwrap();
+        scope.new_struct(&method_struct).vis("pub");
+
+        let method_impl = scope.new_impl(&method_struct);
+        method_impl.impl_trait("GrpcInterface");
+        method_impl.associate_type("Request", request_type);
+        method_impl.associate_type("Response", response_type);
 
         if method.server_streaming() {
             streaming_methods.push((method_name.to_string(), method_struct));
@@ -198,24 +202,24 @@ fn render_service_module(
         trait_bounds.push(format!("GrpcServerStream<{method_struct}>"));
     }
 
-    if trait_bounds.is_empty() {
-        writeln!(out, "pub trait {service_trait_name} {{}}").unwrap();
-        writeln!(out, "impl<T> {service_trait_name} for T {{}}").unwrap();
-    } else {
-        writeln!(out, "pub trait {service_trait_name}: {} {{}}", trait_bounds.join(" + ")).unwrap();
-        writeln!(
-            out,
-            "impl<T> {service_trait_name} for T where T: {} {{}}",
-            trait_bounds.join(" + ")
-        )
-        .unwrap();
+    let service_trait = scope.new_trait(&service_trait_name);
+    service_trait.vis("pub");
+    for bound in &trait_bounds {
+        service_trait.parent(bound);
     }
-    writeln!(out).unwrap();
 
-    writeln!(out, "#[tonic::async_trait]").unwrap();
-    writeln!(out, "impl<T> {server_module}::{service_name} for T").unwrap();
-    writeln!(out, "where").unwrap();
-    writeln!(out, "    T: {service_trait_name},").unwrap();
+    let service_trait_impl = scope.new_impl("T");
+    service_trait_impl.generic("T");
+    service_trait_impl.impl_trait(&service_trait_name);
+    for bound in &trait_bounds {
+        service_trait_impl.bound("T", bound);
+    }
+
+    let service_impl = scope.new_impl("T");
+    service_impl.generic("T");
+    service_impl.impl_trait(format!("{server_module}::{service_name}"));
+    service_impl.r#macro("#[tonic::async_trait]");
+    service_impl.bound("T", &service_trait_name);
 
     for (method_name, method_struct) in &unary_methods {
         let request_type = proto_type_to_rust_path(
@@ -235,13 +239,12 @@ fn render_service_module(
                 .unwrap_or(""),
         );
 
-        writeln!(out, "    {request_type}: GrpcDecode<<T as GrpcUnary<{method_struct}>>::Input>,")
-            .unwrap();
-        writeln!(
-            out,
-            "    <T as GrpcUnary<{method_struct}>>::Output: GrpcEncode<{response_type}>,"
-        )
-        .unwrap();
+        service_impl
+            .bound(request_type, format!("GrpcDecode<<T as GrpcUnary<{method_struct}>>::Input>"));
+        service_impl.bound(
+            format!("<T as GrpcUnary<{method_struct}>>::Output"),
+            format!("GrpcEncode<{response_type}>"),
+        );
     }
 
     for (method_name, method_struct) in &streaming_methods {
@@ -253,22 +256,18 @@ fn render_service_module(
                 .and_then(|m| m.input_type.as_deref())
                 .unwrap_or(""),
         );
-        writeln!(
-            out,
-            "    {request_type}: GrpcDecode<<T as GrpcServerStream<{method_struct}>>::Input>,"
-        )
-        .unwrap();
+        service_impl.bound(
+            request_type,
+            format!("GrpcDecode<<T as GrpcServerStream<{method_struct}>>::Input>"),
+        );
     }
-
-    writeln!(out, "{{").unwrap();
 
     for (method_name, method_struct) in &streaming_methods {
         let stream_name = format!("{method_name}Stream");
-        writeln!(
-            out,
-            "    type {stream_name} = <T as GrpcServerStream<{method_struct}>>::Stream;"
-        )
-        .unwrap();
+        service_impl.associate_type(
+            stream_name,
+            format!("<T as GrpcServerStream<{method_struct}>>::Stream"),
+        );
     }
 
     for (method_name, method_struct) in &unary_methods {
@@ -290,13 +289,12 @@ fn render_service_module(
                 .unwrap_or(""),
         );
 
-        writeln!(
-            out,
-            "    async fn {method_fn}(&self, request: Request<{request_type}>) -> Result<Response<{response_type}>, Status> {{"
-        )
-        .unwrap();
-        writeln!(out, "        handle_unary::<{method_struct}, _>(self, request).await").unwrap();
-        writeln!(out, "    }}").unwrap();
+        let func = service_impl.new_fn(method_fn);
+        func.set_async(true);
+        func.arg_ref_self();
+        func.arg("request", format!("Request<{request_type}>"));
+        func.ret(format!("Result<Response<{response_type}>, Status>"));
+        func.line(format!("handle_unary::<{method_struct}, _>(self, request).await"));
     }
 
     for (method_name, method_struct) in &streaming_methods {
@@ -311,91 +309,92 @@ fn render_service_module(
         );
         let stream_name = format!("{method_name}Stream");
 
-        writeln!(
-            out,
-            "    async fn {method_fn}(&self, request: Request<{request_type}>) -> Result<Response<Self::{stream_name}>, Status> {{"
-        )
-        .unwrap();
-        writeln!(out, "        handle_streaming::<{method_struct}, _>(self, request).await")
-            .unwrap();
-        writeln!(out, "    }}").unwrap();
+        let func = service_impl.new_fn(method_fn);
+        func.set_async(true);
+        func.arg_ref_self();
+        func.arg("request", format!("Request<{request_type}>"));
+        func.ret(format!("Result<Response<Self::{stream_name}>, Status>"));
+        func.line(format!("handle_streaming::<{method_struct}, _>(self, request).await"));
     }
 
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    let server_struct = scope.new_struct(format!("{service_name}Server"));
+    server_struct.vis("pub");
+    server_struct.generic("T");
+    server_struct.field("inner", format!("{server_module}::{service_name}Server<T>"));
 
-    writeln!(out, "pub struct {service_name}Server<T> {{").unwrap();
-    writeln!(out, "    inner: {server_module}::{service_name}Server<T>,").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    let server_impl = scope.new_impl(format!("{service_name}Server"));
+    server_impl.generic("T");
+    server_impl.target_generic("T");
+    server_impl.bound("T", &service_trait_name);
+    let new_fn = server_impl.new_fn("new");
+    new_fn.vis("pub");
+    new_fn.arg("service", "T");
+    new_fn.ret("Self");
+    new_fn.line("Self {");
+    new_fn.line(format!("inner: {server_module}::{service_name}Server::new(service),"));
+    new_fn.line("}");
 
-    writeln!(out, "impl<T> {service_name}Server<T>").unwrap();
-    writeln!(out, "where").unwrap();
-    writeln!(out, "    T: {service_trait_name},").unwrap();
-    writeln!(out, "{{").unwrap();
-    writeln!(out, "    pub fn new(service: T) -> Self {{").unwrap();
-    writeln!(out, "        Self {{").unwrap();
-    writeln!(out, "            inner: {server_module}::{service_name}Server::new(service),")
-        .unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    let clone_impl = scope.new_impl(format!("{service_name}Server"));
+    clone_impl.generic("T");
+    clone_impl.target_generic("T");
+    clone_impl.impl_trait("Clone");
+    let clone_fn = clone_impl.new_fn("clone");
+    clone_fn.arg_ref_self();
+    clone_fn.ret("Self");
+    clone_fn.line("Self { inner: self.inner.clone() }");
 
-    writeln!(out, "impl<T> Clone for {service_name}Server<T> {{").unwrap();
-    writeln!(out, "    fn clone(&self) -> Self {{").unwrap();
-    writeln!(out, "        Self {{ inner: self.inner.clone() }}").unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    let tonic_service_impl = scope.new_impl(format!("{service_name}Server"));
+    tonic_service_impl.generic("T");
+    tonic_service_impl.generic("B");
+    tonic_service_impl.target_generic("T");
+    tonic_service_impl.impl_trait("tonic::codegen::Service<http::Request<B>>");
+    tonic_service_impl.bound(
+        format!("{server_module}::{service_name}Server<T>"),
+        "tonic::codegen::Service<http::Request<B>>",
+    );
+    tonic_service_impl.associate_type(
+        "Response",
+        format!(
+            "<{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Response"
+        ),
+    );
+    tonic_service_impl.associate_type(
+        "Error",
+        format!(
+            "<{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Error"
+        ),
+    );
+    tonic_service_impl.associate_type(
+        "Future",
+        format!(
+            "<{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Future"
+        ),
+    );
 
-    writeln!(
-        out,
-        "impl<T, B> tonic::codegen::Service<http::Request<B>> for {service_name}Server<T>"
-    )
-    .unwrap();
-    writeln!(out, "where").unwrap();
-    writeln!(
-        out,
-        "    {server_module}::{service_name}Server<T>: tonic::codegen::Service<http::Request<B>>,"
-    )
-    .unwrap();
-    writeln!(out, "{{").unwrap();
-    writeln!(
-        out,
-        "    type Response = <{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Response;"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "    type Error = <{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Error;"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "    type Future = <{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Future;"
-    )
-    .unwrap();
-    writeln!(out).unwrap();
-    writeln!(
-        out,
-        "    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {{"
-    )
-    .unwrap();
-    writeln!(out, "        self.inner.poll_ready(cx)").unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "    fn call(&mut self, req: http::Request<B>) -> Self::Future {{").unwrap();
-    writeln!(out, "        self.inner.call(req)").unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    let poll_ready_fn = tonic_service_impl.new_fn("poll_ready");
+    poll_ready_fn.arg_mut_self();
+    poll_ready_fn.arg("cx", "&mut Context<'_>");
+    poll_ready_fn.ret("Poll<Result<(), Self::Error>>");
+    poll_ready_fn.line("self.inner.poll_ready(cx)");
 
-    writeln!(out, "impl<T> tonic::server::NamedService for {service_name}Server<T> {{").unwrap();
-    writeln!(out, "    const NAME: &'static str = {server_module}::SERVICE_NAME;").unwrap();
-    writeln!(out, "}}").unwrap();
+    let call_fn = tonic_service_impl.new_fn("call");
+    call_fn.arg_mut_self();
+    call_fn.arg("req", "http::Request<B>");
+    call_fn.ret("Self::Future");
+    call_fn.line("self.inner.call(req)");
 
-    out
+    let named_service_impl = scope.new_impl(format!("{service_name}Server"));
+    named_service_impl.generic("T");
+    named_service_impl.target_generic("T");
+    named_service_impl.impl_trait("tonic::server::NamedService");
+    named_service_impl.associate_const(
+        "NAME",
+        "&'static str",
+        format!("{server_module}::SERVICE_NAME"),
+        "",
+    );
+
+    scope
 }
 
 fn service_module_name(package: &str, service: &str) -> String {
