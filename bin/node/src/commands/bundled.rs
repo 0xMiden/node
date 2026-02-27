@@ -7,7 +7,7 @@ use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
 use miden_node_utils::grpc::UrlExt;
-use miden_node_validator::Validator;
+use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
 use tokio::net::TcpListener;
@@ -17,14 +17,13 @@ use url::Url;
 use super::{ENV_DATA_DIRECTORY, ENV_RPC_URL};
 use crate::commands::{
     BlockProducerConfig,
+    BundledValidatorConfig,
     DEFAULT_TIMEOUT,
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_KEY,
-    INSECURE_VALIDATOR_KEY_HEX,
     NtxBuilderConfig,
-    ValidatorConfig,
+    ValidatorKey,
     duration_to_human_readable_string,
 };
 
@@ -47,16 +46,9 @@ pub enum BundledCommand {
         /// Constructs the genesis block from the given toml file.
         #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "FILE")]
         genesis_config_file: Option<PathBuf>,
-        /// Insecure, hex-encoded validator secret key for development and testing purposes.
-        ///
-        /// If not provided, a predefined key is used.
-        #[arg(
-            long = "validator.key",
-            env = ENV_VALIDATOR_KEY,
-            value_name = "VALIDATOR_KEY",
-            default_value = INSECURE_VALIDATOR_KEY_HEX
-        )]
-        validator_key: String,
+        /// Configuration for the Validator key used to sign genesis block.
+        #[command(flatten)]
+        validator_key: ValidatorKey,
     },
 
     /// Runs all three node components in the same process.
@@ -83,7 +75,7 @@ pub enum BundledCommand {
         ntx_builder: NtxBuilderConfig,
 
         #[command(flatten)]
-        validator: ValidatorConfig,
+        validator: BundledValidatorConfig,
 
         /// Enables the exporting of traces for OpenTelemetry.
         ///
@@ -156,7 +148,7 @@ impl BundledCommand {
         data_directory: PathBuf,
         block_producer: BlockProducerConfig,
         ntx_builder: NtxBuilderConfig,
-        validator: ValidatorConfig,
+        validator: BundledValidatorConfig,
         grpc_timeout: Duration,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
@@ -313,6 +305,7 @@ impl BundledCommand {
         if let Some(address) = validator_socket_address {
             let secret_key_bytes = hex::decode(validator.validator_key)?;
             let signer = SecretKey::read_from_bytes(&secret_key_bytes)?;
+            let signer = ValidatorSigner::new_local(signer);
             let id = join_set
                 .spawn({
                     async move {

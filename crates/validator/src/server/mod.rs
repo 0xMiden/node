@@ -12,7 +12,7 @@ use miden_node_utils::ErrorReport;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::block::{BlockSigner, ProposedBlock};
+use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::{Deserializable, Serializable};
 use tokio::net::TcpListener;
@@ -22,10 +22,10 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info_span, instrument};
 
-use crate::COMPONENT;
 use crate::block_validation::validate_block;
 use crate::db::{insert_transaction, load};
 use crate::tx_validation::validate_transaction;
+use crate::{COMPONENT, ValidatorSigner};
 
 // VALIDATOR
 // ================================================================================
@@ -33,7 +33,7 @@ use crate::tx_validation::validate_transaction;
 /// The handle into running the gRPC validator server.
 ///
 /// Facilitates the running of the gRPC server which implements the validator API.
-pub struct Validator<S> {
+pub struct Validator {
     /// The address of the validator component.
     pub address: SocketAddr,
     /// Server-side timeout for an individual gRPC request.
@@ -42,13 +42,13 @@ pub struct Validator<S> {
     pub grpc_timeout: Duration,
 
     /// The signer used to sign blocks.
-    pub signer: S,
+    pub signer: ValidatorSigner,
 
     /// The data directory for the validator component's database files.
     pub data_directory: PathBuf,
 }
 
-impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
+impl Validator {
     /// Serves the validator RPC API.
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
@@ -99,19 +99,19 @@ impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
 /// The underlying implementation of the gRPC validator server.
 ///
 /// Implements the gRPC API for the validator.
-struct ValidatorServer<S> {
-    signer: S,
+struct ValidatorServer {
+    signer: ValidatorSigner,
     db: Arc<Db>,
 }
 
-impl<S> ValidatorServer<S> {
-    fn new(signer: S, db: Db) -> Self {
+impl ValidatorServer {
+    fn new(signer: ValidatorSigner, db: Db) -> Self {
         Self { signer, db: db.into() }
     }
 }
 
 #[tonic::async_trait]
-impl<S: BlockSigner + Send + Sync + 'static> api_server::Api for ValidatorServer<S> {
+impl api_server::Api for ValidatorServer {
     /// Returns the status of the validator.
     async fn status(
         &self,

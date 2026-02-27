@@ -71,7 +71,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
                 .map_err(|err| ConversionError::deserialization_error("NoteAttachment", err))?
         };
 
-        Ok(NoteMetadata::new(sender, note_type, tag).with_attachment(attachment))
+        Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
     }
 }
 
