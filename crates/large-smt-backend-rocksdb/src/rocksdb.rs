@@ -159,8 +159,6 @@ impl RocksDbStorage {
             opts.set_max_write_buffer_size_to_maintain(0);
             // Use level-based compaction
             opts.set_compaction_style(DBCompactionStyle::Level);
-            // Trigger compaction at 4 L0 files
-            opts.set_level_zero_file_num_compaction_trigger(4);
             // 512 MB target file size
             opts.set_target_file_size_base(512 << 20);
             opts.set_target_file_size_multiplier(2);
