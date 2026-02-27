@@ -16,7 +16,7 @@ pub enum ValidatorSigner {
 impl ValidatorSigner {
     /// Constructs a signer which uses an AWS KMS key for signing.
     ///
-    /// See [`self::KmsSigner`] for details as to env var configuration and AWS IAM policies
+    /// See [`KmsSigner`] for details as to env var configuration and AWS IAM policies
     /// required to use this functionality.
     pub async fn new_kms(key_id: impl Into<String>) -> anyhow::Result<Self> {
         let kms_signer = KmsSigner::new(key_id).await?;
