@@ -79,6 +79,7 @@ assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
 build-rs          = { version = "0.3" }
 clap              = { features = ["derive"], version = "4.5" }
+codegen           = { version = "0.3" }
 deadpool          = { default-features = false, version = "0.12" }
 deadpool-diesel   = { version = "0.6" }
 deadpool-sync     = { default-features = false, version = "0.1" }
