@@ -376,7 +376,6 @@ pub async fn load_smt_forest(
                 StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
             })?;
 
-            // Use the unified update method (will recognize it's a full-state delta)
             forest.update_account(block_num, &delta)?;
         }
 
