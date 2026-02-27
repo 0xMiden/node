@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use fs_err as fs;
 use miden_node_proto_build::remote_prover_api_descriptor;
@@ -8,9 +8,7 @@ use tonic_prost_build::FileDescriptorSet;
 
 /// Generates Rust protobuf bindings.
 fn main() -> miette::Result<()> {
-    let dst_dir =
-        PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is always set for build.rs"))
-            .join("generated");
+    let dst_dir = build_rs::input::out_dir().join("generated");
 
     // Remove all existing files.
     let _ = fs::remove_dir_all(&dst_dir);

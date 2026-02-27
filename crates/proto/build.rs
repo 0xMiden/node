@@ -1,5 +1,4 @@
-use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use fs_err as fs;
 use miden_node_proto_build::{
@@ -16,12 +15,9 @@ use tonic_prost_build::FileDescriptorSet;
 
 /// Generates Rust protobuf bindings using `miden-node-proto-build`.
 fn main() -> miette::Result<()> {
-    println!("cargo::rerun-if-changed=../../proto/proto");
-
     miden_node_rocksdb_cxx_linkage_fix::configure();
 
-    let dst_dir =
-        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR should be set")).join("generated");
+    let dst_dir = build_rs::input::out_dir().join("generated");
 
     // Remove all existing files.
     let _ = fs::remove_dir_all(&dst_dir);

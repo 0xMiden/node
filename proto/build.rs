@@ -1,6 +1,3 @@
-use std::env;
-use std::path::PathBuf;
-
 use fs_err as fs;
 use miette::{Context, IntoDiagnostic};
 use protox::prost::Message;
@@ -28,14 +25,10 @@ const VALIDATOR_DESCRIPTOR: &str = "validator_file_descriptor.bin";
 /// This is done only if `BUILD_PROTO` environment variable is set to `1` to avoid running the
 /// script on crates.io where repo-level .proto files are not available.
 fn main() -> miette::Result<()> {
-    println!("cargo::rerun-if-changed=./proto");
-    println!("cargo::rerun-if-env-changed=BUILD_PROTO");
+    build_rs::output::rerun_if_changed("./proto");
 
-    let out_dir = PathBuf::from(
-        env::var("OUT_DIR").expect("env::OUT_DIR is always set in build.rs when used with cargo"),
-    );
-
-    let crate_root: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    let out_dir = build_rs::input::out_dir();
+    let crate_root = build_rs::input::cargo_manifest_dir();
     let proto_src_dir = crate_root.join("proto");
     let includes = &[proto_src_dir];
 

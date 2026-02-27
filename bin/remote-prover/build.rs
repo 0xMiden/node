@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use fs_err as fs;
 use miden_node_proto_build::remote_prover_api_descriptor;
@@ -9,8 +9,7 @@ use tonic_prost_build::FileDescriptorSet;
 fn main() -> miette::Result<()> {
     miden_node_rocksdb_cxx_linkage_fix::configure();
 
-    let dst_dir =
-        PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR should be set")).join("generated");
+    let dst_dir = build_rs::input::out_dir().join("generated");
 
     // Remove all existing files.
     let _ = fs::remove_dir_all(&dst_dir);

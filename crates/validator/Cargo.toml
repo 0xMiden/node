@@ -37,4 +37,7 @@ tonic-reflection       = { workspace = true }
 tower-http             = { features = ["util"], workspace = true }
 tracing                = { workspace = true }
 
+[build-dependencies]
+build-rs = { workspace = true }
+
 [dev-dependencies]

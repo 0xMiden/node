@@ -41,6 +41,7 @@ tokio          = { default-features = false, features = ["sync"], optional = tru
 tonic-prost    = { workspace = true }
 
 [build-dependencies]
+build-rs               = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { workspace = true }
 miette                 = { features = ["fancy"], version = "7.5" }
