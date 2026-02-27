@@ -1,9 +1,11 @@
 //! Account-related queries and models.
 
+use diesel::dsl::exists;
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::Account;
+use miden_protocol::transaction::TransactionId;
 
 use crate::db::models::conv as conversions;
 use crate::db::schema;
@@ -99,4 +101,25 @@ pub fn get_account(
 
     row.map(|AccountRow { account_data, .. }| conversions::account_from_bytes(&account_data))
         .transpose()
+}
+
+/// Returns `true` when an inflight account row exists with the given `transaction_id`.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT EXISTS (SELECT 1 FROM accounts WHERE transaction_id = ?1)
+/// ```
+pub fn transaction_exists(
+    conn: &mut SqliteConnection,
+    tx_id: &TransactionId,
+) -> Result<bool, DatabaseError> {
+    let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
+
+    let result: bool = diesel::select(exists(
+        schema::accounts::table.filter(schema::accounts::transaction_id.eq(&tx_id_bytes)),
+    ))
+    .get_result(conn)?;
+
+    Ok(result)
 }

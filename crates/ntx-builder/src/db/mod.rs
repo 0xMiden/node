@@ -77,6 +77,13 @@ impl Db {
             .await
     }
 
+    /// Returns `true` when an inflight account row exists with the given transaction ID.
+    pub async fn transaction_exists(&self, tx_id: TransactionId) -> Result<bool> {
+        self.inner
+            .query("transaction_exists", move |conn| queries::transaction_exists(conn, &tx_id))
+            .await
+    }
+
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
