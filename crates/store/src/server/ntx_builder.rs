@@ -181,11 +181,12 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 
     async fn get_note_script_by_root(
         &self,
-        request: Request<proto::note::NoteRoot>,
+        request: Request<proto::note::NoteScriptRoot>,
     ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let root = read_root::<GetNoteScriptByRootError>(request.into_inner().root, "NoteRoot")?;
+        let root =
+            read_root::<GetNoteScriptByRootError>(request.into_inner().root, "NoteScriptRoot")?;
 
         let note_script = self
             .state

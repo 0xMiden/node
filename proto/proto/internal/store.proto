@@ -45,7 +45,7 @@ service Rpc {
     rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteRoot) returns (rpc.MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (rpc.MaybeNoteScript) {}
 
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
     //
@@ -269,7 +269,7 @@ service NtxBuilder {
     rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteRoot) returns (rpc.MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (rpc.MaybeNoteScript) {}
 
     // Returns vault asset witnesses for the specified account.
     rpc GetVaultAssetWitnesses(VaultAssetWitnessesRequest) returns (VaultAssetWitnessesResponse) {}
