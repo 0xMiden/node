@@ -53,10 +53,9 @@ use tokio::task::JoinError;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
-use crate::actor::account_state::TransactionCandidate;
-use crate::block_producer::BlockProducerClient;
+use crate::actor::candidate::TransactionCandidate;
+use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
-use crate::store::StoreClient;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NtxError {

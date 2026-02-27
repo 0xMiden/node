@@ -4,22 +4,23 @@ use std::sync::Arc;
 
 use actor::AccountActorContext;
 use anyhow::Context;
-use block_producer::BlockProducerClient;
-use builder::{ChainState, MempoolEventStream};
+use builder::MempoolEventStream;
+use chain_state::ChainState;
+use clients::{BlockProducerClient, StoreClient};
 use coordinator::Coordinator;
 use db::Db;
 use futures::TryStreamExt;
 use miden_node_utils::lru_cache::LruCache;
-use store::StoreClient;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
 
 mod actor;
-mod block_producer;
 mod builder;
+mod chain_state;
+mod clients;
 mod coordinator;
 pub(crate) mod db;
-mod store;
+pub(crate) mod inflight_note;
 
 pub use builder::NetworkTransactionBuilder;
 
