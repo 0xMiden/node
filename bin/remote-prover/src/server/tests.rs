@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use assert_matches::assert_matches;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
@@ -229,9 +230,9 @@ async fn capacity_is_respected() {
     result.sort_unstable();
     assert_eq!(expected, result);
 
-    // We also expect that the error is a resource exhaustion error.
-    let err = first.err().or(second.err()).or(third.err()).unwrap();
-    assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+    assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
+        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+    });
 
     server.abort();
 }

@@ -51,6 +51,7 @@ tracing           = { workspace = true }
 url               = { workspace = true }
 
 [build-dependencies]
+build-rs                           = { workspace = true }
 fs-err                             = { workspace = true }
 miden-agglayer                     = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }

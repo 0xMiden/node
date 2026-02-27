@@ -9,11 +9,11 @@ use miden_protocol::account::{Account, AccountCode, AccountFile};
 use miden_protocol::{Felt, Word};
 
 fn main() {
-    println!("cargo:rerun-if-changed=./src/db/migrations");
+    build_rs::output::rerun_if_changed("src/db/migrations");
     // If we do one re-write, the default rules are disabled,
     // hence we need to trigger explicitly on `Cargo.toml`.
     // <https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-changed>
-    println!("cargo:rerun-if-changed=Cargo.toml");
+    build_rs::output::rerun_if_changed("Cargo.toml");
 
     // Generate sample agglayer account files for genesis config samples.
     generate_agglayer_sample_accounts();
@@ -28,11 +28,9 @@ fn main() {
 /// - `02-with-account-files/agglayer_faucet_usdc.mac` - agglayer faucet for wrapped USDC
 fn generate_agglayer_sample_accounts() {
     // Use CARGO_MANIFEST_DIR to get the absolute path to the crate root
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let manifest_dir = build_rs::input::cargo_manifest_dir();
     let samples_dir: PathBuf =
-        [&manifest_dir, "src", "genesis", "config", "samples", "02-with-account-files"]
-            .iter()
-            .collect();
+        manifest_dir.join("src/genesis/config/samples/02-with-account-files");
 
     // Create the directory if it doesn't exist
     fs_err::create_dir_all(&samples_dir).expect("Failed to create samples directory");

@@ -23,8 +23,8 @@ jobs:
           ref: "next"
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup install beta && rustup default beta
       - uses: taiki-e/install-action@v2
@@ -45,8 +45,8 @@ jobs:
           ref: "next"
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
       - name: Install rust
         run: rustup update --no-self-update
       - name: Install cargo-hack

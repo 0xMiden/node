@@ -60,8 +60,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
 
       - name: Build and Publish Packages
         uses: ./.github/actions/debian

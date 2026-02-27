@@ -13,7 +13,6 @@ use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::ProposedBlock;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::{Deserializable, Serializable};
 use tokio::net::TcpListener;
@@ -23,10 +22,10 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info_span, instrument};
 
-use crate::COMPONENT;
 use crate::block_validation::validate_block;
 use crate::db::{insert_transaction, load};
 use crate::tx_validation::validate_transaction;
+use crate::{COMPONENT, ValidatorSigner};
 
 // VALIDATOR
 // ================================================================================
@@ -43,7 +42,7 @@ pub struct Validator {
     pub grpc_timeout: Duration,
 
     /// The signer used to sign blocks.
-    pub signer: SecretKey,
+    pub signer: ValidatorSigner,
 
     /// The data directory for the validator component's database files.
     pub data_directory: PathBuf,
@@ -101,12 +100,12 @@ impl Validator {
 ///
 /// Implements the gRPC API for the validator.
 struct ValidatorServer {
-    signer: SecretKey,
+    signer: ValidatorSigner,
     db: Arc<Db>,
 }
 
 impl ValidatorServer {
-    fn new(signer: SecretKey, db: Db) -> Self {
+    fn new(signer: ValidatorSigner, db: Db) -> Self {
         Self { signer, db: db.into() }
     }
 }

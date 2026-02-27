@@ -88,6 +88,7 @@ miden-crypto = { version = "0.19.6" }
 anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
+build-rs          = { version = "0.3" }
 clap              = { features = ["derive"], version = "4.5" }
 deadpool          = { default-features = false, version = "0.12" }
 deadpool-diesel   = { version = "0.6" }
