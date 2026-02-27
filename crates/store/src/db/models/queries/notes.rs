@@ -752,7 +752,7 @@ impl TryInto<NoteMetadata> for NoteMetadataRawRow {
             .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
         let attachment = NoteAttachment::read_from_bytes(&self.attachment)?;
-        Ok(NoteMetadata::new(sender, note_type, tag).with_attachment(attachment))
+        Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
     }
 }
 

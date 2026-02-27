@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use indexmap::IndexMap;
 use miden_node_utils::crypto::get_rpo_random_coin;
+use miden_node_utils::signer::BlockSigner;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
     Account,
@@ -13,7 +14,6 @@ use miden_protocol::account::{
     AccountDelta,
     AccountFile,
     AccountId,
-    AccountStorage,
     AccountStorageDelta,
     AccountStorageMode,
     AccountType,
@@ -25,10 +25,10 @@ use miden_protocol::asset::{FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, FieldElement, ONE, ZERO};
+use miden_protocol::{Felt, FieldElement, ONE};
 use miden_standards::AuthScheme;
 use miden_standards::account::auth::AuthFalcon512Rpo;
-use miden_standards::account::faucets::BasicFungibleFaucet;
+use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
 use rand::{Rng, SeedableRng};
@@ -279,11 +279,11 @@ impl GenesisConfig {
             let mut storage_delta = AccountStorageDelta::default();
 
             if total_issuance != 0 {
-                // slot 0
-                storage_delta.set_item(
-                    AccountStorage::faucet_sysdata_slot().clone(),
-                    [ZERO, ZERO, ZERO, Felt::new(total_issuance)].into(),
-                )?;
+                let current_metadata = TokenMetadata::try_from(faucet_account.storage())?;
+                let updated_metadata =
+                    current_metadata.with_token_supply(Felt::new(total_issuance))?;
+                storage_delta
+                    .set_item(TokenMetadata::metadata_slot().clone(), updated_metadata.into())?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
@@ -522,10 +522,10 @@ impl AccountSecrets {
     ///
     /// If no name is present, a new one is generated based on the current time
     /// and the index in
-    pub fn as_account_files<S>(
+    pub fn as_account_files(
         &self,
-        genesis_state: &GenesisState<S>,
-    ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + use<'_, S> {
+        genesis_state: &GenesisState<impl BlockSigner>,
+    ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + '_ {
         let account_lut = IndexMap::<AccountId, Account>::from_iter(
             genesis_state.accounts.iter().map(|account| (account.id(), account.clone())),
         );

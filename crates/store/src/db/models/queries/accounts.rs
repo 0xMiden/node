@@ -1033,9 +1033,9 @@ fn prepare_full_account_update(
     let account_id = account.id();
 
     // sanity check the commitment of account matches the final state commitment
-    if account.commitment() != update.final_state_commitment() {
+    if account.to_commitment() != update.final_state_commitment() {
         return Err(DatabaseError::AccountCommitmentsMismatch {
-            calculated: account.commitment(),
+            calculated: account.to_commitment(),
             expected: update.final_state_commitment(),
         });
     }
@@ -1177,9 +1177,9 @@ fn prepare_partial_account_update(
         account_state.code_commitment,
     );
 
-    if account_header.commitment() != update.final_state_commitment() {
+    if account_header.to_commitment() != update.final_state_commitment() {
         return Err(DatabaseError::AccountCommitmentsMismatch {
-            calculated: account_header.commitment(),
+            calculated: account_header.to_commitment(),
             expected: update.final_state_commitment(),
         });
     }

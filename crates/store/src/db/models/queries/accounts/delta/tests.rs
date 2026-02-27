@@ -8,6 +8,7 @@ use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnect
 use diesel_migrations::MigrationHarness;
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::{
     AccountStorageDelta,
     AccountUpdateDetails,
@@ -137,9 +138,13 @@ fn optimized_delta_matches_full_account_method() {
         .compile_component_code("test::interface", "pub proc foo push.1 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -158,7 +163,7 @@ fn optimized_delta_matches_full_account_method() {
     let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta_initial),
     );
     upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
@@ -225,7 +230,7 @@ fn optimized_delta_matches_full_account_method() {
     expected_account.apply_delta(&partial_delta).unwrap();
     let final_account_for_commitment = expected_account;
 
-    let final_commitment = final_account_for_commitment.commitment();
+    let final_commitment = final_account_for_commitment.to_commitment();
     let expected_storage_commitment = final_account_for_commitment.storage().to_commitment();
     let expected_vault_root = final_account_for_commitment.vault().root();
 
@@ -279,7 +284,7 @@ fn optimized_delta_matches_full_account_method() {
 
     // Verify the account commitment matches
     assert_eq!(
-        header_after.commitment(),
+        header_after.to_commitment(),
         final_commitment,
         "Account commitment should match the expected final state"
     );
@@ -324,9 +329,13 @@ fn optimized_delta_updates_non_empty_vault() {
         .compile_component_code("test::interface", "pub proc vault push.1 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -345,7 +354,7 @@ fn optimized_delta_updates_non_empty_vault() {
     let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta_initial),
     );
     upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
@@ -371,7 +380,7 @@ fn optimized_delta_updates_non_empty_vault() {
 
     let mut expected_account = full_account_before.clone();
     expected_account.apply_delta(&partial_delta).unwrap();
-    let expected_commitment = expected_account.commitment();
+    let expected_commitment = expected_account.to_commitment();
     let expected_vault_root = expected_account.vault().root();
 
     let account_update = BlockAccountUpdate::new(
@@ -394,7 +403,7 @@ fn optimized_delta_updates_non_empty_vault() {
         .expect("Failed to load full account after update");
 
     assert_eq!(full_account_after.vault().root(), expected_vault_root);
-    assert_eq!(full_account_after.commitment(), expected_commitment);
+    assert_eq!(full_account_after.to_commitment(), expected_commitment);
 }
 
 #[test]
@@ -442,9 +451,13 @@ fn optimized_delta_updates_storage_map_header() {
         .compile_component_code("test::interface", "pub proc map push.1 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -462,7 +475,7 @@ fn optimized_delta_updates_storage_map_header() {
     let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta_initial),
     );
     upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
@@ -487,7 +500,7 @@ fn optimized_delta_updates_storage_map_header() {
 
     let mut expected_account = full_account_before.clone();
     expected_account.apply_delta(&partial_delta).unwrap();
-    let expected_commitment = expected_account.commitment();
+    let expected_commitment = expected_account.to_commitment();
     let expected_storage_commitment = expected_account.storage().to_commitment();
 
     let account_update = BlockAccountUpdate::new(
@@ -508,7 +521,7 @@ fn optimized_delta_updates_storage_map_header() {
         "Storage commitment should match after map delta"
     );
     assert_eq!(
-        header_after.commitment(),
+        header_after.to_commitment(),
         expected_commitment,
         "Account commitment should match after map delta"
     );
@@ -609,9 +622,13 @@ fn upsert_full_state_delta() {
         .compile_component_code("test::interface", "pub proc bar push.2 end")
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountImmutableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountImmutableCode),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -627,7 +644,7 @@ fn upsert_full_state_delta() {
 
     let account_update = BlockAccountUpdate::new(
         account.id(),
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(delta),
     );
 

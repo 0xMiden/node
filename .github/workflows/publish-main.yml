@@ -18,8 +18,8 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
       # Ensure the release tag refers to the latest commit on main.
       # Compare the commit SHA that triggered the workflow with the HEAD of the branch we just
       # checked out (main).

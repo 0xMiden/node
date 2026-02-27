@@ -498,6 +498,7 @@ fn test_storage_map_removals() {
 #[test]
 fn test_empty_storage_map_entries_query() {
     use miden_protocol::account::auth::PublicKeyCommitment;
+    use miden_protocol::account::component::AccountComponentMetadata;
     use miden_protocol::account::{
         AccountBuilder,
         AccountComponent,
@@ -520,9 +521,12 @@ fn test_empty_storage_map_entries_query() {
     let component_code = CodeBuilder::default()
         .compile_component_code("test::interface", "pub proc test push.1 end")
         .unwrap();
-    let account_component = AccountComponent::new(component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        component_code,
+        component_storage,
+        AccountComponentMetadata::new("test").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
