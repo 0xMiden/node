@@ -120,9 +120,9 @@ message NoteSyncRecord {
     primitives.SparseMerklePath inclusion_path = 4;
 }
 
-// Represents a note root.
-message NoteRoot {
-    // The root of the note.
+// Represents a commitment to a note script.
+message NoteScriptRoot {
+    // Root of the note script.
     primitives.Digest root = 1;
 }
 
@@ -130,6 +130,6 @@ message NoteRoot {
 message NoteScript {
     // Entrypoint of the script.
     uint32 entrypoint = 1;
-    // Mast of the script.
+    // MAST of the script.
     bytes mast = 2;
 }

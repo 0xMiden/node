@@ -365,7 +365,7 @@ impl StoreClient {
         &self,
         root: Word,
     ) -> Result<Option<NoteScript>, StoreError> {
-        let request = proto::note::NoteRoot { root: Some(root.into()) };
+        let request = proto::note::NoteScriptRoot { root: Some(root.into()) };
 
         let script = self.inner.clone().get_note_script_by_root(request).await?.into_inner().script;
 

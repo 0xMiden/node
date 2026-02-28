@@ -51,7 +51,7 @@ service Api {
     rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteRoot) returns (MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (MaybeNoteScript) {}
 
     // TRANSACTION SUBMISSION ENDPOINTS
     // --------------------------------------------------------------------------------------------
