@@ -1,0 +1,22 @@
+[package]
+authors.workspace      = true
+description            = "Large-scale Sparse Merkle Tree backed by pluggable storage - RocksDB backend"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["merkle", "miden", "node", "smt"]
+license.workspace      = true
+name                   = "miden-large-smt-backend-rocksdb"
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+miden-crypto   = { features = ["concurrent", "std"], workspace = true }
+miden-protocol = { features = ["std"], workspace = true }
+rayon          = { version = "1.10" }
+rocksdb        = { default-features = false, features = ["bindgen-runtime", "lz4"], version = "0.24" }
+winter-utils   = { version = "0.13" }

@@ -2620,7 +2620,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 [[package]]
 name = "miden-agglayer"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -2689,7 +2689,7 @@ dependencies = [
 [[package]]
 name = "miden-block-prover"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "miden-protocol",
  "thiserror 2.0.18",
@@ -2736,9 +2736,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto"
-version = "0.19.6"
+version = "0.19.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "999926d48cf0929a39e06ce22299084f11d307ca9e765801eb56bf192b07054b"
+checksum = "ab800d547e4a09ed8f6306e6b8f51f4c26c4c4fc32c88be6f1be84392e6fa790"
 dependencies = [
  "blake3",
  "cc",
@@ -2758,7 +2758,6 @@ dependencies = [
  "rand_core 0.9.5",
  "rand_hc",
  "rayon",
- "rocksdb",
  "sha2",
  "sha3",
  "subtle",
@@ -2771,9 +2770,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto-derive"
-version = "0.19.4"
+version = "0.19.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40e95b9c7c99ed6bbf073d9e02721d812dedd2c195019c0a0e0a3dbb9cbf034"
+checksum = "ccd9786df82cf7bdb93bb64330a0c5644c07478a57250e19018518a598c80367"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -2804,6 +2803,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e392e0a8c34b32671012b439de35fa8987bf14f0f8aac279b97f8b8cc6e263b"
 dependencies = [
  "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "miden-large-smt-backend-rocksdb"
+version = "0.14.0"
+dependencies = [
+ "miden-crypto",
+ "miden-protocol",
+ "rayon",
+ "rocksdb",
+ "winter-utils",
 ]
 
 [[package]]
@@ -3091,6 +3101,7 @@ dependencies = [
  "miden-agglayer",
  "miden-block-prover",
  "miden-crypto",
+ "miden-large-smt-backend-rocksdb",
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
@@ -3224,7 +3235,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3254,7 +3265,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol-macros"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3336,7 +3347,7 @@ dependencies = [
 [[package]]
 name = "miden-standards"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -3353,7 +3364,7 @@ dependencies = [
 [[package]]
 name = "miden-testing"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -3376,7 +3387,7 @@ dependencies = [
 [[package]]
 name = "miden-tx"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -3389,7 +3400,7 @@ dependencies = [
 [[package]]
 name = "miden-tx-batch-prover"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
+source = "git+https://github.com/0xMiden/miden-base.git?branch=next#0904e2c610ab49bf6ee13cf349c05c8621f23cd2"
 dependencies = [
  "miden-protocol",
  "miden-tx",
