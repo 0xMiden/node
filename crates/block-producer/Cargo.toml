@@ -22,16 +22,14 @@ tracing-forest = ["miden-node-utils/tracing-forest"]
 anyhow                     = { workspace = true }
 futures                    = { workspace = true }
 itertools                  = { workspace = true }
-miden-block-prover         = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-proto-build     = { features = ["internal"], workspace = true }
 miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
 miden-standards            = { workspace = true }
-miden-tx                   = { default-features = true, workspace = true }
 miden-tx-batch-prover      = { workspace = true }
-rand                       = { version = "0.9" }
+rand                       = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream               = { features = ["net"], workspace = true }
@@ -46,13 +44,14 @@ assert_matches        = { workspace = true }
 miden-node-store      = { workspace = true }
 miden-node-test-macro = { workspace = true }
 miden-node-utils      = { features = ["testing"], workspace = true }
+miden-node-validator  = { workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 miden-tx              = { features = ["testing"], workspace = true }
 pretty_assertions     = "1.4"
-rand_chacha           = { default-features = false, version = "0.9" }
+rand_chacha           = { default-features = false, workspace = true }
 rstest                = { workspace = true }
 serial_test           = "3.2"
-tempfile              = { version = "3.20" }
+tempfile              = { workspace = true }
 tokio                 = { features = ["test-util"], workspace = true }
 winterfell            = { version = "0.13" }

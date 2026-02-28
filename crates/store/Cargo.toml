@@ -15,21 +15,24 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-anyhow                 = { workspace = true }
-deadpool               = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
-deadpool-diesel        = { features = ["sqlite"], version = "0.6" }
-deadpool-sync          = { default-features = false, features = ["tracing"], version = "0.1" }
-diesel                 = { features = ["numeric", "sqlite"], version = "2.3" }
-diesel_migrations      = { features = ["sqlite"], version = "2.3" }
-fs-err                 = { workspace = true }
-hex                    = { version = "0.4" }
-indexmap               = { workspace = true }
-libsqlite3-sys         = { workspace = true }
-miden-crypto           = { features = ["concurrent", "hashmaps"], workspace = true }
-miden-node-proto       = { workspace = true }
-miden-node-proto-build = { features = ["internal"], workspace = true }
-miden-node-utils       = { workspace = true }
-miden-standards        = { workspace = true }
+anyhow                     = { workspace = true }
+deadpool                   = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
+deadpool-diesel            = { features = ["sqlite"], version = "0.6" }
+diesel                     = { features = ["numeric", "sqlite"], version = "2.3" }
+diesel_migrations          = { features = ["sqlite"], version = "2.3" }
+fs-err                     = { workspace = true }
+futures                    = { workspace = true }
+hex                        = { version = "0.4" }
+indexmap                   = { workspace = true }
+libsqlite3-sys             = { workspace = true }
+miden-block-prover         = { workspace = true }
+miden-crypto               = { features = ["concurrent", "hashmaps"], workspace = true }
+miden-node-db              = { workspace = true }
+miden-node-proto           = { workspace = true }
+miden-node-proto-build     = { features = ["internal"], workspace = true }
+miden-node-utils           = { workspace = true }
+miden-remote-prover-client = { features = ["block-prover"], workspace = true }
+miden-standards            = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -39,15 +42,23 @@ serde             = { features = ["derive"], version = "1" }
 thiserror         = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
 tokio-stream      = { features = ["net"], workspace = true }
-toml              = { version = "0.9" }
+toml              = { workspace = true }
 tonic             = { default-features = true, workspace = true }
 tonic-reflection  = { workspace = true }
 tower-http        = { features = ["util"], workspace = true }
 tracing           = { workspace = true }
+url               = { workspace = true }
+
+[build-dependencies]
+build-rs                           = { workspace = true }
+fs-err                             = { workspace = true }
+miden-agglayer                     = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
+miden-protocol                     = { features = ["std"], workspace = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }
-criterion             = { version = "0.5" }
+criterion             = "0.8"
 fs-err                = { workspace = true }
 miden-node-test-macro = { workspace = true }
 miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = true }
@@ -55,7 +66,8 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
 regex                 = { version = "1.11" }
-termtree              = { version = "0.5" }
+tempfile              = { workspace = true }
+termtree              = "1.0"
 
 [features]
 default = ["rocksdb"]

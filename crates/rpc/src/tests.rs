@@ -13,12 +13,12 @@ use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
-    QueryParamNoteTagLimit,
     QueryParamNullifierLimit,
 };
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
+    Account,
     AccountBuilder,
     AccountDelta,
     AccountId,
@@ -28,7 +28,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
-use miden_protocol::transaction::ProvenTransactionBuilder;
+use miden_protocol::transaction::{ProvenTransaction, ProvenTransactionBuilder};
 use miden_protocol::utils::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
@@ -39,6 +39,53 @@ use tokio::task;
 use url::Url;
 
 use crate::Rpc;
+
+/// Byte offset of the account delta commitment in serialized `ProvenTransaction`.
+/// Layout: `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
+const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
+
+/// Creates a minimal account and its delta for testing proven transaction building.
+fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
+    let account = AccountBuilder::new(seed)
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_assets(vec![])
+        .with_component(BasicWallet)
+        .with_auth_component(NoopAuthComponent)
+        .build_existing()
+        .unwrap();
+
+    let delta: AccountDelta = account.clone().try_into().unwrap();
+    (account, delta)
+}
+
+/// Creates a minimal proven transaction for testing.
+///
+/// This uses `ExecutionProof::new_dummy()` and is intended for tests that
+/// need to test validation logic.
+fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransaction {
+    let account_id = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version0,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Public,
+    );
+
+    ProvenTransactionBuilder::new(
+        account_id,
+        [8; 32].try_into().unwrap(),
+        account.to_commitment(),
+        delta.to_commitment(),
+        0.into(),
+        Word::default(),
+        test_fee(),
+        u32::MAX.into(),
+        ExecutionProof::new_dummy(),
+    )
+    .account_update_details(AccountUpdateDetails::Delta(delta.clone()))
+    .build()
+    .unwrap()
+}
 
 #[tokio::test]
 async fn rpc_server_accepts_requests_without_accept_header() {
@@ -199,6 +246,9 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     let (_, rpc_addr, store_addr) = start_rpc().await;
     let (store_runtime, _data_directory, genesis) = start_store(store_addr).await;
 
+    // Wait for the store to be ready before sending requests.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
         miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())
@@ -209,54 +259,19 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
             .without_otel_context_injection()
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
-    let account_id = AccountId::dummy(
-        [0; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    // Build a valid proven transaction
+    let (account, account_delta) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_delta);
 
-    let account = AccountBuilder::new([0; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
-        .with_assets(vec![])
-        .with_component(BasicWallet)
-        .with_auth_component(NoopAuthComponent)
-        .build_existing()
-        .unwrap();
+    // Create an incorrect delta commitment from a different account
+    let (other_account, _) = build_test_account([1; 32]);
+    let incorrect_delta: AccountDelta = other_account.try_into().unwrap();
+    let incorrect_commitment_bytes = incorrect_delta.to_commitment().as_bytes();
 
-    let other_account = AccountBuilder::new([1; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Private)
-        .with_assets(vec![])
-        .with_component(BasicWallet)
-        .with_auth_component(NoopAuthComponent)
-        .build_existing()
-        .unwrap();
-    let incorrect_commitment_delta: AccountDelta = other_account.try_into().unwrap();
-    let incorrect_commitment_delta_bytes = incorrect_commitment_delta.to_commitment().as_bytes();
-
-    let account_delta: AccountDelta = account.clone().try_into().unwrap();
-
-    // Send any request to the RPC.
-    let tx = ProvenTransactionBuilder::new(
-        account_id,
-        [8; 32].try_into().unwrap(),
-        account.commitment(),
-        account_delta.clone().to_commitment(), // delta commitment
-        0.into(),
-        Word::default(),
-        test_fee(),
-        u32::MAX.into(),
-        ExecutionProof::new_dummy(),
-    )
-    .account_update_details(AccountUpdateDetails::Delta(account_delta))
-    .build()
-    .unwrap();
-
+    // Corrupt the transaction bytes with the incorrect delta commitment
     let mut tx_bytes = tx.to_bytes();
-    let offset = 15 + 32 + 32;
-    tx_bytes[offset..offset + 32].copy_from_slice(&incorrect_commitment_delta_bytes);
+    tx_bytes[DELTA_COMMITMENT_BYTE_OFFSET..DELTA_COMMITMENT_BYTE_OFFSET + 32]
+        .copy_from_slice(&incorrect_commitment_bytes);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx_bytes,
@@ -295,39 +310,8 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
             .without_otel_context_injection()
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
-    let account_id = AccountId::dummy(
-        [0; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
-
-    let account = AccountBuilder::new([0; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
-        .with_assets(vec![])
-        .with_component(BasicWallet)
-        .with_auth_component(NoopAuthComponent)
-        .build_existing()
-        .unwrap();
-
-    let account_delta: AccountDelta = account.clone().try_into().unwrap();
-
-    // Send any request to the RPC.
-    let tx = ProvenTransactionBuilder::new(
-        account_id,
-        [8; 32].try_into().unwrap(),
-        account.commitment(),
-        account_delta.clone().to_commitment(), // delta commitment
-        0.into(),
-        Word::default(),
-        test_fee(),
-        u32::MAX.into(),
-        ExecutionProof::new_dummy(),
-    )
-    .account_update_details(AccountUpdateDetails::Delta(account_delta))
-    .build()
-    .unwrap();
+    let (account, account_delta) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_delta);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx.to_bytes(),
@@ -423,7 +407,9 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     let config = GenesisConfig::default();
     let signer = SecretKey::new();
     let (genesis_state, _) = config.into_state(signer).unwrap();
-    Store::bootstrap(genesis_state.clone(), data_directory.path()).expect("store should bootstrap");
+    Store::bootstrap(genesis_state.clone(), data_directory.path())
+        .await
+        .expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let rpc_listener = TcpListener::bind(store_addr).await.expect("store should bind a port");
     let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
@@ -439,6 +425,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
@@ -451,7 +438,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     (
         store_runtime,
         data_directory,
-        genesis_state.into_block().unwrap().inner().header().commitment(),
+        genesis_state.into_block().await.unwrap().inner().header().commitment(),
     )
 }
 
@@ -479,6 +466,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
@@ -509,27 +497,32 @@ async fn get_limits_endpoint() {
         limits.endpoints.get("CheckNullifiers").expect("CheckNullifiers should exist");
 
     assert_eq!(
-        check_nullifiers.parameters.get("nullifier"),
+        check_nullifiers.parameters.get(QueryParamNullifierLimit::PARAM_NAME),
         Some(&(QueryParamNullifierLimit::LIMIT as u32)),
-        "CheckNullifiers nullifier limit should be {}",
+        "CheckNullifiers {} limit should be {}",
+        QueryParamNullifierLimit::PARAM_NAME,
         QueryParamNullifierLimit::LIMIT
     );
 
-    // Verify SyncState endpoint has multiple parameters
-    let sync_state = limits.endpoints.get("SyncState").expect("SyncState should exist");
+    let sync_transactions =
+        limits.endpoints.get("SyncTransactions").expect("SyncTransactions should exist");
     assert_eq!(
-        sync_state.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
+        sync_transactions.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
         Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
-        "SyncState {} limit should be {}",
+        "SyncTransactions {} limit should be {}",
         QueryParamAccountIdLimit::PARAM_NAME,
         QueryParamAccountIdLimit::LIMIT
     );
-    assert_eq!(
-        sync_state.parameters.get(QueryParamNoteTagLimit::PARAM_NAME),
-        Some(&(QueryParamNoteTagLimit::LIMIT as u32)),
-        "SyncState {} limit should be {}",
-        QueryParamNoteTagLimit::PARAM_NAME,
-        QueryParamNoteTagLimit::LIMIT
+
+    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id,
+    // not a repeated list, so they do not have list parameter limits.
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountVault"),
+        "SyncAccountVault should not have list parameter limits"
+    );
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountStorageMaps"),
+        "SyncAccountStorageMaps should not have list parameter limits"
     );
 
     // Verify GetNotesById endpoint
@@ -543,5 +536,23 @@ async fn get_limits_endpoint() {
     );
 
     // Shutdown to avoid runtime drop error.
+    shutdown_store(store_runtime).await;
+}
+
+#[tokio::test]
+async fn sync_chain_mmr_returns_delta() {
+    let (mut rpc_client, _rpc_addr, store_addr) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+
+    let request = proto::rpc::SyncChainMmrRequest {
+        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: None }),
+    };
+    let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
+    let response = response.into_inner();
+
+    let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
+    assert_eq!(mmr_delta.forest, 0);
+    assert!(mmr_delta.data.is_empty());
+
     shutdown_store(store_runtime).await;
 }

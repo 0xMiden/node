@@ -1,12 +1,19 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use miden_node_validator::ValidatorSigner;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::utils::Deserializable;
+use tokio::net::TcpListener;
 use url::Url;
 
 pub mod block_producer;
@@ -36,7 +43,8 @@ const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_MAX_TXS_PER_BATCH";
 const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_MAX_BATCHES_PER_BLOCK";
 const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_MEMPOOL_TX_CAPACITY";
 const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE";
-const ENV_VALIDATOR_INSECURE_SECRET_KEY: &str = "MIDEN_NODE_VALIDATOR_INSECURE_SECRET_KEY";
+const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
+const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -47,7 +55,95 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-/// Configuration for the Network Transaction Builder component
+/// Configuration for the Validator key used to sign blocks.
+///
+/// Used by the Validator command and the genesis bootstrap command.
+#[derive(clap::Args)]
+#[group(required = true, multiple = false)]
+pub struct ValidatorKey {
+    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    ///
+    /// If not provided, a predefined key is used.
+    ///
+    /// Cannot be used with `validator.key.kms-id`.
+    #[arg(
+        long = "validator.key.hex",
+        env = ENV_VALIDATOR_KEY,
+        value_name = "VALIDATOR_KEY",
+        default_value = INSECURE_VALIDATOR_KEY_HEX,
+    )]
+    validator_key: String,
+    /// Key ID for the KMS key used by validator to sign blocks.
+    ///
+    /// Cannot be used with `validator.key.hex`.
+    #[arg(
+        long = "validator.key.kms-id",
+        env = ENV_VALIDATOR_KMS_KEY_ID,
+        value_name = "VALIDATOR_KMS_KEY_ID",
+    )]
+    validator_kms_key_id: Option<String>,
+}
+
+impl ValidatorKey {
+    /// Consumes the validator key configuration and returns a KMS or local key signer depending on
+    /// the supplied configuration.
+    pub async fn into_signer(self) -> anyhow::Result<ValidatorSigner> {
+        if let Some(kms_key_id) = self.validator_kms_key_id {
+            // Use KMS key ID to create a ValidatorSigner.
+            let signer = ValidatorSigner::new_kms(kms_key_id).await?;
+            Ok(signer)
+        } else {
+            // Use hex-encoded key to create a ValidatorSigner.
+            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
+            let signer = ValidatorSigner::new_local(signer);
+            Ok(signer)
+        }
+    }
+}
+
+/// Configuration for the Validator component when run in the bundled mode.
+#[derive(clap::Args)]
+pub struct BundledValidatorConfig {
+    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    /// Only used when the Validator URL argument is not set.
+    #[arg(
+        long = "validator.key",
+        env = ENV_VALIDATOR_KEY,
+        value_name = "VALIDATOR_KEY",
+        default_value = INSECURE_VALIDATOR_KEY_HEX
+    )]
+    validator_key: String,
+
+    /// The remote Validator's gRPC URL. If unset, will default to running a Validator
+    /// in-process. If set, the insecure key argument is ignored.
+    #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
+    validator_url: Option<Url>,
+}
+
+impl BundledValidatorConfig {
+    /// Converts the [`ValidatorConfig`] into a URL and an optional [`SocketAddr`].
+    ///
+    /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
+    ///
+    /// If `validator_url` is not set, it binds to a random port on localhost, creates a URL,
+    /// and returns the URL and the bound [`SocketAddr`].
+    async fn to_addresses(&self) -> anyhow::Result<(Url, Option<SocketAddr>)> {
+        if let Some(url) = &self.validator_url {
+            Ok((url.clone(), None))
+        } else {
+            let socket_addr = TcpListener::bind("127.0.0.1:0")
+                .await
+                .context("Failed to bind to validator gRPC endpoint")?
+                .local_addr()
+                .context("Failed to retrieve the validator's gRPC address")?;
+            let url = Url::parse(&format!("http://{socket_addr}"))
+                .context("Failed to parse Validator URL")?;
+            Ok((url, Some(socket_addr)))
+        }
+    }
+}
+
+/// Configuration for the Network Transaction Builder component.
 #[derive(clap::Args)]
 pub struct NtxBuilderConfig {
     /// Disable spawning the network transaction builder.
@@ -68,6 +164,9 @@ pub struct NtxBuilderConfig {
     )]
     pub ticker_interval: Duration,
 
+    /// Number of note scripts to cache locally.
+    ///
+    /// Note scripts not in cache must first be retrieved from the store.
     #[arg(
         long = "ntx-builder.script-cache-size",
         env = ENV_NTX_SCRIPT_CACHE_SIZE,
@@ -75,6 +174,38 @@ pub struct NtxBuilderConfig {
         default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
     )]
     pub script_cache_size: NonZeroUsize,
+
+    /// Directory for the ntx-builder's persistent database.
+    ///
+    /// If not set, defaults to the node's data directory.
+    #[arg(long = "ntx-builder.data-directory", value_name = "DIR")]
+    pub data_directory: Option<PathBuf>,
+}
+
+impl NtxBuilderConfig {
+    /// Converts this CLI config into the ntx-builder's internal config.
+    ///
+    /// The `node_data_directory` is used as the default location for the ntx-builder's database
+    /// if `--ntx-builder.data-directory` is not explicitly set.
+    pub fn into_builder_config(
+        self,
+        store_url: Url,
+        block_producer_url: Url,
+        validator_url: Url,
+        node_data_directory: &Path,
+    ) -> miden_node_ntx_builder::NtxBuilderConfig {
+        let data_dir = self.data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
+        let database_filepath = data_dir.join("ntx-builder.sqlite3");
+
+        miden_node_ntx_builder::NtxBuilderConfig::new(
+            store_url,
+            block_producer_url,
+            validator_url,
+            database_filepath,
+        )
+        .with_tx_prover_url(self.tx_prover_url)
+        .with_script_cache_size(self.script_cache_size)
+    }
 }
 
 /// Configuration for the Block Producer component
@@ -102,11 +233,6 @@ pub struct BlockProducerConfig {
     /// in-process which is expensive.
     #[arg(long = "batch-prover.url", env = ENV_BATCH_PROVER_URL, value_name = "URL")]
     pub batch_prover_url: Option<Url>,
-
-    /// The remote block prover's gRPC url. If unset, will default to running a prover
-    /// in-process which is expensive.
-    #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
-    pub block_prover_url: Option<Url>,
 
     /// The number of transactions per batch.
     #[arg(

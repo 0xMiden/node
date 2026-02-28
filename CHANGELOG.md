@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.14.0 (TBD)
+
+### Enhancements
+
+- [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).
+- [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
+- Validator now persists validated transactions ([#1614](https://github.com/0xMiden/miden-node/pull/1614)).
+- [BREAKING] Remove `SynState` and introduce `SyncChainMmr` ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
+- Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
+- Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/miden-node/issues/1701)).
+- Added KMS signing support in validator ([#1677](https://github.com/0xMiden/miden-node/pull/1677)).
+
+### Changes
+
+- [BREAKING] Removed obsolete `SyncState` RPC endpoint; clients should use `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, or `SyncChainMmr` instead ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
+- Added account ID limits for `SyncTransactions`, `SyncAccountVault`, and `SyncAccountStorageMaps` to `GetLimits` responses ([#1636](https://github.com/0xMiden/miden-node/pull/1636)).
+- [BREAKING] Added typed `GetAccountError` for `GetAccount` endpoint, splitting `BlockNotAvailable` into `UnknownBlock` and `BlockPruned`. `AccountNotFound` and `AccountNotPublic` now return `InvalidArgument` gRPC status instead of `NotFound`; clients should parse the error details discriminant rather than branching on status codes ([#1646](https://github.com/0xMiden/miden-node/pull/1646)).
+- Changed `note_type` field in proto `NoteMetadata` from `uint32` to a `NoteType` enum ([#1594](https://github.com/0xMiden/miden-node/pull/1594)).
+- Refactored NTX Builder startup and introduced `NtxBuilderConfig` with configurable parameters ([#1610](https://github.com/0xMiden/miden-node/pull/1610)).
+- Refactored NTX Builder actor state into `AccountDeltaTracker` and `NotePool` for clarity, and added tracing instrumentation to event broadcasting ([#1611](https://github.com/0xMiden/miden-node/pull/1611)).
+- Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/miden-node/pull/1651)).
+- Added support for generic account loading at genesis ([#1624](https://github.com/0xMiden/miden-node/pull/1624)).
+- Improved tracing span fields ([#1650](https://github.com/0xMiden/miden-node/pull/1650))
+ - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/miden-node/pull/1662)).
+- [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
+- [BREAKING] Renamed `NoteRoot` protobuf message used in `GetNoteScriptByRoot` gRPC endpoints into `NoteScriptRoot` ([#1722](https://github.com/0xMiden/miden-node/pull/1722)).
+
 ## v0.13.7 (2026-02-25)
 
 - Updated `SyncAccountStorageMaps` and `SyncAccountVault` to allow all accounts with public state, including network accounts ([#1711](https://github.com/0xMiden/node/pull/1711)).
@@ -47,6 +74,7 @@
 
 ### Enhancements
 
+- Cleanup old account data from the database on apply block ([#1304](https://github.com/0xMiden/miden-node/issues/1304)).
 - Added block validation endpoint to validator and integrated with block producer ([#1382](https://github.com/0xMiden/miden-node/pull/1381)).
 - Added support for timeouts in the WASM remote prover clients ([#1383](https://github.com/0xMiden/miden-node/pull/1383)).
 - Added mempool statistics to the block producer status in the `miden-network-monitor` binary ([#1392](https://github.com/0xMiden/miden-node/pull/1392)).
@@ -68,10 +96,12 @@
 - The network monitor now marks the chain as unhealthy if it fails to create new blocks ([#1512](https://github.com/0xMiden/miden-node/pull/1512)).
 - Limited number of storage map keys in `GetAccount` requests ([#1517](https://github.com/0xMiden/miden-node/pull/1517)).
 - Block producer now detects if it is desync'd from the store's chain tip and aborts ([#1520](https://github.com/0xMiden/miden-node/pull/1520)).
+- Pin tool versions in CI ([#1523](https://github.com/0xMiden/miden-node/pull/1523)).
+- Add `GetVaultAssetWitnesses` and `GetStorageMapWitness` RPC endpoints to store ([#1529](https://github.com/0xMiden/miden-node/pull/1529)).
+- Add check to ensure tree store state is in sync with database storage ([#1532](https://github.com/0xMiden/miden-node/issues/1534)).
+- Ensure store terminates on nullifier tree or account tree root vs header mismatch (#[#1569](https://github.com/0xMiden/miden-node/pull/1569)).
 - Added support for foreign accounts to `NtxDataStore` and add `GetAccount` endpoint to NTX Builder gRPC store client ([#1521](https://github.com/0xMiden/miden-node/pull/1521)).
-- Pined tool versions in CI ([#1523](https://github.com/0xMiden/miden-node/pull/1523)).
-- Added `GetVaultAssetWitnesses` and `GetStorageMapWitness` RPC endpoints to store ([#1529](https://github.com/0xMiden/miden-node/pull/1529)).
-- Added check to ensure tree store state is in sync with database storage ([#1532](https://github.com/0xMiden/miden-node/issues/1534)).
+- Use paged queries for tree rebuilding to reduce memory usage during startup ([#1536](https://github.com/0xMiden/miden-node/pull/1536)).
 
 ### Changes
 
@@ -136,7 +166,7 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
-  - This presented as a database locked error and in rare cases a desync between the mempool and store. 
+  - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)
 

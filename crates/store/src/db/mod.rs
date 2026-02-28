@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::ops::RangeInclusive;
+use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::path::PathBuf;
 
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
-use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
+use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
 use miden_protocol::asset::{Asset, AssetVaultKey};
-use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, ProvenBlock};
+use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
@@ -23,18 +23,20 @@ use miden_protocol::note::{
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, instrument};
+use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::queries::StorageMapValuesPage;
+pub use crate::db::models::queries::{
+    AccountCommitmentsPage,
+    NullifiersPage,
+    PublicAccountIdsPage,
+};
+use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
 use crate::db::models::{Page, queries};
-use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
+use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
-
-pub(crate) mod manager;
 
 mod migrations;
 mod schema_hash;
@@ -49,8 +51,25 @@ pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
+/// The Store's database.
+///
+/// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.
 pub struct Db {
-    pool: deadpool_diesel::Pool<ConnectionManager, deadpool::managed::Object<ConnectionManager>>,
+    db: miden_node_db::Db,
+}
+
+impl Deref for Db {
+    type Target = miden_node_db::Db;
+
+    fn deref(&self) -> &Self::Target {
+        &self.db
+    }
+}
+
+impl DerefMut for Db {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.db
+    }
 }
 
 /// Describes the value of an asset for an account ID at `block_num` specifically.
@@ -86,13 +105,6 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
     fn eq(&self, (nullifier, block_num): &(Nullifier, BlockNumber)) -> bool {
         &self.nullifier == nullifier && &self.block_num == block_num
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct TransactionSummary {
-    pub account_id: AccountId,
-    pub block_num: BlockNumber,
-    pub transaction_id: TransactionId,
 }
 
 #[derive(Debug, PartialEq)]
@@ -173,14 +185,6 @@ impl From<NoteRecord> for proto::note::NoteSyncRecord {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct StateSyncUpdate {
-    pub notes: Vec<NoteSyncRecord>,
-    pub block_header: BlockHeader,
-    pub account_updates: Vec<AccountSummary>,
-    pub transactions: Vec<TransactionSummary>,
-}
-
-#[derive(Debug, PartialEq)]
 pub struct NoteSyncUpdate {
     pub notes: Vec<NoteSyncRecord>,
     pub block_header: BlockHeader,
@@ -238,7 +242,7 @@ impl Db {
         )
         .context("failed to open a database connection")?;
 
-        configure_connection_on_creation(&mut conn)?;
+        miden_node_db::configure_connection_on_creation(&mut conn)?;
 
         // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
@@ -249,6 +253,7 @@ impl Db {
             models::queries::apply_block(
                 conn,
                 genesis.header(),
+                genesis.signature(),
                 &[],
                 &[],
                 genesis.body().updated_accounts(),
@@ -259,83 +264,42 @@ impl Db {
         Ok(())
     }
 
-    /// Create and commit a transaction with the queries added in the provided closure
-    pub(crate) async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
-    where
-        Q: Send
-            + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
-            + 'static,
-        R: Send + 'static,
-        M: Send + ToString,
-        E: From<diesel::result::Error>,
-        E: From<DatabaseError>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let conn = self
-            .pool
-            .get()
-            .in_current_span()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        conn.interact(|conn| <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query))
-            .in_current_span()
-            .await
-            .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
-    }
-
-    /// Run the query _without_ a transaction
-    pub(crate) async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
-    where
-        Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,
-        R: Send + 'static,
-        M: Send + ToString,
-        E: From<DatabaseError>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        conn.interact(move |conn| {
-            let r = query(conn)?;
-            Ok(r)
-        })
-        .await
-        .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
-    }
-
     /// Open a connection to the DB and apply any pending migrations.
     #[instrument(target = COMPONENT, skip_all)]
-    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseSetupError> {
-        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
-
+    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
+        let db = miden_node_db::Db::new(&database_filepath)?;
         info!(
             target: COMPONENT,
             sqlite= %database_filepath.display(),
             "Connected to the database"
         );
 
-        let me = Db { pool };
-        me.query("migrations", apply_migrations).await?;
-        Ok(me)
+        db.query("migrations", apply_migrations).await?;
+        Ok(Self { db })
     }
 
-    /// Loads all the nullifiers from the DB.
+    /// Returns a page of nullifiers for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub(crate) async fn select_all_nullifiers(&self) -> Result<Vec<NullifierInfo>> {
-        self.transact("all nullifiers", move |conn| {
-            let nullifiers = queries::select_all_nullifiers(conn)?;
-            Ok(nullifiers)
+    pub async fn select_nullifiers_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_nullifier: Option<Nullifier>,
+    ) -> Result<NullifiersPage> {
+        self.transact("read nullifiers paged", move |conn| {
+            queries::select_nullifiers_paged(conn, page_size, after_nullifier)
         })
         .await
     }
 
     /// Loads the nullifiers that match the prefixes from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(
+        level = "debug",
+        target = COMPONENT,
+        skip_all,
+        fields(prefix_len, prefixes = nullifier_prefixes.len()),
+        ret(level = "debug"),
+        err
+    )]
     pub async fn select_nullifiers_by_prefix(
         &self,
         prefix_len: u32,
@@ -395,20 +359,38 @@ impl Db {
         .await
     }
 
-    /// TODO marked for removal, replace with paged version
+    /// Loads all the block headers from the DB.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_account_commitments(&self) -> Result<Vec<(AccountId, Word)>> {
-        self.transact("read all account commitments", move |conn| {
-            queries::select_all_account_commitments(conn)
+    pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
+        self.transact("all block headers", |conn| {
+            let raw = queries::select_all_block_header_commitments(conn)?;
+            Ok(raw)
         })
         .await
     }
 
-    /// Returns all account IDs that have public state.
+    /// Returns a page of account commitments for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_public_account_ids(&self) -> Result<Vec<AccountId>> {
-        self.transact("read all public account IDs", move |conn| {
-            queries::select_all_public_account_ids(conn)
+    pub async fn select_account_commitments_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<AccountCommitmentsPage> {
+        self.transact("read account commitments paged", move |conn| {
+            queries::select_account_commitments_paged(conn, page_size, after_account_id)
+        })
+        .await
+    }
+
+    /// Returns a page of public account IDs for forest rebuilding.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_public_account_ids_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<PublicAccountIdsPage> {
+        self.transact("read public account IDs paged", move |conn| {
+            queries::select_public_account_ids_paged(conn, page_size, after_account_id)
         })
         .await
     }
@@ -498,19 +480,6 @@ impl Db {
     }
 
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn get_state_sync(
-        &self,
-        block_number: BlockNumber,
-        account_ids: Vec<AccountId>,
-        note_tags: Vec<u32>,
-    ) -> Result<StateSyncUpdate, StateSyncError> {
-        self.transact::<StateSyncUpdate, StateSyncError, _, _>("state sync", move |conn| {
-            queries::get_state_sync(conn, block_number, account_ids, note_tags)
-        })
-        .await
-    }
-
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn get_note_sync(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -566,17 +535,18 @@ impl Db {
         &self,
         allow_acquire: oneshot::Sender<()>,
         acquire_done: oneshot::Receiver<()>,
-        block: ProvenBlock,
+        signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
                 conn,
-                block.header(),
+                signed_block.header(),
+                signed_block.signature(),
                 &notes,
-                block.body().created_nullifiers(),
-                block.body().updated_accounts(),
-                block.body().transactions(),
+                signed_block.body().created_nullifiers(),
+                signed_block.body().updated_accounts(),
+                signed_block.body().transactions(),
             )?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
@@ -584,6 +554,8 @@ impl Db {
             if allow_acquire.send(()).is_err() {
                 tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
             }
+
+            models::queries::prune_history(conn, signed_block.header().block_num())?;
 
             acquire_done.blocking_recv()?;
 

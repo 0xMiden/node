@@ -21,7 +21,6 @@ testing = ["miden-protocol/testing"]
 [dependencies]
 anyhow                = { workspace = true }
 bytes                 = { version = "1.10" }
-figment               = { features = ["env", "toml"], version = "0.10" }
 http                  = { workspace = true }
 http-body-util        = { version = "0.1" }
 itertools             = { workspace = true }
@@ -31,16 +30,18 @@ opentelemetry         = { version = "0.31" }
 opentelemetry-otlp    = { default-features = false, features = ["grpc-tonic", "tls-roots", "trace"], version = "0.31" }
 opentelemetry_sdk     = { features = ["rt-tokio", "testing"], version = "0.31" }
 rand                  = { workspace = true }
-serde                 = { features = ["derive"], version = "1.0" }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
 tonic                 = { default-features = true, workspace = true }
 tower-http            = { features = ["catch-panic"], workspace = true }
 tracing               = { workspace = true }
-tracing-forest        = { features = ["chrono"], optional = true, version = "0.2" }
+tracing-forest        = { features = ["chrono"], optional = true, version = "0.3" }
 tracing-opentelemetry = { version = "0.32" }
 tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
+
+[build-dependencies]
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 
 [dev-dependencies]
 thiserror = { workspace = true }

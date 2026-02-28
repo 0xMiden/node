@@ -290,7 +290,7 @@ impl InnerForest {
     /// account, returns an empty SMT root.
     fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
         self.vault_roots
-            .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::from(u32::MAX)))
+            .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::MAX))
             .next_back()
             .map_or_else(Self::empty_smt_root, |(_, root)| *root)
     }
@@ -449,7 +449,7 @@ impl InnerForest {
         self.storage_map_roots
             .range(
                 (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), BlockNumber::from(u32::MAX)),
+                    ..=(account_id, slot_name.clone(), BlockNumber::MAX),
             )
             .next_back()
             .map_or_else(Self::empty_smt_root, |(_, root)| *root)
@@ -465,7 +465,7 @@ impl InnerForest {
         self.storage_entries
             .range(
                 (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..(account_id, slot_name.clone(), BlockNumber::from(u32::MAX)),
+                    ..(account_id, slot_name.clone(), BlockNumber::MAX),
             )
             .next_back()
             .map(|(_, entries)| entries.clone())
@@ -612,4 +612,6 @@ impl InnerForest {
             );
         }
     }
+
+    // TODO: tie in-memory forest retention to DB pruning policy once forest queries rely on it.
 }

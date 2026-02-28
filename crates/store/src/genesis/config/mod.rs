@@ -1,10 +1,12 @@
 //! Describe a subset of the genesis manifest in easily human readable format
 
 use std::cmp::Ordering;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
 use miden_node_utils::crypto::get_rpo_random_coin;
+use miden_node_utils::signer::BlockSigner;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
     Account,
@@ -12,7 +14,6 @@ use miden_protocol::account::{
     AccountDelta,
     AccountFile,
     AccountId,
-    AccountStorage,
     AccountStorageDelta,
     AccountStorageMode,
     AccountType,
@@ -24,10 +25,10 @@ use miden_protocol::asset::{FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, FieldElement, ONE, ZERO};
+use miden_protocol::{Felt, FieldElement, ONE};
 use miden_standards::AuthScheme;
 use miden_standards::account::auth::AuthFalcon512Rpo;
-use miden_standards::account::faucets::BasicFungibleFaucet;
+use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
 use rand::{Rng, SeedableRng};
@@ -42,27 +43,55 @@ use self::errors::GenesisConfigError;
 #[cfg(test)]
 mod tests;
 
+const DEFAULT_NATIVE_FAUCET_SYMBOL: &str = "MIDEN";
+const DEFAULT_NATIVE_FAUCET_DECIMALS: u8 = 6;
+const DEFAULT_NATIVE_FAUCET_MAX_SUPPLY: u64 = 100_000_000_000_000_000;
+
 // GENESIS CONFIG
 // ================================================================================================
+
+/// An account loaded from a `.mac` file (path relative to genesis config directory).
+///
+/// Notice: Generic accounts are not validated (e.g. that their vault assets reference known
+/// faucets), leaving the responsibility of ensuring valid genesis state to the operator.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenericAccountConfig {
+    path: PathBuf,
+}
 
 /// Specify a set of faucets and wallets with assets for easier test deployments.
 ///
 /// Notice: Any faucet must be declared _before_ it's use in a wallet/regular account.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenesisConfig {
     version: u32,
     timestamp: u32,
-    native_faucet: NativeFaucet,
+    /// Override the native faucet with a custom faucet account.
+    ///
+    /// If unspecified, a default native faucet will be used with:
+    ///
+    /// ```toml
+    /// symbol     = "MIDEN"
+    /// decimals   = 6
+    /// max_supply = 100_000_000_000_000_000
+    /// ```
+    #[serde(default)]
+    native_faucet: Option<PathBuf>,
     fee_parameters: FeeParameterConfig,
     #[serde(default)]
     wallet: Vec<WalletConfig>,
     #[serde(default)]
     fungible_faucet: Vec<FungibleFaucetConfig>,
+    #[serde(default)]
+    account: Vec<GenericAccountConfig>,
+    #[serde(skip)]
+    config_dir: PathBuf,
 }
 
 impl Default for GenesisConfig {
     fn default() -> Self {
-        let miden = TokenSymbolStr::from_str("MIDEN").unwrap();
         Self {
             version: 1_u32,
             timestamp: u32::try_from(
@@ -73,30 +102,44 @@ impl Default for GenesisConfig {
             )
             .expect("Timestamp should fit into u32"),
             wallet: vec![],
-            native_faucet: NativeFaucet {
-                max_supply: 100_000_000_000_000_000u64,
-                decimals: 6u8,
-                symbol: miden.clone(),
-            },
+            native_faucet: None,
             fee_parameters: FeeParameterConfig { verification_base_fee: 0 },
             fungible_faucet: vec![],
+            account: vec![],
+            config_dir: PathBuf::from("."),
         }
     }
 }
 
 impl GenesisConfig {
-    /// Read the genesis accounts from a toml formatted string
+    /// Read the genesis config from a TOML file.
+    ///
+    /// The parent directory of `path` is used to resolve relative paths for account files
+    /// referenced in the configuration (e.g., `[[account]]` entries with `path` fields).
     ///
     /// Notice: It will generate the specified case during [`fn into_state`].
-    pub fn read_toml(toml_str: &str) -> Result<Self, GenesisConfigError> {
-        let me = toml::from_str::<Self>(toml_str)?;
-        Ok(me)
+    pub fn read_toml_file(path: &Path) -> Result<Self, GenesisConfigError> {
+        let toml_str = fs_err::read_to_string(path)
+            .map_err(|e| GenesisConfigError::ConfigFileRead(e, path.to_path_buf()))?;
+        let config_dir = path.parent().expect("config file path must have a parent directory");
+        Self::read_toml(&toml_str, config_dir)
+    }
+
+    /// Parse a genesis config from a TOML formatted string.
+    ///
+    /// The `config_dir` parameter is stored so that relative paths for account files
+    /// (e.g., `[[account]]` entries with `path` fields, or native faucet file references)
+    /// can be resolved later during [`Self::into_state`].
+    fn read_toml(toml_str: &str, config_dir: &Path) -> Result<Self, GenesisConfigError> {
+        let mut config: Self = toml::from_str(toml_str)?;
+        config.config_dir = config_dir.to_path_buf();
+        Ok(config)
     }
 
     /// Convert the in memory representation into the new genesis state
     ///
     /// Also returns the set of secrets for the generated accounts.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub fn into_state<S>(
         self,
         signer: S,
@@ -108,10 +151,20 @@ impl GenesisConfig {
             fee_parameters,
             fungible_faucet: fungible_faucet_configs,
             wallet: wallet_configs,
-            ..
+            account: account_entries,
+            config_dir,
         } = self;
 
-        let symbol = native_faucet.symbol.clone();
+        // Load account files from disk
+        let file_loaded_accounts = account_entries
+            .into_iter()
+            .map(|acc| {
+                let full_path = config_dir.join(&acc.path);
+                let account_file = AccountFile::read(&full_path)
+                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
+                Ok(account_file.account)
+            })
+            .collect::<Result<Vec<_>, GenesisConfigError>>()?;
 
         let mut wallet_accounts = Vec::<Account>::new();
         // Every asset sitting in a wallet, has to reference a faucet for that asset
@@ -121,10 +174,21 @@ impl GenesisConfig {
         // accounts/sign transactions
         let mut secrets = Vec::new();
 
-        // First setup all the faucets
-        for fungible_faucet_config in std::iter::once(native_faucet.to_faucet_config())
-            .chain(fungible_faucet_configs.into_iter())
-        {
+        // Handle native faucet: build from defaults or load from file
+        let (native_faucet_account, symbol, native_secret) =
+            NativeFaucetConfig(native_faucet).build_account(&config_dir)?;
+        if let Some(secret_key) = native_secret {
+            secrets.push((
+                format!("faucet_{symbol}.mac", symbol = symbol.to_string().to_lowercase()),
+                native_faucet_account.id(),
+                secret_key,
+            ));
+        }
+        let native_faucet_account_id = native_faucet_account.id();
+        faucet_accounts.insert(symbol.clone(), native_faucet_account);
+
+        // Setup additional fungible faucets from parameters
+        for fungible_faucet_config in fungible_faucet_configs {
             let symbol = fungible_faucet_config.symbol.clone();
             let (faucet_account, secret_key) = fungible_faucet_config.build_account()?;
 
@@ -141,11 +205,6 @@ impl GenesisConfig {
             // we know the remaining supply in the faucets.
         }
 
-        let native_faucet_account_id = faucet_accounts
-            .get(&symbol)
-            .expect("Parsing guarantees the existence of a native faucet.")
-            .id();
-
         let fee_parameters =
             FeeParameters::new(native_faucet_account_id, fee_parameters.verification_base_fee)?;
 
@@ -158,7 +217,7 @@ impl GenesisConfig {
         for (index, WalletConfig { has_updatable_code, storage_mode, assets }) in
             wallet_configs.into_iter().enumerate()
         {
-            tracing::debug!("Adding wallet account {index} with {assets:?}");
+            tracing::debug!(index, assets = ?assets, "Adding wallet account");
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
@@ -220,11 +279,11 @@ impl GenesisConfig {
             let mut storage_delta = AccountStorageDelta::default();
 
             if total_issuance != 0 {
-                // slot 0
-                storage_delta.set_item(
-                    AccountStorage::faucet_sysdata_slot().clone(),
-                    [ZERO, ZERO, ZERO, Felt::new(total_issuance)].into(),
-                )?;
+                let current_metadata = TokenMetadata::try_from(faucet_account.storage())?;
+                let updated_metadata =
+                    current_metadata.with_token_supply(Felt::new(total_issuance))?;
+                storage_delta
+                    .set_item(TokenMetadata::metadata_slot().clone(), updated_metadata.into())?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
@@ -264,6 +323,9 @@ impl GenesisConfig {
         // Ensure the faucets always precede the wallets referencing them
         all_accounts.extend(wallet_accounts);
 
+        // Append file-loaded accounts as-is
+        all_accounts.extend(file_loaded_accounts);
+
         Ok((
             GenesisState {
                 fee_parameters,
@@ -274,36 +336,6 @@ impl GenesisConfig {
             },
             AccountSecrets { secrets },
         ))
-    }
-}
-
-// NATIVE FAUCET
-// ================================================================================================
-
-/// Declare the native fungible asset
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NativeFaucet {
-    /// Token symbol to use for fees.
-    symbol: TokenSymbolStr,
-
-    decimals: u8,
-    /// Max supply in full token units
-    ///
-    /// It will be converted internally to the smallest representable unit,
-    /// using based `10.powi(decimals)` as a multiplier.
-    max_supply: u64,
-}
-
-impl NativeFaucet {
-    fn to_faucet_config(&self) -> FungibleFaucetConfig {
-        let NativeFaucet { symbol, decimals, max_supply, .. } = self;
-        FungibleFaucetConfig {
-            symbol: symbol.clone(),
-            decimals: *decimals,
-            max_supply: *max_supply,
-            storage_mode: StorageMode::Public,
-        }
     }
 }
 
@@ -318,6 +350,54 @@ impl NativeFaucet {
 pub struct FeeParameterConfig {
     /// Verification base fee, in units of smallest denomination.
     verification_base_fee: u32,
+}
+
+// NATIVE FAUCET CONFIG
+// ================================================================================================
+
+/// Wraps an optional path to a pre-built faucet account file.
+///
+/// When no path is provided, a default native faucet is built using hardcoded MIDEN defaults.
+struct NativeFaucetConfig(Option<PathBuf>);
+
+impl NativeFaucetConfig {
+    /// Build or load the native faucet account.
+    ///
+    /// For `None`, builds a new faucet from defaults and returns the generated secret key.
+    /// For `Some(path)`, loads the account from disk and validates it is a fungible faucet.
+    fn build_account(
+        self,
+        config_dir: &Path,
+    ) -> Result<(Account, TokenSymbolStr, Option<RpoSecretKey>), GenesisConfigError> {
+        match self.0 {
+            None => {
+                let symbol = TokenSymbolStr::from_str(DEFAULT_NATIVE_FAUCET_SYMBOL).unwrap();
+                let faucet_config = FungibleFaucetConfig {
+                    symbol: symbol.clone(),
+                    decimals: DEFAULT_NATIVE_FAUCET_DECIMALS,
+                    max_supply: DEFAULT_NATIVE_FAUCET_MAX_SUPPLY,
+                    storage_mode: StorageMode::Public,
+                };
+                let (account, secret_key) = faucet_config.build_account()?;
+                Ok((account, symbol, Some(secret_key)))
+            },
+            Some(path) => {
+                let full_path = config_dir.join(&path);
+                let account_file = AccountFile::read(&full_path)
+                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
+                let account = account_file.account;
+
+                if account.id().account_type() != AccountType::FungibleFaucet {
+                    return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
+                }
+
+                let faucet = BasicFungibleFaucet::try_from(&account)
+                    .expect("validated as fungible faucet above");
+                let symbol = TokenSymbolStr::from(faucet.symbol());
+                Ok((account, symbol, None))
+            },
+        }
+    }
 }
 
 // FUNGIBLE FAUCET CONFIG
@@ -442,10 +522,10 @@ impl AccountSecrets {
     ///
     /// If no name is present, a new one is generated based on the current time
     /// and the index in
-    pub fn as_account_files<S>(
+    pub fn as_account_files(
         &self,
-        genesis_state: &GenesisState<S>,
-    ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + use<'_, S> {
+        genesis_state: &GenesisState<impl BlockSigner>,
+    ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + '_ {
         let account_lut = IndexMap::<AccountId, Account>::from_iter(
             genesis_state.accounts.iter().map(|account| (account.id(), account.clone())),
         );
@@ -545,6 +625,14 @@ impl Eq for TokenSymbolStr {}
 impl From<TokenSymbolStr> for TokenSymbol {
     fn from(value: TokenSymbolStr) -> Self {
         value.encoded
+    }
+}
+
+impl From<TokenSymbol> for TokenSymbolStr {
+    fn from(symbol: TokenSymbol) -> Self {
+        // SAFETY: TokenSymbol guarantees valid format, so to_string should not fail
+        let raw = symbol.to_string().expect("TokenSymbol should always produce valid string");
+        Self { raw, encoded: symbol }
     }
 }
 

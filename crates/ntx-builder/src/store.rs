@@ -236,10 +236,10 @@ impl StoreClient {
         &self,
         sender: tokio::sync::mpsc::Sender<NetworkAccountId>,
     ) -> Result<(), StoreError> {
-        let mut block_range = BlockNumber::from(0)..=BlockNumber::from(u32::MAX);
+        let mut block_range = BlockNumber::GENESIS..=BlockNumber::MAX;
 
         while let Some(next_start) = self.load_accounts_page(block_range, &sender).await? {
-            block_range = next_start..=BlockNumber::from(u32::MAX);
+            block_range = next_start..=BlockNumber::MAX;
         }
 
         Ok(())
@@ -365,7 +365,7 @@ impl StoreClient {
         &self,
         root: Word,
     ) -> Result<Option<NoteScript>, StoreError> {
-        let request = proto::note::NoteRoot { root: Some(root.into()) };
+        let request = proto::note::NoteScriptRoot { root: Some(root.into()) };
 
         let script = self.inner.clone().get_note_script_by_root(request).await?.into_inner().script;
 

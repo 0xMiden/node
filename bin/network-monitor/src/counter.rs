@@ -21,12 +21,10 @@ use miden_protocol::note::{
     Note,
     NoteAssets,
     NoteAttachment,
-    NoteExecutionHint,
-    NoteInputs,
     NoteMetadata,
     NoteRecipient,
     NoteScript,
-    NoteTag,
+    NoteStorage,
     NoteType,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
@@ -34,7 +32,7 @@ use miden_protocol::utils::Deserializable;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::note::NetworkAccountTarget;
+use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::utils::Serializable;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
@@ -751,7 +749,7 @@ fn load_counter_account(file_path: &Path) -> Result<Account> {
 }
 
 /// Create and submit a network note that targets the counter account.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[instrument(
     parent = None,
     target = COMPONENT,
@@ -858,12 +856,8 @@ fn create_network_note(
         .context("Failed to create NetworkAccountTarget for counter account")?;
     let attachment: NoteAttachment = target.into();
 
-    let metadata = NoteMetadata::new(
-        wallet_account.id(),
-        NoteType::Public,
-        NoteTag::with_account_target(counter_account.id()),
-    )
-    .with_attachment(attachment);
+    let metadata =
+        NoteMetadata::new(wallet_account.id(), NoteType::Public).with_attachment(attachment);
 
     let serial_num = Word::new([
         Felt::new(rng.random()),
@@ -872,7 +866,7 @@ fn create_network_note(
         Felt::new(rng.random()),
     ]);
 
-    let recipient = NoteRecipient::new(serial_num, script, NoteInputs::new(vec![])?);
+    let recipient = NoteRecipient::new(serial_num, script, NoteStorage::new(vec![])?);
 
     let network_note = Note::new(NoteAssets::new(vec![])?, metadata, recipient.clone());
     Ok((network_note, recipient))

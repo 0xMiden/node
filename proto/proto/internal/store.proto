@@ -45,7 +45,7 @@ service Rpc {
     rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteRoot) returns (rpc.MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (rpc.MaybeNoteScript) {}
 
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
     //
@@ -63,22 +63,8 @@ service Rpc {
     // tip of the chain.
     rpc SyncNotes(rpc.SyncNotesRequest) returns (rpc.SyncNotesResponse) {}
 
-    // Returns info which can be used by the requester to sync up to the latest state of the chain
-    // for the objects (accounts, notes, nullifiers) the requester is interested in.
-    //
-    // This request returns the next block containing requested data. It also returns `chain_tip`
-    // which is the latest block number in the chain. requester is expected to repeat these requests
-    // in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-    // the requester is fully synchronized with the chain.
-    //
-    // Each request also returns info about new notes, nullifiers etc. created. It also returns
-    // Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain
-    // MMR peaks and chain MMR nodes.
-    //
-    // For preserving some degree of privacy, note tags and nullifiers filters contain only high
-    // part of hashes. Thus, returned data contains excessive notes and nullifiers, requester can make
-    // additional filtering of that data on its side.
-    rpc SyncState(rpc.SyncStateRequest) returns (rpc.SyncStateResponse) {}
+    // Returns chain MMR updates within a block range.
+    rpc SyncChainMmr(rpc.SyncChainMmrRequest) returns (rpc.SyncChainMmrResponse) {}
 
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(rpc.SyncAccountVaultRequest) returns (rpc.SyncAccountVaultResponse) {}
@@ -96,7 +82,7 @@ service Rpc {
 // Store API for the BlockProducer component
 service BlockProducer {
     // Applies changes of a new block to the DB and in-memory data structures.
-    rpc ApplyBlock(blockchain.Block) returns (google.protobuf.Empty) {}
+    rpc ApplyBlock(ApplyBlockRequest) returns (google.protobuf.Empty) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
@@ -110,6 +96,18 @@ service BlockProducer {
 
     // Returns data required to validate a new transaction.
     rpc GetTransactionInputs(TransactionInputsRequest) returns (TransactionInputs) {}
+}
+
+// APPLY BLOCK REQUEST
+// ================================================================================================
+
+// Applies a block to the state.
+message ApplyBlockRequest {
+    // Ordered batches encoded using [winter_utils::Serializable] implementation for
+    // [miden_objects::batch::OrderedBatches].
+    bytes ordered_batches = 1;
+    // Block signed by the Validator.
+    blockchain.SignedBlock block = 2;
 }
 
 // GET BLOCK INPUTS
@@ -271,7 +269,7 @@ service NtxBuilder {
     rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteRoot) returns (rpc.MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (rpc.MaybeNoteScript) {}
 
     // Returns vault asset witnesses for the specified account.
     rpc GetVaultAssetWitnesses(VaultAssetWitnessesRequest) returns (VaultAssetWitnessesResponse) {}

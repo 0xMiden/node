@@ -14,30 +14,32 @@
 //! Notice: Changing any of these are _backwards-incompatible_ changes that are not caught/covered
 //! by migrations!
 
-#![allow(
+#![expect(
     clippy::inline_always,
     reason = "Just unification helpers of 1-2 lines of casting types"
 )]
-#![allow(
+#![expect(
     dead_code,
     reason = "Not all converters are used bidirectionally, however, keeping them is a good thing"
 )]
-#![allow(
+#![expect(
     clippy::cast_sign_loss,
     reason = "This is the one file where we map the signed database types to the working types"
 )]
-#![allow(
+#![expect(
     clippy::cast_possible_wrap,
     reason = "We will not approach the item count where i64 and usize casting will cause issues
     on relevant platforms"
 )]
 
+use miden_crypto::Word;
+use miden_crypto::utils::Deserializable;
 use miden_protocol::Felt;
 use miden_protocol::account::{StorageSlotName, StorageSlotType};
-use miden_protocol::block::BlockNumber;
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteTag;
 
-use crate::db::models::queries::NetworkAccountType;
+use crate::db::models::queries::{BlockHeaderCommitment, NetworkAccountType};
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from database type {from_type} into {into_type}")]
@@ -50,7 +52,7 @@ pub struct DatabaseTypeConversionError {
 /// Convert from and to it's database representation and back
 ///
 /// We do not assume sanity of DB types.
-pub(crate) trait SqlTypeConvert: Sized {
+pub trait SqlTypeConvert: Sized {
     type Raw: Sized;
 
     fn to_raw_sql(self) -> Self::Raw;
@@ -64,6 +66,32 @@ pub(crate) trait SqlTypeConvert: Sized {
             from_type: std::any::type_name::<Self::Raw>(),
             into_type: std::any::type_name::<Self>(),
         }
+    }
+}
+
+impl SqlTypeConvert for BlockHeaderCommitment {
+    type Raw = Vec<u8>;
+    fn from_raw_sql(
+        raw: Self::Raw,
+    ) -> Result<Self, crate::db::models::conv::DatabaseTypeConversionError> {
+        let inner =
+            <Word as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)?;
+        Ok(BlockHeaderCommitment(inner))
+    }
+    fn to_raw_sql(self) -> Self::Raw {
+        self.0.as_bytes().to_vec()
+    }
+}
+
+impl SqlTypeConvert for BlockHeader {
+    type Raw = Vec<u8>;
+
+    fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
+        <Self as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)
+    }
+
+    fn to_raw_sql(self) -> Self::Raw {
+        miden_crypto::utils::Serializable::to_bytes(&self)
     }
 }
 
@@ -107,7 +135,7 @@ impl SqlTypeConvert for NoteTag {
 
     #[inline(always)]
     fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
-        #[allow(clippy::cast_sign_loss)]
+        #[expect(clippy::cast_sign_loss)]
         Ok(NoteTag::new(raw as u32))
     }
 
@@ -189,7 +217,7 @@ pub(crate) fn fungible_delta_to_raw_sql(delta: i64) -> i64 {
 }
 
 #[inline(always)]
-#[allow(clippy::cast_sign_loss)]
+#[expect(clippy::cast_sign_loss)]
 pub(crate) fn raw_sql_to_note_type(raw: i32) -> u8 {
     raw as u8
 }

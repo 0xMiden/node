@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use diesel::prelude::{Queryable, QueryableByName};
@@ -17,11 +18,7 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
-use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES,
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-};
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -44,7 +41,8 @@ use miden_protocol::utils::{Deserializable, Serializable};
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
-use crate::db::models::{serialize_vec, vec_raw_try_into};
+#[cfg(test)]
+use crate::db::models::vec_raw_try_into;
 use crate::db::{AccountVaultValue, schema};
 use crate::errors::DatabaseError;
 
@@ -254,11 +252,19 @@ pub(crate) fn select_network_account_by_id(
     }
 }
 
-/// Select all account commitments from the DB using the given [`SqliteConnection`].
+/// Page of account commitments returned by [`select_account_commitments_paged`].
+#[derive(Debug)]
+pub struct AccountCommitmentsPage {
+    /// The account commitments in this page.
+    pub commitments: Vec<(AccountId, Word)>,
+    /// If `Some`, there are more results. Use this as the `after_account_id` for the next page.
+    pub next_cursor: Option<AccountId>,
+}
+
+/// Selects account commitments with pagination.
 ///
-/// # Returns
-///
-/// The vector with the account id and corresponding commitment, or an error.
+/// Returns up to `page_size` account commitments, starting after `after_account_id` if provided.
+/// Results are ordered by `account_id` for stable pagination.
 ///
 /// # Raw SQL
 ///
@@ -270,31 +276,71 @@ pub(crate) fn select_network_account_by_id(
 ///     accounts
 /// WHERE
 ///     is_latest = 1
+///     AND (account_id > :after_account_id OR :after_account_id IS NULL)
 /// ORDER BY
-///     block_num ASC
+///     account_id ASC
+/// LIMIT :page_size + 1
 /// ```
-pub(crate) fn select_all_account_commitments(
+pub(crate) fn select_account_commitments_paged(
     conn: &mut SqliteConnection,
-) -> Result<Vec<(AccountId, Word)>, DatabaseError> {
-    let raw = SelectDsl::select(
+    page_size: NonZeroUsize,
+    after_account_id: Option<AccountId>,
+) -> Result<AccountCommitmentsPage, DatabaseError> {
+    use miden_protocol::utils::Serializable;
+
+    // Fetch one extra to determine if there are more results
+    #[expect(clippy::cast_possible_wrap)]
+    let limit = (page_size.get() + 1) as i64;
+
+    let mut query = SelectDsl::select(
         schema::accounts::table,
         (schema::accounts::account_id, schema::accounts::account_commitment),
     )
     .filter(schema::accounts::is_latest.eq(true))
-    .order_by(schema::accounts::block_num.asc())
-    .load::<(Vec<u8>, Vec<u8>)>(conn)?;
+    .order_by(schema::accounts::account_id.asc())
+    .limit(limit)
+    .into_boxed();
 
-    Result::<Vec<_>, DatabaseError>::from_iter(raw.into_iter().map(
+    if let Some(cursor) = after_account_id {
+        query = query.filter(schema::accounts::account_id.gt(cursor.to_bytes()));
+    }
+
+    let raw = query.load::<(Vec<u8>, Vec<u8>)>(conn)?;
+
+    let mut commitments = Result::<Vec<_>, DatabaseError>::from_iter(raw.into_iter().map(
         |(ref account, ref commitment)| {
             Ok((AccountId::read_from_bytes(account)?, Word::read_from_bytes(commitment)?))
         },
-    ))
+    ))?;
+
+    // If we got more than page_size, there are more results
+    let next_cursor = if commitments.len() > page_size.get() {
+        commitments.pop(); // Remove the extra element
+        commitments.last().map(|(id, _)| *id)
+    } else {
+        None
+    };
+
+    Ok(AccountCommitmentsPage { commitments, next_cursor })
 }
 
-/// Select all account IDs that have public state.
+/// Page of public account IDs returned by [`select_public_account_ids_paged`].
+#[derive(Debug)]
+pub struct PublicAccountIdsPage {
+    /// The public account IDs in this page.
+    pub account_ids: Vec<AccountId>,
+    /// If `Some`, there are more results. Use this as the `after_account_id` for the next page.
+    pub next_cursor: Option<AccountId>,
+}
+
+/// Selects public account IDs with pagination.
 ///
-/// This filters accounts in-memory after loading only the account IDs (not commitments),
-/// which is more efficient than loading full commitments when only IDs are needed.
+/// Returns up to `page_size` public account IDs, starting after `after_account_id` if provided.
+/// Results are ordered by `account_id` for stable pagination.
+///
+/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
+/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
+/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -305,31 +351,48 @@ pub(crate) fn select_all_account_commitments(
 ///     accounts
 /// WHERE
 ///     is_latest = 1
+///     AND code_commitment IS NOT NULL
+///     AND (account_id > :after_account_id OR :after_account_id IS NULL)
 /// ORDER BY
-///     block_num ASC
+///     account_id ASC
+/// LIMIT :page_size + 1
 /// ```
-pub(crate) fn select_all_public_account_ids(
+pub(crate) fn select_public_account_ids_paged(
     conn: &mut SqliteConnection,
-) -> Result<Vec<AccountId>, DatabaseError> {
-    // We could technically use a `LIKE` constraint for both postgres and sqlite backends,
-    // but diesel doesn't expose that.
-    let raw: Vec<Vec<u8>> =
-        SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
-            .filter(schema::accounts::is_latest.eq(true))
-            .order_by(schema::accounts::block_num.asc())
-            .load::<Vec<u8>>(conn)?;
+    page_size: NonZeroUsize,
+    after_account_id: Option<AccountId>,
+) -> Result<PublicAccountIdsPage, DatabaseError> {
+    use miden_protocol::utils::Serializable;
 
-    Result::from_iter(
-        raw.into_iter()
-            .map(|bytes| {
-                AccountId::read_from_bytes(&bytes).map_err(DatabaseError::DeserializationError)
-            })
-            .filter_map(|result| match result {
-                Ok(id) if id.has_public_state() => Some(Ok(id)),
-                Ok(_) => None,
-                Err(e) => Some(Err(e)),
-            }),
-    )
+    #[expect(clippy::cast_possible_wrap)]
+    let limit = (page_size.get() + 1) as i64;
+
+    let mut query = SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
+        .filter(schema::accounts::is_latest.eq(true))
+        .filter(schema::accounts::code_commitment.is_not_null())
+        .order_by(schema::accounts::account_id.asc())
+        .limit(limit)
+        .into_boxed();
+
+    if let Some(cursor) = after_account_id {
+        query = query.filter(schema::accounts::account_id.gt(cursor.to_bytes()));
+    }
+
+    let raw = query.load::<Vec<u8>>(conn)?;
+
+    let mut account_ids: Vec<AccountId> = Result::from_iter(raw.into_iter().map(|bytes| {
+        AccountId::read_from_bytes(&bytes).map_err(DatabaseError::DeserializationError)
+    }))?;
+
+    // If we got more than page_size, there are more results
+    let next_cursor = if account_ids.len() > page_size.get() {
+        account_ids.pop(); // Remove the extra element
+        account_ids.last().copied()
+    } else {
+        None
+    };
+
+    Ok(PublicAccountIdsPage { account_ids, next_cursor })
 }
 
 /// Select account vault assets within a block range (inclusive).
@@ -416,49 +479,6 @@ pub(crate) fn select_account_vault_assets(
     };
 
     Ok((last_block_included, values))
-}
-
-/// Select [`AccountSummary`] from the DB using the given [`SqliteConnection`], given that the
-/// account update was in the given block range (inclusive).
-///
-/// # Returns
-///
-/// The vector of [`AccountSummary`] with the matching accounts.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT
-///     account_id,
-///     account_commitment,
-///     block_num
-/// FROM
-///     accounts
-/// WHERE
-///     block_num > ?1 AND
-///     block_num <= ?2 AND
-///     account_id IN (?3)
-/// ORDER BY
-///     block_num ASC
-/// ```
-pub fn select_accounts_by_block_range(
-    conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<Vec<AccountSummary>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
-
-    let desired_account_ids = serialize_vec(account_ids);
-    let raw: Vec<AccountSummaryRaw> =
-        SelectDsl::select(schema::accounts::table, AccountSummaryRaw::as_select())
-            .filter(schema::accounts::block_num.gt(block_range.start().to_raw_sql()))
-            .filter(schema::accounts::block_num.le(block_range.end().to_raw_sql()))
-            .filter(schema::accounts::account_id.eq_any(desired_account_ids))
-            .order(schema::accounts::block_num.asc())
-            .load::<AccountSummaryRaw>(conn)?;
-    // SAFETY `From` implies `TryFrom<Error=Infallible`, which is the case for `AccountSummaryRaw`
-    // -> `AccountSummary`
-    Ok(vec_raw_try_into(raw).unwrap())
 }
 
 /// Select all accounts from the DB using the given [`SqliteConnection`].
@@ -851,11 +871,13 @@ pub(crate) fn insert_account_vault_asset(
         // First, update any existing rows with the same (account_id, vault_key) to set
         // is_latest=false
         let vault_key: Word = vault_key.into();
+        let vault_key_bytes = vault_key.to_bytes();
+        let account_id_bytes = account_id.to_bytes();
         let update_count = diesel::update(schema::account_vault_assets::table)
             .filter(
                 schema::account_vault_assets::account_id
-                    .eq(&account_id.to_bytes())
-                    .and(schema::account_vault_assets::vault_key.eq(&vault_key.to_bytes()))
+                    .eq(account_id_bytes)
+                    .and(schema::account_vault_assets::vault_key.eq(vault_key_bytes))
                     .and(schema::account_vault_assets::is_latest.eq(true)),
             )
             .set(schema::account_vault_assets::is_latest.eq(false))
@@ -919,7 +941,7 @@ pub(crate) fn insert_account_storage_map_value(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -968,9 +990,9 @@ pub(crate) fn upsert_accounts(
                 let account = Account::try_from(delta)?;
                 debug_assert_eq!(account_id, account.id());
 
-                if account.commitment() != update.final_state_commitment() {
+                if account.to_commitment() != update.final_state_commitment() {
                     return Err(DatabaseError::AccountCommitmentsMismatch {
-                        calculated: account.commitment(),
+                        calculated: account.to_commitment(),
                         expected: update.final_state_commitment(),
                     });
                 }
@@ -1113,7 +1135,7 @@ pub(crate) fn apply_delta(
 ) -> crate::db::Result<Account, DatabaseError> {
     account.apply_delta(delta)?;
 
-    let actual_commitment = account.commitment();
+    let actual_commitment = account.to_commitment();
     if &actual_commitment != final_state_commitment {
         return Err(DatabaseError::AccountCommitmentsMismatch {
             calculated: actual_commitment,
@@ -1188,4 +1210,79 @@ pub(crate) struct AccountStorageMapRowInsert {
     pub(crate) key: Vec<u8>,
     pub(crate) value: Vec<u8>,
     pub(crate) is_latest: bool,
+}
+
+// CLEANUP FUNCTIONS
+// ================================================================================================
+
+/// Number of historical blocks to retain for vault assets and storage map values.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
+/// except for entries marked with `is_latest=true` which are always retained.
+pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
+
+/// Clean up old entries for all accounts, deleting entries older than the retention window.
+///
+/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`.
+/// This is a simple and efficient approach that doesn't require window functions.
+///
+/// # Returns
+/// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+pub(crate) fn prune_history(
+    conn: &mut SqliteConnection,
+    chain_tip: BlockNumber,
+) -> Result<(usize, usize), DatabaseError> {
+    let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+    tracing::Span::current().record("cutoff_block", cutoff_block);
+    let vault_deleted = prune_account_vault_assets(conn, cutoff_block)?;
+    let storage_deleted = prune_account_storage_map_values(conn, cutoff_block)?;
+
+    Ok((vault_deleted, storage_deleted))
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_vault_assets(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
+        schema::account_vault_assets::table.filter(
+            schema::account_vault_assets::block_num
+                .lt(cutoff_block)
+                .and(schema::account_vault_assets::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
+}
+
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_storage_map_values(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    diesel::delete(
+        schema::account_storage_map_values::table.filter(
+            schema::account_storage_map_values::block_num
+                .lt(cutoff_block)
+                .and(schema::account_storage_map_values::is_latest.eq(false)),
+        ),
+    )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
 }

@@ -1,6 +1,6 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use miden_protocol::note::Nullifier;
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::Serializable;
 
 use crate::errors::DatabaseError;
 
@@ -11,16 +11,6 @@ pub(crate) fn vec_raw_try_into<D, R: TryInto<D>>(
 ) -> std::result::Result<Vec<D>, <R as TryInto<D>>::Error> {
     std::result::Result::<Vec<D>, <R as TryInto<D>>::Error>::from_iter(
         raw.into_iter().map(<R as std::convert::TryInto<D>>::try_into),
-    )
-}
-
-#[allow(dead_code)]
-/// Deserialize an iterable container full of byte blobs `B` to types `T`
-pub(crate) fn deserialize_raw_vec<B: AsRef<[u8]>, T: Deserializable>(
-    raw: impl IntoIterator<Item = B>,
-) -> Result<Vec<T>, DeserializationError> {
-    Result::<Vec<_>, DeserializationError>::from_iter(
-        raw.into_iter().map(|raw| T::read_from_bytes(raw.as_ref())),
     )
 }
 
@@ -38,7 +28,6 @@ pub fn get_nullifier_prefix(nullifier: &Nullifier) -> u16 {
 
 /// Converts a slice of length `N` to an array, returns `None` if invariant
 /// isn'crates/store/src/db/mod.rs upheld.
-#[allow(dead_code)]
 pub fn slice_to_array<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
     if bytes.len() != N {
         return None;
@@ -48,7 +37,7 @@ pub fn slice_to_array<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
     Some(arr)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[inline]
 pub fn from_be_to_u32(bytes: &[u8]) -> Option<u32> {
     slice_to_array::<4>(bytes).map(u32::from_be_bytes)
@@ -62,8 +51,8 @@ pub struct PragmaSchemaVersion {
 }
 
 /// Returns the schema version of the database.
-#[allow(dead_code)]
-#[allow(
+#[expect(dead_code)]
+#[expect(
     clippy::cast_sign_loss,
     reason = "schema version is always positive and we will never reach 0xEFFF_..._FFFF"
 )]

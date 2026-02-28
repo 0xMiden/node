@@ -11,11 +11,11 @@
 
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use diesel_migrations::MigrationHarness;
+use miden_node_db::SchemaVerificationError;
 use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::MIGRATIONS;
-use crate::errors::SchemaVerificationError;
 
 /// Represents a schema object for comparison.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -107,10 +107,20 @@ pub fn verify_schema(conn: &mut SqliteConnection) -> Result<(), SchemaVerificati
 
         // Log specific differences at debug level
         for obj in &missing {
-            tracing::debug!(target: COMPONENT, name = %obj.name, "Missing or modified: {}", obj.sql);
+            tracing::debug!(
+                target: COMPONENT,
+                name = %obj.name,
+                sql = %obj.sql,
+                "Missing or modified"
+            );
         }
         for obj in &extra {
-            tracing::debug!(target: COMPONENT, name = %obj.name, "Extra or modified: {}", obj.sql);
+            tracing::debug!(
+                target: COMPONENT,
+                name = %obj.name,
+                sql = %obj.sql,
+                "Extra or modified"
+            );
         }
 
         return Err(SchemaVerificationError::Mismatch {
@@ -129,7 +139,6 @@ pub fn verify_schema(conn: &mut SqliteConnection) -> Result<(), SchemaVerificati
 mod tests {
     use super::*;
     use crate::db::migrations::apply_migrations;
-    use crate::errors::DatabaseError;
 
     #[test]
     fn verify_schema_passes_for_correct_schema() {
@@ -181,6 +190,9 @@ mod tests {
             .execute(&mut conn)
             .unwrap();
 
-        assert!(matches!(apply_migrations(&mut conn), Err(DatabaseError::SchemaVerification(_))));
+        assert!(matches!(
+            apply_migrations(&mut conn),
+            Err(miden_node_db::DatabaseError::SchemaVerification(_))
+        ));
     }
 }

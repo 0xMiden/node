@@ -1,8 +1,11 @@
 mod block_validation;
+mod db;
 mod server;
+mod signers;
 mod tx_validation;
 
 pub use server::Validator;
+pub use signers::ValidatorSigner;
 
 // CONSTANTS
 // =================================================================================================

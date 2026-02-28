@@ -1,4 +1,3 @@
-pub mod config;
 pub mod cors;
 pub mod crypto;
 #[cfg(feature = "testing")]
@@ -9,6 +8,7 @@ pub mod limiter;
 pub mod logging;
 pub mod lru_cache;
 pub mod panic;
+pub mod signer;
 pub mod tracing;
 
 pub trait ErrorReport: std::error::Error {

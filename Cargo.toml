@@ -5,10 +5,12 @@ members = [
   "bin/remote-prover",
   "bin/stress-test",
   "crates/block-producer",
+  "crates/db",
   "crates/grpc-error-macro",
   "crates/ntx-builder",
   "crates/proto",
   "crates/remote-prover-client",
+  "crates/rocksdb-cxx-linkage-fix",
   "crates/rpc",
   "crates/store",
   "crates/test-macro",
@@ -27,37 +29,45 @@ homepage     = "https://miden.xyz"
 license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/miden-node"
-rust-version = "1.90"
-version      = "0.13.7"
+rust-version = "1.91"
+version      = "0.14.0"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
 opt-level = 2
+
+# Avoid running the expensive debug assertion in winter-prover
+[profile.test.package.winter-prover]
+debug-assertions = false
 
 [profile.release]
 debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-node-block-producer   = { path = "crates/block-producer", version = "0.13" }
-miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.13" }
-miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.13" }
-miden-node-proto            = { path = "crates/proto", version = "0.13" }
-miden-node-proto-build      = { path = "proto", version = "0.13" }
-miden-node-rpc              = { path = "crates/rpc", version = "0.13" }
-miden-node-store            = { path = "crates/store", version = "0.13" }
+miden-node-block-producer   = { path = "crates/block-producer", version = "0.14" }
+miden-node-db               = { path = "crates/db", version = "0.14" }
+miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.14" }
+miden-node-ntx-builder      = { path = "crates/ntx-builder", version = "0.14" }
+miden-node-proto            = { path = "crates/proto", version = "0.14" }
+miden-node-proto-build      = { path = "proto", version = "0.14" }
+miden-node-rpc              = { path = "crates/rpc", version = "0.14" }
+miden-node-store            = { path = "crates/store", version = "0.14" }
 miden-node-test-macro       = { path = "crates/test-macro" }
-miden-node-utils            = { path = "crates/utils", version = "0.13" }
-miden-node-validator        = { path = "crates/validator", version = "0.13" }
-miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.13" }
+miden-node-utils            = { path = "crates/utils", version = "0.14" }
+miden-node-validator        = { path = "crates/validator", version = "0.14" }
+miden-remote-prover-client  = { path = "crates/remote-prover-client", version = "0.14" }
+# Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
+# is part of `rocksdb-rust` release
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
-miden-block-prover    = { version = "0.13" }
-miden-protocol        = { default-features = false, version = "0.13" }
-miden-standards       = { version = "0.13" }
-miden-testing         = { version = "0.13" }
-miden-tx              = { default-features = false, version = "0.13" }
-miden-tx-batch-prover = { version = "0.13" }
+miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
+miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
+miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
+miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
 miden-air    = { features = ["std", "testing"], version = "0.20" }
@@ -67,7 +77,13 @@ miden-crypto = { default-features = false, version = "0.19" }
 anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
+build-rs          = { version = "0.3" }
 clap              = { features = ["derive"], version = "4.5" }
+deadpool          = { default-features = false, version = "0.12" }
+deadpool-diesel   = { version = "0.6" }
+deadpool-sync     = { default-features = false, version = "0.1" }
+diesel            = { version = "2.3" }
+diesel_migrations = { version = "2.3" }
 fs-err            = { version = "3" }
 futures           = { version = "0.3" }
 hex               = { version = "0.4" }
@@ -84,13 +100,16 @@ pretty_assertions = { version = "1.4" }
 prost              = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
 rand               = { version = "0.9" }
-rand_chacha        = { version = "0.9" }
+rand_chacha        = { default-features = false, version = "0.9" }
+reqwest            = { version = "0.13" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
+tempfile           = { version = "3" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
-toml               = { version = "0.9" }
+tokio-util         = { version = "0.7" }
+toml               = "1.0"
 tonic              = { default-features = false, version = "0.14" }
 tonic-health       = { version = "0.14" }
 tonic-prost        = { version = "0.14" }
@@ -107,6 +126,7 @@ url                = { features = ["serde"], version = "2.5" }
 # Pedantic lints are set to a lower priority which allows lints in the group to be selectively enabled.
 pedantic = { level = "warn", priority = -1 }
 
+allow_attributes             = "deny"
 cast_possible_truncation     = "allow" # Overly many instances especially regarding indices.
 collapsible-if               = "allow" # Too new to enforce.
 from_iter_instead_of_collect = "allow" # at times `FromIter` is much more readable
@@ -119,3 +139,7 @@ must_use_candidate           = "allow" # This marks many fn's which isn't helpfu
 needless_for_each            = "allow" # Context dependent if that's useful.
 should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
+
+# Configure `cargo-typos`
+[workspace.metadata.typos]
+files.extend-exclude = ["*.svg"] # Ignore SVG files.

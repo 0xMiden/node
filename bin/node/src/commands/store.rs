@@ -5,8 +5,8 @@ use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::grpc::UrlExt;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::Deserializable;
+use miden_node_utils::signer::BlockSigner;
+use miden_node_validator::ValidatorSigner;
 use url::Url;
 
 use super::{
@@ -17,14 +17,14 @@ use super::{
 };
 use crate::commands::{
     DEFAULT_TIMEOUT,
+    ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    ENV_VALIDATOR_INSECURE_SECRET_KEY,
-    INSECURE_VALIDATOR_KEY_HEX,
+    ValidatorKey,
     duration_to_human_readable_string,
 };
 
-#[allow(clippy::large_enum_variant, reason = "single use enum")]
+#[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
     /// Bootstraps the blockchain database with the genesis block.
@@ -43,16 +43,9 @@ pub enum StoreCommand {
         /// Use the given configuration file to construct the genesis state from.
         #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
         genesis_config_file: Option<PathBuf>,
-        /// Insecure, hex-encoded validator secret key for development and testing purposes.
-        ///
-        /// If not provided, a predefined key is used.
-        #[arg(
-            long = "validator.insecure.secret-key",
-            env = ENV_VALIDATOR_INSECURE_SECRET_KEY,
-            value_name = "VALIDATOR_INSECURE_SECRET_KEY",
-            default_value = INSECURE_VALIDATOR_KEY_HEX
-        )]
-        validator_insecure_secret_key: String,
+        /// Configuration for the Validator key used to sign genesis block.
+        #[command(flatten)]
+        validator_key: ValidatorKey,
     },
 
     /// Starts the store component.
@@ -71,6 +64,10 @@ pub enum StoreCommand {
         /// Url at which to serve the store's block producer API.
         #[arg(long = "block-producer.url", env = ENV_STORE_BLOCK_PRODUCER_URL, value_name = "URL")]
         block_producer_url: Url,
+
+        /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
+        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
+        block_prover_url: Option<Url>,
 
         /// Directory in which to store the database and raw block data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -104,17 +101,21 @@ impl StoreCommand {
                 data_directory,
                 accounts_directory,
                 genesis_config_file,
-                validator_insecure_secret_key,
-            } => Self::bootstrap(
-                &data_directory,
-                &accounts_directory,
-                genesis_config_file.as_ref(),
-                validator_insecure_secret_key,
-            ),
+                validator_key,
+            } => {
+                Self::bootstrap(
+                    &data_directory,
+                    &accounts_directory,
+                    genesis_config_file.as_ref(),
+                    validator_key,
+                )
+                .await
+            },
             StoreCommand::Start {
                 rpc_url,
                 ntx_builder_url,
                 block_producer_url,
+                block_prover_url,
                 data_directory,
                 enable_otel: _,
                 grpc_timeout,
@@ -123,6 +124,7 @@ impl StoreCommand {
                     rpc_url,
                     ntx_builder_url,
                     block_producer_url,
+                    block_prover_url,
                     data_directory,
                     grpc_timeout,
                 )
@@ -143,6 +145,7 @@ impl StoreCommand {
         rpc_url: Url,
         ntx_builder_url: Url,
         block_producer_url: Url,
+        block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_timeout: Duration,
     ) -> anyhow::Result<()> {
@@ -169,6 +172,7 @@ impl StoreCommand {
 
         Store {
             rpc_listener,
+            block_prover_url,
             ntx_builder_listener,
             block_producer_listener,
             data_directory,
@@ -179,27 +183,21 @@ impl StoreCommand {
         .context("failed while serving store component")
     }
 
-    fn bootstrap(
+    async fn bootstrap(
         data_directory: &Path,
         accounts_directory: &Path,
         genesis_config: Option<&PathBuf>,
-        validator_insecure_secret_key: String,
+        validator_key: ValidatorKey,
     ) -> anyhow::Result<()> {
-        // Decode the validator key.
-        let signer = SecretKey::read_from_bytes(&hex::decode(validator_insecure_secret_key)?)?;
-
         // Parse genesis config (or default if not given).
         let config = genesis_config
             .map(|file_path| {
-                let toml_str = fs_err::read_to_string(file_path)?;
-                GenesisConfig::read_toml(toml_str.as_str()).with_context(|| {
+                GenesisConfig::read_toml_file(file_path).with_context(|| {
                     format!("failed to parse genesis config from file {}", file_path.display())
                 })
             })
             .transpose()?
             .unwrap_or_default();
-
-        let (genesis_state, secrets) = config.into_state(signer)?;
 
         // Create directories if they do not already exist.
         for directory in &[accounts_directory, data_directory] {
@@ -223,7 +221,41 @@ impl StoreCommand {
             }
         }
 
-        // Write the accounts to disk
+        // Bootstrap with KMS key or local key.
+        let signer = validator_key.into_signer().await?;
+        match signer {
+            ValidatorSigner::Kms(signer) => {
+                Self::bootstrap_accounts_and_store(
+                    config,
+                    signer,
+                    accounts_directory,
+                    data_directory,
+                )
+                .await
+            },
+            ValidatorSigner::Local(signer) => {
+                Self::bootstrap_accounts_and_store(
+                    config,
+                    signer,
+                    accounts_directory,
+                    data_directory,
+                )
+                .await
+            },
+        }
+    }
+
+    /// Builds the genesis state of the chain, writes accounts to file, and bootstraps the store.
+    async fn bootstrap_accounts_and_store(
+        config: GenesisConfig,
+        signer: impl BlockSigner,
+        accounts_directory: &Path,
+        data_directory: &Path,
+    ) -> anyhow::Result<()> {
+        // Build genesis state with the provided signer.
+        let (genesis_state, secrets) = config.into_state(signer)?;
+
+        // Write accounts to file.
         for item in secrets.as_account_files(&genesis_state) {
             let AccountFileWithName { account_file, name } = item?;
             let accountpath = accounts_directory.join(name);
@@ -236,6 +268,7 @@ impl StoreCommand {
             account_file.write(accountpath)?;
         }
 
-        Store::bootstrap(genesis_state, data_directory)
+        // Bootstrap store.
+        Store::bootstrap(genesis_state, data_directory).await
     }
 }

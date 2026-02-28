@@ -1,6 +1,8 @@
 CREATE TABLE block_headers (
     block_num    INTEGER NOT NULL,
     block_header BLOB    NOT NULL,
+    signature    BLOB    NOT NULL,
+    commitment   BLOB    NOT NULL,
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
@@ -59,7 +61,7 @@ CREATE TABLE notes (
     consumed_at                   INTEGER,          -- Block number when the note was consumed
     nullifier                     BLOB,             -- Only known for public notes, null for private notes
     assets                        BLOB,
-    inputs                        BLOB,
+    storage                       BLOB,
     script_root                   BLOB,
     serial_num                    BLOB,
 
@@ -155,3 +157,9 @@ CREATE TABLE transactions (
 CREATE INDEX idx_transactions_account_id ON transactions(account_id);
 -- Index for joining with block_headers
 CREATE INDEX idx_transactions_block_num ON transactions(block_num);
+
+CREATE INDEX idx_vault_cleanup ON account_vault_assets(block_num) WHERE is_latest = 0;
+CREATE INDEX idx_storage_cleanup ON account_storage_map_values(block_num) WHERE is_latest = 0;
+
+CREATE INDEX idx_account_storage_map_latest_by_account_slot_key ON account_storage_map_values(account_id, slot_name, key, is_latest) WHERE is_latest = 1;
+CREATE INDEX idx_account_vault_assets_latest_by_account_key ON account_vault_assets(account_id, vault_key, is_latest) WHERE is_latest = 1;

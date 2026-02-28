@@ -1,6 +1,3 @@
-#![allow(clippy::similar_names, reason = "naming dummy test values is hard")]
-#![allow(clippy::too_many_lines, reason = "test code can be long")]
-
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -8,6 +5,7 @@ use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::AccountSummary;
 use miden_node_utils::fee::{test_fee, test_fee_params};
 use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
@@ -41,7 +39,6 @@ use miden_protocol::note::{
     Note,
     NoteAttachment,
     NoteDetails,
-    NoteExecutionHint,
     NoteHeader,
     NoteId,
     NoteMetadata,
@@ -52,11 +49,10 @@ use miden_protocol::note::{
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
-    ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
-use miden_protocol::testing::random_signer::RandomBlockSigner;
+use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
@@ -68,14 +64,17 @@ use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
 use miden_standards::account::auth::AuthFalcon512Rpo;
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
+use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 use pretty_assertions::assert_eq;
 use rand::Rng;
 
 use super::{AccountInfo, NoteRecord, NullifierInfo};
-use crate::db::TransactionSummary;
 use crate::db::migrations::apply_migrations;
-use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
+use crate::db::models::queries::{
+    HISTORICAL_BLOCK_RETENTION,
+    StorageMapValue,
+    insert_account_storage_map_value,
+};
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
 
@@ -101,7 +100,8 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         11_u8.into(),
     );
 
-    conn.transaction(|conn| queries::insert_block_header(conn, &block_header))
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    conn.transaction(|conn| queries::insert_block_header(conn, &block_header, &dummy_signature))
         .unwrap();
 }
 
@@ -164,33 +164,6 @@ fn sql_insert_transactions() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn sql_select_transactions() {
-    fn query_transactions(conn: &mut SqliteConnection) -> Vec<TransactionSummary> {
-        queries::select_transactions_by_accounts_and_block_range(
-            conn,
-            &[AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap()],
-            BlockNumber::from(0)..=BlockNumber::from(2),
-        )
-        .unwrap()
-    }
-
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let transactions = query_transactions(conn);
-
-    assert!(transactions.is_empty(), "No elements must be initially in the DB");
-
-    let count = insert_transactions(conn);
-
-    assert_eq!(count, 2, "Two elements must have been inserted");
-
-    let transactions = query_transactions(conn);
-
-    assert_eq!(transactions.len(), 2, "Two elements must be in the DB");
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
 fn sql_select_nullifiers() {
     let mut conn = create_db();
     let conn = &mut conn;
@@ -219,7 +192,7 @@ pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
     let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
     let mut rng = rng.lock().unwrap();
-    create_p2id_note(
+    P2idNote::create(
         account_id,
         account_id,
         vec![Asset::Fungible(
@@ -339,7 +312,7 @@ fn make_account_and_note(
             conn,
             &[BlockAccountUpdate::new(
                 account_id,
-                account.commitment(),
+                account.to_commitment(),
                 AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
             )],
             block_num,
@@ -377,12 +350,8 @@ fn sql_unconsumed_network_notes() {
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
             note_id: num_to_word(i.into()),
             note_commitment: num_to_word(i.into()),
-            metadata: NoteMetadata::new(
-                account_note.0,
-                NoteType::Public,
-                NoteTag::with_account_target(account_note.0),
-            )
-            .with_attachment(attachment.clone()),
+            metadata: NoteMetadata::new(account_note.0, NoteType::Public)
+                .with_attachment(attachment.clone()),
             details: None,
             inclusion_path: SparseMerklePath::default(),
         };
@@ -768,7 +737,8 @@ fn db_block_header() {
     );
     // test insertion
 
-    queries::insert_block_header(conn, &block_header).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    queries::insert_block_header(conn, &block_header, &dummy_signature).unwrap();
 
     // test fetch unknown block header
     let block_number = 1;
@@ -799,7 +769,8 @@ fn db_block_header() {
         21_u8.into(),
     );
 
-    queries::insert_block_header(conn, &block_header2).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header2.commitment());
+    queries::insert_block_header(conn, &block_header2, &dummy_signature).unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
@@ -810,87 +781,13 @@ fn db_block_header() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn db_account() {
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let block_num: BlockNumber = 1.into();
-    create_block(conn, block_num);
-
-    // test empty table
-    let account_ids: Vec<AccountId> =
-        [ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE, 1, 2, 3, 4, 5]
-            .iter()
-            .map(|acc_id| (*acc_id).try_into().unwrap())
-            .collect();
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        BlockNumber::from(0)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-
-    // test insertion
-    let account_id = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE;
-    let account_commitment = num_to_word(0);
-
-    let row_count = queries::upsert_accounts(
-        conn,
-        &[BlockAccountUpdate::new(
-            account_id.try_into().unwrap(),
-            account_commitment,
-            AccountUpdateDetails::Private,
-        )],
-        block_num,
-    )
-    .unwrap();
-
-    assert_eq!(row_count, 1);
-
-    // test successful query
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        BlockNumber::from(0)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert_eq!(
-        res,
-        vec![AccountSummary {
-            account_id: account_id.try_into().unwrap(),
-            account_commitment,
-            block_num,
-        }]
-    );
-
-    // test query for update outside the block range
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        (block_num.as_u32() + 1).into()..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-
-    // test query with unknown accounts
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &[6.try_into().unwrap(), 7.try_into().unwrap(), 8.try_into().unwrap()],
-        (block_num + 1)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
 fn notes() {
     let mut conn = create_db();
     let conn = &mut conn;
     let block_num_1 = 1.into();
     create_block(conn, block_num_1);
 
-    let block_range = BlockNumber::from(0)..=BlockNumber::from(1);
+    let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
     let (res, last_included_block) =
@@ -919,7 +816,7 @@ fn notes() {
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 2).unwrap();
     let tag = 5u32;
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public, tag.into());
+    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
 
     let values = [(note_index, new_note.id(), &note_metadata)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
@@ -930,7 +827,7 @@ fn notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: NoteMetadata::new(sender, NoteType::Public, tag.into()),
+        metadata: NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
         details: Some(NoteDetails::from(&new_note)),
         inclusion_path: inclusion_path.clone(),
     };
@@ -1214,42 +1111,6 @@ fn select_storage_map_sync_values() {
     assert_eq!(page.values, expected, "should return latest values ordered by key");
 }
 
-#[test]
-fn select_storage_map_sync_values_for_network_account() {
-    let mut conn = create_db();
-    let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
-
-    let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Network);
-    let slot_name = StorageSlotName::mock(7);
-    let key = num_to_word(1);
-    let value = num_to_word(10);
-
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block_num,
-        slot_name.clone(),
-        key,
-        value,
-    )
-    .unwrap();
-
-    let page = queries::select_account_storage_map_values(
-        &mut conn,
-        account_id,
-        BlockNumber::GENESIS..=block_num,
-    )
-    .unwrap();
-
-    assert_eq!(
-        page.values,
-        vec![StorageMapValue { block_num, slot_name, key, value }],
-        "network accounts with public state should be accepted",
-    );
-}
-
 // UTILITIES
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
@@ -1275,9 +1136,13 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .compile_component_code("test::interface", code_str)
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountUpdatableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test")
+            .with_supported_type(AccountType::RegularAccountUpdatableCode),
+    )
+    .unwrap();
 
     AccountBuilder::new(seed)
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -1302,7 +1167,7 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
             Word::try_from([num, num, 0, 0]).unwrap(),
             Word::try_from([0, 0, num, num]).unwrap(),
         ),
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::new(num as u32)),
+        NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
     )];
 
     TransactionHeader::new_unchecked(
@@ -1369,9 +1234,12 @@ fn mock_account_code_and_storage(
     let account_component_code = CodeBuilder::default()
         .compile_component_code("counter_contract::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("counter_contract").with_supports_all_types(),
+    )
+    .unwrap();
 
     AccountBuilder::new(init_seed.unwrap_or([0; 32]))
         .account_type(account_type)
@@ -1412,7 +1280,7 @@ fn test_select_account_code_by_commitment() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account.id(),
-            account.commitment(),
+            account.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
         )],
         block_num_1,
@@ -1460,7 +1328,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account_v1.id(),
-            account_v1.commitment(),
+            account_v1.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v1).unwrap()),
         )],
         block_num_1,
@@ -1493,7 +1361,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account_v2.id(),
-            account_v2.commitment(),
+            account_v2.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v2).unwrap()),
         )],
         block_num_2,
@@ -1518,18 +1386,21 @@ fn test_select_account_code_by_commitment_multiple_codes() {
 // ================================================================================================
 
 /// Verifies genesis block with account containing vault assets can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets() {
+async fn genesis_with_account_assets() {
     use crate::genesis::GenesisState;
     let component_code = "pub proc foo push.1 end";
 
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let fungible_asset = FungibleAsset::new(faucet_id, 1000).unwrap();
@@ -1544,16 +1415,16 @@ fn genesis_with_account_assets() {
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_storage_map() {
+async fn genesis_with_account_storage_map() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1580,9 +1451,12 @@ fn genesis_with_account_storage_map() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1593,16 +1467,16 @@ fn genesis_with_account_storage_map() {
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets_and_storage() {
+async fn genesis_with_account_assets_and_storage() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1626,9 +1500,12 @@ fn genesis_with_account_assets_and_storage() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1640,17 +1517,17 @@ fn genesis_with_account_assets_and_storage() {
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types.
 /// Tests realistic genesis scenario with basic accounts, assets, and storage.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_multiple_accounts() {
+async fn genesis_with_multiple_accounts() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1658,9 +1535,12 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", "pub proc foo push.1 end")
         .unwrap();
-    let account_component1 = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component1 = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("foo").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account1 = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1676,9 +1556,12 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("bar::interface", "pub proc bar push.2 end")
         .unwrap();
-    let account_component2 = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component2 = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("bar").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account2 = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -1700,9 +1583,12 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("baz::interface", "pub proc baz push.3 end")
         .unwrap();
-    let account_component3 = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component3 = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("baz").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account3 = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -1717,9 +1603,9 @@ fn genesis_with_multiple_accounts() {
         test_fee_params(),
         1,
         0,
-        SecretKey::random(),
+        random_secret_key(),
     );
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
 }
@@ -1748,7 +1634,7 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
 
     let block_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
 
@@ -1872,7 +1758,7 @@ fn serialization_symmetry_note_metadata() {
     // Use a tag that roundtrips properly - NoteTag::LocalAny stores the full u32 including type
     // bits
     let tag = NoteTag::with_account_target(sender);
-    let metadata = NoteMetadata::new(sender, NoteType::Public, tag);
+    let metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag);
 
     let bytes = metadata.to_bytes();
     let restored = NoteMetadata::read_from_bytes(&bytes).unwrap();
@@ -1917,7 +1803,8 @@ fn db_roundtrip_block_header() {
     );
 
     // Insert
-    queries::insert_block_header(&mut conn, &block_header).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    queries::insert_block_header(&mut conn, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
     let retrieved =
@@ -1964,7 +1851,7 @@ fn db_roundtrip_account() {
         Some([99u8; 32]),
     );
     let account_id = account.id();
-    let account_commitment = account.commitment();
+    let account_commitment = account.to_commitment();
 
     // Insert with full delta (like genesis)
     let account_delta = AccountDelta::try_from(account.clone()).unwrap();
@@ -2043,47 +1930,6 @@ fn db_roundtrip_notes() {
         note.details, retrieved_note.details,
         "Note details DB roundtrip must be symmetric"
     );
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
-fn db_roundtrip_transactions() {
-    let mut conn = create_db();
-    let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
-
-    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
-        .unwrap();
-
-    let tx = mock_block_transaction(account_id, 1);
-    let ordered_tx = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
-
-    // Insert
-    queries::insert_transactions(&mut conn, block_num, &ordered_tx).unwrap();
-
-    // Retrieve
-    let retrieved = queries::select_transactions_by_accounts_and_block_range(
-        &mut conn,
-        &[account_id],
-        BlockNumber::from(0)..=BlockNumber::from(2),
-    )
-    .unwrap();
-
-    assert_eq!(retrieved.len(), 1, "Should have one transaction");
-    let retrieved_tx = &retrieved[0];
-
-    assert_eq!(
-        tx.account_id(),
-        retrieved_tx.account_id,
-        "AccountId DB roundtrip must be symmetric"
-    );
-    assert_eq!(
-        tx.id(),
-        retrieved_tx.transaction_id,
-        "TransactionId DB roundtrip must be symmetric"
-    );
-    assert_eq!(block_num, retrieved_tx.block_num, "Block number must match");
 }
 
 #[test]
@@ -2201,9 +2047,12 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("test::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([50u8; 32])
         .account_type(AccountType::RegularAccountUpdatableCode)
@@ -2221,7 +2070,7 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_delta = AccountDelta::try_from(account.clone()).unwrap();
     let block_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
     queries::upsert_accounts(&mut conn, &[block_update], block_num).unwrap();
@@ -2272,15 +2121,15 @@ fn db_roundtrip_account_storage_with_maps() {
     assert!(account_info.details.is_some(), "Public account should have details");
     let retrieved_account = account_info.details.unwrap();
     assert_eq!(
-        account.commitment(),
-        retrieved_account.commitment(),
+        account.to_commitment(),
+        retrieved_account.to_commitment(),
         "Full account commitment must match after DB roundtrip"
     );
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn test_note_metadata_with_attachment_roundtrip() {
+fn db_roundtrip_note_metadata_attachment() {
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
@@ -2294,8 +2143,7 @@ fn test_note_metadata_with_attachment_roundtrip() {
 
     // Create NoteMetadata with the attachment
     let metadata =
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::with_account_target(account_id))
-            .with_attachment(attachment.clone());
+        NoteMetadata::new(account_id, NoteType::Public).with_attachment(attachment.clone());
 
     let note = NoteRecord {
         block_num,
@@ -2330,4 +2178,324 @@ fn test_note_metadata_with_attachment_roundtrip() {
         account_id,
         "NetworkAccountTarget should have the correct target account ID"
     );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn test_prune_history() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let public_account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    // Create blocks around the retention window.
+    const GENESIS_BLOCK_NUM: u32 = 0;
+    const OLD_BLOCK_OFFSET: u32 = 1;
+    const CUTOFF_BLOCK_OFFSET: u32 = 2;
+    const UPDATE_BLOCK_OFFSET: u32 = 3;
+
+    let block_0: BlockNumber = GENESIS_BLOCK_NUM.into();
+    let block_old: BlockNumber = OLD_BLOCK_OFFSET.into();
+    let block_cutoff: BlockNumber = CUTOFF_BLOCK_OFFSET.into();
+    let block_update: BlockNumber = UPDATE_BLOCK_OFFSET.into();
+    let block_tip: BlockNumber = (HISTORICAL_BLOCK_RETENTION + CUTOFF_BLOCK_OFFSET).into();
+
+    for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
+        create_block(conn, block);
+    }
+
+    // Create account
+    for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
+        queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block)
+            .unwrap();
+    }
+
+    // Insert vault assets at different blocks
+    let vault_key_old = AssetVaultKey::new_unchecked(num_to_word(100));
+    let vault_key_cutoff = AssetVaultKey::new_unchecked(num_to_word(200));
+    let vault_key_recent = AssetVaultKey::new_unchecked(num_to_word(300));
+    let asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let asset_2 = Asset::Fungible(FungibleAsset::new(public_account_id, 2000).unwrap());
+    let asset_3 = Asset::Fungible(FungibleAsset::new(public_account_id, 3000).unwrap());
+
+    // Old entry at block_old (should be deleted when cutoff is at block_cutoff for
+    // chain_tip=block_tip)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_old,
+        vault_key_old,
+        Some(asset_1),
+    )
+    .unwrap();
+
+    // Entry exactly at cutoff (block_cutoff, should be retained)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_cutoff,
+        vault_key_cutoff,
+        Some(asset_2),
+    )
+    .unwrap();
+
+    // Recent entry (should always be retained)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_tip,
+        vault_key_recent,
+        Some(asset_3),
+    )
+    .unwrap();
+
+    // Update an entry to create a non-latest version
+    let updated_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_update,
+        vault_key_old,
+        Some(updated_asset),
+    )
+    .unwrap();
+
+    // Insert storage map values at different blocks
+    let slot_name = StorageSlotName::mock(5);
+    let map_key_old = num_to_word(10);
+    let map_key_cutoff = num_to_word(20);
+    let map_key_recent = num_to_word(30);
+    let value_1 = num_to_word(111);
+    let value_2 = num_to_word(222);
+    let value_3 = num_to_word(333);
+    let value_updated = num_to_word(444);
+
+    // Old storage map entry at block_old
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_old,
+        slot_name.clone(),
+        map_key_old,
+        value_1,
+    )
+    .unwrap();
+
+    // Storage map entry at cutoff boundary (block_cutoff)
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_cutoff,
+        slot_name.clone(),
+        map_key_cutoff,
+        value_2,
+    )
+    .unwrap();
+
+    // Recent storage map entry
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_tip,
+        slot_name.clone(),
+        map_key_recent,
+        value_3,
+    )
+    .unwrap();
+
+    // Update map_key_old to create a non-latest entry at block_update
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_update,
+        slot_name.clone(),
+        map_key_old,
+        value_updated,
+    )
+    .unwrap();
+
+    // Verify initial state - should have 4 vault assets and 4 storage map values
+    let (_, initial_vault_assets) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert_eq!(initial_vault_assets.len(), 4, "should have 4 vault assets before cleanup");
+
+    let initial_storage_values =
+        queries::select_account_storage_map_values(conn, public_account_id, block_0..=block_tip)
+            .unwrap();
+    assert_eq!(
+        initial_storage_values.values.len(),
+        4,
+        "should have 4 storage map values before cleanup"
+    );
+
+    // Run cleanup with chain_tip = block_tip, cutoff will be block_tip - HISTORICAL_BLOCK_RETENTION
+    // = block_cutoff
+    let (vault_deleted, storage_deleted) = queries::prune_history(conn, block_tip).unwrap();
+
+    // Verify deletions occurred
+    assert_eq!(vault_deleted, 1, "should delete 1 old vault asset");
+    assert_eq!(storage_deleted, 1, "should delete 1 old storage map value");
+
+    // Verify remaining vault assets - should have 3 (cutoff, update, tip)
+    let (_, remaining_vault_assets) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert_eq!(remaining_vault_assets.len(), 3, "should have 3 vault assets after cleanup");
+
+    // Verify no vault asset at block_old remains
+    assert!(
+        !remaining_vault_assets.iter().any(|v| v.block_num == block_old),
+        "block_old vault asset should be deleted"
+    );
+
+    // Verify vault assets at block_cutoff, block_update, block_tip remain
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_cutoff),
+        "block_cutoff vault asset should be retained (at cutoff)"
+    );
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_update),
+        "block_update vault asset should be retained"
+    );
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_tip),
+        "block_tip vault asset should be retained"
+    );
+
+    // Verify remaining storage map values - should have 3 (cutoff, update, tip)
+    let remaining_storage_values =
+        queries::select_account_storage_map_values(conn, public_account_id, block_0..=block_tip)
+            .unwrap();
+    assert_eq!(
+        remaining_storage_values.values.len(),
+        3,
+        "should have 3 storage map values after cleanup"
+    );
+
+    // Verify no storage map value at block_old remains
+    assert!(
+        !remaining_storage_values.values.iter().any(|v| v.block_num == block_old),
+        "block_old storage map value should be deleted"
+    );
+
+    // Verify storage map values at block_cutoff, block_update, block_tip remain
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_cutoff),
+        "block_cutoff storage map value should be retained (at cutoff)"
+    );
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_update),
+        "block_update storage map value should be retained"
+    );
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_tip),
+        "block_tip storage map value should be retained"
+    );
+
+    // Test that is_latest=true entries are never deleted, even if old
+    // Insert an old entry marked as latest
+    let vault_key_old_latest = AssetVaultKey::new_unchecked(num_to_word(999));
+    let asset_old = Asset::Fungible(FungibleAsset::new(public_account_id, 9999).unwrap());
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_0,
+        vault_key_old_latest,
+        Some(asset_old),
+    )
+    .unwrap();
+
+    // This entry at block 0 is marked as is_latest=true by insert_account_vault_asset
+    // Run cleanup again
+    let (vault_deleted_2, _) = queries::prune_history(conn, block_tip).unwrap();
+
+    // The old latest entry should not be deleted (vault_deleted_2 should be 0)
+    assert_eq!(vault_deleted_2, 0, "should not delete any is_latest=true entries");
+
+    // Verify the old latest entry still exists
+    let (_, vault_assets_with_latest) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert!(
+        vault_assets_with_latest
+            .iter()
+            .any(|v| v.block_num == block_0 && v.vault_key == vault_key_old_latest),
+        "is_latest=true entry should be retained even if old"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
+        .unwrap();
+
+    // Build two transaction headers with distinct data
+    let tx1 = mock_block_transaction(account_id, 1);
+    let tx2 = mock_block_transaction(account_id, 2);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx1.clone(), tx2.clone()]);
+
+    // Insert
+    let count = queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+    assert_eq!(count, 2, "Should insert 2 transactions");
+
+    // Retrieve
+    let (last_block, records) = queries::select_transactions_records(
+        &mut conn,
+        &[account_id],
+        BlockNumber::GENESIS..=block_num,
+    )
+    .unwrap();
+    assert_eq!(last_block, block_num, "Last block should match");
+    assert_eq!(records.len(), 2, "Should retrieve 2 transactions");
+
+    // Verify each transaction roundtrips correctly.
+    // Records are ordered by (block_num, transaction_id), so match by ID.
+    let originals = [&tx1, &tx2];
+    for record in &records {
+        let original = originals
+            .iter()
+            .find(|tx| tx.id() == record.transaction_id)
+            .expect("Retrieved transaction should match one of the originals");
+        assert_eq!(
+            record.transaction_id,
+            original.id(),
+            "TransactionId DB roundtrip must be symmetric"
+        );
+        assert_eq!(
+            record.account_id,
+            original.account_id(),
+            "AccountId DB roundtrip must be symmetric"
+        );
+        assert_eq!(record.block_num, block_num, "Block number must match");
+        assert_eq!(
+            record.initial_state_commitment,
+            original.initial_state_commitment(),
+            "Initial state commitment DB roundtrip must be symmetric"
+        );
+        assert_eq!(
+            record.final_state_commitment,
+            original.final_state_commitment(),
+            "Final state commitment DB roundtrip must be symmetric"
+        );
+
+        // Input notes are stored as nullifiers only
+        let expected_nullifiers: Vec<Nullifier> =
+            original.input_notes().iter().map(InputNoteCommitment::nullifier).collect();
+        assert_eq!(
+            record.nullifiers, expected_nullifiers,
+            "Nullifiers (from input notes) DB roundtrip must be symmetric"
+        );
+
+        // Output notes are stored as note IDs only
+        let expected_note_ids: Vec<NoteId> =
+            original.output_notes().iter().map(NoteHeader::id).collect();
+        assert_eq!(
+            record.output_notes, expected_note_ids,
+            "Output note IDs DB roundtrip must be symmetric"
+        );
+    }
 }
