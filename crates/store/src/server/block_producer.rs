@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
-use futures::TryFutureExt;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::errors::MissingFieldHelper;
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
@@ -11,7 +11,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::{Deserializable, Serializable};
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
@@ -89,41 +89,38 @@ impl block_producer_server::BlockProducer for StoreApi {
         span.set_attribute("block.output_notes.count", body.output_notes().count());
         span.set_attribute("block.nullifiers.count", body.created_nullifiers().len());
 
-        // We perform the apply/prove block work in a separate task. This prevents the caller
+        // Serialize proving inputs so they can be persisted alongside the block for
+        // deferred proving.
+        let proving_inputs = BlockProofRequest {
+            tx_batches: ordered_batches,
+            block_header: header.clone(),
+            block_inputs,
+        }
+        .to_bytes();
+
+        // We perform the apply block work in a separate task. This prevents the caller
         // cancelling the request and thereby cancelling the task at an arbitrary point of
         // execution.
         //
         // Normally this shouldn't be a problem, however our apply_block isn't quite ACID compliant
         // so things get a bit messy. This is more a temporary hack-around to minimize this risk.
         let this = self.clone();
-        // TODO(sergerad): Use block proof.
-        let _block_proof = tokio::spawn(
+        tokio::spawn(
             async move {
                 // SAFETY: The header, body, and signature are assumed to
                 // correspond to each other because they are provided by the Block
                 // Producer.
-                let signed_block = SignedBlock::new_unchecked(header.clone(), body, signature); // TODO(sergerad): Use `SignedBlock::new()` when available.
+                let signed_block = SignedBlock::new_unchecked(header, body, signature); // TODO(sergerad): Use `SignedBlock::new()` when available.
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
-                this.state
-                    .apply_block(signed_block)
-                    .inspect_err(|err| {
-                        span.set_error(err);
-                    })
-                    .map_err(|err| {
-                        let code = match err {
-                            ApplyBlockError::InvalidBlockError(_) => tonic::Code::InvalidArgument,
-                            _ => tonic::Code::Internal,
-                        };
-                        Status::new(code, err.as_report())
-                    })
-                    .and_then(|_| {
-                        this.block_prover
-                            .prove(ordered_batches, block_inputs, &header)
-                            .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))
-                    })
-                    .await
-                    .map(Response::new)
+                this.state.apply_block(signed_block, Some(proving_inputs)).await.map_err(|err| {
+                    span.set_error(&err);
+                    let code = match err {
+                        ApplyBlockError::InvalidBlockError(_) => tonic::Code::InvalidArgument,
+                        _ => tonic::Code::Internal,
+                    };
+                    Status::new(code, err.as_report())
+                })
             }
             .in_current_span(),
         )

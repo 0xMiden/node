@@ -59,10 +59,11 @@ pub(crate) fn apply_block(
     nullifiers: &[Nullifier],
     accounts: &[BlockAccountUpdate],
     transactions: &OrderedTransactionHeaders,
+    proving_inputs: Option<Vec<u8>>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     // Note: ordering here is important as the relevant tables have FK dependencies.
-    count += insert_block_header(conn, block_header, signature)?;
+    count += insert_block_header(conn, block_header, signature, proving_inputs)?;
     count += upsert_accounts(conn, accounts, block_header.block_num())?;
     count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(conn, notes)?;

@@ -175,6 +175,8 @@ pub struct BlockHeaderRawRow {
     pub commitment: Vec<u8>,
     #[expect(dead_code)]
     pub block_proof: Option<Vec<u8>>,
+    #[expect(dead_code)]
+    pub proving_inputs: Option<Vec<u8>>,
 }
 impl TryInto<BlockHeader> for BlockHeaderRawRow {
     type Error = DatabaseError;
@@ -207,16 +209,7 @@ pub struct BlockHeaderInsert {
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,
     pub commitment: Vec<u8>,
-}
-impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
-    fn from((header, signature): (&BlockHeader, &Signature)) -> Self {
-        Self {
-            block_num: header.block_num().to_raw_sql(),
-            block_header: header.to_bytes(),
-            signature: signature.to_bytes(),
-            commitment: BlockHeaderCommitment::new(header).to_raw_sql(),
-        }
-    }
+    pub proving_inputs: Option<Vec<u8>>,
 }
 
 /// Insert a [`BlockHeader`] to the DB using the given [`SqliteConnection`].
@@ -238,12 +231,42 @@ pub(crate) fn insert_block_header(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,
     signature: &Signature,
+    proving_inputs: Option<Vec<u8>>,
 ) -> Result<usize, DatabaseError> {
-    let block_header = BlockHeaderInsert::from((block_header, signature));
-    let count = diesel::insert_into(schema::block_headers::table)
-        .values(&[block_header])
-        .execute(conn)?;
+    let row = BlockHeaderInsert {
+        block_num: block_header.block_num().to_raw_sql(),
+        block_header: block_header.to_bytes(),
+        signature: signature.to_bytes(),
+        commitment: BlockHeaderCommitment::new(block_header).to_raw_sql(),
+        proving_inputs,
+    };
+    let count = diesel::insert_into(schema::block_headers::table).values(&[row]).execute(conn)?;
     Ok(count)
+}
+
+/// Select the serialized proving inputs for a given block number.
+///
+/// # Returns
+///
+/// `None` if the block does not exist or has no proving inputs stored.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT proving_inputs
+/// FROM block_headers
+/// WHERE block_num = ?1
+/// ```
+pub(crate) fn select_block_proving_inputs(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Option<Vec<u8>>, DatabaseError> {
+    let inputs: Option<Option<Vec<u8>>> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::proving_inputs)
+            .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
+            .get_result(conn)
+            .optional()?;
+    Ok(inputs.flatten())
 }
 
 /// Store a [`BlockProof`] for a committed block.

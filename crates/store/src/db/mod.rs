@@ -258,6 +258,7 @@ impl Db {
                 &[],
                 genesis.body().updated_accounts(),
                 genesis.body().transactions(),
+                None, // Genesis block has no proving inputs.
             )
         })
         .context("failed to insert genesis block")?;
@@ -537,6 +538,7 @@ impl Db {
         acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
+        proving_inputs: Option<Vec<u8>>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
@@ -547,6 +549,7 @@ impl Db {
                 signed_block.body().created_nullifiers(),
                 signed_block.body().updated_accounts(),
                 signed_block.body().transactions(),
+                proving_inputs,
             )?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
@@ -586,6 +589,18 @@ impl Db {
     pub async fn select_unproven_blocks(&self) -> Result<Vec<BlockNumber>> {
         self.transact("select unproven blocks", |conn| {
             models::queries::select_unproven_blocks(conn)
+        })
+        .await
+    }
+
+    /// Returns the serialized proving inputs for a given block number, if stored.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_block_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<Vec<u8>>> {
+        self.transact("select block proving inputs", move |conn| {
+            models::queries::select_block_proving_inputs(conn, block_num)
         })
         .await
     }
