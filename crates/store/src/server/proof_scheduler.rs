@@ -12,7 +12,6 @@
 //!    an error. The scheduler logs it and continues — the block will be retried on the next
 //!    iteration.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,81 +87,91 @@ async fn run(db: Arc<Db>, block_prover: Arc<BlockProver>, notify: Arc<Notify>) {
             },
         };
 
+        // Wait for notify if there are no unproven blocks.
         if unproven_blocks.is_empty() {
-            // No work to do — wait for a notification that a new block was committed.
             notify.notified().await;
             continue;
         }
 
-        // Submit all unproven blocks into a FuturesOrdered. Each future runs the full
-        // prove-with-retries pipeline concurrently, but completions are polled in submission
-        // (i.e. block) order.
-        let mut proving_futures = FuturesOrdered::new();
-        for block_num in &unproven_blocks {
-            let db = Arc::clone(&db);
-            let block_prover = Arc::clone(&block_prover);
-            let block_num = *block_num;
-            proving_futures.push_back(async move {
-                let result = tokio::time::timeout(
-                    BLOCK_PROVE_TIMEOUT,
-                    prove_block(&db, &block_prover, block_num),
-                )
-                .await;
-
-                match result {
-                    Ok(proof) => (block_num, proof),
-                    Err(elapsed) => {
-                        error!(
-                            target: COMPONENT,
-                            %block_num,
-                            "Block proving timed out after {:?}",
-                            elapsed,
-                        );
-                        (block_num, Err(ProveBlockError::Timeout))
-                    },
-                }
-            });
-        }
-
-        // Drain results in order. Track which blocks we've already dispatched to avoid
-        // re-queuing them before this batch completes.
-        let mut inflight: HashSet<BlockNumber> = unproven_blocks.iter().copied().collect();
-
+        // Construct proving jobs and drain results in order.
+        // On any failure we break immediately — dropping remaining futures cancels them.
+        // The outer loop will re-query unproven blocks and restart the sequence, ensuring
+        // we never persist a proof while an ancestor block is still unproven.
+        let mut proving_futures = order_proving_jobs(&db, &block_prover, &unproven_blocks);
         while let Some((block_num, result)) = proving_futures.next().await {
-            inflight.remove(&block_num);
-
             match result {
-                Ok(proof) => {
-                    // Persist the proof. On failure, log and move on — it will be retried.
-                    match db.insert_block_proof(block_num, &proof).await {
-                        Ok(()) => {
-                            info!(
-                                target: COMPONENT,
-                                %block_num,
-                                proof_size = proof.to_bytes().len(),
-                                "Block proof persisted"
-                            );
-                        },
-                        Err(err) => {
-                            error!(
-                                target: COMPONENT,
-                                %block_num,
-                                %err,
-                                "Failed to persist block proof"
-                            );
-                        },
-                    }
-                },
+                Ok(proof) => persist_proof(&db, block_num, &proof).await,
                 Err(err) => {
                     error!(
                         target: COMPONENT,
                         %block_num,
                         ?err,
-                        "Block proving failed, will retry next iteration"
+                        "Block proving failed, abandoning batch and retrying next iteration"
                     );
+                    break;
                 },
             }
         }
+    }
+}
+
+/// Submits all unproven blocks into a [`FuturesOrdered`]. Each future runs the full
+/// prove-with-retries pipeline concurrently, but completions are polled in submission
+/// (i.e. block) order.
+fn order_proving_jobs(
+    db: &Arc<Db>,
+    block_prover: &Arc<BlockProver>,
+    unproven_blocks: &[BlockNumber],
+) -> FuturesOrdered<
+    impl std::future::Future<Output = (BlockNumber, Result<BlockProof, ProveBlockError>)>,
+> {
+    let mut futures = FuturesOrdered::new();
+    for &block_num in unproven_blocks {
+        let db = Arc::clone(db);
+        let block_prover = Arc::clone(block_prover);
+        futures.push_back(async move {
+            let result = tokio::time::timeout(
+                BLOCK_PROVE_TIMEOUT,
+                prove_block(&db, &block_prover, block_num),
+            )
+            .await;
+
+            match result {
+                Ok(proof) => (block_num, proof),
+                Err(elapsed) => {
+                    error!(
+                        target: COMPONENT,
+                        %block_num,
+                        "Block proving timed out after {:?}",
+                        elapsed,
+                    );
+                    (block_num, Err(ProveBlockError::Timeout))
+                },
+            }
+        });
+    }
+    futures
+}
+
+/// Persists a proven block proof to the DB. Logs on success or failure.
+async fn persist_proof(db: &Db, block_num: BlockNumber, proof: &BlockProof) {
+    match db.insert_block_proof(block_num, proof).await {
+        Ok(()) => {
+            info!(
+                target: COMPONENT,
+                %block_num,
+                proof_size = proof.to_bytes().len(),
+                "Block proof persisted"
+            );
+        },
+        Err(err) => {
+            error!(
+                target: COMPONENT,
+                %block_num,
+                %err,
+                "Failed to persist block proof"
+            );
+        },
     }
 }
 
