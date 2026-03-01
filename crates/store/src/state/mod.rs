@@ -104,7 +104,7 @@ impl<S: SmtStorage> InnerState<S> {
 pub struct State {
     /// The database which stores block headers, nullifiers, notes, and the latest states of
     /// accounts.
-    db: Arc<Db>,
+    pub(crate) db: Arc<Db>,
 
     /// The block store which stores full block contents for all blocks.
     block_store: Arc<BlockStore>,

@@ -113,14 +113,20 @@ impl block_producer_server::BlockProducer for StoreApi {
                 let signed_block = SignedBlock::new_unchecked(header, body, signature); // TODO(sergerad): Use `SignedBlock::new()` when available.
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
-                this.state.apply_block(signed_block, Some(proving_inputs)).await.map_err(|err| {
-                    span.set_error(&err);
-                    let code = match err {
-                        ApplyBlockError::InvalidBlockError(_) => tonic::Code::InvalidArgument,
-                        _ => tonic::Code::Internal,
-                    };
-                    Status::new(code, err.as_report())
-                })
+                this.state
+                    .apply_block(signed_block, Some(proving_inputs))
+                    .await
+                    .inspect(|_| {
+                        this.proof_scheduler.notify_block_committed();
+                    })
+                    .map_err(|err| {
+                        span.set_error(&err);
+                        let code = match err {
+                            ApplyBlockError::InvalidBlockError(_) => tonic::Code::InvalidArgument,
+                            _ => tonic::Code::Internal,
+                        };
+                        Status::new(code, err.as_report())
+                    })
             }
             .in_current_span(),
         )

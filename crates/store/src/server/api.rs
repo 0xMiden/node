@@ -12,9 +12,10 @@ use miden_protocol::note::Nullifier;
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
 
+use crate::COMPONENT;
 use crate::errors::GetBlockInputsError;
+use crate::server::proof_scheduler::ProofSchedulerHandle;
 use crate::state::State;
-use crate::{BlockProver, COMPONENT};
 
 // STORE API
 // ================================================================================================
@@ -22,7 +23,7 @@ use crate::{BlockProver, COMPONENT};
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
-    pub(super) block_prover: Arc<BlockProver>,
+    pub(super) proof_scheduler: ProofSchedulerHandle,
 }
 
 impl StoreApi {
