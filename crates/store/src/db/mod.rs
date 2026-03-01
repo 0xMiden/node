@@ -10,7 +10,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
 use miden_protocol::asset::{Asset, AssetVaultKey};
-use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
+use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, BlockProof, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
@@ -560,6 +560,42 @@ impl Db {
             acquire_done.blocking_recv()?;
 
             Ok(())
+        })
+        .await
+    }
+
+    /// Stores a [`BlockProof`] for a previously committed block.
+    ///
+    /// Updates the `block_proof` column for the given block number.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn insert_block_proof(
+        &self,
+        block_num: BlockNumber,
+        block_proof: &BlockProof,
+    ) -> Result<()> {
+        let block_proof = block_proof.clone();
+        self.transact("insert block proof", move |conn| {
+            models::queries::insert_block_proof(conn, block_num, &block_proof)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Returns block numbers for all blocks that have not yet been proven, ordered ascending.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_unproven_blocks(&self) -> Result<Vec<BlockNumber>> {
+        self.transact("select unproven blocks", |conn| {
+            models::queries::select_unproven_blocks(conn)
+        })
+        .await
+    }
+
+    /// Returns the [`BlockProof`] for a given block number, if the block exists and has been
+    /// proven.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_block_proof(&self, block_num: BlockNumber) -> Result<Option<BlockProof>> {
+        self.transact("select block proof", move |conn| {
+            models::queries::select_block_proof(conn, block_num)
         })
         .await
     }

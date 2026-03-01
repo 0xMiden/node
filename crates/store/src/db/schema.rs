@@ -49,6 +49,7 @@ diesel::table! {
         block_header -> Binary,
         signature -> Binary,
         commitment -> Binary,
+        block_proof -> Nullable<Binary>,
     }
 }
 
