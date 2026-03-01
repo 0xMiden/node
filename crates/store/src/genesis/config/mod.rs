@@ -7,7 +7,7 @@ use std::str::FromStr;
 use indexmap::IndexMap;
 use miden_node_utils::crypto::get_rpo_random_coin;
 use miden_node_utils::signer::BlockSigner;
-use miden_protocol::account::auth::AuthSecretKey;
+use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
     AccountBuilder,
@@ -26,8 +26,8 @@ use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::{Felt, FieldElement, ONE};
-use miden_standards::AuthScheme;
-use miden_standards::account::auth::AuthFalcon512Rpo;
+use miden_standards::AuthMethod;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
@@ -221,7 +221,9 @@ impl GenesisConfig {
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-            let auth = AuthScheme::Falcon512Rpo { pub_key: secret_key.public_key().into() };
+            let auth = AuthMethod::SingleSig {
+                approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            };
             let init_seed: [u8; 32] = rng.random();
 
             let account_type = if has_updatable_code {
@@ -429,7 +431,7 @@ impl FungibleFaucetConfig {
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
         let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-        let auth = AuthFalcon512Rpo::new(secret_key.public_key().into());
+        let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Rpo);
         let init_seed: [u8; 32] = rng.random();
 
         let max_supply = Felt::try_from(max_supply)
