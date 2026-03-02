@@ -13,7 +13,7 @@ use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{SMT_DEPTH, SmtForest};
 use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
-use miden_protocol::errors::{AssetError, StorageMapError};
+use miden_protocol::errors::{AccountError, AssetError, StorageMapError};
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 
@@ -25,6 +25,12 @@ mod tests;
 
 #[derive(Debug, Error)]
 pub enum InnerForestError {
+    #[error(transparent)]
+    Account(#[from] AccountError),
+    #[error(transparent)]
+    Asset(#[from] AssetError),
+    #[error(transparent)]
+    Merkle(#[from] MerkleError),
     #[error(
         "balance underflow: account {account_id}, faucet {faucet_id}, \
          previous balance {prev_balance}, delta {delta}"
@@ -35,10 +41,6 @@ pub enum InnerForestError {
         prev_balance: u64,
         delta: i64,
     },
-    #[error("asset error")]
-    AssetError(#[from] AssetError),
-    #[error("merkle error")]
-    MerkleError(#[from] MerkleError),
 }
 
 #[derive(Debug, Error)]
@@ -91,6 +93,14 @@ impl InnerForest {
     /// Returns the root of an empty SMT.
     const fn empty_smt_root() -> Word {
         *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
+    }
+
+    /// Retrieves the most recent vault root for an account.
+    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
+        self.vault_roots
+            .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::MAX))
+            .next_back()
+            .map_or_else(Self::empty_smt_root, |(_, root)| *root)
     }
 
     /// Retrieves a vault root for the specified account at or before the specified block.
@@ -287,13 +297,13 @@ impl InnerForest {
         if is_full_state {
             self.insert_account_vault(block_num, account_id, delta.vault())?;
         } else if !delta.vault().is_empty() {
-            self.update_account_vault(block_num, account_id, delta.vault(), false)?;
+            self.update_account_vault(block_num, account_id, delta.vault())?;
         }
 
         if is_full_state {
             self.insert_account_storage(block_num, account_id, delta.storage())?;
         } else if !delta.storage().is_empty() {
-            self.update_account_storage(block_num, account_id, delta.storage(), false)?;
+            self.update_account_storage(block_num, account_id, delta.storage())?;
         }
 
         Ok(())
@@ -401,14 +411,6 @@ impl InnerForest {
     // ASSET VAULT DELTA PROCESSING
     // --------------------------------------------------------------------------------------------
 
-    /// Retrieves the most recent vault SMT root for an account.
-    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
-        self.vault_roots
-            .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::MAX))
-            .next_back()
-            .map_or_else(Self::empty_smt_root, |(_, root)| *root)
-    }
-
     /// Updates the forest with vault changes from a delta and returns the new root.
     ///
     /// Processes both fungible and non-fungible asset changes, building entries for the vault SMT
@@ -431,13 +433,8 @@ impl InnerForest {
         block_num: BlockNumber,
         account_id: AccountId,
         vault_delta: &AccountVaultDelta,
-        is_full_state: bool,
     ) -> Result<Word, InnerForestError> {
-        let prev_root = if is_full_state {
-            Self::empty_smt_root()
-        } else {
-            self.get_latest_vault_root(account_id)
-        };
+        let prev_root = self.get_latest_vault_root(account_id);
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
@@ -485,9 +482,7 @@ impl InnerForest {
         }
 
         if entries.is_empty() {
-            if is_full_state {
-                self.vault_roots.insert((account_id, block_num), prev_root);
-            }
+            self.vault_roots.insert((account_id, block_num), prev_root);
             return Ok(prev_root);
         }
 
@@ -560,39 +555,17 @@ impl InnerForest {
         block_num: BlockNumber,
         account_id: AccountId,
         storage_delta: &AccountStorageDelta,
-        is_full_state: bool,
     ) -> Result<BTreeMap<StorageSlotName, Word>, InnerForestError> {
         let mut updated_roots = BTreeMap::new();
 
         for (slot_name, map_delta) in storage_delta.maps() {
-            let prev_root = if is_full_state {
-                Self::empty_smt_root()
-            } else {
-                self.get_latest_storage_map_root(account_id, slot_name)
-            };
+            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
 
-            let delta_entries = if is_full_state {
-                Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
-                    if value == EMPTY_WORD {
-                        None
-                    } else {
-                        Some((Word::from(key), value))
-                    }
-                }))
-            } else {
-                Vec::from_iter(
-                    map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
-                )
-            };
+            let delta_entries = Vec::from_iter(
+                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
+            );
 
             if delta_entries.is_empty() {
-                if is_full_state {
-                    self.storage_map_roots
-                        .insert((account_id, slot_name.clone(), block_num), prev_root);
-                    self.storage_entries
-                        .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
-                    updated_roots.insert(slot_name.clone(), prev_root);
-                }
                 continue;
             }
 
@@ -605,21 +578,17 @@ impl InnerForest {
                 .insert((account_id, slot_name.clone(), block_num), updated_root);
             updated_roots.insert(slot_name.clone(), updated_root);
 
-            let entries = if is_full_state {
-                BTreeMap::from_iter(delta_entries.iter().copied())
-            } else {
-                let mut latest_entries = self.get_latest_storage_map_entries(account_id, slot_name);
-                for (key, value) in &delta_entries {
-                    if *value == EMPTY_WORD {
-                        latest_entries.remove(key);
-                    } else {
-                        latest_entries.insert(*key, *value);
-                    }
+            let mut latest_entries = self.get_latest_storage_map_entries(account_id, slot_name);
+            for (key, value) in &delta_entries {
+                if *value == EMPTY_WORD {
+                    latest_entries.remove(key);
+                } else {
+                    latest_entries.insert(*key, *value);
                 }
-                latest_entries
-            };
+            }
 
-            self.storage_entries.insert((account_id, slot_name.clone(), block_num), entries);
+            self.storage_entries
+                .insert((account_id, slot_name.clone(), block_num), latest_entries);
 
             tracing::debug!(
                 target: crate::COMPONENT,

@@ -7,7 +7,7 @@ use assert_matches::assert_matches;
 use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
 use diesel_migrations::MigrationHarness;
 use miden_node_utils::fee::test_fee_params;
-use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::{
     AccountStorageDelta,
@@ -36,7 +36,7 @@ use miden_protocol::testing::account_id::{
 };
 use miden_protocol::utils::Serializable;
 use miden_protocol::{EMPTY_WORD, Felt, Word};
-use miden_standards::account::auth::AuthFalcon512Rpo;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
 use crate::db::migrations::MIGRATIONS;
@@ -150,7 +150,10 @@ fn optimized_delta_matches_full_account_method() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -341,7 +344,10 @@ fn optimized_delta_updates_non_empty_vault() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .with_assets([initial_asset])
         .build_existing()
         .unwrap();
@@ -463,7 +469,10 @@ fn optimized_delta_updates_storage_map_header() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
@@ -634,7 +643,10 @@ fn upsert_full_state_delta() {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 
