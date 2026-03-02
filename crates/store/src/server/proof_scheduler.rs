@@ -108,12 +108,17 @@ async fn run(
         let mut proving_futures = order_proving_jobs(&db, &block_prover, &unproven_blocks);
         while let Some(timeout_result) = proving_futures.next().await {
             match timeout_result {
+                // Store successful proofs.
                 Ok((block_num, proof)) => {
                     db.insert_block_proof(block_num, &proof)
                         .await
                         .map_err(ProofSchedulerError::PersistFailed)?;
                 },
+
+                // Abort on fatal errors.
                 Err(ProveBlockError::Fatal(err)) => return Err(err),
+
+                // Log transient errors and restart proof scheduler loop.
                 Err(ProveBlockError::Transient(err)) => {
                     error!(
                         target: COMPONENT,
