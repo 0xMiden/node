@@ -3311,6 +3311,7 @@ dependencies = [
  "miette",
  "opentelemetry",
  "prost",
+ "serial_test",
  "tokio",
  "tokio-stream",
  "tonic",

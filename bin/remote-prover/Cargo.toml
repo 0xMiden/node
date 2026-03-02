@@ -45,6 +45,7 @@ miden-protocol  = { features = ["testing"], workspace = true }
 miden-standards = { features = ["testing"], workspace = true }
 miden-testing   = { workspace = true }
 miden-tx        = { features = ["testing"], workspace = true }
+serial_test     = { version = "3" }
 
 [build-dependencies]
 build-rs                           = { workspace = true }
