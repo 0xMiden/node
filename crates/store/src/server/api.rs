@@ -23,6 +23,7 @@ use crate::state::State;
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
+    /// Handle used to notify proof scheduler of newly committed blocks.
     pub(super) proof_scheduler: ProofSchedulerHandle,
 }
 
