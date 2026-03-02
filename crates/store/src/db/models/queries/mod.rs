@@ -27,6 +27,7 @@
 
 use diesel::SqliteConnection;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::BlockProofRequest;
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::OrderedTransactionHeaders;
@@ -54,7 +55,7 @@ pub(crate) struct ApplyBlockData<'a> {
     pub nullifiers: &'a [Nullifier],
     pub accounts: &'a [BlockAccountUpdate],
     pub transactions: &'a OrderedTransactionHeaders,
-    pub proving_inputs: Option<Vec<u8>>,
+    pub proving_inputs: Option<BlockProofRequest>,
 }
 
 /// Apply a new block to the state

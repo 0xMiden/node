@@ -13,6 +13,7 @@ use diesel::{
 };
 use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::BlockProofRequest;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockProof};
 use miden_protocol::utils::{Deserializable, Serializable};
@@ -231,14 +232,14 @@ pub(crate) fn insert_block_header(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,
     signature: &Signature,
-    proving_inputs: Option<Vec<u8>>,
+    proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
     let row = BlockHeaderInsert {
         block_num: block_header.block_num().to_raw_sql(),
         block_header: block_header.to_bytes(),
         signature: signature.to_bytes(),
         commitment: BlockHeaderCommitment::new(block_header).to_raw_sql(),
-        proving_inputs,
+        proving_inputs: proving_inputs.map(|inputs| inputs.to_bytes()),
     };
     let count = diesel::insert_into(schema::block_headers::table).values(&[row]).execute(conn)?;
     Ok(count)

@@ -552,7 +552,7 @@ impl Db {
                     nullifiers: signed_block.body().created_nullifiers(),
                     accounts: signed_block.body().updated_accounts(),
                     transactions: signed_block.body().transactions(),
-                    proving_inputs: proving_inputs.map(|request| request.to_bytes()),
+                    proving_inputs,
                 },
             )?;
 
