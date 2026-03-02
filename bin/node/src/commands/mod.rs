@@ -59,7 +59,7 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
 ///
 /// Used by the Validator command and the genesis bootstrap command.
 #[derive(clap::Args)]
-#[group(required = true, multiple = false)]
+#[group(required = false, multiple = false)]
 pub struct ValidatorKey {
     /// Insecure, hex-encoded validator secret key for development and testing purposes.
     ///
@@ -179,7 +179,7 @@ pub struct NtxBuilderConfig {
     ///
     /// If not set, defaults to the node's data directory.
     #[arg(long = "ntx-builder.data-directory", value_name = "DIR")]
-    pub data_directory: Option<PathBuf>,
+    pub ntx_data_directory: Option<PathBuf>,
 }
 
 impl NtxBuilderConfig {
@@ -194,7 +194,7 @@ impl NtxBuilderConfig {
         validator_url: Url,
         node_data_directory: &Path,
     ) -> miden_node_ntx_builder::NtxBuilderConfig {
-        let data_dir = self.data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
+        let data_dir = self.ntx_data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
         let database_filepath = data_dir.join("ntx-builder.sqlite3");
 
         miden_node_ntx_builder::NtxBuilderConfig::new(
