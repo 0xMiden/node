@@ -216,7 +216,10 @@ async fn load_proving_inputs(
     let mut retry_delay = INITIAL_RETRY_DELAY;
 
     loop {
+        // Load proving inputs from the DB.
         match db.select_block_proving_inputs(block_num).await {
+            // Inputs found. All committed blocks should have inputs available apart from the
+            // genesis block.
             Ok(Some(bytes)) => {
                 return BlockProofRequest::read_from_bytes(&bytes[..]).map_err(|err| {
                     error!(
@@ -228,6 +231,8 @@ async fn load_proving_inputs(
                     ProveBlockError::DeserializationFailed
                 });
             },
+            // Inputs not found. This should never happen for committed blocks. The genesis block
+            // does not have inputs but it should not be queried by this function.
             Ok(None) => {
                 error!(
                     target: COMPONENT,
@@ -236,6 +241,7 @@ async fn load_proving_inputs(
                 );
                 return Err(ProveBlockError::MissingProvingInputs);
             },
+            // Failed to retrieve proving inputs. Treat as retryable error.
             Err(err) => {
                 warn!(
                     target: COMPONENT,
