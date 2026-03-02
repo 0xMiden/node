@@ -540,9 +540,9 @@ fn note_script_insert_is_idempotent() {
 ///
 /// Uses `AccountBuilder` with minimal components needed for serialization.
 fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Account {
-    use miden_protocol::account::auth::PublicKeyCommitment;
+    use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
     use miden_protocol::account::{AccountBuilder, AccountComponent};
-    use miden_standards::account::auth::AuthFalcon512Rpo;
+    use miden_standards::account::auth::AuthSingleSig;
 
     let component_code = miden_standards::code_builder::CodeBuilder::default()
         .compile_component_code("test::interface", "pub proc test_proc push.1.2 add end")
@@ -559,7 +559,10 @@ fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Accou
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Network)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(Word::default())))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(Word::default()),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap()
 }

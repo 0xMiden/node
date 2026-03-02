@@ -255,7 +255,7 @@ impl api_server::Api for RpcService {
 
     async fn get_note_script_by_root(
         &self,
-        request: Request<proto::note::NoteRoot>,
+        request: Request<proto::note::NoteScriptRoot>,
     ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
@@ -534,13 +534,11 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
-    use {
-        QueryParamAccountIdLimit as AccountId,
-        QueryParamNoteIdLimit as NoteId,
-        QueryParamNoteTagLimit as NoteTag,
-        QueryParamNullifierLimit as Nullifier,
-        QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal,
-    };
+    use QueryParamAccountIdLimit as AccountId;
+    use QueryParamNoteIdLimit as NoteId;
+    use QueryParamNoteTagLimit as NoteTag;
+    use QueryParamNullifierLimit as Nullifier;
+    use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([
