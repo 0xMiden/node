@@ -9,7 +9,7 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
 
-use crate::actor::account_effect::NetworkAccountEffect;
+use super::account_effect::NetworkAccountEffect;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 

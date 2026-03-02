@@ -13,9 +13,9 @@ use miden_protocol::transaction::TransactionId;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::actor::inflight_note::InflightNetworkNote;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
+use crate::inflight_note::InflightNetworkNote;
 
 pub(crate) mod models;
 
