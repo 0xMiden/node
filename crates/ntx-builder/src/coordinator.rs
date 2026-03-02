@@ -15,6 +15,17 @@ use tokio_util::sync::CancellationToken;
 use crate::actor::{AccountActor, AccountActorContext, AccountOrigin, ActorShutdownReason};
 use crate::db::Db;
 
+// WRITE EVENT RESULT
+// ================================================================================================
+
+/// Result of writing a mempool event to the database.
+pub struct WriteEventResult {
+    /// Accounts that should be notified of state changes.
+    pub accounts_to_notify: Vec<NetworkAccountId>,
+    /// Accounts whose creation was reverted and should be cancelled.
+    pub accounts_to_cancel: Vec<NetworkAccountId>,
+}
+
 // ACTOR HANDLE
 // ================================================================================================
 
@@ -133,14 +144,16 @@ impl Coordinator {
         tracing::info!(account_id = %account_id, "Created actor for account prefix");
     }
 
-    /// Notifies all active account actors that state may have changed.
+    /// Notifies specific account actors that state may have changed.
     ///
-    /// Each actor will re-evaluate its state from the DB on the next iteration of its run loop.
-    /// Notifications are coalesced: multiple notifications while an actor is busy result in a
-    /// single wake-up.
-    pub fn broadcast(&self) {
-        for handle in self.actor_registry.values() {
-            handle.notify.notify_one();
+    /// Only actors that are currently active are notified. Each actor will re-evaluate its state
+    /// from the DB on the next iteration of its run loop. Notifications are coalesced: multiple
+    /// notifications while an actor is busy result in a single wake-up.
+    pub fn notify_accounts(&self, account_ids: &[NetworkAccountId]) {
+        for account_id in account_ids {
+            if let Some(handle) = self.actor_registry.get(account_id) {
+                handle.notify.notify_one();
+            }
         }
     }
 
@@ -221,12 +234,12 @@ impl Coordinator {
 
     /// Writes mempool event effects to the database.
     ///
-    /// This must be called BEFORE sending notifications to actors. For `TransactionsReverted`,
-    /// returns the list of account IDs whose creation was reverted.
+    /// This must be called BEFORE sending notifications to actors. Returns a [`WriteEventResult`]
+    /// with the accounts to notify and cancel.
     pub async fn write_event(
         &self,
         event: &MempoolEvent,
-    ) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    ) -> Result<WriteEventResult, DatabaseError> {
         match event {
             MempoolEvent::TransactionAdded {
                 id,
@@ -245,20 +258,32 @@ impl Coordinator {
                 self.db
                     .handle_transaction_added(*id, account_delta.clone(), notes, nullifiers.clone())
                     .await?;
-                Ok(Vec::new())
+                Ok(WriteEventResult {
+                    accounts_to_notify: Vec::new(),
+                    accounts_to_cancel: Vec::new(),
+                })
             },
             MempoolEvent::BlockCommitted { header, txs } => {
-                self.db
+                let affected_accounts = self
+                    .db
                     .handle_block_committed(
                         txs.clone(),
                         header.block_num(),
                         header.as_ref().clone(),
                     )
                     .await?;
-                Ok(Vec::new())
+                Ok(WriteEventResult {
+                    accounts_to_notify: affected_accounts,
+                    accounts_to_cancel: Vec::new(),
+                })
             },
             MempoolEvent::TransactionsReverted(tx_ids) => {
-                self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await
+                let result =
+                    self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await?;
+                Ok(WriteEventResult {
+                    accounts_to_notify: result.affected_accounts,
+                    accounts_to_cancel: result.reverted_accounts,
+                })
             },
         }
     }

@@ -259,31 +259,32 @@ impl NetworkTransactionBuilder {
                 self.coordinator.send_targeted(&event);
                 Ok(())
             },
-            // Update chain state and broadcast.
+            // Update chain state and notify affected actors.
             MempoolEvent::BlockCommitted { header, .. } => {
                 // Write event effects to DB first.
-                self.coordinator
+                let result = self
+                    .coordinator
                     .write_event(&event)
                     .await
                     .context("failed to write BlockCommitted to DB")?;
 
                 self.update_chain_tip(header.as_ref().clone()).await;
-                self.coordinator.broadcast();
+                self.coordinator.notify_accounts(&result.accounts_to_notify);
                 Ok(())
             },
-            // Broadcast to all actors.
+            // Notify affected actors and cancel reverted account creations.
             MempoolEvent::TransactionsReverted(_) => {
-                // Write event effects to DB first; returns reverted account IDs.
-                let reverted_accounts = self
+                // Write event effects to DB first.
+                let result = self
                     .coordinator
                     .write_event(&event)
                     .await
                     .context("failed to write TransactionsReverted to DB")?;
 
-                self.coordinator.broadcast();
+                self.coordinator.notify_accounts(&result.accounts_to_notify);
 
                 // Cancel actors for reverted account creations.
-                for account_id in &reverted_accounts {
+                for account_id in &result.accounts_to_cancel {
                     self.coordinator.cancel_actor(account_id);
                 }
                 Ok(())

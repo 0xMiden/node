@@ -534,13 +534,11 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
-    use {
-        QueryParamAccountIdLimit as AccountId,
-        QueryParamNoteIdLimit as NoteId,
-        QueryParamNoteTagLimit as NoteTag,
-        QueryParamNullifierLimit as Nullifier,
-        QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal,
-    };
+    use QueryParamAccountIdLimit as AccountId;
+    use QueryParamNoteIdLimit as NoteId;
+    use QueryParamNoteTagLimit as NoteTag;
+    use QueryParamNullifierLimit as Nullifier;
+    use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([

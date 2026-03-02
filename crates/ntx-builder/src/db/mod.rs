@@ -130,12 +130,14 @@ impl Db {
     }
 
     /// Handles a `BlockCommitted` mempool event by committing transaction effects.
+    ///
+    /// Returns the list of affected account IDs that should be notified.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,
         block_num: BlockNumber,
         header: BlockHeader,
-    ) -> Result<()> {
+    ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_block_committed", move |conn| {
                 queries::commit_block(conn, &txs, block_num, &header)
@@ -145,11 +147,11 @@ impl Db {
 
     /// Handles a `TransactionsReverted` mempool event by undoing transaction effects.
     ///
-    /// Returns the list of account IDs whose creation was reverted.
+    /// Returns affected accounts and fully reverted accounts.
     pub async fn handle_transactions_reverted(
         &self,
         tx_ids: Vec<TransactionId>,
-    ) -> Result<Vec<NetworkAccountId>> {
+    ) -> Result<queries::RevertResult> {
         self.inner
             .transact("handle_transactions_reverted", move |conn| {
                 queries::revert_transaction(conn, &tx_ids)
