@@ -259,7 +259,7 @@ impl Db {
                     nullifiers: &[],
                     accounts: genesis.body().updated_accounts(),
                     transactions: genesis.body().transactions(),
-                    proving_inputs: None, // Genesis block has no proving inputs.
+                    proving_inputs: None, // Genesis block is never proven.
                 },
             )
         })
