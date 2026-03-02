@@ -605,6 +605,16 @@ impl Db {
         .await
     }
 
+    /// Returns the highest block number that has been proven, or `None` if no blocks have been
+    /// proven yet.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_latest_proven_block_num(&self) -> Result<Option<BlockNumber>> {
+        self.transact("select latest proven block num", |conn| {
+            models::queries::select_latest_proven_block_num(conn)
+        })
+        .await
+    }
+
     /// Returns the [`BlockProof`] for a given block number, if the block exists and has been
     /// proven.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]

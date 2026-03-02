@@ -254,6 +254,11 @@ pub enum SyncChainMmrError {
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),
+    #[error("no proven blocks available")]
+    NoProvenBlocks,
+    #[error("database error")]
+    #[grpc(internal)]
+    DatabaseError(#[from] DatabaseError),
 }
 
 impl From<diesel::result::Error> for StateSyncError {

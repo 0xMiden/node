@@ -546,6 +546,7 @@ async fn sync_chain_mmr_returns_delta() {
 
     let request = proto::rpc::SyncChainMmrRequest {
         block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: None }),
+        finality: proto::rpc::Finality::Committed.into(),
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();

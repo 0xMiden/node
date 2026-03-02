@@ -325,6 +325,31 @@ pub(crate) fn select_unproven_blocks(
         .map_err(Into::into)
 }
 
+/// Select the highest block number that has been proven.
+///
+/// Returns `None` if no blocks have been proven yet (genesis is never proven).
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT MAX(block_num)
+/// FROM block_headers
+/// WHERE block_proof IS NOT NULL
+/// ```
+pub(crate) fn select_latest_proven_block_num(
+    conn: &mut SqliteConnection,
+) -> Result<Option<BlockNumber>, DatabaseError> {
+    use diesel::dsl::max;
+
+    let block_num: Option<i64> = SelectDsl::select(
+        schema::block_headers::table.filter(schema::block_headers::block_proof.is_not_null()),
+        max(schema::block_headers::block_num),
+    )
+    .get_result(conn)?;
+
+    block_num.map(BlockNumber::from_raw_sql).transpose().map_err(Into::into)
+}
+
 /// Select the [`BlockProof`] for a given block number, if it exists.
 ///
 /// # Returns
