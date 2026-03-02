@@ -122,7 +122,7 @@ pub struct BundledValidatorConfig {
 }
 
 impl BundledValidatorConfig {
-    /// Converts the [`ValidatorConfig`] into a URL and an optional [`SocketAddr`].
+    /// Converts the [`BundledValidatorConfig`] into a URL and an optional [`SocketAddr`].
     ///
     /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
     ///

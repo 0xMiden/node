@@ -277,6 +277,7 @@ impl State {
                 .account_tree
                 .apply_mutations(account_tree_update)
                 .expect("Unreachable: old account tree root must be checked before this step");
+
             inner.blockchain.push(block_commitment);
 
             Ok(())
