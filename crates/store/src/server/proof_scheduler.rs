@@ -127,15 +127,18 @@ fn order_proving_jobs(
 > {
     let mut futures = FuturesOrdered::new();
     for &block_num in unproven_blocks {
+        // Clone the resources for each future.
         let db = Arc::clone(db);
         let block_prover = Arc::clone(block_prover);
-        futures.push_back(async move {
+        // Define the future.
+        let fut = async move {
+            // Prove block with timeout.
             let result = tokio::time::timeout(
                 BLOCK_PROVE_TIMEOUT,
                 prove_block(&db, &block_prover, block_num),
             )
             .await;
-
+            // Handle proving result.
             match result {
                 Ok(proof) => (block_num, proof),
                 Err(elapsed) => {
@@ -148,13 +151,15 @@ fn order_proving_jobs(
                     (block_num, Err(ProveBlockError::Timeout))
                 },
             }
-        });
+        };
+        futures.push_back(fut);
     }
     futures
 }
 
 /// Persists a proven block proof to the DB. Logs on success or failure.
 async fn persist_proof(db: &Db, block_num: BlockNumber, proof: &BlockProof) {
+    // Persist the block proof to the database.
     match db.insert_block_proof(block_num, proof).await {
         Ok(()) => {
             info!(
