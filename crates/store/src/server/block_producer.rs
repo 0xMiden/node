@@ -107,10 +107,8 @@ impl block_producer_server::BlockProducer for StoreApi {
         let this = self.clone();
         tokio::spawn(
             async move {
-                // SAFETY: The header, body, and signature are assumed to
-                // correspond to each other because they are provided by the Block
-                // Producer.
-                let signed_block = SignedBlock::new_unchecked(header, body, signature); // TODO(sergerad): Use `SignedBlock::new()` when available.
+                let signed_block = SignedBlock::new(header, body, signature)
+                    .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
                 this.state
