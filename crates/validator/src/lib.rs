@@ -5,7 +5,7 @@ mod signers;
 mod tx_validation;
 
 pub use server::Validator;
-pub use signers::ValidatorSigner;
+pub use signers::{KmsSigner, ValidatorSigner};
 
 // CONSTANTS
 // =================================================================================================
