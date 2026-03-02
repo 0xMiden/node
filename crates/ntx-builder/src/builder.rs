@@ -177,7 +177,7 @@ impl NetworkTransactionBuilder {
                 },
                 // Handle requests from actors.
                 Some(request) = self.actor_request_rx.recv() => {
-                    self.handle_actor_request(request).await;
+                    self.handle_actor_request(request).await?;
                 },
                 // Handle account loader task completion/failure.
                 // If the task fails, we abort since the builder would be in a degraded state
@@ -292,20 +292,26 @@ impl NetworkTransactionBuilder {
     }
 
     /// Processes a request from an account actor.
-    async fn handle_actor_request(&mut self, request: ActorRequest) {
+    async fn handle_actor_request(
+        &mut self,
+        request: ActorRequest,
+    ) -> Result<(), anyhow::Error> {
         match request {
             ActorRequest::NotesFailed { nullifiers, block_num, ack_tx } => {
-                if let Err(err) = self.db.notes_failed(nullifiers, block_num).await {
-                    tracing::error!(err = %err, "failed to mark notes as failed");
-                }
+                self.db
+                    .notes_failed(nullifiers, block_num)
+                    .await
+                    .context("failed to mark notes as failed")?;
                 let _ = ack_tx.send(());
             },
             ActorRequest::CacheNoteScript { script_root, script } => {
-                if let Err(err) = self.db.insert_note_script(script_root, &script).await {
-                    tracing::error!(err = %err, "failed to cache note script");
-                }
+                self.db
+                    .insert_note_script(script_root, &script)
+                    .await
+                    .context("failed to cache note script")?;
             },
         }
+        Ok(())
     }
 
     /// Updates the chain tip and prunes old blocks from the MMR.
