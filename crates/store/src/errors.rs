@@ -30,6 +30,21 @@ use tonic::Status;
 use crate::db::models::conv::DatabaseTypeConversionError;
 use crate::inner_forest::{InnerForestError, WitnessError};
 
+// PROOF SCHEDULER ERRORS
+// =================================================================================================
+
+#[derive(Debug, Error)]
+pub enum ProofSchedulerError {
+    #[error("no proving inputs found for block {0}")]
+    MissingProvingInputs(BlockNumber),
+    #[error("failed to deserialize proving inputs for block")]
+    DeserializationFailed(#[source] DeserializationError),
+    #[error("failed to persist block proof for block")]
+    PersistFailed(#[source] DatabaseError),
+    #[error("invalid remote prover endpoint: {0}")]
+    InvalidProverEndpoint(String),
+}
+
 // DATABASE ERRORS
 // =================================================================================================
 

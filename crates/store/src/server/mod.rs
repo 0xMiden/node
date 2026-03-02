@@ -90,6 +90,7 @@ impl Store {
     /// Serves the store APIs (rpc, ntx-builder, block-producer) and DB maintenance background task.
     ///
     /// Note: this blocks until the server dies.
+    #[expect(clippy::too_many_lines)]
     pub async fn serve(self) -> anyhow::Result<()> {
         let rpc_address = self.rpc_listener.local_addr()?;
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
@@ -115,7 +116,8 @@ impl Store {
 
         // Spawn the proof scheduler as a background task. It will immediately pick up any
         // unproven blocks from previous runs and begin proving them.
-        let proof_scheduler_handle = proof_scheduler::spawn(state.db.clone(), block_prover);
+        let (proof_scheduler_handle, proof_scheduler_task) =
+            proof_scheduler::spawn(state.db.clone(), block_prover);
 
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),
@@ -205,6 +207,13 @@ impl Store {
             result = service => result,
             Some(err) = termination_signal.recv() => {
                 Err(anyhow::anyhow!("received termination signal").context(err))
+            },
+            result = proof_scheduler_task => {
+                match result {
+                    Ok(Ok(())) => Err(anyhow::anyhow!("proof scheduler exited unexpectedly")),
+                    Ok(Err(err)) => Err(anyhow::anyhow!("proof scheduler fatal error").context(err)),
+                    Err(join_err) => Err(anyhow::anyhow!("proof scheduler panicked").context(join_err)),
+                }
             }
         }
     }

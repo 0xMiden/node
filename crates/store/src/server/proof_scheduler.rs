@@ -7,10 +7,10 @@
 //! 3. Proves blocks concurrently, but resolves completions in FIFO order via [`FuturesOrdered`].
 //!    This ensures the ancestor rule: a block's proof is only persisted after all ancestor proofs
 //!    have been persisted.
-//! 4. Each proving future includes retry logic with exponential backoff and an overall timeout.
-//! 5. On fatal errors (e.g. deserialization failures, timeout exhaustion), the future resolves with
-//!    an error. The scheduler logs it and continues — the block will be retried on the next
-//!    iteration.
+//! 4. On transient errors (DB reads, prover failures, timeouts), the scheduler abandons the current
+//!    batch, re-queries unproven blocks, and retries from scratch.
+//! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
+//!    returns the error to the caller for node shutdown.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,24 +19,21 @@ use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Deserializable;
+use miden_remote_prover_client::RemoteProverClientError;
 use tokio::sync::Notify;
-use tracing::{error, info, instrument, warn};
+use tokio::task::JoinHandle;
+use tracing::{error, info, instrument};
 
 use crate::COMPONENT;
 use crate::db::Db;
-use crate::server::block_prover_client::BlockProver;
+use crate::errors::{DatabaseError, ProofSchedulerError};
+use crate::server::block_prover_client::{BlockProver, StoreProverError};
 
 // CONSTANTS
 // ================================================================================================
 
-/// Initial retry delay on proving failure.
-const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
-
-/// Maximum retry delay (caps the exponential backoff).
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
-
-/// Overall timeout for proving a single block (including all retries).
+/// Overall timeout for proving a single block.
 const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(2);
 
 // PROOF SCHEDULER
@@ -50,6 +47,7 @@ pub struct ProofSchedulerHandle {
 
 impl ProofSchedulerHandle {
     /// Notify the scheduler that a new block has been committed and may need proving.
+    #[instrument(target = COMPONENT, name = "proof_scheduler.notify", skip_all)]
     pub fn notify_block_committed(&self) {
         self.notify.notify_one();
     }
@@ -58,22 +56,32 @@ impl ProofSchedulerHandle {
 /// Spawns the proof scheduler as a background tokio task.
 ///
 /// Returns a [`ProofSchedulerHandle`] that should be used to notify the scheduler when new
-/// blocks are committed.
-pub fn spawn(db: Arc<Db>, block_prover: Arc<BlockProver>) -> ProofSchedulerHandle {
+/// blocks are committed, and a [`JoinHandle`] that resolves when the scheduler encounters a
+/// fatal error or completes unexpectedly.
+pub fn spawn(
+    db: Arc<Db>,
+    block_prover: Arc<BlockProver>,
+) -> (ProofSchedulerHandle, JoinHandle<Result<(), ProofSchedulerError>>) {
     let notify = Arc::new(Notify::new());
     let handle = ProofSchedulerHandle { notify: Arc::clone(&notify) };
 
-    tokio::spawn(run(db, block_prover, notify));
+    let join_handle = tokio::spawn(run(db, block_prover, notify));
 
-    handle
+    (handle, join_handle)
 }
 
 /// Main loop of the proof scheduler.
 ///
 /// Uses [`FuturesOrdered`] to run proving concurrently while resolving completions in block
 /// order. This provides natural backpressure and ensures proofs are persisted sequentially.
-#[instrument(target = COMPONENT, name = "proof_scheduler", skip_all)]
-async fn run(db: Arc<Db>, block_prover: Arc<BlockProver>, notify: Arc<Notify>) {
+///
+/// Returns `Err` on irrecoverable errors (missing/corrupt proving inputs, DB write failures).
+/// Transient errors are retried internally.
+async fn run(
+    db: Arc<Db>,
+    block_prover: Arc<BlockProver>,
+    notify: Arc<Notify>,
+) -> Result<(), ProofSchedulerError> {
     info!(target: COMPONENT, "Proof scheduler started");
 
     loop {
@@ -82,7 +90,7 @@ async fn run(db: Arc<Db>, block_prover: Arc<BlockProver>, notify: Arc<Notify>) {
             Ok(blocks) => blocks,
             Err(err) => {
                 error!(target: COMPONENT, %err, "Failed to query unproven blocks, retrying");
-                tokio::time::sleep(INITIAL_RETRY_DELAY).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             },
         };
@@ -100,13 +108,26 @@ async fn run(db: Arc<Db>, block_prover: Arc<BlockProver>, notify: Arc<Notify>) {
         let mut proving_futures = order_proving_jobs(&db, &block_prover, &unproven_blocks);
         while let Some((block_num, result)) = proving_futures.next().await {
             match result {
-                Ok(proof) => persist_proof(&db, block_num, &proof).await,
-                Err(err) => {
+                Ok(proof) => {
+                    db.insert_block_proof(block_num, &proof)
+                        .await
+                        .map_err(ProofSchedulerError::PersistFailed)?;
+                },
+                Err(ProveBlockError::Fatal(err)) => return Err(err),
+                Err(ProveBlockError::Transient(err)) => {
                     error!(
                         target: COMPONENT,
                         %block_num,
-                        ?err,
+                        %err,
                         "Block proving failed, abandoning batch and retrying next iteration"
+                    );
+                    break;
+                },
+                Err(ProveBlockError::Timeout) => {
+                    error!(
+                        target: COMPONENT,
+                        %block_num,
+                        "Block proving timed out, abandoning batch and retrying next iteration"
                     );
                     break;
                 },
@@ -141,15 +162,7 @@ fn order_proving_jobs(
             // Handle proving result.
             match result {
                 Ok(proof) => (block_num, proof),
-                Err(elapsed) => {
-                    error!(
-                        target: COMPONENT,
-                        %block_num,
-                        "Block proving timed out after {:?}",
-                        elapsed,
-                    );
-                    (block_num, Err(ProveBlockError::Timeout))
-                },
+                Err(_elapsed) => (block_num, Err(ProveBlockError::Timeout)),
             }
         };
         futures.push_back(fut);
@@ -157,136 +170,78 @@ fn order_proving_jobs(
     futures
 }
 
-/// Persists a proven block proof to the DB. Logs on success or failure.
-async fn persist_proof(db: &Db, block_num: BlockNumber, proof: &BlockProof) {
-    // Persist the block proof to the database.
-    match db.insert_block_proof(block_num, proof).await {
-        Ok(()) => {
-            info!(
-                target: COMPONENT,
-                %block_num,
-                proof_size = proof.to_bytes().len(),
-                "Block proof persisted"
-            );
-        },
-        Err(err) => {
-            error!(
-                target: COMPONENT,
-                %block_num,
-                %err,
-                "Failed to persist block proof"
-            );
-        },
-    }
-}
-
 // PROVE BLOCK
 // ================================================================================================
 
-/// Errors that can occur during block proving.
-#[derive(Debug)]
-enum ProveBlockError {
-    /// The proving inputs were not found in the database.
-    MissingProvingInputs,
-    /// The proving inputs could not be deserialized.
-    DeserializationFailed,
-    /// The overall proving timeout was exceeded.
-    Timeout,
-}
-
-/// Proves a single block, retrying with exponential backoff on transient failures.
+/// Proves a single block.
 ///
-/// Returns the proof on success, or a fatal error if proving cannot succeed (missing or
-/// corrupt proving inputs).
-///
-/// This function is designed to be run as a future inside [`FuturesOrdered`]. Transient
-/// errors (DB reads, prover failures) are retried internally. Only fatal errors are returned.
+/// Loads proving inputs from the DB, deserializes them, and invokes the block prover.
+/// blocks.
+#[instrument(target = COMPONENT, name = "proof_scheduler.prove_block", skip_all, fields(%block_num))]
 async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
     block_num: BlockNumber,
 ) -> Result<BlockProof, ProveBlockError> {
-    // Load and deserialize proving inputs (with retries for transient DB errors).
-    let request = load_proving_inputs(db, block_num).await?;
+    // Load proving inputs from the DB.
+    let bytes = match db.select_block_proving_inputs(block_num).await {
+        Ok(Some(bytes)) => bytes,
+        // Inputs not found. This should never happen for committed blocks. The genesis block
+        // does not have inputs but it should not be queried by this function.
+        Ok(None) => {
+            return Err(ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(
+                block_num,
+            )));
+        },
+        // Failed to retrieve proving inputs.
+        Err(err) => return Err(err.into()),
+    };
 
-    // Prove the block (with retries for transient prover errors).
-    prove_with_retries(block_prover, block_num, request).await
+    // Deserialize proving inputs.
+    let request = BlockProofRequest::read_from_bytes(&bytes[..])
+        .map_err(|err| ProveBlockError::Fatal(ProofSchedulerError::DeserializationFailed(err)))?;
+
+    // Prove the block.
+    let proof = block_prover
+        .prove(request.tx_batches, request.block_inputs, &request.block_header)
+        .await
+        .map_err(ProveBlockError::from)?;
+
+    Ok(proof)
 }
 
-/// Loads and deserializes proving inputs from the DB, retrying on transient DB errors.
-async fn load_proving_inputs(
-    db: &Db,
-    block_num: BlockNumber,
-) -> Result<BlockProofRequest, ProveBlockError> {
-    let mut retry_delay = INITIAL_RETRY_DELAY;
+// PROVE BLOCK ERROR
+// ================================================================================================
 
-    loop {
-        // Load proving inputs from the DB.
-        match db.select_block_proving_inputs(block_num).await {
-            // Inputs found. All committed blocks should have inputs available apart from the
-            // genesis block.
-            Ok(Some(bytes)) => {
-                return BlockProofRequest::read_from_bytes(&bytes[..]).map_err(|err| {
-                    error!(
-                        target: COMPONENT,
-                        %block_num,
-                        %err,
-                        "Failed to deserialize proving inputs"
-                    );
-                    ProveBlockError::DeserializationFailed
-                });
+/// Errors that can occur during block proving.
+#[derive(Debug)]
+enum ProveBlockError {
+    /// An irrecoverable error that should cause node shutdown.
+    Fatal(ProofSchedulerError),
+    /// A transient error (DB read, prover failure). The outer loop will retry.
+    Transient(Box<dyn std::error::Error + Send + Sync>),
+    /// The overall proving timeout was exceeded. Retriable on next iteration.
+    Timeout,
+}
+
+impl From<DatabaseError> for ProveBlockError {
+    fn from(err: DatabaseError) -> Self {
+        match err {
+            DatabaseError::DeserializationError(err) => {
+                Self::Fatal(ProofSchedulerError::DeserializationFailed(err))
             },
-            // Inputs not found. This should never happen for committed blocks. The genesis block
-            // does not have inputs but it should not be queried by this function.
-            Ok(None) => {
-                error!(
-                    target: COMPONENT,
-                    %block_num,
-                    "No proving inputs found for unproven block"
-                );
-                return Err(ProveBlockError::MissingProvingInputs);
-            },
-            // Failed to retrieve proving inputs. Treat as retryable error.
-            Err(err) => {
-                warn!(
-                    target: COMPONENT,
-                    %block_num,
-                    %err,
-                    ?retry_delay,
-                    "Failed to load proving inputs, retrying"
-                );
-                tokio::time::sleep(retry_delay).await;
-                retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
-            },
+            _ => Self::Transient(err.into()),
         }
     }
 }
 
-/// Calls the block prover, retrying with exponential backoff on failure.
-async fn prove_with_retries(
-    block_prover: &BlockProver,
-    block_num: BlockNumber,
-    request: BlockProofRequest,
-) -> Result<BlockProof, ProveBlockError> {
-    let mut retry_delay = INITIAL_RETRY_DELAY;
-
-    loop {
-        match block_prover
-            .prove(request.tx_batches.clone(), request.block_inputs.clone(), &request.block_header)
-            .await
-        {
-            Ok(proof) => return Ok(proof),
-            Err(err) => {
-                warn!(
-                    target: COMPONENT,
-                    %block_num,
-                    %err,
-                    ?retry_delay,
-                    "Block proving failed, retrying"
-                );
-                tokio::time::sleep(retry_delay).await;
-                retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
-            },
+impl From<StoreProverError> for ProveBlockError {
+    fn from(err: StoreProverError) -> Self {
+        match err {
+            StoreProverError::RemoteProvingFailed(RemoteProverClientError::InvalidEndpoint(
+                uri,
+            )) => Self::Fatal(ProofSchedulerError::InvalidProverEndpoint(uri)),
+            _ => Self::Transient(err.into()),
         }
     }
 }
