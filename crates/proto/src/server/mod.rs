@@ -49,15 +49,19 @@ pub trait GrpcServerStream<Method: GrpcInterface>: Send + Sync + 'static {
 /// Execute the standard unary flow: decode → handle → encode.
 ///
 /// Decode errors are mapped to `Status::invalid_argument`.
-pub async fn handle_unary<Method>(
+pub(crate) async fn handle_unary<Service, Method>(
+    service: &Service,
     request: Request<Method::Request>,
 ) -> Result<Response<Method::Response>, Status>
 where
+    Service: GrpcUnary<Method>,
+    Service::Input: GrpcDecode<Method::Request>,
+    Service::Output: GrpcEncode<Method::Response>,
     Method: GrpcInterface,
 {
-    let input = Method::Input::decode(request.into_inner())
+    let input = Service::Input::decode(request.into_inner())
         .map_err(|err| Status::invalid_argument(err.to_string()))?;
-    let output = Method::handle(input).await?;
+    let output = service.handle(input).await?;
     let response = output.encode()?;
     Ok(Response::new(response))
 }
