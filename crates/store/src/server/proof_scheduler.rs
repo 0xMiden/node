@@ -37,7 +37,7 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 /// Overall timeout for proving a single block (including all retries).
-const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_secs(120);
+const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(2);
 
 // PROOF SCHEDULER
 // ================================================================================================

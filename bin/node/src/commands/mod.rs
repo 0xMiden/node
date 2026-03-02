@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -174,12 +174,6 @@ pub struct NtxBuilderConfig {
         default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
     )]
     pub script_cache_size: NonZeroUsize,
-
-    /// Directory for the ntx-builder's persistent database.
-    ///
-    /// If not set, defaults to the node's data directory.
-    #[arg(long = "ntx-builder.data-directory", value_name = "DIR")]
-    pub data_directory: Option<PathBuf>,
 }
 
 impl NtxBuilderConfig {
@@ -194,7 +188,7 @@ impl NtxBuilderConfig {
         validator_url: Url,
         node_data_directory: &Path,
     ) -> miden_node_ntx_builder::NtxBuilderConfig {
-        let data_dir = self.data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
+        let data_dir = node_data_directory.to_path_buf();
         let database_filepath = data_dir.join("ntx-builder.sqlite3");
 
         miden_node_ntx_builder::NtxBuilderConfig::new(

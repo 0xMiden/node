@@ -298,12 +298,15 @@ pub(crate) fn insert_block_proof(
 
 /// Select all block numbers that have not yet been proven, ordered ascending.
 ///
+/// The genesis block (block 0) is excluded because it is never proven.
+///
 /// # Raw SQL
 ///
 /// ```sql
 /// SELECT block_num
 /// FROM block_headers
 /// WHERE block_proof IS NULL
+///   AND block_num > 0
 /// ORDER BY block_num ASC
 /// ```
 pub(crate) fn select_unproven_blocks(
@@ -312,6 +315,7 @@ pub(crate) fn select_unproven_blocks(
     let block_nums: Vec<i64> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
             .filter(schema::block_headers::block_proof.is_null())
+            .filter(schema::block_headers::block_num.gt(0i64))
             .order(schema::block_headers::block_num.asc())
             .load(conn)?;
     block_nums

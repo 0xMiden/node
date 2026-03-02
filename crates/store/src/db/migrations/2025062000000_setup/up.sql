@@ -1,10 +1,10 @@
 CREATE TABLE block_headers (
-    block_num    INTEGER NOT NULL,
-    block_header BLOB    NOT NULL,
-    signature    BLOB    NOT NULL,
-    commitment   BLOB    NOT NULL,
-    block_proof     BLOB,             -- NULL means the block has not yet been proven
-    proving_inputs  BLOB,             -- Serialized BlockProofRequest needed for deferred proving
+    block_num      INTEGER NOT NULL,
+    block_header   BLOB    NOT NULL,
+    signature      BLOB    NOT NULL,
+    commitment     BLOB    NOT NULL,
+    proving_inputs BLOB,             -- Serialized BlockProofRequest needed for deferred proving. NULL for genesis block.
+    block_proof    BLOB,             -- NULL means the block has not yet been proven
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
