@@ -36,7 +36,7 @@ fn db_query<T>(
 ) -> Result<T, ActorShutdownReason> {
     result.map_err(|err| {
         tracing::error!(err = err.as_report(), account_id = %account_id, "{context}");
-        ActorShutdownReason::DbError(account_id)
+        ActorShutdownReason::DbError(account_id, err)
     })
 }
 
@@ -70,7 +70,7 @@ pub enum ActorShutdownReason {
     /// graceful shutdown of actors.
     Cancelled(NetworkAccountId),
     /// Occurs when the actor encounters a database error it cannot recover from.
-    DbError(NetworkAccountId),
+    DbError(NetworkAccountId, miden_node_db::DatabaseError),
 }
 
 // ACCOUNT ACTOR CONFIG

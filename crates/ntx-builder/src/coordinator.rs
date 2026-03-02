@@ -6,6 +6,7 @@ use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
+use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
@@ -162,8 +163,8 @@ impl Coordinator {
                     Ok(())
                 },
                 ActorShutdownReason::SemaphoreFailed(err) => Err(err).context("semaphore failed"),
-                ActorShutdownReason::DbError(account_id) => {
-                    tracing::error!(account_id = %account_id, "Account actor shut down due to DB error");
+                ActorShutdownReason::DbError(account_id, err) => {
+                    tracing::error!(account_id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
                     Ok(())
                 },
             },
