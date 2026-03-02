@@ -292,10 +292,7 @@ impl NetworkTransactionBuilder {
     }
 
     /// Processes a request from an account actor.
-    async fn handle_actor_request(
-        &mut self,
-        request: ActorRequest,
-    ) -> Result<(), anyhow::Error> {
+    async fn handle_actor_request(&mut self, request: ActorRequest) -> Result<(), anyhow::Error> {
         match request {
             ActorRequest::NotesFailed { nullifiers, block_num, ack_tx } => {
                 self.db

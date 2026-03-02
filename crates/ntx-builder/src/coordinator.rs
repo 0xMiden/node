@@ -164,6 +164,7 @@ impl Coordinator {
                 },
                 ActorShutdownReason::SemaphoreFailed(err) => Err(err).context("semaphore failed"),
                 ActorShutdownReason::DbError(account_id, err) => {
+                    self.actor_registry.remove(&account_id);
                     tracing::error!(account_id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
                     Ok(())
                 },
