@@ -252,13 +252,15 @@ impl Db {
         conn.transaction(move |conn| {
             models::queries::apply_block(
                 conn,
-                genesis.header(),
-                genesis.signature(),
-                &[],
-                &[],
-                genesis.body().updated_accounts(),
-                genesis.body().transactions(),
-                None, // Genesis block has no proving inputs.
+                models::queries::ApplyBlockData {
+                    block_header: genesis.header(),
+                    signature: genesis.signature(),
+                    notes: &[],
+                    nullifiers: &[],
+                    accounts: genesis.body().updated_accounts(),
+                    transactions: genesis.body().transactions(),
+                    proving_inputs: None, // Genesis block has no proving inputs.
+                },
             )
         })
         .context("failed to insert genesis block")?;
@@ -543,13 +545,15 @@ impl Db {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
                 conn,
-                signed_block.header(),
-                signed_block.signature(),
-                &notes,
-                signed_block.body().created_nullifiers(),
-                signed_block.body().updated_accounts(),
-                signed_block.body().transactions(),
-                proving_inputs,
+                models::queries::ApplyBlockData {
+                    block_header: signed_block.header(),
+                    signature: signed_block.signature(),
+                    notes: &notes,
+                    nullifiers: signed_block.body().created_nullifiers(),
+                    accounts: signed_block.body().updated_accounts(),
+                    transactions: signed_block.body().transactions(),
+                    proving_inputs,
+                },
             )?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
