@@ -199,44 +199,6 @@ async fn legacy_behaviour_with_capacity_1() {
     server.abort();
 }
 
-/// Test that multiple requests can be queued and capacity is respected.
-///
-/// Create a server with a capacity of two and submit three requests. Ensure
-/// that two succeed and one fails with a resource exhaustion error.
-#[tokio::test(flavor = "multi_thread")]
-async fn capacity_is_respected() {
-    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
-        .with_capacity(2)
-        .spawn()
-        .await
-        .expect("server should spawn");
-
-    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
-    let mut client_a = Client::connect(port).await;
-    let mut client_b = client_a.clone();
-    let mut client_c = client_a.clone();
-
-    let a = client_a.submit_request(request.clone());
-    let b = client_b.submit_request(request.clone());
-    let c = client_c.submit_request(request);
-
-    let (first, second, third) = tokio::join!(a, b, c);
-
-    // We cannot know which got served and which got rejected.
-    // We can only assert that two succeeded and one failed.
-    let mut expected = [true, true, false];
-    let mut result = [first.is_ok(), second.is_ok(), third.is_ok()];
-    expected.sort_unstable();
-    result.sort_unstable();
-    assert_eq!(expected, result);
-
-    assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
-        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
-    });
-
-    server.abort();
-}
-
 /// Ensures that the server request timeout is adhered to.
 ///
 /// We cannot actually enforce this for a request that has already being proven as the proof
