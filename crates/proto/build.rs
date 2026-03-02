@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use codegen::{Scope, *};
+use codegen::{Function, Impl, Module, Struct, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
     block_producer_api_descriptor,
@@ -108,13 +108,14 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> miette::Re
 
 /// Generate `mod.rs` which includes all files in the folder as submodules.
 fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
-    let mut scope = Scope::new();
+    // I couldn't find any `codegen::` function for `mod <module>;`, so we generate it manually.
+    let mut modules = Vec::new();
 
     for entry in fs::read_dir(dst_dir.as_ref())? {
         let entry = entry?;
         let path = entry.path();
 
-        let name = if path.is_file() {
+        let module = if path.is_file() {
             path.file_stem().and_then(|f| f.to_str()).expect("Could not get file name")
         } else if path.is_dir() {
             path.file_name().and_then(|f| f.to_str()).expect("Could not get directory name")
@@ -122,10 +123,10 @@ fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
             continue;
         };
 
-        scope.raw(format!("pub mod {name};"));
+        modules.push(format!("pub mod {module};"));
     }
 
-    fs::write(dst_dir.as_ref().join("mod.rs"), scope.to_string())
+    fs::write(dst_dir.as_ref().join("mod.rs"), modules.join("\n"))
 }
 
 /// Generate server facade modules (one per service) from the provided descriptor sets.
@@ -143,7 +144,8 @@ fn generate_server_modules(
                 let service_name = to_snake_case(service_name);
                 let module_name = format!("{}_{}", &package, service_name);
 
-                let contents = Service::from_descriptor(service).generate().scope().to_string();
+                let contents =
+                    Service::from_descriptor(service, &package).generate().scope().to_string();
 
                 let path = dst_dir.join(format!("{module_name}.rs"));
                 fs::write(path, contents).into_diagnostic().wrap_err("writing server module")?;
@@ -156,21 +158,52 @@ fn generate_server_modules(
 
 struct Service {
     name: String,
-    methods: Vec<Method>,
+    package: String,
+    unary_methods: Vec<UnaryMethod>,
+    server_streams: Vec<ServerStream>,
 }
 
-struct Method {
+struct UnaryMethod {
+    name: String,
+    request: String,
+    response: String,
+}
+
+struct ServerStream {
     name: String,
     request: String,
     response: String,
 }
 
 impl Service {
-    fn from_descriptor(descriptor: &ServiceDescriptorProto) -> Self {
+    fn from_descriptor(descriptor: &ServiceDescriptorProto, package: &str) -> Self {
         let name = descriptor.name().to_string();
-        let methods = descriptor.method.iter().map(Method::from_descriptor).collect();
+        let unary_methods = descriptor
+            .method
+            .iter()
+            .filter(|method| !method.client_streaming() && !method.server_streaming())
+            .map(UnaryMethod::from_descriptor)
+            .collect();
+        let server_streams = descriptor
+            .method
+            .iter()
+            .filter(|method| method.server_streaming())
+            .map(ServerStream::from_descriptor)
+            .collect();
+        let package = package.to_string();
 
-        Self { name, methods }
+        // We don't have any client streams, so no need to support them.
+        assert!(
+            !descriptor.method.iter().any(MethodDescriptorProto::client_streaming),
+            "client streams are not supported"
+        );
+
+        Self {
+            name,
+            package,
+            unary_methods,
+            server_streams,
+        }
     }
 
     /// Generates a module containing the service's interface and implementation, including the
@@ -184,10 +217,15 @@ impl Service {
 
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
+        module.push_impl(self.tonic_impl());
 
-        for method in &self.methods {
+        for method in &self.unary_methods {
             module.push_struct(method.marker_struct());
             module.push_impl(method.grpc_interface_impl());
+        }
+
+        for stream in &self.server_streams {
+            module.push_struct(stream.marker_struct());
         }
 
         module
@@ -209,7 +247,7 @@ impl Service {
         let mut ret = Trait::new(format!("{}Service", &self.name));
         ret.vis("pub");
 
-        for method in &self.methods {
+        for method in &self.unary_methods {
             ret.parent(method.unary_trait().ty());
         }
 
@@ -232,20 +270,41 @@ impl Service {
         let mut ret = Impl::new("T");
         ret.generic("T").impl_trait(self.service_trait().ty());
 
-        for method in &self.methods {
+        for method in &self.unary_methods {
             ret.bound("T", method.unary_trait().ty());
+        }
+
+        ret
+    }
+
+    fn tonic_impl(&self) -> Impl {
+        let tonic_path = format!("crate::generated::{}::api_server::{}", self.package, self.name);
+
+        let mut ret = Impl::new("T");
+        ret.generic("T")
+            .bound("T", self.service_trait().ty())
+            .impl_trait(tonic_path)
+            .r#macro("#[tonic::async_trait]");
+
+        for method in &self.unary_methods {
+            ret.push_fn(method.tonic_impl());
+        }
+
+        for stream in &self.server_streams {
+            ret.push_fn(stream.tonic_impl());
+            ret.associate_type(stream.associated_type().0, stream.associated_type().1);
         }
 
         ret
     }
 }
 
-impl Method {
+impl UnaryMethod {
     fn from_descriptor(descriptor: &MethodDescriptorProto) -> Self {
         let name = descriptor.name().to_string();
 
-        let request = Self::grpc_path_to_generated(descriptor.input_type());
-        let response = Self::grpc_path_to_generated(descriptor.output_type());
+        let request = grpc_path_to_generated(descriptor.input_type());
+        let response = grpc_path_to_generated(descriptor.output_type());
 
         Self { name, request, response }
     }
@@ -282,23 +341,62 @@ impl Method {
         ret
     }
 
-    /// Translates a gRPC protobuf path to the corresponding generated Rust path. This is used to
-    /// translate the protobuf type definitions to their tonic generated Rust types.
-    ///
-    /// i.e. `.x.y.z` -> `crate::generated::x::y::z`
-    ///
-    /// It also handles the case where the path is `.google.protobuf.Empty` by returning `()`.
-    fn grpc_path_to_generated(path: &str) -> String {
-        if path == ".google.protobuf.Empty" {
-            return "()".to_string();
-        }
+    fn tonic_impl(&self) -> Function {
+        let mut ret = Function::new(to_snake_case(&self.name));
+        ret.set_async(true)
+            .arg_ref_self()
+            .arg("request", format!("tonic::Request<{}>", self.request))
+            .ret(format!("tonic::Result<tonic::Response<{}>>", self.response))
+            .line(format!("handle_unary::<{}>(request).await", self.name));
 
-        let path = path.trim_start_matches('.').replace('.', "::");
-        format!("crate::generated::{path}")
+        ret
     }
 }
 
-/// Converts a string to snake_case.
+impl ServerStream {
+    fn from_descriptor(descriptor: &MethodDescriptorProto) -> Self {
+        let name = descriptor.name().to_string();
+
+        let request = grpc_path_to_generated(descriptor.input_type());
+        let response = grpc_path_to_generated(descriptor.output_type());
+
+        Self { name, request, response }
+    }
+
+    /// This stream's marker struct.
+    ///
+    /// ```rust
+    /// pub struct <Self::name>;
+    /// ```
+    fn marker_struct(&self) -> Struct {
+        let mut ret = Struct::new(&self.name);
+        ret.vis("pub");
+        ret
+    }
+
+    fn tonic_impl(&self) -> Function {
+        let mut ret = Function::new(to_snake_case(&self.name));
+        ret.set_async(true)
+            .arg_ref_self()
+            .arg("request", format!("tonic::Request<{}>", self.request))
+            .ret(format!("tonic::Result<tonic::Response<Self::{}>>", self.associated_type().0))
+            .line("todo!()");
+
+        ret
+    }
+
+    fn associated_type(&self) -> (String, Type) {
+        (
+            format!("{}Stream", self.name),
+            Type::new(format!(
+                "std::pin::Pin<Box<dyn tonic::codegen::tokio_stream::Stream<Item = tonic::Result<{}>> + Send + 'static>>",
+                self.response
+            )),
+        )
+    }
+}
+
+/// Converts a string to `snake_case`.
 fn to_snake_case(s: &str) -> String {
     let mut ret = String::new();
 
@@ -312,4 +410,19 @@ fn to_snake_case(s: &str) -> String {
     }
 
     ret
+}
+
+/// Translates a gRPC protobuf path to the corresponding generated Rust path. This is used to
+/// translate the protobuf type definitions to their tonic generated Rust types.
+///
+/// i.e. `.x.y.z` -> `crate::generated::x::y::z`
+///
+/// It also handles the case where the path is `.google.protobuf.Empty` by returning `()`.
+fn grpc_path_to_generated(path: &str) -> String {
+    if path == ".google.protobuf.Empty" {
+        return "()".to_string();
+    }
+
+    let path = path.trim_start_matches('.').replace('.', "::");
+    format!("crate::generated::{path}")
 }
