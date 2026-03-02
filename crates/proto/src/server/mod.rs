@@ -1,5 +1,3 @@
-pub mod remote_prover;
-
 use core::fmt::Display;
 
 use futures::stream::Stream;
@@ -51,19 +49,15 @@ pub trait GrpcServerStream<Method: GrpcInterface>: Send + Sync + 'static {
 /// Execute the standard unary flow: decode → handle → encode.
 ///
 /// Decode errors are mapped to `Status::invalid_argument`.
-pub async fn handle_unary<Handler, Method>(
-    handler: &Handler,
+pub async fn handle_unary<Method>(
     request: Request<Method::Request>,
 ) -> Result<Response<Method::Response>, Status>
 where
-    Handler: GrpcUnary<Method>,
-    Handler::Input: GrpcDecode<Method::Request>,
-    Handler::Output: GrpcEncode<Method::Response>,
     Method: GrpcInterface,
 {
-    let input = Handler::Input::decode(request.into_inner())
+    let input = Method::Input::decode(request.into_inner())
         .map_err(|err| Status::invalid_argument(err.to_string()))?;
-    let output = handler.handle(input).await?;
+    let output = Method::handle(input).await?;
     let response = output.encode()?;
     Ok(Response::new(response))
 }
