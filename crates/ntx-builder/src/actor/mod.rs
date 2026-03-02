@@ -28,7 +28,7 @@ use crate::builder::ChainState;
 use crate::db::Db;
 use crate::store::StoreClient;
 
-/// Converts a database result into an `ActorShutdownReason` error, logging the error on failure.
+/// Converts a database result mapping the error into an `ActorShutdownReason`, logging it on failure.
 fn db_query<T>(
     account_id: NetworkAccountId,
     result: Result<T, miden_node_db::DatabaseError>,
