@@ -11,7 +11,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Deserializable;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
