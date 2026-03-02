@@ -278,7 +278,12 @@ impl Service {
     }
 
     fn tonic_impl(&self) -> Impl {
-        let tonic_path = format!("crate::generated::{}::api_server::{}", self.package, self.name);
+        let tonic_path = format!(
+            "crate::generated::{}::{}_server::{}",
+            self.package,
+            to_snake_case(&self.name),
+            self.name
+        );
 
         let mut ret = Impl::new("T");
         ret.generic("T")
@@ -347,7 +352,7 @@ impl UnaryMethod {
             .arg_ref_self()
             .arg("request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<{}>>", self.response))
-            .line(format!("handle_unary::<{}>(request).await", self.name));
+            .line(format!("handle_unary::<_, {}>(self, request).await", self.name));
 
         ret
     }
@@ -378,7 +383,7 @@ impl ServerStream {
         let mut ret = Function::new(to_snake_case(&self.name));
         ret.set_async(true)
             .arg_ref_self()
-            .arg("request", format!("tonic::Request<{}>", self.request))
+            .arg("_request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<Self::{}>>", self.associated_type().0))
             .line("todo!()");
 
