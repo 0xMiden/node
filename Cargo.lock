@@ -3185,7 +3185,6 @@ dependencies = [
  "build-rs",
  "diesel",
  "diesel_migrations",
- "k256",
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
