@@ -47,6 +47,24 @@ mod tests;
 pub(crate) mod models;
 
 /// [diesel](https://diesel.rs) generated schema
+///
+/// ```sh
+/// cargo binstall diesel_cli
+/// sqlite3 -init ./src/db/migrations/001-init.sql ephemeral_setup.db ""
+/// diesel setup --database-url=./ephemeral_setup.db
+/// diesel print-schema > src/db/schema.rs
+/// ```
+///
+/// which assumes an _existing_ database.
+///
+/// Unfortunately, there is no systematic way of modifying the schema other
+/// than patching (in the diff sense) which is brittle at best.
+/// So the above must be followed by a manual editing step, for now it's
+/// limited to:
+///
+/// * `i64`/`u64` being represented as `BigInt`
+///
+/// The list might be extended.
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;

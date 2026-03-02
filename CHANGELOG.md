@@ -29,6 +29,11 @@
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/miden-node/pull/1688)).
 - [BREAKING] Renamed `NoteRoot` protobuf message used in `GetNoteScriptByRoot` gRPC endpoints into `NoteScriptRoot` ([#1722](https://github.com/0xMiden/miden-node/pull/1722)).
 
+### Fixes
+
+- Fixed `bundled start` panicking due to duplicate `data_directory` clap argument name between `BundledCommand::Start` and `NtxBuilderConfig` ([#1732](https://github.com/0xMiden/node/pull/1732)).
+- Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
+
 ## v0.13.7 (2026-02-25)
 
 - Updated `SyncAccountStorageMaps` and `SyncAccountVault` to allow all accounts with public state, including network accounts ([#1711](https://github.com/0xMiden/node/pull/1711)).

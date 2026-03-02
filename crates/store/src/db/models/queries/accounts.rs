@@ -1113,6 +1113,7 @@ pub(crate) fn upsert_accounts(
             .execute(conn)?;
 
         // insert pending storage map entries
+        // TODO consider batching
         for (acc_id, slot_name, key, value) in pending_storage_inserts {
             insert_account_storage_map_value(conn, acc_id, block_num, slot_name, key, value)?;
         }

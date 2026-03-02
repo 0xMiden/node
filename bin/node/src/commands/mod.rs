@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -45,6 +45,7 @@ const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_MEMPOOL_TX_CAPACITY";
 const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE";
 const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
+const ENV_NTX_DATA_DIRECTORY: &str = "MIDEN_NODE_NTX_DATA_DIRECTORY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -59,7 +60,7 @@ fn duration_to_human_readable_string(duration: Duration) -> String {
 ///
 /// Used by the Validator command and the genesis bootstrap command.
 #[derive(clap::Args)]
-#[group(required = true, multiple = false)]
+#[group(required = false, multiple = false)]
 pub struct ValidatorKey {
     /// Insecure, hex-encoded validator secret key for development and testing purposes.
     ///
@@ -121,7 +122,7 @@ pub struct BundledValidatorConfig {
 }
 
 impl BundledValidatorConfig {
-    /// Converts the [`ValidatorConfig`] into a URL and an optional [`SocketAddr`].
+    /// Converts the [`BundledValidatorConfig`] into a URL and an optional [`SocketAddr`].
     ///
     /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
     ///
@@ -174,6 +175,12 @@ pub struct NtxBuilderConfig {
         default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
     )]
     pub script_cache_size: NonZeroUsize,
+
+    /// Directory for the ntx-builder's persistent database.
+    ///
+    /// If not set, defaults to the node's data directory.
+    #[arg(long = "ntx-builder.data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
+    pub ntx_data_directory: Option<PathBuf>,
 }
 
 impl NtxBuilderConfig {
@@ -188,7 +195,7 @@ impl NtxBuilderConfig {
         validator_url: Url,
         node_data_directory: &Path,
     ) -> miden_node_ntx_builder::NtxBuilderConfig {
-        let data_dir = node_data_directory.to_path_buf();
+        let data_dir = self.ntx_data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
         let database_filepath = data_dir.join("ntx-builder.sqlite3");
 
         miden_node_ntx_builder::NtxBuilderConfig::new(
