@@ -106,9 +106,9 @@ async fn run(
         // The outer loop will re-query unproven blocks and restart the sequence, ensuring
         // we never persist a proof while an ancestor block is still unproven.
         let mut proving_futures = order_proving_jobs(&db, &block_prover, &unproven_blocks);
-        while let Some((block_num, result)) = proving_futures.next().await {
-            match result {
-                Ok(proof) => {
+        while let Some(timeout_result) = proving_futures.next().await {
+            match timeout_result {
+                Ok((block_num, proof)) => {
                     db.insert_block_proof(block_num, &proof)
                         .await
                         .map_err(ProofSchedulerError::PersistFailed)?;
@@ -117,7 +117,6 @@ async fn run(
                 Err(ProveBlockError::Transient(err)) => {
                     error!(
                         target: COMPONENT,
-                        %block_num,
                         %err,
                         "Block proving failed, abandoning batch and retrying next iteration"
                     );
@@ -126,7 +125,6 @@ async fn run(
                 Err(ProveBlockError::Timeout) => {
                     error!(
                         target: COMPONENT,
-                        %block_num,
                         "Block proving timed out, abandoning batch and retrying next iteration"
                     );
                     break;
@@ -144,7 +142,7 @@ fn order_proving_jobs(
     block_prover: &Arc<BlockProver>,
     unproven_blocks: &[BlockNumber],
 ) -> FuturesOrdered<
-    impl std::future::Future<Output = (BlockNumber, Result<BlockProof, ProveBlockError>)>,
+    impl std::future::Future<Output = Result<(BlockNumber, BlockProof), ProveBlockError>>,
 > {
     let mut futures = FuturesOrdered::new();
     for &block_num in unproven_blocks {
@@ -154,15 +152,15 @@ fn order_proving_jobs(
         // Define the future.
         let fut = async move {
             // Prove block with timeout.
-            let result = tokio::time::timeout(
+            let timeout_result = tokio::time::timeout(
                 BLOCK_PROVE_TIMEOUT,
                 prove_block(&db, &block_prover, block_num),
             )
             .await;
             // Handle proving result.
-            match result {
-                Ok(proof) => (block_num, proof),
-                Err(_elapsed) => (block_num, Err(ProveBlockError::Timeout)),
+            match timeout_result {
+                Ok(proof_result) => proof_result.map(|proof| (block_num, proof)),
+                Err(_elapsed) => Err(ProveBlockError::Timeout),
             }
         };
         futures.push_back(fut);
