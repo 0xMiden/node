@@ -1,6 +1,7 @@
 use std::path::Path;
+use std::process::Command;
 
-use codegen::Scope;
+use codegen::{Scope, *};
 use fs_err as fs;
 use miden_node_proto_build::{
     block_producer_api_descriptor,
@@ -10,6 +11,7 @@ use miden_node_proto_build::{
     validator_api_descriptor,
 };
 use miette::{Context, IntoDiagnostic};
+use prost_types::{MethodDescriptorProto, ServiceDescriptorProto};
 use tonic_prost_build::FileDescriptorSet;
 
 /// Generates Rust protobuf bindings using `miden-node-proto-build`.
@@ -42,11 +44,15 @@ fn main() -> miette::Result<()> {
         .wrap_err("creating server destination folder")?;
 
     generate_server_modules(&descriptor_sets, &server_dst_dir)?;
+
     generate_mod_rs(&server_dst_dir)
         .into_diagnostic()
         .wrap_err("generating server mod.rs")?;
-    generate_mod_rs(dst_dir).into_diagnostic().wrap_err("generating mod.rs")?;
 
+    // generate_server_modules(&descriptor_sets, &server_dst_dir)?;
+    generate_mod_rs(&dst_dir).into_diagnostic().wrap_err("generating mod.rs")?;
+
+    rustfmt_generated(&dst_dir)?;
     Ok(())
 }
 
@@ -66,42 +72,60 @@ fn generate_bindings(file_descriptors: FileDescriptorSet, dst_dir: &Path) -> mie
     Ok(())
 }
 
+fn rustfmt_generated(dir: &Path) -> miette::Result<()> {
+    let mut rs_files = Vec::new();
+    collect_rs_files(dir, &mut rs_files)?;
+
+    if rs_files.is_empty() {
+        return Ok(());
+    }
+
+    let status = Command::new("rustfmt")
+        .args(&rs_files)
+        .status()
+        .into_diagnostic()
+        .wrap_err("running rustfmt on generated files")?;
+
+    if !status.success() {
+        miette::bail!("rustfmt failed with status: {status}");
+    }
+
+    Ok(())
+}
+
+fn collect_rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> miette::Result<()> {
+    for entry in fs_err::read_dir(dir).into_diagnostic()? {
+        let entry = entry.into_diagnostic()?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, out)?;
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
 /// Generate `mod.rs` which includes all files in the folder as submodules.
 fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
-    let mod_filepath = dst_dir.as_ref().join("mod.rs");
+    let mut scope = Scope::new();
 
-    // Discover all submodules by iterating over the folder contents.
-    let mut submodules = Vec::new();
     for entry in fs::read_dir(dst_dir.as_ref())? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
-            let file_stem = path
-                .file_stem()
-                .and_then(|f| f.to_str())
-                .expect("Could not get file name")
-                .to_owned();
 
-            submodules.push(file_stem);
+        let name = if path.is_file() {
+            path.file_stem().and_then(|f| f.to_str()).expect("Could not get file name")
         } else if path.is_dir() {
-            let dir_name = path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .expect("Could not get directory name")
-                .to_owned();
+            path.file_name().and_then(|f| f.to_str()).expect("Could not get directory name")
+        } else {
+            continue;
+        };
 
-            submodules.push(dir_name);
-        }
+        scope.raw(format!("pub mod {name};"));
     }
 
-    submodules.sort();
-
-    let mut scope = Scope::new();
-    for module in submodules {
-        scope.raw(format!("pub mod {module};\n"));
-    }
-
-    fs::write(mod_filepath, scope.to_string())
+    fs::write(dst_dir.as_ref().join("mod.rs"), scope.to_string())
 }
 
 /// Generate server facade modules (one per service) from the provided descriptor sets.
@@ -112,17 +136,14 @@ fn generate_server_modules(
     for fds in descriptor_sets {
         for file in &fds.file {
             let package = file.package.as_deref().unwrap_or_default();
-            let package_module = package.replace('.', "::");
-            let package_prefix = package.replace('.', "_");
+            let package = package.replace('.', "_");
 
             for service in &file.service {
                 let service_name = service.name.as_deref().unwrap_or("Service");
-                let module_name = service_module_name(&package_prefix, service_name);
-                let server_module = format!("{}_server", to_snake_case(service_name));
+                let service_name = to_snake_case(service_name);
+                let module_name = format!("{}_{}", &package, service_name);
 
-                let contents =
-                    render_service_module(&package_module, service_name, &server_module, service)
-                        .to_string();
+                let contents = Service::from_descriptor(service).generate().scope().to_string();
 
                 let path = dst_dir.join(format!("{module_name}.rs"));
                 fs::write(path, contents).into_diagnostic().wrap_err("writing server module")?;
@@ -133,355 +154,162 @@ fn generate_server_modules(
     Ok(())
 }
 
-#[expect(clippy::too_many_lines, reason = "Will split later")]
-fn render_service_module(
-    package_module: &str,
-    service_name: &str,
-    server_module: &str,
-    service: &prost_types::ServiceDescriptorProto,
-) -> Scope {
-    let mut scope = Scope::new();
-
-    scope.import("std::task", "Context");
-    scope.import("std::task", "Poll");
-    scope.import("tonic", "Request");
-    scope.import("tonic", "Response");
-    scope.import("tonic", "Status");
-
-    let package_use = if package_module.is_empty() {
-        "crate::generated".to_string()
-    } else {
-        format!("crate::generated::{package_module}")
-    };
-    add_server_imports(&mut scope, &package_use, server_module);
-
-    let (unary_methods, streaming_methods) = collect_methods(&mut scope, service);
-    let service_trait_name = format!("{service_name}Service");
-    let trait_bounds = build_trait_bounds(&unary_methods, &streaming_methods);
-
-    let service_trait = scope.new_trait(&service_trait_name);
-    service_trait.vis("pub");
-    apply_trait_bounds(service_trait, &trait_bounds);
-
-    let service_trait_impl = scope.new_impl("T");
-    service_trait_impl.generic("T");
-    service_trait_impl.impl_trait(&service_trait_name);
-    apply_trait_impl_bounds(service_trait_impl, &trait_bounds);
-
-    let service_impl = scope.new_impl("T");
-    service_impl.generic("T");
-    service_impl.impl_trait(format!("{server_module}::{service_name}"));
-    service_impl.r#macro("#[tonic::async_trait]");
-    service_impl.bound("T", &service_trait_name);
-
-    add_unary_bounds(service_impl, service, &unary_methods);
-    add_streaming_bounds(service_impl, service, &streaming_methods);
-    add_streaming_assoc_types(service_impl, &streaming_methods);
-    add_unary_methods(service_impl, service, &unary_methods);
-    add_streaming_methods(service_impl, service, &streaming_methods);
-
-    let server_struct = scope.new_struct(format!("{service_name}Server"));
-    server_struct.vis("pub");
-    server_struct.generic("T");
-    server_struct.field("inner", format!("{server_module}::{service_name}Server<T>"));
-
-    let server_impl = scope.new_impl(format!("{service_name}Server"));
-    server_impl.generic("T");
-    server_impl.target_generic("T");
-    server_impl.bound("T", &service_trait_name);
-    let new_fn = server_impl.new_fn("new");
-    new_fn.vis("pub");
-    new_fn.arg("service", "T");
-    new_fn.ret("Self");
-    new_fn.line("Self {");
-    new_fn.line(format!("inner: {server_module}::{service_name}Server::new(service),"));
-    new_fn.line("}");
-
-    let clone_impl = scope.new_impl(format!("{service_name}Server"));
-    clone_impl.generic("T");
-    clone_impl.target_generic("T");
-    clone_impl.impl_trait("Clone");
-    let clone_fn = clone_impl.new_fn("clone");
-    clone_fn.arg_ref_self();
-    clone_fn.ret("Self");
-    clone_fn.line("Self { inner: self.inner.clone() }");
-
-    let tonic_service_impl = scope.new_impl(format!("{service_name}Server"));
-    tonic_service_impl.generic("T");
-    tonic_service_impl.generic("B");
-    tonic_service_impl.target_generic("T");
-    tonic_service_impl.impl_trait("tonic::codegen::Service<http::Request<B>>");
-    tonic_service_impl.bound(
-        format!("{server_module}::{service_name}Server<T>"),
-        "tonic::codegen::Service<http::Request<B>>",
-    );
-    tonic_service_impl.associate_type(
-        "Response",
-        format!(
-            "<{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Response"
-        ),
-    );
-    tonic_service_impl.associate_type(
-        "Error",
-        format!(
-            "<{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Error"
-        ),
-    );
-    tonic_service_impl.associate_type(
-        "Future",
-        format!(
-            "<{server_module}::{service_name}Server<T> as tonic::codegen::Service<http::Request<B>>>::Future"
-        ),
-    );
-
-    let poll_ready_fn = tonic_service_impl.new_fn("poll_ready");
-    poll_ready_fn.arg_mut_self();
-    poll_ready_fn.arg("cx", "&mut Context<'_>");
-    poll_ready_fn.ret("Poll<Result<(), Self::Error>>");
-    poll_ready_fn.line("self.inner.poll_ready(cx)");
-
-    let call_fn = tonic_service_impl.new_fn("call");
-    call_fn.arg_mut_self();
-    call_fn.arg("req", "http::Request<B>");
-    call_fn.ret("Self::Future");
-    call_fn.line("self.inner.call(req)");
-
-    let named_service_impl = scope.new_impl(format!("{service_name}Server"));
-    named_service_impl.generic("T");
-    named_service_impl.target_generic("T");
-    named_service_impl.impl_trait("tonic::server::NamedService");
-    named_service_impl.associate_const(
-        "NAME",
-        "&'static str",
-        format!("{server_module}::SERVICE_NAME"),
-        "",
-    );
-
-    scope
+struct Service {
+    name: String,
+    methods: Vec<Method>,
 }
 
-fn add_server_imports(scope: &mut Scope, package_use: &str, server_module: &str) {
-    scope.import(package_use, server_module);
+struct Method {
+    name: String,
+    request: String,
+    response: String,
+}
 
-    for import in [
-        "GrpcDecode",
-        "GrpcEncode",
-        "GrpcInterface",
-        "GrpcServerStream",
-        "GrpcUnary",
-        "handle_streaming",
-        "handle_unary",
-    ] {
-        scope.import("crate::server", import);
+impl Service {
+    fn from_descriptor(descriptor: &ServiceDescriptorProto) -> Self {
+        let name = descriptor.name().to_string();
+        let methods = descriptor.method.iter().map(Method::from_descriptor).collect();
+
+        Self { name, methods }
     }
-}
 
-fn collect_methods(
-    scope: &mut Scope,
-    service: &prost_types::ServiceDescriptorProto,
-) -> (Vec<(String, String)>, Vec<(String, String)>) {
-    let mut unary_methods = Vec::new();
-    let mut streaming_methods = Vec::new();
+    /// Generates a module containing the service's interface and implementation, including the
+    /// methods.
+    fn generate(&self) -> Module {
+        let mut module = Module::new(&self.name);
 
-    for method in &service.method {
-        let method_name = method.name.as_deref().unwrap_or("Method");
-        let method_struct = format!("{method_name}Method");
-        let request_type = proto_type_to_rust_path(method.input_type.as_deref().unwrap_or(""));
-        let response_type = proto_type_to_rust_path(method.output_type.as_deref().unwrap_or(""));
+        module.import("crate::server", "GrpcInterface");
+        module.import("crate::server", "GrpcUnary");
+        module.import("crate::server", "handle_unary");
 
-        if method.client_streaming() {
-            continue;
+        module.push_trait(self.service_trait());
+        module.push_impl(self.blanket_impl());
+
+        for method in &self.methods {
+            module.push_struct(method.marker_struct());
+            module.push_impl(method.grpc_interface_impl());
         }
 
-        scope.new_struct(&method_struct).vis("pub");
+        module
+    }
 
-        let method_impl = scope.new_impl(&method_struct);
-        method_impl.impl_trait("GrpcInterface");
-        method_impl.associate_type("Request", request_type);
-        method_impl.associate_type("Response", response_type);
+    /// The trait describing the service's interface.
+    ///
+    /// This is a super trait consisting of all the gRPC method traits for this service.
+    ///
+    /// ```rust
+    /// trait <Self::name()Service>:
+    ///   GrpcUnary<Self::method[0]::marker_struct> +
+    ///   GrpcUnary<Self::method[1]::marker_struct> +
+    ///   ...
+    ///   GrpcUnary<Self::method[N]::marker_struct>,
+    /// {}
+    /// ```
+    fn service_trait(&self) -> Trait {
+        let mut ret = Trait::new(format!("{}Service", &self.name));
+        ret.vis("pub");
 
-        if method.server_streaming() {
-            streaming_methods.push((method_name.to_string(), method_struct));
-        } else {
-            unary_methods.push((method_name.to_string(), method_struct));
+        for method in &self.methods {
+            ret.parent(method.unary_trait().ty());
         }
+
+        ret
     }
 
-    (unary_methods, streaming_methods)
-}
+    /// The blanket implementation of the the service's trait, for all `T` that implement all
+    /// required gRPC methods.
+    ///
+    /// ```rust
+    /// impl<T> <Self::service_trait()> for T
+    /// where T:
+    ///   GrpcUnary<Self::method[0]::marker_struct> +
+    ///   GrpcUnary<Self::method[1]::marker_struct> +
+    ///   ...
+    ///   GrpcUnary<Self::method[N]::marker_struct>,
+    /// {}
+    /// ```
+    fn blanket_impl(&self) -> Impl {
+        let mut ret = Impl::new("T");
+        ret.generic("T").impl_trait(self.service_trait().ty());
 
-fn build_trait_bounds(
-    unary_methods: &[(String, String)],
-    streaming_methods: &[(String, String)],
-) -> Vec<String> {
-    let mut trait_bounds = Vec::new();
-    for (_, method_struct) in unary_methods {
-        trait_bounds.push(format!("GrpcUnary<{method_struct}>"));
-    }
-    for (_, method_struct) in streaming_methods {
-        trait_bounds.push(format!("GrpcServerStream<{method_struct}>"));
-    }
-    trait_bounds
-}
+        for method in &self.methods {
+            ret.bound("T", method.unary_trait().ty());
+        }
 
-fn apply_trait_bounds(service_trait: &mut codegen::Trait, trait_bounds: &[String]) {
-    for bound in trait_bounds {
-        service_trait.parent(bound);
-    }
-}
-
-fn apply_trait_impl_bounds(service_trait_impl: &mut codegen::Impl, trait_bounds: &[String]) {
-    for bound in trait_bounds {
-        service_trait_impl.bound("T", bound);
+        ret
     }
 }
 
-fn add_unary_bounds(
-    service_impl: &mut codegen::Impl,
-    service: &prost_types::ServiceDescriptorProto,
-    unary_methods: &[(String, String)],
-) {
-    for (method_name, method_struct) in unary_methods {
-        let (request_type, response_type) = method_types(service, method_name);
+impl Method {
+    fn from_descriptor(descriptor: &MethodDescriptorProto) -> Self {
+        let name = descriptor.name().to_string();
 
-        service_impl
-            .bound(request_type, format!("GrpcDecode<<T as GrpcUnary<{method_struct}>>::Input>"));
-        service_impl.bound(
-            format!("<T as GrpcUnary<{method_struct}>>::Output"),
-            format!("GrpcEncode<{response_type}>"),
-        );
+        let request = Self::grpc_path_to_generated(descriptor.input_type());
+        let response = Self::grpc_path_to_generated(descriptor.output_type());
+
+        Self { name, request, response }
+    }
+
+    /// This [`Method`]'s marker struct.
+    ///
+    /// ```rust
+    /// pub struct <Self::name>;
+    /// ```
+    fn marker_struct(&self) -> Struct {
+        let mut ret = Struct::new(&self.name);
+        ret.vis("pub");
+        ret
+    }
+
+    /// Returns this method's unary trait concrete type.
+    ///
+    /// ```rust
+    /// GrpcUnary<Self::marker_struct()>
+    /// ```
+    fn unary_trait(&self) -> Trait {
+        let mut ret = Trait::new("GrpcUnary");
+        ret.generic(&self.name);
+        ret
+    }
+
+    /// This method's implementation of the `GrpcInterface` trait.
+    fn grpc_interface_impl(&self) -> Impl {
+        let mut ret = Impl::new(&self.name);
+        ret.impl_trait("GrpcInterface")
+            .associate_type("Request", &self.request)
+            .associate_type("Response", &self.response);
+
+        ret
+    }
+
+    /// Translates a gRPC protobuf path to the corresponding generated Rust path. This is used to
+    /// translate the protobuf type definitions to their tonic generated Rust types.
+    ///
+    /// i.e. `.x.y.z` -> `crate::generated::x::y::z`
+    ///
+    /// It also handles the case where the path is `.google.protobuf.Empty` by returning `()`.
+    fn grpc_path_to_generated(path: &str) -> String {
+        if path == ".google.protobuf.Empty" {
+            return "()".to_string();
+        }
+
+        let path = path.trim_start_matches('.').replace('.', "::");
+        format!("crate::generated::{path}")
     }
 }
 
-fn add_streaming_bounds(
-    service_impl: &mut codegen::Impl,
-    service: &prost_types::ServiceDescriptorProto,
-    streaming_methods: &[(String, String)],
-) {
-    for (method_name, method_struct) in streaming_methods {
-        let (request_type, _) = method_types(service, method_name);
-        service_impl.bound(
-            request_type,
-            format!("GrpcDecode<<T as GrpcServerStream<{method_struct}>>::Input>"),
-        );
-    }
-}
+/// Converts a string to snake_case.
+fn to_snake_case(s: &str) -> String {
+    let mut ret = String::new();
 
-fn add_streaming_assoc_types(
-    service_impl: &mut codegen::Impl,
-    streaming_methods: &[(String, String)],
-) {
-    for (method_name, method_struct) in streaming_methods {
-        let stream_name = format!("{method_name}Stream");
-        service_impl.associate_type(
-            stream_name,
-            format!("<T as GrpcServerStream<{method_struct}>>::Stream"),
-        );
-    }
-}
-
-fn add_unary_methods(
-    service_impl: &mut codegen::Impl,
-    service: &prost_types::ServiceDescriptorProto,
-    unary_methods: &[(String, String)],
-) {
-    for (method_name, method_struct) in unary_methods {
-        let method_fn = to_snake_case(method_name);
-        let (request_type, response_type) = method_types(service, method_name);
-
-        let func = service_impl.new_fn(method_fn);
-        func.set_async(true);
-        func.arg_ref_self();
-        func.arg("request", format!("Request<{request_type}>"));
-        func.ret(format!("Result<Response<{response_type}>, Status>"));
-        func.line(format!("handle_unary::<{method_struct}, _>(self, request).await"));
-    }
-}
-
-fn add_streaming_methods(
-    service_impl: &mut codegen::Impl,
-    service: &prost_types::ServiceDescriptorProto,
-    streaming_methods: &[(String, String)],
-) {
-    for (method_name, method_struct) in streaming_methods {
-        let method_fn = to_snake_case(method_name);
-        let (request_type, _) = method_types(service, method_name);
-        let stream_name = format!("{method_name}Stream");
-
-        let func = service_impl.new_fn(method_fn);
-        func.set_async(true);
-        func.arg_ref_self();
-        func.arg("request", format!("Request<{request_type}>"));
-        func.ret(format!("Result<Response<Self::{stream_name}>, Status>"));
-        func.line(format!("handle_streaming::<{method_struct}, _>(self, request).await"));
-    }
-}
-
-fn method_types(
-    service: &prost_types::ServiceDescriptorProto,
-    method_name: &str,
-) -> (String, String) {
-    let request_type = proto_type_to_rust_path(
-        service
-            .method
-            .iter()
-            .find(|m| m.name.as_deref() == Some(method_name))
-            .and_then(|m| m.input_type.as_deref())
-            .unwrap_or(""),
-    );
-    let response_type = proto_type_to_rust_path(
-        service
-            .method
-            .iter()
-            .find(|m| m.name.as_deref() == Some(method_name))
-            .and_then(|m| m.output_type.as_deref())
-            .unwrap_or(""),
-    );
-
-    (request_type, response_type)
-}
-
-fn service_module_name(package: &str, service: &str) -> String {
-    if package.is_empty() {
-        to_snake_case(service)
-    } else {
-        format!("{package}_{}", to_snake_case(service))
-    }
-}
-
-fn to_snake_case(value: &str) -> String {
-    let mut out = String::new();
-    for (idx, ch) in value.chars().enumerate() {
-        if ch.is_uppercase() {
-            if idx != 0 {
-                out.push('_');
+    for c in s.chars() {
+        if c.is_uppercase() {
+            if !ret.is_empty() {
+                ret.push('_');
             }
-            for lower in ch.to_lowercase() {
-                out.push(lower);
-            }
-        } else {
-            out.push(ch);
         }
-    }
-    out
-}
-
-fn proto_type_to_rust_path(proto_type: &str) -> String {
-    if proto_type == ".google.protobuf.Empty" {
-        return "()".to_string();
+        ret.push(c.to_ascii_lowercase());
     }
 
-    let trimmed = proto_type.trim_start_matches('.');
-    let mut parts = trimmed.split('.').collect::<Vec<_>>();
-    if parts.is_empty() {
-        return "()".to_string();
-    }
-
-    let type_name = parts.pop().unwrap();
-    let module_path = parts.join("::");
-    if module_path.is_empty() {
-        format!("crate::generated::{type_name}")
-    } else {
-        format!("crate::generated::{module_path}::{type_name}")
-    }
+    ret
 }
