@@ -259,43 +259,9 @@ async fn prove_with_retries(
 ) -> Result<BlockProof, ProveBlockError> {
     let mut retry_delay = INITIAL_RETRY_DELAY;
 
-    // The proving inputs must be re-usable across retries. Since `BlockProver::prove` takes
-    // ownership, we serialize once and re-deserialize on each retry attempt.
-    let request_bytes = request.to_bytes();
-
-    // First attempt uses the already-deserialized request.
-    match block_prover
-        .prove(request.tx_batches, request.block_inputs, &request.block_header)
-        .await
-    {
-        Ok(proof) => return Ok(proof),
-        Err(err) => {
-            warn!(
-                target: COMPONENT,
-                %block_num,
-                %err,
-                ?retry_delay,
-                "Block proving failed, retrying"
-            );
-            tokio::time::sleep(retry_delay).await;
-            retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
-        },
-    }
-
-    // Subsequent retries re-deserialize from bytes.
     loop {
-        let request = BlockProofRequest::read_from_bytes(&request_bytes[..]).map_err(|err| {
-            error!(
-                target: COMPONENT,
-                %block_num,
-                %err,
-                "Failed to re-deserialize proving inputs during retry"
-            );
-            ProveBlockError::DeserializationFailed
-        })?;
-
         match block_prover
-            .prove(request.tx_batches, request.block_inputs, &request.block_header)
+            .prove(request.tx_batches.clone(), request.block_inputs.clone(), &request.block_header)
             .await
         {
             Ok(proof) => return Ok(proof),
