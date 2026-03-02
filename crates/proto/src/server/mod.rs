@@ -1,4 +1,5 @@
 use core::fmt::Display;
+use std::convert::Infallible;
 
 use futures::stream::Stream;
 use tonic::{Request, Response, Status};
@@ -8,6 +9,14 @@ pub trait GrpcDecode<T>: Sized + Send + Sync + 'static {
     type Error: Display + Send + Sync + 'static;
 
     fn decode(input: T) -> Result<Self, Self::Error>;
+}
+
+impl GrpcDecode<()> for () {
+    type Error = Infallible;
+
+    fn decode(_input: ()) -> Result<Self, Self::Error> {
+        Ok(())
+    }
 }
 
 /// Encode a domain output into a gRPC response body.

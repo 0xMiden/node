@@ -27,6 +27,8 @@ use crate::db::{insert_transaction, load};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
 
+mod status;
+
 // VALIDATOR
 // ================================================================================
 
