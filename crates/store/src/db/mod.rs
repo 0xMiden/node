@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::generated as proto;
+use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
@@ -540,7 +540,7 @@ impl Db {
         acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
-        proving_inputs: Option<Vec<u8>>,
+        proving_inputs: Option<BlockProofRequest>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
@@ -552,7 +552,7 @@ impl Db {
                     nullifiers: signed_block.body().created_nullifiers(),
                     accounts: signed_block.body().updated_accounts(),
                     transactions: signed_block.body().transactions(),
-                    proving_inputs,
+                    proving_inputs: proving_inputs.map(|request| request.to_bytes()),
                 },
             )?;
 

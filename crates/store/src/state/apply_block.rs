@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::SignedBlock;
@@ -44,7 +45,7 @@ impl State {
     pub async fn apply_block(
         &self,
         signed_block: SignedBlock,
-        proving_inputs: Option<Vec<u8>>,
+        proving_inputs: Option<BlockProofRequest>,
     ) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 

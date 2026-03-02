@@ -89,14 +89,13 @@ impl block_producer_server::BlockProducer for StoreApi {
         span.set_attribute("block.output_notes.count", body.output_notes().count());
         span.set_attribute("block.nullifiers.count", body.created_nullifiers().len());
 
-        // Serialize proving inputs so they can be persisted alongside the block for
-        // deferred proving.
+        // Construct block proof request to be stored alongside the block for deferred block
+        // proving.
         let proving_inputs = BlockProofRequest {
             tx_batches: ordered_batches,
             block_header: header.clone(),
             block_inputs,
-        }
-        .to_bytes();
+        };
 
         // We perform the apply block work in a separate task. This prevents the caller
         // cancelling the request and thereby cancelling the task at an arbitrary point of
