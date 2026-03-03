@@ -4,15 +4,6 @@
 
 ### Enhancements
 
-- [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/miden-node/pull/1579)).
-- [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/miden-node/pull/1595)).
-- Validator now persists validated transactions ([#1614](https://github.com/0xMiden/miden-node/pull/1614)).
-- [BREAKING] Remove `SynState` and introduce `SyncChainMmr` ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
-- Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/miden-node/issues/1591)).
-- Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/miden-node/issues/1701)).
-- Added KMS signing support in validator ([#1677](https://github.com/0xMiden/miden-node/pull/1677)).
-- Restructured block proving to be asynchronous and added finality field for `SyncChainMmr` requests ([#1725](https://github.com/0xMiden/miden-node/pull/1725)).
-
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).
 - Validator now persists validated transactions ([#1614](https://github.com/0xMiden/node/pull/1614)).
@@ -20,6 +11,7 @@
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
+- Restructured block proving to be asynchronous and added finality field for `SyncChainMmr` requests ([#1725](https://github.com/0xMiden/miden-node/pull/1725)).
 
 ### Changes
 
