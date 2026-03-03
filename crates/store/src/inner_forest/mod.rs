@@ -145,11 +145,11 @@ impl InnerForest {
         block_num: BlockNumber,
         raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
-        let key = raw_key.hash();
+        let key_hash = raw_key.hash();
         let root = self
             .get_storage_map_root(account_id, slot_name, block_num)
             .ok_or(WitnessError::RootNotFound)?;
-        let proof = self.forest.open(root, key.into())?;
+        let proof = self.forest.open(root, key_hash.into())?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
     }
