@@ -282,6 +282,7 @@ impl InnerForest {
         let account_id = delta.id();
         let is_full_state = delta.is_full_state();
 
+        // Validate full-state invariants in debug builds.
         #[cfg(debug_assertions)]
         if is_full_state {
             let has_vault_root = self.vault_roots.keys().any(|(id, _)| *id == account_id);
@@ -294,12 +295,14 @@ impl InnerForest {
             );
         }
 
+        // Apply vault changes.
         if is_full_state {
             self.insert_account_vault(block_num, account_id, delta.vault())?;
         } else if !delta.vault().is_empty() {
             self.update_account_vault(block_num, account_id, delta.vault())?;
         }
 
+        // Apply storage map changes.
         if is_full_state {
             self.insert_account_storage(block_num, account_id, delta.storage())?;
         } else if !delta.storage().is_empty() {
