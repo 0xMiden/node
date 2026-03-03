@@ -1,4 +1,4 @@
-use miden_protocol::account::AccountCode;
+use miden_protocol::account::{AccountCode, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
@@ -323,7 +323,7 @@ fn test_update_storage_map() {
     let block_num = BlockNumber::GENESIS.child();
 
     let slot_name = StorageSlotName::mock(3);
-    let key = Word::from([1u32, 2, 3, 4]);
+    let key = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
     let value = Word::from([5u32, 6, 7, 8]);
 
     let mut map_delta = StorageMapDelta::default();
@@ -403,8 +403,8 @@ fn test_storage_map_incremental_updates() {
     let account_id = dummy_account();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 0, 0, 0]);
-    let key2 = Word::from([2u32, 0, 0, 0]);
+    let key1 = StorageMapKey::from_index(1u32);
+    let key2 = StorageMapKey::from_index(2u32);
     let value1 = Word::from([10u32, 0, 0, 0]);
     let value2 = Word::from([20u32, 0, 0, 0]);
     let value3 = Word::from([30u32, 0, 0, 0]);

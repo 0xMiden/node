@@ -609,7 +609,7 @@ pub(crate) fn select_all_network_account_ids(
 pub struct StorageMapValue {
     pub block_num: BlockNumber,
     pub slot_name: StorageSlotName,
-    pub key: Word,
+    pub key: StorageMapKey,
     pub value: Word,
 }
 
@@ -627,7 +627,7 @@ impl StorageMapValue {
         Ok(Self {
             block_num: BlockNumber::from_raw_sql(block_num)?,
             slot_name: StorageSlotName::from_raw_sql(slot_name)?,
-            key: Word::read_from_bytes(&key)?,
+            key: StorageMapKey::read_from_bytes(&key)?,
             value: Word::read_from_bytes(&value)?,
         })
     }
