@@ -36,6 +36,9 @@ use crate::server::block_prover_client::{BlockProver, StoreProverError};
 /// Overall timeout for proving a single block.
 const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
 
+/// Maximum number of unproven blocks to process in a single batch.
+const MAX_PROVING_BATCH_SIZE: i64 = 16;
+
 // PROOF SCHEDULER
 // ================================================================================================
 
@@ -91,7 +94,7 @@ async fn run(
         let notified = notify.notified();
 
         // Query all unproven blocks. This handles both startup recovery and new blocks.
-        let unproven_blocks = match db.select_unproven_blocks().await {
+        let unproven_blocks = match db.select_unproven_blocks(MAX_PROVING_BATCH_SIZE).await {
             Ok(blocks) => blocks,
             Err(err) => {
                 error!(target: COMPONENT, %err, "Failed to query unproven blocks, retrying");

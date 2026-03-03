@@ -608,9 +608,9 @@ impl Db {
 
     /// Returns block numbers for all blocks that have not yet been proven, ordered ascending.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_unproven_blocks(&self) -> Result<Vec<BlockNumber>> {
-        self.transact("select unproven blocks", |conn| {
-            models::queries::select_unproven_blocks(conn)
+    pub async fn select_unproven_blocks(&self, limit: i64) -> Result<Vec<BlockNumber>> {
+        self.transact("select unproven blocks", move |conn| {
+            models::queries::select_unproven_blocks(conn, limit)
         })
         .await
     }

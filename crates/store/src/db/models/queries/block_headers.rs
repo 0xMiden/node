@@ -293,9 +293,10 @@ pub(crate) fn insert_block_proof(
     Ok(count)
 }
 
-/// Select all block numbers that have not yet been proven, ordered ascending.
+/// Select block numbers that have not yet been proven, ordered ascending.
 ///
 /// The genesis block (block 0) is excluded because it is never proven.
+/// Results are limited to at most `limit` rows.
 ///
 /// # Raw SQL
 ///
@@ -305,15 +306,18 @@ pub(crate) fn insert_block_proof(
 /// WHERE block_proof IS NULL
 ///   AND block_num > 0
 /// ORDER BY block_num ASC
+/// LIMIT ?
 /// ```
 pub(crate) fn select_unproven_blocks(
     conn: &mut SqliteConnection,
+    limit: i64,
 ) -> Result<Vec<BlockNumber>, DatabaseError> {
     let block_nums: Vec<i64> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
             .filter(schema::block_headers::block_proof.is_null())
             .filter(schema::block_headers::block_num.gt(0i64))
             .order(schema::block_headers::block_num.asc())
+            .limit(limit)
             .load(conn)?;
     block_nums
         .into_iter()
