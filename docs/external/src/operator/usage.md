@@ -142,4 +142,4 @@ source profile.env && miden-node <...>
 
 This works well on Linux and MacOS, but Windows requires some additional scripting unfortunately.
 
-See the `.env` files in each of the binary crates' [directories](https://github.com/0xMiden/miden-node/tree/next/bin) for a list of all available environment variables.
+See the `.env` files in each of the binary crates' [directories](https://github.com/0xMiden/node/tree/next/bin) for a list of all available environment variables.

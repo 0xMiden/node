@@ -7,7 +7,7 @@ This enables weaker devices to offload the proof generation to a beefy remote se
 The implementation provides a configurable request queue and proves one request at a time in FIFO order. This is not intended to cover
 complex proxy setups nor load-balancing, but can instead be used as a starting point for more advanced setups.
 
-The gRPC specification can be found in the [Miden repository](https://github.com/0xMiden/miden-node/blob/main/proto/proto/remote_prover.proto).
+The gRPC specification can be found in the [Miden repository](https://github.com/0xMiden/node/blob/main/proto/proto/remote_prover.proto).
 Ensure you are viewing the appropriate version tag or commit.
 
 ## Quick start
@@ -43,8 +43,8 @@ Install the Debian package:
 ```bash
 set -e
 
-sudo wget https://github.com/0xMiden/miden-node/releases/download/v0.8/miden-prover-v0.8-arm64.deb -O prover.deb
-sudo wget -q -O - https://github.com/0xMiden/miden-node/releases/download/v0.8/miden-prover-v0.8-arm64.deb.checksum | awk '{print $1}' | sudo tee prover.checksum
+sudo wget https://github.com/0xMiden/node/releases/download/v0.8/miden-prover-v0.8-arm64.deb -O prover.deb
+sudo wget -q -O - https://github.com/0xMiden/node/releases/download/v0.8/miden-prover-v0.8-arm64.deb.checksum | awk '{print $1}' | sudo tee prover.checksum
 sudo sha256sum prover.deb | awk '{print $1}' > prover.sha256
 sudo diff prover.sha256 prover.checksum
 sudo dpkg -i prover.deb
@@ -125,7 +125,7 @@ The server implements the following health and status related gRPC services:
 
 - [gRPC Health Check](https://grpc.io/docs/guides/health-checking/)
 - [gRPC Reflection](https://grpc.io/docs/guides/reflection/) 
-- [WorkerStatusApi](https://github.com/0xMiden/miden-node/blob/main/proto/proto/remote_prover.proto)
+- [WorkerStatusApi](https://github.com/0xMiden/node/blob/main/proto/proto/remote_prover.proto)
 
 The server supports OpenTelemetry traces which can be configured using the environment variables specified in the OpenTelemetry documentation.
 
