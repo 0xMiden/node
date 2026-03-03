@@ -117,7 +117,7 @@ impl Store {
         // Spawn the proof scheduler as a background task. It will immediately pick up any
         // unproven blocks from previous runs and begin proving them.
         let (proof_scheduler_handle, proof_scheduler_task) =
-            proof_scheduler::spawn(state.db.clone(), block_prover, state.block_store());
+            proof_scheduler::spawn(state.db().clone(), block_prover, state.block_store());
 
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),

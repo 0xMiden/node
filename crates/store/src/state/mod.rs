@@ -104,7 +104,7 @@ impl<S: SmtStorage> InnerState<S> {
 pub struct State {
     /// The database which stores block headers, nullifiers, notes, and the latest states of
     /// accounts.
-    pub(crate) db: Arc<Db>,
+    db: Arc<Db>,
 
     /// The block store which stores full block contents for all blocks.
     block_store: Arc<BlockStore>,
@@ -180,6 +180,16 @@ impl State {
             writer,
             termination_ask,
         })
+    }
+
+    /// Returns the database.
+    pub(crate) fn db(&self) -> Arc<Db> {
+        self.db.clone()
+    }
+
+    /// Returns the block store.
+    pub(crate) fn block_store(&self) -> Arc<BlockStore> {
+        self.block_store.clone()
     }
 
     // STATE ACCESSORS
@@ -774,11 +784,6 @@ impl State {
             return Ok(None);
         }
         self.block_store.load_block(block_num).await.map_err(Into::into)
-    }
-
-    /// Returns the block store.
-    pub(crate) fn block_store(&self) -> Arc<BlockStore> {
-        self.block_store.clone()
     }
 
     /// Returns the latest block number.
