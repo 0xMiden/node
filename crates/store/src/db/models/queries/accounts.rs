@@ -1066,6 +1066,7 @@ fn prepare_full_account_update(
     Ok((AccountStateForInsert::FullAccount(account), storage, assets))
 }
 
+/// Prepare partial delta data for account upserts and follow-up storage and vault inserts.
 fn prepare_partial_account_update(
     conn: &mut SqliteConnection,
     update: &BlockAccountUpdate,
@@ -1073,22 +1074,21 @@ fn prepare_partial_account_update(
     delta: &miden_protocol::account::delta::AccountDelta,
     block_num: BlockNumber,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
-    // Load only the minimal data needed. Only load those storage map entries and vault
-    // entries that will receive updates.
-    // The next line fetches the header, which will always change with the exception of
-    // an empty delta.
+    // Build the minimal account state needed for partial delta application.
+    // Only load the storage map entries and vault balances that will receive updates.
+    // The next line fetches the header, which will always change unless the delta is empty.
     let state_headers = select_minimal_account_state_headers(conn, account_id)?;
 
-    // --- process asset updates ----------------------------------
-    // Only query balances for faucet_ids that are being updated
+    // --- Process asset updates. ---------------------------------
+    // Only query balances for faucet_ids that are being updated.
     let faucet_ids =
         Vec::from_iter(delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id));
     let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
 
-    // encode `Some` as update, `None` as removal
+    // Encode `Some` as update and `None` as removal.
     let mut assets = Vec::new();
 
-    // update fungible assets
+    // Update fungible assets.
     for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
         let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
         let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
@@ -1107,7 +1107,7 @@ fn prepare_partial_account_update(
         assets.push((account_id, new_balance.vault_key(), update_or_remove));
     }
 
-    // update non-fungible assets
+    // Update non-fungible assets.
     for (asset, delta_action) in delta.vault().non_fungible().iter() {
         let asset_update = match delta_action {
             NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
@@ -1116,7 +1116,7 @@ fn prepare_partial_account_update(
         assets.push((account_id, asset.vault_key(), asset_update));
     }
 
-    // --- collect storage map updates ----------------------------
+    // --- Collect storage map updates. ---------------------------
 
     let mut storage = Vec::new();
     for (slot_name, map_delta) in delta.storage().maps() {
@@ -1125,7 +1125,7 @@ fn prepare_partial_account_update(
         }
     }
 
-    // first collect entries that have associated changes
+    // First collect entries that have associated changes.
     let slot_names = Vec::from_iter(delta.storage().maps().filter_map(|(slot_name, map_delta)| {
         if map_delta.is_empty() {
             None
@@ -1136,11 +1136,11 @@ fn prepare_partial_account_update(
 
     let map_entries = select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
 
-    // apply the delta storage to the given storage header
+    // Apply the delta storage to the given storage header.
     let new_storage_header =
         apply_storage_delta(&state_headers.storage_header, delta.storage(), &map_entries)?;
 
-    // --- update the vault root by constructing the asset vault from DB
+    // --- Update the vault root by constructing the asset vault from DB.
     let new_vault_root = {
         let (_last_block, assets) =
             select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
@@ -1150,8 +1150,8 @@ fn prepare_partial_account_update(
         vault.root()
     };
 
-    // --- compute updated account state for the accounts row ---
-    // Apply nonce delta
+    // --- Compute updated account state for the accounts row. ---
+    // Apply nonce delta.
     let new_nonce_value = state_headers
         .nonce
         .as_int()
@@ -1161,7 +1161,7 @@ fn prepare_partial_account_update(
         })?;
     let new_nonce = Felt::new(new_nonce_value);
 
-    // Create minimal account state data for the row insert
+    // Create minimal account state data for the row insert.
     let account_state = PartialAccountState {
         nonce: new_nonce,
         code_commitment: state_headers.code_commitment,
