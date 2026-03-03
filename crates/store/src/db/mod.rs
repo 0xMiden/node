@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
+use diesel::{Connection, ExpressionMethods, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_proto::generated as proto;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -23,13 +23,14 @@ use miden_protocol::note::{
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use tokio::sync::oneshot;
+use tower_http::follow_redirect::policy::PolicyExt;
 use tracing::{Instrument, info, instrument};
 
 use crate::COMPONENT;
 use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::queries::StorageMapValuesPage;
+use crate::db::models::queries::{NetworkNoteType, StorageMapValuesPage};
 use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
 use crate::genesis::GenesisBlock;
@@ -321,7 +322,26 @@ impl Db {
 
         let me = Db { pool };
         me.query("migrations", apply_migrations).await?;
+        me.fixup_network_note_classification().await;
         Ok(me)
+    }
+
+    #[instrument(target = COMPONENT, skip_all, err)]
+    async fn fixup_network_note_classification(&self) -> Result<()> {
+        self.transact("fixup network notes", move |conn| {
+            // TODO: log each updated entry.
+            let updated = diesel::update(schema::notes::table)
+                .filter(
+                    schema::notes::network_note_type
+                        .eq(NetworkNoteType::SingleTarget.into())
+                        .and(schema::notes::nullifier.is_null()),
+                )
+                .set(schema::notes::network_note_type.eq(NetworkNoteType::None.into()))
+                .execute(conn)?;
+
+            Ok(())
+        })
+        .await
     }
 
     /// Loads all the nullifiers from the DB.
