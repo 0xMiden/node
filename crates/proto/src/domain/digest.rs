@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display, Formatter};
 
 use hex::{FromHex, ToHex};
+use miden_protocol::account::StorageMapKey;
 use miden_protocol::note::NoteId;
 use miden_protocol::{Felt, StarkField, Word};
 
@@ -182,6 +183,14 @@ impl TryFrom<proto::primitives::Digest> for Word {
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         Ok(Self::new(value.try_into()?))
+    }
+}
+
+impl TryFrom<proto::primitives::Digest> for StorageMapKey {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
+        Ok(StorageMapKey::new(value.try_into()?))
     }
 }
 

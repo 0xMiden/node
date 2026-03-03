@@ -28,6 +28,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     StorageMap,
+    StorageMapKey,
     StorageSlot,
     StorageSlotName,
     StorageSlotType,
@@ -93,18 +94,19 @@ fn reconstruct_account_storage_at_block(
             .load(conn)?;
 
     // For each (slot_name, key) pair, keep only the latest entry
-    let mut latest_map_entries: BTreeMap<(StorageSlotName, Word), Word> = BTreeMap::new();
+    let mut latest_map_entries: BTreeMap<(StorageSlotName, StorageMapKey), Word> = BTreeMap::new();
     for (_, slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
-        let key = Word::read_from_bytes(&key_bytes)?;
+        let key = StorageMapKey::read_from_bytes(&key_bytes)?;
         let value = Word::read_from_bytes(&value_bytes)?;
         latest_map_entries.entry((slot_name, key)).or_insert(value);
     }
 
     // Group entries by slot name
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(StorageMapKey, Word)>> =
+        BTreeMap::new();
     for ((slot_name, key), value) in latest_map_entries {
         map_entries_by_slot.entry(slot_name).or_default().push((key, value));
     }

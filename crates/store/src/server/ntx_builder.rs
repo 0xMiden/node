@@ -7,7 +7,8 @@ use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
 use miden_node_utils::ErrorReport;
-use miden_protocol::account::StorageSlotName;
+use miden_protocol::Word;
+use miden_protocol::account::{StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetVaultKey;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Note;
@@ -262,8 +263,9 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             read_account_id::<GetWitnessesError>(request.account_id).map_err(invalid_argument)?;
 
         // Read the map key.
-        let map_key =
-            read_root::<GetWitnessesError>(request.map_key, "MapKey").map_err(invalid_argument)?;
+        let map_key = StorageMapKey::new(
+            read_root::<GetWitnessesError>(request.map_key, "MapKey").map_err(invalid_argument)?,
+        );
 
         // Read the slot name.
         let slot_name = StorageSlotName::new(request.slot_name).map_err(|err| {
@@ -288,7 +290,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let proof: SmtProof = storage_witness.into();
         Ok(Response::new(proto::store::StorageMapWitnessResponse {
             witness: Some(proto::store::storage_map_witness_response::StorageWitness {
-                key: Some(map_key.into()),
+                key: Some((Into::<Word>::into(map_key)).into()),
                 proof: Some(proof.into()),
             }),
             block_num: self.state.latest_block_num().await.as_u32(),

@@ -5,7 +5,7 @@ use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountV
 use miden_protocol::account::{
     AccountId,
     NonFungibleDeltaAction,
-    StorageMap,
+    StorageMapKey,
     StorageMapWitness,
     StorageSlotName,
 };
@@ -70,7 +70,8 @@ pub(crate) struct InnerForest {
 
     /// Maps (`account_id`, `slot_name`, `block_num`) to all key-value entries in that storage map.
     /// Accumulated from deltas - each block's entries include all entries up to that point.
-    storage_entries: BTreeMap<(AccountId, StorageSlotName, BlockNumber), BTreeMap<Word, Word>>,
+    storage_entries:
+        BTreeMap<(AccountId, StorageSlotName, BlockNumber), BTreeMap<StorageMapKey, Word>>,
 
     /// Maps (`account_id`, `block_num`) to vault SMT root.
     /// Tracks asset vault versions across all blocks with structural sharing.
@@ -142,13 +143,13 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        raw_key: Word,
+        raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
-        let key = StorageMap::hash_key(raw_key);
+        let key = raw_key.hash();
         let root = self
             .get_storage_map_root(account_id, slot_name, block_num)
             .ok_or(WitnessError::RootNotFound)?;
-        let proof = self.forest.open(root, key)?;
+        let proof = self.forest.open(root, key.into())?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
     }
@@ -182,14 +183,14 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: StorageSlotName,
         block_num: BlockNumber,
-        raw_keys: &[Word],
+        raw_keys: &[StorageMapKey],
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
         let root = self.get_storage_map_root(account_id, &slot_name, block_num)?;
 
         // Collect SMT proofs for each key
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
-            let key = StorageMap::hash_key(*raw_key);
-            self.forest.open(root, key)
+            let key_hash = raw_key.hash();
+            self.forest.open(root, key_hash.into())
         }));
 
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
@@ -460,7 +461,7 @@ impl InnerForest {
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
-    ) -> BTreeMap<Word, Word> {
+    ) -> BTreeMap<StorageMapKey, Word> {
         self.storage_entries
             .range(
                 (account_id, slot_name.clone(), BlockNumber::GENESIS)
@@ -488,14 +489,14 @@ impl InnerForest {
             // build a vector of raw entries and filter out any empty values; such values
             // shouldn't be present in full-state deltas, but it is good to exclude them
             // explicitly
-            let raw_map_entries: Vec<(Word, Word)> = map_delta
+            let raw_map_entries: Vec<(StorageMapKey, Word)> = map_delta
                 .entries()
                 .iter()
                 .filter_map(|(&key, &value)| {
                     if value == EMPTY_WORD {
                         None
                     } else {
-                        Some((Word::from(key), value))
+                        Some((key.into_inner(), value))
                     }
                 })
                 .collect();
@@ -513,10 +514,8 @@ impl InnerForest {
 
             // hash the keys before inserting into the forest, matching how `StorageMap`
             // hashes keys before inserting into the SMT.
-            let hashed_entries: Vec<(Word, Word)> = raw_map_entries
-                .iter()
-                .map(|(key, value)| (StorageMap::hash_key(*key), *value))
-                .collect();
+            let hashed_entries: Vec<(Word, Word)> =
+                raw_map_entries.iter().map(|(key, value)| (key.hash().into(), *value)).collect();
 
             // insert the updates into the forest and update storage map roots map
             let new_root = self
@@ -568,15 +567,16 @@ impl InnerForest {
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
-            let delta_entries: Vec<(Word, Word)> =
-                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)).collect();
+            let delta_entries: Vec<(StorageMapKey, Word)> = map_delta
+                .entries()
+                .iter()
+                .map(|(key, value)| (StorageMapKey::new((*key).into()), *value))
+                .collect();
 
             // Hash the keys before inserting into the forest, matching how StorageMap
             // hashes keys before inserting into the SMT.
-            let hashed_entries: Vec<(Word, Word)> = delta_entries
-                .iter()
-                .map(|(key, value)| (StorageMap::hash_key(*key), *value))
-                .collect();
+            let hashed_entries: Vec<(Word, Word)> =
+                delta_entries.iter().map(|(key, value)| (key.hash().into(), *value)).collect();
 
             let new_root = self
                 .forest

@@ -17,6 +17,7 @@ use miden_protocol::account::{
     AccountId,
     PartialAccount,
     PartialStorage,
+    StorageMapKey,
     StorageMapWitness,
     StorageSlotName,
 };
@@ -421,13 +422,13 @@ impl StoreClient {
         &self,
         account_id: AccountId,
         slot_name: StorageSlotName,
-        map_key: Word,
+        map_key: StorageMapKey,
         block_num: Option<BlockNumber>,
     ) -> Result<StorageMapWitness, StoreError> {
         // Construct proto request.
         let request = proto::store::StorageMapWitnessRequest {
             account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
-            map_key: Some(map_key.into()),
+            map_key: Some(Into::<Word>::into(map_key).into()),
             slot_name: slot_name.to_string(),
             block_num: block_num.map(|num| num.as_u32()),
         };

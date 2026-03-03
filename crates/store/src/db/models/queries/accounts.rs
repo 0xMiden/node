@@ -30,6 +30,7 @@ use miden_protocol::account::{
     AccountStorageHeader,
     NonFungibleDeltaAction,
     StorageMap,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotName,
@@ -771,12 +772,13 @@ pub(crate) fn select_latest_account_storage(
             .load(conn)?;
 
     // Group map values by slot name
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(StorageMapKey, Word)>> =
+        BTreeMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
-        let key = Word::read_from_bytes(&key_bytes)?;
+        let key = StorageMapKey::read_from_bytes(&key_bytes)?;
         let value = Word::read_from_bytes(&value_bytes)?;
         map_entries_by_slot.entry(slot_name).or_default().push((key, value));
     }
@@ -905,7 +907,7 @@ pub(crate) fn insert_account_storage_map_value(
     account_id: AccountId,
     block_num: BlockNumber,
     slot_name: StorageSlotName,
-    key: Word,
+    key: StorageMapKey,
     value: Word,
 ) -> Result<usize, DatabaseError> {
     let account_id = account_id.to_bytes();
@@ -1032,7 +1034,7 @@ pub(crate) fn upsert_accounts(
                 let mut storage = Vec::new();
                 for (slot_name, map_delta) in delta.storage().maps() {
                     for (key, value) in map_delta.entries() {
-                        storage.push((account_id, slot_name.clone(), (*key).into(), *value));
+                        storage.push((account_id, slot_name.clone(), (*key).into_inner(), *value));
                     }
                 }
 
