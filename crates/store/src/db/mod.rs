@@ -328,26 +328,36 @@ impl Db {
 
         let me = Db { pool };
         me.query("migrations", apply_migrations).await?;
-        let _todo = me.fixup_network_note_classification().await;
+        me.fixup_network_note_classification().await?;
         Ok(me)
     }
 
     #[instrument(target = COMPONENT, skip_all, err)]
-    async fn fixup_network_note_classification(&self) -> Result<Vec<NoteId>> {
-        self.transact("fixup network notes", move |conn| {
-            let updated = diesel::update(schema::notes::table)
-                .filter(
-                    schema::notes::network_note_type
-                        .eq(NetworkNoteType::SingleTarget as i32)
-                        .and(schema::notes::nullifier.is_null()),
-                )
-                .set(schema::notes::network_note_type.eq(NetworkNoteType::None as i32))
-                .returning(schema::notes::note_id)
-                .get_results::<Vec<u8>>(conn)?;
+    async fn fixup_network_note_classification(&self) -> Result<()> {
+        let notes = self
+            .transact("fixup network notes", move |conn| {
+                let updated = diesel::update(schema::notes::table)
+                    .filter(
+                        schema::notes::network_note_type
+                            .eq(NetworkNoteType::SingleTarget as i32)
+                            .and(schema::notes::nullifier.is_null()),
+                    )
+                    .set(schema::notes::network_note_type.eq(NetworkNoteType::None as i32))
+                    .returning(schema::notes::note_id)
+                    .get_results::<Vec<u8>>(conn)?;
 
-            deserialize_raw_vec::<_, NoteId>(updated).map_err(DatabaseError::from)
-        })
-        .await
+                deserialize_raw_vec::<_, NoteId>(updated).map_err(DatabaseError::from)
+            })
+            .await?;
+
+        for note in notes {
+            tracing::info!(
+                note.id = %note,
+                "Fixed private note misclassified as network note"
+            );
+        }
+
+        Ok(())
     }
 
     /// Loads all the nullifiers from the DB.
