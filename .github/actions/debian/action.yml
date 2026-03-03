@@ -121,8 +121,8 @@ runs:
         Maintainer: Miden <devops@miden.team>
         Description: $pkg binary package
         Homepage: https://miden.xyz
-        Vcs-Git: git@github.com:0xMiden/miden-node.git
-        Vcs-Browser: https://github.com/0xMiden/miden-node
+        Vcs-Git: git@github.com:0xMiden/node.git
+        Vcs-Browser: https://github.com/0xMiden/node
         EOF
 
     - name: Build binaries

@@ -56,6 +56,7 @@ fs-err                             = { workspace = true }
 miden-agglayer                     = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 miden-protocol                     = { features = ["std"], workspace = true }
+miden-standards                    = { workspace = true }
 
 [dev-dependencies]
 assert_matches        = { workspace = true }

@@ -8,7 +8,7 @@ We provide Debian packages for official releases for the node software. Alternat
 
 ## Debian package
 
-Official Debian packages are available under our [releases](https://github.com/0xMiden/miden-node/releases) page.
+Official Debian packages are available under our [releases](https://github.com/0xMiden/node/releases) page.
 Both `amd64` and `arm64` packages are available.
 
 Note that the packages include a `systemd` service which is disabled by default.
@@ -69,13 +69,13 @@ this for advanced use only. The incantation is a little different as you'll be t
 
 ```sh
 # Install from a specific branch
-cargo install --locked --git https://github.com/0xMiden/miden-node miden-node --branch <branch>
+cargo install --locked --git https://github.com/0xMiden/node miden-node --branch <branch>
 
 # Install a specific tag
-cargo install --locked --git https://github.com/0xMiden/miden-node miden-node --tag <tag>
+cargo install --locked --git https://github.com/0xMiden/node miden-node --tag <tag>
 
 # Install a specific git revision
-cargo install --locked --git https://github.com/0xMiden/miden-node miden-node --rev <git-sha>
+cargo install --locked --git https://github.com/0xMiden/node miden-node --rev <git-sha>
 ```
 
 More information on the various `cargo install` options can be found

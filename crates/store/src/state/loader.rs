@@ -362,7 +362,7 @@ pub async fn load_smt_forest(
         // Process each account in this page
         for account_id in page.account_ids {
             // TODO: Loading the full account from the database is inefficient and will need to
-            // go away. <https://github.com/0xMiden/miden-node/issues/1556>
+            // go away. <https://github.com/0xMiden/node/issues/1556>
             let account_info = db.select_account(account_id).await?;
             let account = account_info
                 .details
@@ -373,7 +373,6 @@ pub async fn load_smt_forest(
                 StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
             })?;
 
-            // Use the unified update method (will recognize it's a full-state delta)
             forest.update_account(block_num, &delta)?;
         }
 

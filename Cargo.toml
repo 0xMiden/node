@@ -29,7 +29,7 @@ exclude      = [".github/"]
 homepage     = "https://miden.xyz"
 license      = "MIT"
 readme       = "README.md"
-repository   = "https://github.com/0xMiden/miden-node"
+repository   = "https://github.com/0xMiden/node"
 rust-version = "1.91"
 version      = "0.14.0"
 
@@ -65,22 +65,15 @@ miden-remote-prover-client      = { path = "crates/remote-prover-client", versio
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
-# miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-# miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
-# miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-# miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-# miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base" }
-# miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base" }
-
-# Other miden dependencies. These should align with those expected by miden-base.
-miden-air = { features = ["std", "testing"], version = "0.20" }
-# miden-crypto = { default-features = false,  version = "0.19.4" }
 miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
 miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
 miden-standards       = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
 miden-testing         = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
 miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/miden-base.git" }
 miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/miden-base.git" }
+
+# Other miden dependencies. These should align with those expected by miden-base.
+miden-air = { features = ["std", "testing"], version = "0.20" }
 
 miden-crypto = { version = "0.19.7" }
 
