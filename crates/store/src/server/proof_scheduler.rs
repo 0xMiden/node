@@ -19,13 +19,14 @@ use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::{Deserializable, Serializable};
 use miden_remote_prover_client::RemoteProverClientError;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::{error, info, instrument};
 
 use crate::COMPONENT;
+use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::{DatabaseError, ProofSchedulerError};
 use crate::server::block_prover_client::{BlockProver, StoreProverError};
@@ -64,11 +65,12 @@ impl ProofSchedulerHandle {
 pub fn spawn(
     db: Arc<Db>,
     block_prover: Arc<BlockProver>,
+    block_store: Arc<BlockStore>,
 ) -> (ProofSchedulerHandle, JoinHandle<Result<(), ProofSchedulerError>>) {
     let notify = Arc::new(Notify::new());
     let handle = ProofSchedulerHandle { notify: Arc::clone(&notify) };
 
-    let join_handle = tokio::spawn(run(db, block_prover, notify));
+    let join_handle = tokio::spawn(run(db, block_prover, block_store, notify));
 
     (handle, join_handle)
 }
@@ -83,6 +85,7 @@ pub fn spawn(
 async fn run(
     db: Arc<Db>,
     block_prover: Arc<BlockProver>,
+    block_store: Arc<BlockStore>,
     notify: Arc<Notify>,
 ) -> Result<(), ProofSchedulerError> {
     info!(target: COMPONENT, "Proof scheduler started");
@@ -116,11 +119,15 @@ async fn run(
         let mut proving_futures = order_proving_jobs(&db, &block_prover, &unproven_blocks);
         while let Some(timeout_result) = proving_futures.next().await {
             match timeout_result {
-                // Store successful proofs.
+                // Save proof to file, then mark as proven in DB.
                 Ok((block_num, proof)) => {
-                    db.insert_block_proof(block_num, proof)
+                    block_store
+                        .save_proof(block_num, &proof.to_bytes())
                         .await
-                        .map_err(ProofSchedulerError::PersistFailed)?;
+                        .map_err(ProofSchedulerError::PersistProofFailed)?;
+                    db.mark_block_proven(block_num)
+                        .await
+                        .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
                 },
 
                 // Abort on fatal errors.

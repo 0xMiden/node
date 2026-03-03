@@ -15,7 +15,7 @@ use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
-use miden_protocol::block::{BlockHeader, BlockNumber, BlockProof};
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::utils::{Deserializable, Serializable};
 
 use super::DatabaseError;
@@ -266,9 +266,9 @@ pub(crate) fn select_block_proving_inputs(
     Ok(inputs.flatten())
 }
 
-/// Store a [`BlockProof`] for a committed block.
+/// Mark a committed block as proven.
 ///
-/// Updates the `block_proof` column for the row with the given `block_num`.
+/// Sets the `is_proven` flag to `true` for the row with the given `block_num`.
 ///
 /// # Returns
 ///
@@ -279,16 +279,15 @@ pub(crate) fn select_block_proving_inputs(
     fields(block_num = %block_num),
     err,
 )]
-pub(crate) fn insert_block_proof(
+pub(crate) fn mark_block_proven(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
-    block_proof: BlockProof,
 ) -> Result<usize, DatabaseError> {
     let count = diesel::update(
         schema::block_headers::table
             .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
     )
-    .set(schema::block_headers::block_proof.eq(block_proof.to_raw_sql()))
+    .set(schema::block_headers::is_proven.eq(true))
     .execute(conn)?;
     Ok(count)
 }
@@ -303,7 +302,7 @@ pub(crate) fn insert_block_proof(
 /// ```sql
 /// SELECT block_num
 /// FROM block_headers
-/// WHERE block_proof IS NULL
+/// WHERE is_proven = 0
 ///   AND block_num > 0
 /// ORDER BY block_num ASC
 /// LIMIT ?
@@ -314,7 +313,7 @@ pub(crate) fn select_unproven_blocks(
 ) -> Result<Vec<BlockNumber>, DatabaseError> {
     let block_nums: Vec<i64> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
-            .filter(schema::block_headers::block_proof.is_null())
+            .filter(schema::block_headers::is_proven.eq(false))
             .filter(schema::block_headers::block_num.gt(0i64))
             .order(schema::block_headers::block_num.asc())
             .limit(limit)
@@ -335,7 +334,7 @@ pub(crate) fn select_unproven_blocks(
 /// ```sql
 /// SELECT block_num
 /// FROM block_headers
-/// WHERE block_proof IS NOT NULL
+/// WHERE is_proven = 1
 /// ORDER BY block_num DESC
 /// LIMIT 1
 /// ```
@@ -344,39 +343,10 @@ pub(crate) fn select_latest_proven_block_num(
 ) -> Result<Option<BlockNumber>, DatabaseError> {
     let block_num: Option<i64> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
-            .filter(schema::block_headers::block_proof.is_not_null())
+            .filter(schema::block_headers::is_proven.eq(true))
             .order(schema::block_headers::block_num.desc())
             .first(conn)
             .optional()?;
 
     block_num.map(BlockNumber::from_raw_sql).transpose().map_err(Into::into)
-}
-
-/// Select the [`BlockProof`] for a given block number, if it exists.
-///
-/// # Returns
-///
-/// `None` if the block does not exist or has not been proven yet.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT block_proof
-/// FROM block_headers
-/// WHERE block_num = ?1
-/// ```
-pub(crate) fn select_block_proof(
-    conn: &mut SqliteConnection,
-    block_num: BlockNumber,
-) -> Result<Option<BlockProof>, DatabaseError> {
-    let proof_bytes: Option<Option<Vec<u8>>> =
-        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_proof)
-            .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
-            .get_result(conn)
-            .optional()?;
-    // Flatten: None (row not found) or Some(None) (proof is NULL) => None.
-    match proof_bytes.flatten() {
-        Some(bytes) => Ok(Some(BlockProof::from_raw_sql(bytes)?)),
-        None => Ok(None),
-    }
 }

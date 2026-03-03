@@ -776,6 +776,11 @@ impl State {
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
+    /// Returns the block store.
+    pub(crate) fn block_store(&self) -> Arc<BlockStore> {
+        self.block_store.clone()
+    }
+
     /// Returns the latest block number.
     pub async fn latest_block_num(&self) -> BlockNumber {
         self.inner.read().await.latest_block_num()
