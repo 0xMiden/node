@@ -195,18 +195,15 @@ async fn prove_block(
     block_num: BlockNumber,
 ) -> Result<BlockProof, ProveBlockError> {
     // Load proving inputs from the DB.
-    let bytes = match db.select_block_proving_inputs(block_num).await {
-        Ok(Some(bytes)) => bytes,
-        // Inputs not found. This should never happen for committed blocks. The genesis block
-        // does not have inputs but it should not be queried by this function.
-        Ok(None) => {
-            return Err(ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(
-                block_num,
-            )));
-        },
-        // Failed to retrieve proving inputs.
-        Err(err) => return Err(err.into()),
-    };
+    // All committed blocks should have inputs apart from the genesis block, which should
+    // never be queried by this function.
+    let bytes = db
+        .select_block_proving_inputs(block_num)
+        .await
+        .map_err(ProveBlockError::from)?
+        .ok_or_else(|| {
+            ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(block_num))
+        })?;
 
     // Deserialize proving inputs.
     let request = BlockProofRequest::read_from_bytes(&bytes[..])
