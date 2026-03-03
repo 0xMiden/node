@@ -52,7 +52,7 @@ url               = { workspace = true }
 [build-dependencies]
 build-rs                           = { workspace = true }
 fs-err                             = { workspace = true }
-miden-agglayer                     = { branch = "next", features = ["testing"], git = "https://github.com/0xMiden/miden-base" }
+miden-agglayer                     = { features = ["testing"], version = "=0.14.0-alpha.1" }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 miden-protocol                     = { features = ["std"], workspace = true }
 miden-standards                    = { workspace = true }
