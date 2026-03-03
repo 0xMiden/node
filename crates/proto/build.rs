@@ -319,7 +319,7 @@ impl UnaryMethod {
             .arg("request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<{}>>", self.response))
             .line(format!(
-                "<T as {}>::full(&self, request.into_inner()).await.map(tonic::Response::new)",
+                "<T as {}>::full(self, request.into_inner()).await.map(tonic::Response::new)",
                 self.name
             ));
 
