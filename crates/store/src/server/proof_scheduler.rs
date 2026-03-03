@@ -34,7 +34,7 @@ use crate::server::block_prover_client::{BlockProver, StoreProverError};
 // ================================================================================================
 
 /// Overall timeout for proving a single block.
-const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(2);
+const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
 
 // PROOF SCHEDULER
 // ================================================================================================
