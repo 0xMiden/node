@@ -137,6 +137,18 @@ impl From<&Word> for proto::primitives::Digest {
     }
 }
 
+impl From<StorageMapKey> for proto::primitives::Digest {
+    fn from(value: StorageMapKey) -> Self {
+        Into::<Word>::into(value).into()
+    }
+}
+
+impl From<&StorageMapKey> for proto::primitives::Digest {
+    fn from(value: &StorageMapKey) -> Self {
+        (*value).into()
+    }
+}
+
 impl From<&NoteId> for proto::primitives::Digest {
     fn from(value: &NoteId) -> Self {
         value.as_word().into()

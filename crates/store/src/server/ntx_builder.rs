@@ -7,7 +7,6 @@ use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
 use miden_node_utils::ErrorReport;
-use miden_protocol::Word;
 use miden_protocol::account::{StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetVaultKey;
 use miden_protocol::block::BlockNumber;
@@ -290,7 +289,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let proof: SmtProof = storage_witness.into();
         Ok(Response::new(proto::store::StorageMapWitnessResponse {
             witness: Some(proto::store::storage_map_witness_response::StorageWitness {
-                key: Some((Into::<Word>::into(map_key)).into()),
+                key: Some(map_key.into()),
                 proof: Some(proof.into()),
             }),
             block_num: self.state.latest_block_num().await.as_u32(),

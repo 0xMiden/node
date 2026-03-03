@@ -604,7 +604,7 @@ impl From<AccountStorageMapDetails>
                 let all = AllMapEntries {
                     entries: Vec::from_iter(entries.into_iter().map(|(key, value)| {
                         proto::rpc::account_storage_details::account_storage_map_details::all_map_entries::StorageMapEntry {
-                            key: Some((Into::<Word>::into(key)).into()),
+                            key: Some(key.into()),
                             value: Some(value.into()),
                         }
                     })),
