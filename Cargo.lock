@@ -2629,7 +2629,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 [[package]]
 name = "miden-agglayer"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -2700,7 +2700,7 @@ dependencies = [
 [[package]]
 name = "miden-block-prover"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "miden-protocol",
  "thiserror 2.0.18",
@@ -3234,7 +3234,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3264,7 +3264,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol-macros"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3347,7 +3347,7 @@ dependencies = [
 [[package]]
 name = "miden-standards"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -3364,7 +3364,7 @@ dependencies = [
 [[package]]
 name = "miden-testing"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -3387,7 +3387,7 @@ dependencies = [
 [[package]]
 name = "miden-tx"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -3400,7 +3400,7 @@ dependencies = [
 [[package]]
 name = "miden-tx-batch-prover"
 version = "0.14.0"
-source = "git+https://github.com/0xMiden/miden-base?branch=next#3154a371939125e5cc3faf39a7c42447db67584f"
+source = "git+https://github.com/0xMiden/miden-base?branch=next#592fcbe09ee1281da8e973d99e1b38e3e461e8a3"
 dependencies = [
  "miden-protocol",
  "miden-tx",
