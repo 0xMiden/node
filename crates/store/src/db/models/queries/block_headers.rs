@@ -174,10 +174,6 @@ pub struct BlockHeaderRawRow {
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,
     pub commitment: Vec<u8>,
-    #[expect(dead_code)]
-    pub block_proof: Option<Vec<u8>>,
-    #[expect(dead_code)]
-    pub proving_inputs: Option<Vec<u8>>,
 }
 impl TryInto<BlockHeader> for BlockHeaderRawRow {
     type Error = DatabaseError;
