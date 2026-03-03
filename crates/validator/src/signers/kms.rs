@@ -21,6 +21,9 @@ pub enum KmsSignerError {
     /// The KMS backend returned a signature with an invalid format.
     #[error("invalid signature format")]
     SignatureFormatError(#[source] DeserializationError),
+    /// The KMS backend returned a signature that was not able to be verified.
+    #[error("invalid signature")]
+    InvalidSignature,
 }
 
 // KMS SIGNER
@@ -102,8 +105,15 @@ impl BlockSigner for KmsSigner {
         let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
         // Recovery id is not used by verify(pk), so 0 is fine.
         let recovery_id = 0;
-        Signature::from_der(sig_der.as_ref(), recovery_id)
-            .map_err(KmsSignerError::SignatureFormatError)
+        let sig = Signature::from_der(sig_der.as_ref(), recovery_id)
+            .map_err(KmsSignerError::SignatureFormatError)?;
+
+        // Check the returned signature.
+        if sig.verify(header.commitment(), &self.pub_key) {
+            Ok(sig)
+        } else {
+            Err(KmsSignerError::InvalidSignature)
+        }
     }
 
     fn public_key(&self) -> PublicKey {
