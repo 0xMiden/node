@@ -9,6 +9,7 @@ use miden_protocol::account::{
     AccountId,
     AccountStorageHeader,
     StorageMap,
+    StorageMapKey,
     StorageSlotHeader,
     StorageSlotName,
     StorageSlotType,
@@ -223,7 +224,7 @@ impl TryFrom<proto::rpc::account_request::account_detail_request::StorageMapDeta
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotData {
     All,
-    MapKeys(Vec<Word>),
+    MapKeys(Vec<StorageMapKey>),
 }
 
 impl
@@ -244,8 +245,9 @@ impl
                 return Err(ConversionError::EnumDiscriminantOutOfRange);
             },
             ProtoSlotData::MapKeys(keys) => {
-                let keys = try_convert(keys.map_keys).collect::<Result<Vec<_>, _>>()?;
-                SlotData::MapKeys(keys)
+                let keys: Vec<Word> =
+                    try_convert(keys.map_keys).collect::<Result<Vec<_>, _>>()?;
+                SlotData::MapKeys(keys.into_iter().map(StorageMapKey::new).collect())
             },
         })
     }
@@ -426,7 +428,7 @@ pub enum StorageMapEntries {
 
     /// All storage map entries (key-value pairs) without proofs.
     /// Used when all entries are requested for small maps.
-    AllEntries(Vec<(Word, Word)>),
+    AllEntries(Vec<(StorageMapKey, Word)>),
 
     /// Specific entries with their SMT proofs for client-side verification.
     /// Used when specific keys are requested from the storage map.
@@ -468,7 +470,10 @@ impl AccountStorageMapDetails {
     /// Creates storage map details from forest-queried entries.
     ///
     /// Returns `LimitExceeded` if too many entries.
-    pub fn from_forest_entries(slot_name: StorageSlotName, entries: Vec<(Word, Word)>) -> Self {
+    pub fn from_forest_entries(
+        slot_name: StorageSlotName,
+        entries: Vec<(StorageMapKey, Word)>,
+    ) -> Self {
         if entries.len() > Self::MAX_RETURN_ENTRIES {
             Self {
                 slot_name,
@@ -548,7 +553,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     let entries = entries
                         .into_iter()
                         .map(|entry| {
-                            let key = entry
+                            let key: Word = entry
                                 .key
                                 .ok_or(StorageMapEntry::missing_field(stringify!(key)))?
                                 .try_into()?;
@@ -556,7 +561,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                                 .value
                                 .ok_or(StorageMapEntry::missing_field(stringify!(value)))?
                                 .try_into()?;
-                            Ok((key, value))
+                            Ok((StorageMapKey::new(key), value))
                         })
                         .collect::<Result<Vec<_>, ConversionError>>()?;
                     StorageMapEntries::AllEntries(entries)
@@ -598,7 +603,7 @@ impl From<AccountStorageMapDetails>
                 let all = AllMapEntries {
                     entries: Vec::from_iter(entries.into_iter().map(|(key, value)| {
                         proto::rpc::account_storage_details::account_storage_map_details::all_map_entries::StorageMapEntry {
-                            key: Some(key.into()),
+                            key: Some(Word::from(key).into()),
                             value: Some(value.into()),
                         }
                     })),

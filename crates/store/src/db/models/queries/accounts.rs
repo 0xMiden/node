@@ -30,6 +30,7 @@ use miden_protocol::account::{
     AccountStorageHeader,
     NonFungibleDeltaAction,
     StorageMap,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotName,
@@ -771,12 +772,13 @@ pub(crate) fn select_latest_account_storage(
             .load(conn)?;
 
     // Group map values by slot name
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(StorageMapKey, Word)>> =
+        BTreeMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
-        let key = Word::read_from_bytes(&key_bytes)?;
+        let key = StorageMapKey::new(Word::read_from_bytes(&key_bytes)?);
         let value = Word::read_from_bytes(&value_bytes)?;
         map_entries_by_slot.entry(slot_name).or_default().push((key, value));
     }
@@ -1002,7 +1004,12 @@ pub(crate) fn upsert_accounts(
                 for slot in account.storage().slots() {
                     if let StorageSlotContent::Map(storage_map) = slot.content() {
                         for (key, value) in storage_map.entries() {
-                            storage.push((account_id, slot.name().clone(), *key, *value));
+                            storage.push((
+                                account_id,
+                                slot.name().clone(),
+                                Word::from(*key),
+                                *value,
+                            ));
                         }
                     }
                 }
@@ -1032,7 +1039,12 @@ pub(crate) fn upsert_accounts(
                 let mut storage = Vec::new();
                 for (slot_name, map_delta) in delta.storage().maps() {
                     for (key, value) in map_delta.entries() {
-                        storage.push((account_id, slot_name.clone(), (*key).into(), *value));
+                        storage.push((
+                            account_id,
+                            slot_name.clone(),
+                            Word::from(*key),
+                            *value,
+                        ));
                     }
                 }
 

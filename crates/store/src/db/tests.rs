@@ -19,6 +19,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     AccountVaultDelta,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotDelta,
@@ -920,7 +921,7 @@ fn insert_account_delta(
                 account_id,
                 block_number,
                 slot_name.clone(),
-                *k.inner(),
+                Word::from(*k.inner()),
                 *v,
             )
             .unwrap();
@@ -950,8 +951,8 @@ fn sql_account_storage_map_values_insertion() {
     queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block2).unwrap();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 2, 3, 4]);
-    let key2 = Word::from([5u32, 6, 7, 8]);
+    let key1 = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
+    let key2 = StorageMapKey::new(Word::from([5u32, 6, 7, 8]));
     let value1 = Word::from([10u32, 11, 12, 13]);
     let value2 = Word::from([20u32, 21, 22, 23]);
     let value3 = Word::from([30u32, 31, 32, 33]);
@@ -991,14 +992,18 @@ fn sql_account_storage_map_values_insertion() {
         storage_map_values
             .values
             .iter()
-            .any(|val| val.slot_name == slot_name && val.key == key1 && val.value == value3),
+            .any(|val| val.slot_name == slot_name
+                && val.key == Word::from(key1)
+                && val.value == value3),
         "key1 should point to new value at block2"
     );
     assert!(
         storage_map_values
             .values
             .iter()
-            .any(|val| val.slot_name == slot_name && val.key == key2 && val.value == value2),
+            .any(|val| val.slot_name == slot_name
+                && val.key == Word::from(key2)
+                && val.value == value2),
         "key2 should stay the same (from block1)"
     );
 }
@@ -1440,11 +1445,11 @@ async fn genesis_with_account_storage_map() {
 
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::new(Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO])),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::new(Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO])),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -1497,7 +1502,7 @@ async fn genesis_with_account_assets_and_storage() {
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(100), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::new(Word::from([Felt::new(100), Felt::ZERO, Felt::ZERO, Felt::ZERO])),
         Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]),
     )])
     .unwrap();
@@ -1594,7 +1599,7 @@ async fn genesis_with_multiple_accounts() {
         .unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(5), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::new(Word::from([Felt::new(5), Felt::ZERO, Felt::ZERO, Felt::ZERO])),
         Word::from([Felt::new(15), Felt::new(25), Felt::new(35), Felt::new(45)]),
     )])
     .unwrap();
@@ -2051,11 +2056,11 @@ fn db_roundtrip_account_storage_with_maps() {
     // Create storage with both value slots and map slots
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::new(Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO])),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::new(Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO])),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])

@@ -28,6 +28,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     StorageMap,
+    StorageMapKey,
     StorageSlot,
     StorageSlotName,
     StorageSlotType,
@@ -104,9 +105,13 @@ fn reconstruct_account_storage_at_block(
     }
 
     // Group entries by slot name
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(StorageMapKey, Word)>> =
+        BTreeMap::new();
     for ((slot_name, key), value) in latest_map_entries {
-        map_entries_by_slot.entry(slot_name).or_default().push((key, value));
+        map_entries_by_slot
+            .entry(slot_name)
+            .or_default()
+            .push((StorageMapKey::new(key), value));
     }
 
     // Reconstruct StorageSlots from header slots + map entries
