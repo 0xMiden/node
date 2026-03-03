@@ -20,6 +20,6 @@ interface for users, dApps, wallets and other clients to submit transactions and
 ## Feedback
 
 Please report any issues, ask questions or leave feedback in the node repository
-[here](https://github.com/0xMiden/miden-node/issues/new/choose).
+[here](https://github.com/0xMiden/node/issues/new/choose).
 
 This includes outdated, misleading, incorrect or just plain confusing information :)

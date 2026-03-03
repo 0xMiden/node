@@ -7,7 +7,7 @@ sidebar_position: 1
 
 This is a reference of the Node's public RPC interface. It consists of a gRPC API which may be used to submit transactions and query the state of the blockchain.
 
-The gRPC service definition can be found in the Miden node's `proto` [directory](https://github.com/0xMiden/miden-node/tree/main/proto) in the `rpc.proto` file.
+The gRPC service definition can be found in the Miden node's `proto` [directory](https://github.com/0xMiden/node/tree/main/proto) in the `rpc.proto` file.
 
 <!--toc:start-->
 
