@@ -230,7 +230,7 @@ enum ProveBlockError {
     /// An irrecoverable error that should cause node shutdown.
     Fatal(ProofSchedulerError),
     /// A transient error (DB read, prover failure). The outer loop will retry.
-    Transient(Box<dyn std::error::Error + Send + Sync>),
+    Transient(Box<dyn std::error::Error + Send + Sync + 'static>),
     /// The overall proving timeout was exceeded. Retriable on next iteration.
     Timeout,
 }
