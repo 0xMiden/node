@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use miden_crypto::merkle::smt::{RocksDbConfig, RocksDbStorage};
+use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbStorage};
 use miden_node_store::AccountTreeWithHistory;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
