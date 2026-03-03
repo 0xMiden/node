@@ -211,17 +211,12 @@ impl Service {
     fn generate(&self) -> Module {
         let mut module = Module::new(&self.name);
 
-        module.import("crate::server", "GrpcInterface");
-        module.import("crate::server", "GrpcUnary");
-        module.import("crate::server", "handle_unary");
-
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
         module.push_impl(self.tonic_impl());
 
         for method in &self.unary_methods {
-            module.push_struct(method.marker_struct());
-            module.push_impl(method.grpc_interface_impl());
+            module.push_trait(method.as_trait());
         }
 
         for stream in &self.server_streams {
@@ -248,7 +243,7 @@ impl Service {
         ret.vis("pub");
 
         for method in &self.unary_methods {
-            ret.parent(method.unary_trait().ty());
+            ret.parent(method.as_trait().ty());
         }
 
         ret
@@ -271,7 +266,7 @@ impl Service {
         ret.generic("T").impl_trait(self.service_trait().ty());
 
         for method in &self.unary_methods {
-            ret.bound("T", method.unary_trait().ty());
+            ret.bound("T", method.as_trait().ty());
         }
 
         ret
@@ -288,6 +283,9 @@ impl Service {
         let mut ret = Impl::new("T");
         ret.generic("T")
             .bound("T", self.service_trait().ty())
+            .bound("T", "Send")
+            .bound("T", "Sync")
+            .bound("T", "'static")
             .impl_trait(tonic_path)
             .r#macro("#[tonic::async_trait]");
 
@@ -314,45 +312,49 @@ impl UnaryMethod {
         Self { name, request, response }
     }
 
-    /// This [`Method`]'s marker struct.
-    ///
-    /// ```rust
-    /// pub struct <Self::name>;
-    /// ```
-    fn marker_struct(&self) -> Struct {
-        let mut ret = Struct::new(&self.name);
-        ret.vis("pub");
-        ret
-    }
-
-    /// Returns this method's unary trait concrete type.
-    ///
-    /// ```rust
-    /// GrpcUnary<Self::marker_struct()>
-    /// ```
-    fn unary_trait(&self) -> Trait {
-        let mut ret = Trait::new("GrpcUnary");
-        ret.generic(&self.name);
-        ret
-    }
-
-    /// This method's implementation of the `GrpcInterface` trait.
-    fn grpc_interface_impl(&self) -> Impl {
-        let mut ret = Impl::new(&self.name);
-        ret.impl_trait("GrpcInterface")
-            .associate_type("Request", &self.request)
-            .associate_type("Response", &self.response);
-
-        ret
-    }
-
     fn tonic_impl(&self) -> Function {
         let mut ret = Function::new(to_snake_case(&self.name));
         ret.set_async(true)
             .arg_ref_self()
             .arg("request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<{}>>", self.response))
-            .line(format!("handle_unary::<_, {}>(self, request).await", self.name));
+            .line(format!(
+                "<T as {}>::full(&self, request.into_inner()).await.map(tonic::Response::new)",
+                self.name
+            ));
+
+        ret
+    }
+
+    fn as_trait(&self) -> Trait {
+        let mut ret = Trait::new(&self.name);
+        ret.vis("pub");
+        ret.attr("tonic::async_trait");
+        ret.associated_type("Input");
+        ret.associated_type("Output");
+
+        ret.new_fn("decode")
+            .arg("request", &self.request)
+            .ret("tonic::Result<Self::Input>");
+
+        ret.new_fn("encode")
+            .arg("output", "Self::Output")
+            .ret(format!("tonic::Result<{}>", &self.response));
+
+        ret.new_fn("handle")
+            .set_async(true)
+            .arg_ref_self()
+            .arg("input", "Self::Input")
+            .ret("tonic::Result<Self::Output>");
+
+        ret.new_fn("full")
+            .set_async(true)
+            .arg_ref_self()
+            .arg("request", &self.request)
+            .ret(format!("tonic::Result<{}>", &self.response))
+            .line("let input = Self::decode(request)?;")
+            .line("let output = self.handle(input).await?;")
+            .line("Self::encode(output)");
 
         ret
     }
