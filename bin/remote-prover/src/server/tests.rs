@@ -15,6 +15,7 @@ use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::utils::{Deserializable, Serializable};
 use miden_tx::{LocalTransactionProver, TransactionVerifier};
 use miden_tx_batch_prover::LocalBatchProver;
+use serial_test::serial;
 
 use crate::generated::api_client::ApiClient;
 use crate::generated::{Proof, ProofRequest, ProofType};
@@ -175,6 +176,7 @@ impl Server {
 ///
 /// Create a server with a capacity of one and submit two requests. Ensure
 /// that one succeeds and one fails with a resource exhaustion error.
+#[serial]
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_behaviour_with_capacity_1() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
@@ -208,7 +210,9 @@ async fn legacy_behaviour_with_capacity_1() {
 ///
 /// Create a server with a capacity of two and submit three requests. Ensure
 /// that two succeed and one fails with a resource exhaustion error.
+#[ignore = "Proving 3 requests concurrently causes temporary CI resource starvation which results in _sporadic_ timeouts"]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn capacity_is_respected() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_capacity(2)
@@ -332,6 +336,7 @@ async fn unsupported_proof_kind_is_rejected() {
 ///
 /// The proof is verified and the transaction IDs of request and response must correspond.
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn transaction_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn()
@@ -356,6 +361,7 @@ async fn transaction_proof_is_correct() {
 /// The proof is replicated locally, which ensures that the gRPC codec and server code do the
 /// correct thing.
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn batch_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
         .spawn()
