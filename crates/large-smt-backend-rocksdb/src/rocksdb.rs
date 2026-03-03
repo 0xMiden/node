@@ -1173,7 +1173,7 @@ impl RocksDbConfig {
     ///
     /// # Examples
     /// ```
-    /// use miden_crypto::merkle::smt::RocksDbConfig;
+    /// use miden_large_smt_backend_rocksdb::RocksDbConfig;
     ///
     /// let config = RocksDbConfig::new("/path/to/database");
     /// ```
@@ -1196,7 +1196,7 @@ impl RocksDbConfig {
     ///
     /// # Examples
     /// ```
-    /// use miden_crypto::merkle::smt::RocksDbConfig;
+    /// use miden_large_smt_backend_rocksdb::RocksDbConfig;
     ///
     /// let config = RocksDbConfig::new("/path/to/database")
     ///     .with_cache_size(2 * 1024 * 1024 * 1024); // 2GB cache
@@ -1218,7 +1218,7 @@ impl RocksDbConfig {
     ///
     /// # Examples
     /// ```
-    /// use miden_crypto::merkle::smt::RocksDbConfig;
+    /// use miden_large_smt_backend_rocksdb::RocksDbConfig;
     ///
     /// let config = RocksDbConfig::new("/path/to/database")
     ///     .with_max_open_files(1024); // Allow up to 1024 open files
