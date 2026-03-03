@@ -27,6 +27,13 @@ use crate::db::{insert_transaction, load};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
 
+#[cfg(feature = "unstable")]
+mod sign_block;
+#[cfg(feature = "unstable")]
+mod status;
+#[cfg(feature = "unstable")]
+mod submit_proven_transaction;
+
 // VALIDATOR
 // ================================================================================
 
@@ -110,6 +117,7 @@ impl ValidatorServer {
     }
 }
 
+#[cfg(not(feature = "unstable"))]
 #[tonic::async_trait]
 impl api_server::Api for ValidatorServer {
     /// Returns the status of the validator.

@@ -34,10 +34,12 @@ proptest       = { version = "1.7" }
 
 [build-dependencies]
 build-rs                           = { workspace = true }
+codegen                            = { workspace = true }
 fs-err                             = { workspace = true }
 miden-node-proto-build             = { features = ["internal"], workspace = true }
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 miette                             = { version = "7.6" }
+prost-types                        = { workspace = true }
 tonic-prost-build                  = { workspace = true }
 
 [package.metadata.cargo-machete]
