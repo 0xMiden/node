@@ -2,7 +2,7 @@
 
 ## v0.13.8 (TBD)
 
-- Private notes with the network note attachment are no longer incorrectly considered as network notes (#[]()).
+- Private notes with the network note attachment are no longer incorrectly considered as network notes (#[#1736](https://github.com/0xMiden/node/pull/1736)).
 
 ## v0.13.7 (2026-02-25)
 

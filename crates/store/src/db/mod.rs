@@ -332,6 +332,7 @@ impl Db {
         Ok(me)
     }
 
+    /// Temporary fixup of private notes which were misclassified as network notes.
     #[instrument(target = COMPONENT, skip_all, err)]
     async fn fixup_network_note_classification(&self) -> Result<()> {
         let notes = self

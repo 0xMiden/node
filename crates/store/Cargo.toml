@@ -19,7 +19,7 @@ anyhow                 = { workspace = true }
 deadpool               = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
 deadpool-diesel        = { features = ["sqlite"], version = "0.6" }
 deadpool-sync          = { default-features = false, features = ["tracing"], version = "0.1" }
-diesel                 = { features = ["numeric", "sqlite", "returning_clauses_for_sqlite_3_35"], version = "2.3" }
+diesel                 = { features = ["numeric", "returning_clauses_for_sqlite_3_35", "sqlite"], version = "2.3" }
 diesel_migrations      = { features = ["sqlite"], version = "2.3" }
 fs-err                 = { workspace = true }
 hex                    = { version = "0.4" }
