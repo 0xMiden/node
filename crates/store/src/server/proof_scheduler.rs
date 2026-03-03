@@ -85,6 +85,11 @@ async fn run(
     info!(target: COMPONENT, "Proof scheduler started");
 
     loop {
+        // Capture the notify permit before retrieving unproven blocks from the database.
+        // This ensures that a notify fired between the database query and the wait on the permit
+        // will be captured; meaning we don't block unnecessarily until the next notify.
+        let notified = notify.notified();
+
         // Query all unproven blocks. This handles both startup recovery and new blocks.
         let unproven_blocks = match db.select_unproven_blocks().await {
             Ok(blocks) => blocks,
@@ -97,7 +102,7 @@ async fn run(
 
         // Wait for notify if there are no unproven blocks.
         if unproven_blocks.is_empty() {
-            notify.notified().await;
+            notified.await;
             continue;
         }
 
