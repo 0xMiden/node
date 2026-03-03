@@ -610,12 +610,12 @@ impl Db {
         .await
     }
 
-    /// Returns the serialized proving inputs for a given block number, if stored.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    /// Returns the proving inputs for a given block number, if stored.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_proving_inputs(
         &self,
         block_num: BlockNumber,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<BlockProofRequest>> {
         self.transact("select block proving inputs", move |conn| {
             models::queries::select_block_proving_inputs(conn, block_num)
         })

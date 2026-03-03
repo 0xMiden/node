@@ -241,7 +241,7 @@ pub(crate) fn insert_block_header(
     Ok(count)
 }
 
-/// Select the serialized proving inputs for a given block number.
+/// Select the proving inputs for a given block number.
 ///
 /// # Returns
 ///
@@ -257,13 +257,17 @@ pub(crate) fn insert_block_header(
 pub(crate) fn select_block_proving_inputs(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
-) -> Result<Option<Vec<u8>>, DatabaseError> {
+) -> Result<Option<BlockProofRequest>, DatabaseError> {
     let inputs: Option<Option<Vec<u8>>> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::proving_inputs)
             .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
             .get_result(conn)
             .optional()?;
-    Ok(inputs.flatten())
+    inputs
+        .flatten()
+        .map(|bytes| BlockProofRequest::read_from_bytes(&bytes))
+        .transpose()
+        .map_err(Into::into)
 }
 
 /// Mark a committed block as proven.

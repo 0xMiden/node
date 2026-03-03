@@ -17,9 +17,8 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use futures::stream::FuturesOrdered;
-use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Serializable;
 use miden_remote_prover_client::RemoteProverClientError;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -204,17 +203,13 @@ async fn prove_block(
     // Load proving inputs from the DB.
     // All committed blocks should have inputs apart from the genesis block, which should
     // never be queried by this function.
-    let bytes = db
+    let request = db
         .select_block_proving_inputs(block_num)
         .await
         .map_err(ProveBlockError::from)?
         .ok_or_else(|| {
             ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(block_num))
         })?;
-
-    // Deserialize proving inputs.
-    let request = BlockProofRequest::read_from_bytes(&bytes[..])
-        .map_err(|err| ProveBlockError::Fatal(ProofSchedulerError::DeserializationFailed(err)))?;
 
     // Prove the block.
     let proof = block_prover
