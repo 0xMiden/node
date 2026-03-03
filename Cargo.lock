@@ -3016,7 +3016,6 @@ dependencies = [
  "build-rs",
  "codegen",
  "fs-err",
- "futures",
  "hex",
  "http 1.4.0",
  "miden-node-grpc-error-macro",
