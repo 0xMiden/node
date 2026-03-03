@@ -13,6 +13,8 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use miden_crypto::merkle::mmr::Mmr;
+#[cfg(feature = "rocksdb")]
+use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbStorage};
 use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
@@ -23,11 +25,6 @@ use miden_protocol::{Felt, FieldElement, Word};
 #[cfg(feature = "rocksdb")]
 use tracing::info;
 use tracing::instrument;
-#[cfg(feature = "rocksdb")]
-use {
-    miden_crypto::merkle::smt::RocksDbStorage,
-    miden_protocol::crypto::merkle::smt::RocksDbConfig,
-};
 
 use crate::COMPONENT;
 use crate::db::Db;
@@ -365,7 +362,7 @@ pub async fn load_smt_forest(
         // Process each account in this page
         for account_id in page.account_ids {
             // TODO: Loading the full account from the database is inefficient and will need to
-            // go away. <https://github.com/0xMiden/miden-node/issues/1556>
+            // go away. <https://github.com/0xMiden/node/issues/1556>
             let account_info = db.select_account(account_id).await?;
             let account = account_info
                 .details

@@ -14,6 +14,7 @@ use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::utils::{Deserializable, Serializable};
 use miden_tx::{LocalTransactionProver, TransactionVerifier};
 use miden_tx_batch_prover::LocalBatchProver;
+use serial_test::serial;
 
 use crate::generated::api_client::ApiClient;
 use crate::generated::{Proof, ProofRequest, ProofType};
@@ -174,6 +175,7 @@ impl Server {
 ///
 /// Create a server with a capacity of one and submit two requests. Ensure
 /// that one succeeds and one fails with a resource exhaustion error.
+#[serial]
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_behaviour_with_capacity_1() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
@@ -199,6 +201,46 @@ async fn legacy_behaviour_with_capacity_1() {
     // We also expect that the error is a resource exhaustion error.
     let err = first.err().or(second.err()).unwrap();
     assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+
+    server.abort();
+}
+
+/// Test that multiple requests can be queued and capacity is respected.
+///
+/// Create a server with a capacity of two and submit three requests. Ensure
+/// that two succeed and one fails with a resource exhaustion error.
+#[ignore = "Proving 3 requests concurrently causes temporary CI resource starvation which results in _sporadic_ timeouts"]
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn capacity_is_respected() {
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
+        .with_capacity(2)
+        .spawn()
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    let mut client_a = Client::connect(port).await;
+    let mut client_b = client_a.clone();
+    let mut client_c = client_a.clone();
+
+    let a = client_a.submit_request(request.clone());
+    let b = client_b.submit_request(request.clone());
+    let c = client_c.submit_request(request);
+
+    let (first, second, third) = tokio::join!(a, b, c);
+
+    // We cannot know which got served and which got rejected.
+    // We can only assert that two succeeded and one failed.
+    let mut expected = [true, true, false];
+    let mut result = [first.is_ok(), second.is_ok(), third.is_ok()];
+    expected.sort_unstable();
+    result.sort_unstable();
+    assert_eq!(expected, result);
+
+    assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
+        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+    });
 
     server.abort();
 }
@@ -293,6 +335,7 @@ async fn unsupported_proof_kind_is_rejected() {
 ///
 /// The proof is verified and the transaction IDs of request and response must correspond.
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn transaction_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn()
@@ -317,6 +360,7 @@ async fn transaction_proof_is_correct() {
 /// The proof is replicated locally, which ensures that the gRPC codec and server code do the
 /// correct thing.
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn batch_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
         .spawn()
