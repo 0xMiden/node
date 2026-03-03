@@ -26,7 +26,6 @@ miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["tx-prover"], workspace = true }
 miden-standards            = { workspace = true }
 miden-tx                   = { default-features = true, workspace = true }
-prost                      = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["rt-multi-thread"], workspace = true }
 tokio-stream               = { workspace = true }
