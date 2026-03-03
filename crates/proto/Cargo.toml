@@ -16,7 +16,6 @@ workspace = true
 
 [dependencies]
 anyhow                      = { workspace = true }
-futures                     = { workspace = true }
 hex                         = { version = "0.4" }
 http                        = { workspace = true }
 miden-node-grpc-error-macro = { workspace = true }
