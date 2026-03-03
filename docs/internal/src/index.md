@@ -14,6 +14,6 @@ It is also a good idea to familiarise yourself with the [operator manual](https:
 Living documents go stale - the code is the final arbitrator of truth.
 
 If you encounter any outdated, incorrect or misleading information, please
-[open an issue](https://github.com/0xMiden/miden-node/issues/new/choose).
+[open an issue](https://github.com/0xMiden/node/issues/new/choose).
 
 </div>
