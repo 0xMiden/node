@@ -232,10 +232,10 @@ impl Service {
     ///
     /// ```rust
     /// trait <Self::name()Service>:
-    ///   GrpcUnary<Self::method[0]::marker_struct> +
-    ///   GrpcUnary<Self::method[1]::marker_struct> +
+    ///   method[0]::trait() +
+    ///   method[1]::trait() +
     ///   ...
-    ///   GrpcUnary<Self::method[N]::marker_struct>,
+    ///   method[N]::trait(),
     /// {}
     /// ```
     fn service_trait(&self) -> Trait {
@@ -255,10 +255,10 @@ impl Service {
     /// ```rust
     /// impl<T> <Self::service_trait()> for T
     /// where T:
-    ///   GrpcUnary<Self::method[0]::marker_struct> +
-    ///   GrpcUnary<Self::method[1]::marker_struct> +
+    ///   method[0]::trait() +
+    ///   method[1]::trait() +
     ///   ...
-    ///   GrpcUnary<Self::method[N]::marker_struct>,
+    ///   method[N]::trait(),
     /// {}
     /// ```
     fn blanket_impl(&self) -> Impl {
@@ -272,6 +272,22 @@ impl Service {
         ret
     }
 
+    /// Blanket implementation for all T that implement our service trait, for the tonic generated
+    /// trait.
+    ///
+    /// ```rust
+    /// #[tonic::async_trait]
+    /// impl<T> tonic::generated::service_trait for T
+    /// where T:
+    ///     <Self::service_trait()> + Send + Sync + 'static {
+    ///
+    ///     async fn tonic_method[0](request) -> response {
+    ///         <T as method[0].trait>::full(self, request.into_inner()).await.map(tonic::Response::new)
+    ///     }
+    ///
+    ///     ...
+    /// }
+    /// ```
     fn tonic_impl(&self) -> Impl {
         let tonic_path = format!(
             "crate::generated::{}::{}_server::{}",
@@ -312,6 +328,15 @@ impl UnaryMethod {
         Self { name, request, response }
     }
 
+    /// Function invoking the method handler and mapping from/to tonic's request/response.
+    ///
+    /// ```rust
+    /// async fn <Method::name::snake_case>(
+    ///     request: tonic::Request<<Method::request>>,
+    /// ) -> tonic::Result<tonic::Response<<Method::response>>> {
+    ///     <T as <<Method::name>>::full(self, request.into_inner()).await.map(tonic::Response::new)
+    /// }
+    /// ```
     fn tonic_impl(&self) -> Function {
         let mut ret = Function::new(to_snake_case(&self.name));
         ret.set_async(true)
@@ -326,6 +351,27 @@ impl UnaryMethod {
         ret
     }
 
+    /// This method's trait definition.
+    ///
+    /// ```rust
+    /// trait <Method::name> {
+    ///     type Input;
+    ///     type Output;
+    ///
+    ///     fn decode(request: <Method::request>) -> tonic::Result<Self::Input>;
+    ///     fn encode(output: Self::Output) -> tonic::Result<Method::response>;
+    ///     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output>;
+    ///
+    ///     async fn full(
+    ///         &self,
+    ///         request: <Method::Request>,
+    ///     ) -> tonic::Result<<Method::response>> {
+    ///         let input = Self::decode(request)?;
+    ///         let output = self.handle(input).await?;
+    ///         Self::encode(output)
+    ///     }
+    /// }
+    // /// ```
     fn as_trait(&self) -> Trait {
         let mut ret = Trait::new(&self.name);
         ret.vis("pub");
