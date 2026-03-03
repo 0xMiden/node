@@ -110,7 +110,7 @@ async fn run(
             match timeout_result {
                 // Store successful proofs.
                 Ok((block_num, proof)) => {
-                    db.insert_block_proof(block_num, &proof)
+                    db.insert_block_proof(block_num, proof)
                         .await
                         .map_err(ProofSchedulerError::PersistFailed)?;
                 },

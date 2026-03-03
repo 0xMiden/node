@@ -596,11 +596,11 @@ impl Db {
     pub async fn insert_block_proof(
         &self,
         block_num: BlockNumber,
-        block_proof: &BlockProof,
+        block_proof: BlockProof,
     ) -> Result<()> {
         let block_proof = block_proof.clone();
         self.transact("insert block proof", move |conn| {
-            models::queries::insert_block_proof(conn, block_num, &block_proof)
+            models::queries::insert_block_proof(conn, block_num, block_proof)
         })
         .await?;
         Ok(())

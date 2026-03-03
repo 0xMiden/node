@@ -282,13 +282,13 @@ pub(crate) fn select_block_proving_inputs(
 pub(crate) fn insert_block_proof(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
-    block_proof: &BlockProof,
+    block_proof: BlockProof,
 ) -> Result<usize, DatabaseError> {
     let count = diesel::update(
         schema::block_headers::table
             .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
     )
-    .set(schema::block_headers::block_proof.eq(block_proof.to_bytes()))
+    .set(schema::block_headers::block_proof.eq(block_proof.to_raw_sql()))
     .execute(conn)?;
     Ok(count)
 }
@@ -371,7 +371,7 @@ pub(crate) fn select_block_proof(
             .optional()?;
     // Flatten: None (row not found) or Some(None) (proof is NULL) => None.
     match proof_bytes.flatten() {
-        Some(bytes) => Ok(Some(BlockProof::read_from_bytes(&bytes[..])?)),
+        Some(bytes) => Ok(Some(BlockProof::from_raw_sql(bytes)?)),
         None => Ok(None),
     }
 }
