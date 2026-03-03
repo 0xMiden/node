@@ -24,8 +24,8 @@ The full gRPC method definitions can be found in the [proto](../proto/README.md)
 - [SubmitProvenTransaction](#submitproventransaction)
 - [SyncAccountVault](#SyncAccountVault)
 - [SyncNotes](#syncnotes)
-- [SyncState](#syncstate)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
+- [SyncChainMmr](#syncchainmmr)
 - [SyncTransactions](#synctransactions)
 
 <!--toc:end-->
@@ -215,25 +215,6 @@ When note synchronization fails, detailed error information is provided through 
 
 ---
 
-### SyncState
-
-Returns info which can be used by the client to sync up to the latest state of the chain for the objects (accounts and
-notes) the client is interested in.
-
-**Limits:** `account_id` (1000), `note_tag` (1000)
-
-This request returns the next block containing requested data. It also returns `chain_tip` which is the latest block
-number in the chain. Client is expected to repeat these requests in a loop until
-`response.block_header.block_num == response.chain_tip`, at which point the client is fully synchronized with the chain.
-
-Each request also returns info about new notes, accounts, etc. created. It also returns Chain MMR delta that can be
-used to update the state of Chain MMR. This includes both chain MMR peaks and chain MMR nodes.
-
-For preserving some degree of privacy, note tags contain only high part of hashes. Thus, returned data contains excessive
-notes, client can make additional filtering of that data on its side.
-
----
-
 ### SyncAccountStorageMaps
 
 Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
@@ -253,6 +234,14 @@ When storage map synchronization fails, detailed error information is provided t
 | `INVALID_BLOCK_RANGE`     | 2     | `INVALID_ARGUMENT` | Invalid block range parameters        |
 | `ACCOUNT_NOT_FOUND`       | 3     | `NOT_FOUND`        | Account ID does not exist             |
 | `ACCOUNT_NOT_PUBLIC`      | 4     | `INVALID_ARGUMENT` | Account storage not publicly accessible |
+
+---
+
+### SyncChainMmr
+
+Returns MMR delta information needed to synchronize the chain MMR within a block range.
+
+Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range along with pagination info so the caller can continue syncing until the chain tip.
 
 ---
 

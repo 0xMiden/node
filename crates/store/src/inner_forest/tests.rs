@@ -447,7 +447,8 @@ fn test_storage_map_incremental_updates() {
 
 #[test]
 fn test_empty_storage_map_entries_query() {
-    use miden_protocol::account::auth::PublicKeyCommitment;
+    use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
+    use miden_protocol::account::component::AccountComponentMetadata;
     use miden_protocol::account::{
         AccountBuilder,
         AccountComponent,
@@ -456,7 +457,7 @@ fn test_empty_storage_map_entries_query() {
         StorageMap,
         StorageSlot,
     };
-    use miden_standards::account::auth::AuthFalcon512Rpo;
+    use miden_standards::account::auth::AuthSingleSig;
     use miden_standards::code_builder::CodeBuilder;
 
     let mut forest = InnerForest::new();
@@ -470,15 +471,21 @@ fn test_empty_storage_map_entries_query() {
     let component_code = CodeBuilder::default()
         .compile_component_code("test::interface", "pub proc test push.1 end")
         .unwrap();
-    let account_component = AccountComponent::new(component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        component_code,
+        component_storage,
+        AccountComponentMetadata::new("test").with_supports_all_types(),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
         .build_existing()
         .unwrap();
 

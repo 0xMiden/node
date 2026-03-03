@@ -3,7 +3,14 @@ use std::ops::RangeInclusive;
 
 use miden_protocol::account::AccountId;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, FeeParameters};
+use miden_protocol::block::{
+    BlockBody,
+    BlockHeader,
+    BlockInputs,
+    BlockNumber,
+    FeeParameters,
+    SignedBlock,
+};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
@@ -112,6 +119,84 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
             )?)?,
             value.timestamp,
         ))
+    }
+}
+
+// BLOCK BODY
+// ================================================================================================
+
+impl From<&BlockBody> for proto::blockchain::BlockBody {
+    fn from(body: &BlockBody) -> Self {
+        Self { block_body: body.to_bytes() }
+    }
+}
+
+impl From<BlockBody> for proto::blockchain::BlockBody {
+    fn from(body: BlockBody) -> Self {
+        (&body).into()
+    }
+}
+
+impl TryFrom<&proto::blockchain::BlockBody> for BlockBody {
+    type Error = ConversionError;
+
+    fn try_from(value: &proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
+        value.try_into()
+    }
+}
+
+impl TryFrom<proto::blockchain::BlockBody> for BlockBody {
+    type Error = ConversionError;
+    fn try_from(value: proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
+        BlockBody::read_from_bytes(&value.block_body)
+            .map_err(|source| ConversionError::deserialization_error("BlockBody", source))
+    }
+}
+
+// SIGNED BLOCK
+// ================================================================================================
+
+impl From<&SignedBlock> for proto::blockchain::SignedBlock {
+    fn from(block: &SignedBlock) -> Self {
+        Self {
+            header: Some(block.header().into()),
+            body: Some(block.body().into()),
+            signature: Some(block.signature().into()),
+        }
+    }
+}
+
+impl From<SignedBlock> for proto::blockchain::SignedBlock {
+    fn from(block: SignedBlock) -> Self {
+        (&block).into()
+    }
+}
+
+impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
+    type Error = ConversionError;
+
+    fn try_from(value: &proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
+        value.try_into()
+    }
+}
+
+impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
+    type Error = ConversionError;
+    fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
+        let header = value
+            .header
+            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(header)))?
+            .try_into()?;
+        let body = value
+            .body
+            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(body)))?
+            .try_into()?;
+        let signature = value
+            .signature
+            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(signature)))?
+            .try_into()?;
+
+        Ok(SignedBlock::new_unchecked(header, body, signature))
     }
 }
 

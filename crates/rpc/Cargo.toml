@@ -38,10 +38,10 @@ url                    = { workspace = true }
 
 [dev-dependencies]
 miden-air        = { features = ["testing"], workspace = true }
-miden-node-store = { workspace = true }
+miden-node-store = { features = ["rocksdb"], workspace = true }
 miden-node-utils = { features = ["testing", "tracing-forest"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
 miden-standards  = { workspace = true }
-reqwest          = { version = "0.12" }
+reqwest          = { workspace = true }
 rstest           = { workspace = true }
-tempfile         = { version = "3.20" }
+tempfile         = { workspace = true }

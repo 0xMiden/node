@@ -152,8 +152,13 @@ impl RpcService {
     }
 }
 
+// API IMPLEMENTATION
+// ================================================================================================
+
 #[tonic::async_trait]
 impl api_server::Api for RpcService {
+    // -- Nullifier endpoints -----------------------------------------------------------------
+
     async fn check_nullifiers(
         &self,
         request: Request<proto::rpc::NullifierList>,
@@ -183,6 +188,8 @@ impl api_server::Api for RpcService {
         self.store.clone().sync_nullifiers(request).await
     }
 
+    // -- Block endpoints ---------------------------------------------------------------------
+
     async fn get_block_header_by_number(
         &self,
         request: Request<proto::rpc::BlockHeaderByNumberRequest>,
@@ -192,26 +199,27 @@ impl api_server::Api for RpcService {
         self.store.clone().get_block_header_by_number(request).await
     }
 
-    async fn sync_state(
+    async fn get_block_by_number(
         &self,
-        request: Request<proto::rpc::SyncStateRequest>,
-    ) -> Result<Response<proto::rpc::SyncStateResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request.get_ref());
+        request: Request<proto::blockchain::BlockNumber>,
+    ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
+        let request = request.into_inner();
 
-        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
-        check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
+        debug!(target: COMPONENT, ?request);
 
-        self.store.clone().sync_state(request).await
+        self.store.clone().get_block_by_number(request).await
     }
 
-    async fn sync_account_storage_maps(
+    async fn sync_chain_mmr(
         &self,
-        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
-    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_account_storage_maps(request).await
+        self.store.clone().sync_chain_mmr(request).await
     }
+
+    // -- Note endpoints ----------------------------------------------------------------------
 
     async fn sync_notes(
         &self,
@@ -245,6 +253,26 @@ impl api_server::Api for RpcService {
         self.store.clone().get_notes_by_id(request).await
     }
 
+    async fn get_note_script_by_root(
+        &self,
+        request: Request<proto::note::NoteScriptRoot>,
+    ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
+        debug!(target: COMPONENT, request = ?request);
+
+        self.store.clone().get_note_script_by_root(request).await
+    }
+
+    // -- Account endpoints -------------------------------------------------------------------
+
+    async fn sync_account_storage_maps(
+        &self,
+        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
+    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request.get_ref());
+
+        self.store.clone().sync_account_storage_maps(request).await
+    }
+
     async fn sync_account_vault(
         &self,
         request: tonic::Request<proto::rpc::SyncAccountVaultRequest>,
@@ -255,6 +283,41 @@ impl api_server::Api for RpcService {
         self.store.clone().sync_account_vault(request).await
     }
 
+    /// Validates storage map key limits before forwarding the account request to the store.
+    async fn get_account(
+        &self,
+        request: Request<proto::rpc::AccountRequest>,
+    ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
+        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
+            SlotData::AllEntries as ProtoMapAllEntries, SlotData::MapKeys as ProtoMapKeys,
+        };
+
+        let request = request.into_inner();
+
+        debug!(target: COMPONENT, ?request);
+
+        // Validate total storage map key limit before forwarding to store
+        if let Some(details) = &request.details {
+            let total_keys: usize = details
+                .storage_maps
+                .iter()
+                .filter_map(|m| m.slot_data.as_ref())
+                .filter_map(|d| match d {
+                    ProtoMapKeys(keys) => Some(keys.map_keys.len()),
+                    ProtoMapAllEntries(_) => None,
+                })
+                .sum();
+            check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
+        }
+
+        self.store.clone().get_account(request).await
+    }
+
+    // -- Transaction submission --------------------------------------------------------------
+
+    /// Deserializes and rebuilds the transaction with MAST decorators stripped from output note
+    /// scripts, verifies the transaction proof, optionally re-executes via the validator if
+    /// transaction inputs are provided, then forwards the transaction to the block producer.
     async fn submit_proven_transaction(
         &self,
         request: Request<proto::transaction::ProvenTransaction>,
@@ -288,18 +351,7 @@ impl api_server::Api for RpcService {
         .account_update_details(tx.account_update().details().clone())
         .add_input_notes(tx.input_notes().iter().cloned());
 
-        let stripped_outputs = tx.output_notes().iter().map(|note| match note {
-            OutputNote::Full(note) => {
-                let mut mast = note.script().mast().clone();
-                Arc::make_mut(&mut mast).strip_decorators();
-                let script = NoteScript::from_parts(mast, note.script().entrypoint());
-                let recipient =
-                    NoteRecipient::new(note.serial_num(), script, note.inputs().clone());
-                let new_note = Note::new(note.assets().clone(), note.metadata().clone(), recipient);
-                OutputNote::Full(new_note)
-            },
-            other => other.clone(),
-        });
+        let stripped_outputs = strip_output_note_decorators(tx.output_notes().iter());
         builder = builder.add_output_notes(stripped_outputs);
         let rebuilt_tx = builder.build().map_err(|e| Status::invalid_argument(e.to_string()))?;
         let mut request = request;
@@ -333,6 +385,8 @@ impl api_server::Api for RpcService {
         block_producer.clone().submit_proven_transaction(request).await
     }
 
+    /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
+    /// the batch, then forwards it to the block producer.
     async fn submit_proven_batch(
         &self,
         request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
@@ -347,23 +401,8 @@ impl api_server::Api for RpcService {
             .map_err(|err| Status::invalid_argument(err.as_report_context("invalid batch")))?;
 
         // Build a new batch with output notes' decorators removed
-        let stripped_outputs: Vec<OutputNote> = batch
-            .output_notes()
-            .iter()
-            .map(|note| match note {
-                OutputNote::Full(note) => {
-                    let mut mast = note.script().mast().clone();
-                    Arc::make_mut(&mut mast).strip_decorators();
-                    let script = NoteScript::from_parts(mast, note.script().entrypoint());
-                    let recipient =
-                        NoteRecipient::new(note.serial_num(), script, note.inputs().clone());
-                    let new_note =
-                        Note::new(note.assets().clone(), note.metadata().clone(), recipient);
-                    OutputNote::Full(new_note)
-                },
-                other => other.clone(),
-            })
-            .collect();
+        let stripped_outputs: Vec<OutputNote> =
+            strip_output_note_decorators(batch.output_notes().iter()).collect();
 
         let rebuilt_batch = ProvenBatch::new(
             batch.id(),
@@ -391,45 +430,17 @@ impl api_server::Api for RpcService {
         block_producer.clone().submit_proven_batch(request).await
     }
 
-    async fn get_block_by_number(
+    // -- Status & utility endpoints ----------------------------------------------------------
+
+    async fn sync_transactions(
         &self,
-        request: Request<proto::blockchain::BlockNumber>,
-    ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
-        let request = request.into_inner();
+        request: Request<proto::rpc::SyncTransactionsRequest>,
+    ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request);
 
-        debug!(target: COMPONENT, ?request);
+        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
 
-        self.store.clone().get_block_by_number(request).await
-    }
-
-    async fn get_account(
-        &self,
-        request: Request<proto::rpc::AccountRequest>,
-    ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
-        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
-            SlotData::MapKeys as ProtoMapKeys,
-            SlotData::AllEntries as ProtoMapAllEntries
-        };
-
-        let request = request.into_inner();
-
-        debug!(target: COMPONENT, ?request);
-
-        // Validate total storage map key limit before forwarding to store
-        if let Some(details) = &request.details {
-            let total_keys: usize = details
-                .storage_maps
-                .iter()
-                .filter_map(|m| m.slot_data.as_ref())
-                .filter_map(|d| match d {
-                    ProtoMapKeys(keys) => Some(keys.map_keys.len()),
-                    ProtoMapAllEntries(_) => None,
-                })
-                .sum();
-            check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
-        }
-
-        self.store.clone().get_account(request).await
+        self.store.clone().sync_transactions(request).await
     }
 
     async fn status(
@@ -468,24 +479,6 @@ impl api_server::Api for RpcService {
         }))
     }
 
-    async fn get_note_script_by_root(
-        &self,
-        request: Request<proto::note::NoteRoot>,
-    ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
-        debug!(target: COMPONENT, request = ?request);
-
-        self.store.clone().get_note_script_by_root(request).await
-    }
-
-    async fn sync_transactions(
-        &self,
-        request: Request<proto::rpc::SyncTransactionsRequest>,
-    ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request);
-
-        self.store.clone().sync_transactions(request).await
-    }
-
     async fn get_limits(
         &self,
         request: Request<()>,
@@ -494,6 +487,29 @@ impl api_server::Api for RpcService {
 
         Ok(Response::new(RPC_LIMITS.clone()))
     }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Strips decorators from full output notes' scripts.
+///
+/// This removes MAST decorators from note scripts before forwarding to the block producer,
+/// as decorators are not needed for transaction processing.
+fn strip_output_note_decorators<'a>(
+    notes: impl Iterator<Item = &'a OutputNote> + 'a,
+) -> impl Iterator<Item = OutputNote> + 'a {
+    notes.map(|note| match note {
+        OutputNote::Full(note) => {
+            let mut mast = note.script().mast().clone();
+            Arc::make_mut(&mut mast).strip_decorators();
+            let script = NoteScript::from_parts(mast, note.script().entrypoint());
+            let recipient = NoteRecipient::new(note.serial_num(), script, note.storage().clone());
+            let new_note = Note::new(note.assets().clone(), note.metadata().clone(), recipient);
+            OutputNote::Full(new_note)
+        },
+        other => other.clone(),
+    })
 }
 
 // LIMIT HELPERS
@@ -505,7 +521,6 @@ fn out_of_range_error<E: core::fmt::Display>(err: E) -> Status {
 }
 
 /// Check, but don't repeat ourselves mapping the error
-#[allow(clippy::result_large_err)]
 fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
@@ -519,13 +534,11 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
-    use {
-        QueryParamAccountIdLimit as AccountId,
-        QueryParamNoteIdLimit as NoteId,
-        QueryParamNoteTagLimit as NoteTag,
-        QueryParamNullifierLimit as Nullifier,
-        QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal,
-    };
+    use QueryParamAccountIdLimit as AccountId;
+    use QueryParamNoteIdLimit as NoteId;
+    use QueryParamNoteTagLimit as NoteTag;
+    use QueryParamNullifierLimit as Nullifier;
+    use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([
@@ -538,11 +551,8 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
                 endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
             ),
             (
-                "SyncState".into(),
-                endpoint_limits(&[
-                    (AccountId::PARAM_NAME, AccountId::LIMIT),
-                    (NoteTag::PARAM_NAME, NoteTag::LIMIT),
-                ]),
+                "SyncTransactions".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),

@@ -37,7 +37,7 @@ pub type PersistentAccountTree = AccountTree<LargeSmt<miden_crypto::merkle::smt:
 // HISTORICAL ERROR TYPES
 // ================================================================================================
 
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 #[derive(thiserror::Error, Debug)]
 pub enum HistoricalError {
     #[error(transparent)]

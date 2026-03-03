@@ -27,67 +27,7 @@ use super::DatabaseError;
 use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
-use crate::db::{TransactionSummary, schema};
-
-/// Select transactions for given accounts in a specified block range
-///
-/// # Parameters
-/// * `account_ids`: List of account IDs to filter by
-///     - Limit: 0 <= size <= 1000
-/// * `block_range`: Range of blocks to include inclusive
-///
-/// # Returns
-///
-/// A vector of [`TransactionSummary`] types or an error.
-///
-/// # Raw SQL
-/// ```sql
-/// SELECT
-///     account_id,
-///     block_num,
-///     transaction_id
-/// FROM
-///     transactions
-/// WHERE
-///     block_num > ?1 AND
-///     block_num <= ?2 AND
-///     account_id IN (?3)
-/// ORDER BY
-///     transaction_id ASC
-/// ```
-pub fn select_transactions_by_accounts_and_block_range(
-    conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<Vec<TransactionSummary>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
-
-    let desired_account_ids = serialize_vec(account_ids);
-    let raw = SelectDsl::select(
-        schema::transactions::table,
-        (
-            schema::transactions::account_id,
-            schema::transactions::block_num,
-            schema::transactions::transaction_id,
-        ),
-    )
-    .filter(schema::transactions::block_num.gt(block_range.start().to_raw_sql()))
-    .filter(schema::transactions::block_num.le(block_range.end().to_raw_sql()))
-    .filter(schema::transactions::account_id.eq_any(desired_account_ids))
-    .order(schema::transactions::transaction_id.asc())
-    .load::<TransactionSummaryRaw>(conn)
-    .map_err(DatabaseError::from)?;
-    vec_raw_try_into(raw)
-}
-
-#[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
-#[diesel(table_name = schema::transactions)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct TransactionSummaryRaw {
-    account_id: Vec<u8>,
-    block_num: i64,
-    transaction_id: Vec<u8>,
-}
+use crate::db::schema;
 
 #[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
 #[diesel(table_name = schema::transactions)]
@@ -101,17 +41,6 @@ pub struct TransactionRecordRaw {
     nullifiers: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
-}
-
-impl TryInto<crate::db::TransactionSummary> for TransactionSummaryRaw {
-    type Error = DatabaseError;
-    fn try_into(self) -> Result<crate::db::TransactionSummary, Self::Error> {
-        Ok(crate::db::TransactionSummary {
-            account_id: AccountId::read_from_bytes(&self.account_id[..])?,
-            block_num: BlockNumber::from_raw_sql(self.block_num)?,
-            transaction_id: TransactionId::read_from_bytes(&self.transaction_id[..])?,
-        })
-    }
 }
 
 impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
@@ -150,7 +79,6 @@ impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -161,10 +89,9 @@ pub(crate) fn insert_transactions(
     block_num: BlockNumber,
     transactions: &OrderedTransactionHeaders,
 ) -> Result<usize, DatabaseError> {
-    #[allow(clippy::into_iter_on_ref)] // false positive
     let rows: Vec<_> = transactions
         .as_slice()
-        .into_iter()
+        .iter()
         .map(|tx| TransactionSummaryRowInsert::new(tx, block_num))
         .collect();
 
@@ -187,7 +114,7 @@ pub struct TransactionSummaryRowInsert {
 }
 
 impl TransactionSummaryRowInsert {
-    #[allow(
+    #[expect(
         clippy::cast_possible_wrap,
         reason = "We will not approach the item count where i64 and usize cause issues"
     )]
@@ -197,11 +124,25 @@ impl TransactionSummaryRowInsert {
     ) -> Self {
         const HEADER_BASE_SIZE: usize = 4 + 32 + 16 + 64; // block_num + tx_id + account_id + commitments
 
-        // Serialize input notes using binary format (store nullifiers)
-        let nullifiers_binary = transaction_header.input_notes().to_bytes();
+        // Extract nullifiers from input notes and serialize them.
+        // We only store the nullifiers (not the full `InputNoteCommitment`) since
+        // that's all that's needed when reading back `TransactionRecords`.
+        let nullifiers: Vec<Nullifier> = transaction_header
+            .input_notes()
+            .iter()
+            .map(miden_protocol::transaction::InputNoteCommitment::nullifier)
+            .collect();
+        let nullifiers_binary = nullifiers.to_bytes();
 
-        // Serialize output notes using binary format (store note IDs)
-        let output_notes_binary = transaction_header.output_notes().to_bytes();
+        // Extract note IDs from output note headers and serialize them.
+        // We only store the `NoteId`s (not the full `NoteHeader` with metadata) since
+        // that's all that's needed when reading back `TransactionRecords`.
+        let output_note_ids: Vec<NoteId> = transaction_header
+            .output_notes()
+            .iter()
+            .map(miden_protocol::note::NoteHeader::id)
+            .collect();
+        let output_notes_binary = output_note_ids.to_bytes();
 
         // Manually calculate the estimated size of the transaction header to avoid
         // the cost of serialization. The size estimation includes:
@@ -341,24 +282,18 @@ pub fn select_transactions_records(
 
         // Add transactions from this chunk one by one until we hit the limit
         let mut added_from_chunk = 0;
-        let mut last_added_tx: Option<TransactionRecordRaw> = None;
 
         for tx in chunk {
             if total_size + tx.size_in_bytes <= max_payload_bytes {
                 total_size += tx.size_in_bytes;
-                last_added_tx = Some(tx);
+                last_block_num = Some(tx.block_num);
+                last_transaction_id = Some(tx.transaction_id.clone());
+                all_transactions.push(tx);
                 added_from_chunk += 1;
             } else {
                 // Can't fit this transaction, stop here
                 break;
             }
-        }
-
-        // Update cursor position only for the last transaction that was actually added
-        if let Some(tx) = last_added_tx {
-            last_block_num = Some(tx.block_num);
-            last_transaction_id = Some(tx.transaction_id.clone());
-            all_transactions.push(tx);
         }
 
         // Break if chunk incomplete (size limit hit or data exhausted)

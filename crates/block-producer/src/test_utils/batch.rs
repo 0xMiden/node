@@ -66,7 +66,7 @@ impl TransactionBatchConstructor for ProvenBatch {
             account_updates,
             InputNotes::new_unchecked(input_notes),
             output_notes,
-            BlockNumber::from(u32::MAX),
+            BlockNumber::MAX,
             OrderedTransactionHeaders::new_unchecked(
                 txs.into_iter().map(TransactionHeader::from).collect(),
             ),

@@ -76,7 +76,7 @@ impl SeedingMetrics {
     }
 
     /// Prints the block metrics table.
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     fn print_block_metrics(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "\nBlock metrics:")?;
         writeln!(f, "Note: Each block contains 256 transactions (16 batches * 16 transactions).")?;
@@ -189,7 +189,7 @@ impl SeedingMetrics {
 }
 
 impl Display for SeedingMetrics {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,

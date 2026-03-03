@@ -11,22 +11,24 @@ use miden_node_proto_build::{
     store_rpc_api_descriptor,
 };
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::block::BlockSigner;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
 use tracing::{info, instrument};
+use url::Url;
 
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::ApplyBlockError;
 use crate::state::State;
-use crate::{COMPONENT, GenesisState};
+use crate::{BlockProver, COMPONENT, GenesisState};
 
 mod api;
 mod block_producer;
+pub mod block_prover_client;
 mod ntx_builder;
 mod rpc_api;
 
@@ -35,6 +37,8 @@ pub struct Store {
     pub rpc_listener: TcpListener,
     pub ntx_builder_listener: TcpListener,
     pub block_producer_listener: TcpListener,
+    /// URL for the Block Prover client. Uses local prover if `None`.
+    pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
     /// Server-side timeout for an individual gRPC request.
     ///
@@ -50,12 +54,13 @@ impl Store {
         skip_all,
         err,
     )]
-    pub fn bootstrap<S: BlockSigner>(
+    pub async fn bootstrap<S: BlockSigner>(
         genesis: GenesisState<S>,
         data_directory: &Path,
     ) -> anyhow::Result<()> {
         let genesis = genesis
             .into_block()
+            .await
             .context("failed to convert genesis configuration into the genesis block")?;
 
         let data_directory =
@@ -100,14 +105,25 @@ impl Store {
                 .context("failed to load state")?,
         );
 
-        let rpc_service =
-            store::rpc_server::RpcServer::new(api::StoreApi { state: Arc::clone(&state) });
+        // Initialize local or remote block prover.
+        let block_prover = if let Some(url) = self.block_prover_url {
+            Arc::new(BlockProver::remote(url))
+        } else {
+            Arc::new(BlockProver::local())
+        };
+
+        let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
+            state: Arc::clone(&state),
+            block_prover: Arc::clone(&block_prover),
+        });
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
             state: Arc::clone(&state),
+            block_prover: Arc::clone(&block_prover),
         });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
+                block_prover: Arc::clone(&block_prover),
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())

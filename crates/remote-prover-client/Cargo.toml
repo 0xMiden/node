@@ -21,9 +21,9 @@ std          = ["miden-protocol/std", "miden-tx/std"]
 tx-prover    = ["dep:miden-protocol", "dep:miden-tx", "dep:tokio"]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom             = { features = ["wasm_js"], version = "0.3" }
+getrandom             = { features = ["wasm_js"], version = "0.4" }
 tonic                 = { features = ["codegen"], workspace = true }
-tonic-web-wasm-client = { default-features = false, version = "0.8" }
+tonic-web-wasm-client = { default-features = false, version = "0.9" }
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 tonic     = { features = ["codegen", "tls-native-roots", "tls-ring", "transport"], workspace = true }
@@ -41,7 +41,14 @@ tokio          = { default-features = false, features = ["sync"], optional = tru
 tonic-prost    = { workspace = true }
 
 [build-dependencies]
+build-rs               = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { workspace = true }
 miette                 = { features = ["fancy"], version = "7.5" }
 tonic-prost-build      = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = [
+  "prost",
+  "tonic-prost", # used in generated OUT_DIR code
+]

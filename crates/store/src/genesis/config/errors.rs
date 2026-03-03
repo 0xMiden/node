@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use miden_protocol::account::AccountId;
 use miden_protocol::errors::{
     AccountDeltaError,
@@ -12,18 +14,25 @@ use miden_standards::account::wallets::BasicWalletError;
 
 use crate::genesis::config::TokenSymbolStr;
 
-#[allow(missing_docs, reason = "Error variants must be descriptive by themselves")]
 #[derive(Debug, thiserror::Error)]
 pub enum GenesisConfigError {
     #[error(transparent)]
     Toml(#[from] toml::de::Error),
+    #[error("failed to read config file at {1}")]
+    ConfigFileRead(#[source] std::io::Error, PathBuf),
+    #[error("failed to read account file at {1}")]
+    AccountFileRead(#[source] std::io::Error, PathBuf),
+    #[error("native faucet from file {path} is not a fungible faucet")]
+    NativeFaucetNotFungible { path: PathBuf },
     #[error("account translation from config to state failed")]
     Account(#[from] AccountError),
     #[error("asset translation from config to state failed")]
     Asset(#[from] AssetError),
     #[error("adding assets to account failed")]
     AccountDelta(#[from] AccountDeltaError),
-    #[error("the defined asset {symbol:?} has no corresponding faucet")]
+    #[error(
+        "the defined asset '{symbol}' has no corresponding faucet, or the faucet was provided as an account file"
+    )]
     MissingFaucetDefinition { symbol: TokenSymbolStr },
     #[error("account with id {account_id} was referenced but is not part of given genesis state")]
     MissingGenesisAccount { account_id: AccountId },
@@ -41,10 +50,10 @@ pub enum GenesisConfigError {
     BasicWallet(#[from] BasicWalletError),
     #[error(r#"incompatible combination of `max_supply` ({max_supply})" and `decimals` ({decimals}) exceeding the allowed value range of an `u64`"#)]
     OutOfRange { max_supply: u64, decimals: u8 },
-    #[error("Found duplicate faucet definition for token symbol {symbol:?}")]
+    #[error("Found duplicate faucet definition for token symbol '{symbol}'")]
     DuplicateFaucetDefinition { symbol: TokenSymbolStr },
     #[error(
-        "Total issuance {total_issuance} of {symbol:?} exceeds faucet's maximum issuance of {max_supply}"
+        "Total issuance {total_issuance} of '{symbol}' exceeds faucet's maximum issuance of {max_supply}"
     )]
     MaxIssuanceExceeded {
         symbol: TokenSymbolStr,

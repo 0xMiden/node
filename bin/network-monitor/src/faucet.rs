@@ -47,7 +47,7 @@ pub struct FaucetTestDetails {
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
-    #[allow(dead_code)] // Timestamp is part of API response but not used
+    #[expect(dead_code)] // Timestamp is part of API response but not used
     timestamp: u64,
 }
 
@@ -55,7 +55,7 @@ struct PowChallengeResponse {
 #[derive(Debug, Deserialize)]
 struct GetTokensResponse {
     tx_id: String,
-    #[allow(dead_code)] // Note ID is part of API response but not used in monitoring
+    #[expect(dead_code)] // Note ID is part of API response but not used in monitoring
     note_id: String,
 }
 
