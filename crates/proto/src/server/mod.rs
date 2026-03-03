@@ -26,6 +26,11 @@ pub trait GrpcEncode<T>: Send + Sync + 'static {
     fn encode(self) -> Result<T, Status>;
 }
 
+impl GrpcEncode<()> for () {
+    fn encode(self) -> Result<(), Status> {
+        Ok(())
+    }
+}
 pub trait GrpcInterface {
     type Request;
     type Response;

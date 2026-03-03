@@ -29,6 +29,7 @@ use crate::{COMPONENT, ValidatorSigner};
 
 mod sign_block;
 mod status;
+mod submit_proven_transaction;
 
 // VALIDATOR
 // ================================================================================
