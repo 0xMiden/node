@@ -1214,6 +1214,42 @@ fn select_storage_map_sync_values() {
     assert_eq!(page.values, expected, "should return latest values ordered by key");
 }
 
+#[test]
+fn select_storage_map_sync_values_for_network_account() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let (account_id, _) =
+        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Network);
+    let slot_name = StorageSlotName::mock(7);
+    let key = num_to_word(1);
+    let value = num_to_word(10);
+
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block_num,
+        slot_name.clone(),
+        key,
+        value,
+    )
+    .unwrap();
+
+    let page = queries::select_account_storage_map_values(
+        &mut conn,
+        account_id,
+        BlockNumber::GENESIS..=block_num,
+    )
+    .unwrap();
+
+    assert_eq!(
+        page.values,
+        vec![StorageMapValue { block_num, slot_name, key, value }],
+        "network accounts with public state should be accepted",
+    );
+}
+
 // UTILITIES
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
