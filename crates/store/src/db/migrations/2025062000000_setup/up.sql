@@ -10,6 +10,9 @@ CREATE TABLE block_headers (
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );
 
+CREATE INDEX block_headers_to_be_proven ON block_headers(block_proof ASC) WHERE block_proof IS NULL;
+CREATE INDEX block_headers_proven_desc ON block_headers(block_num DESC) WHERE block_proof IS NOT NULL;
+
 CREATE TABLE account_codes (
     code_commitment BLOB NOT NULL,
     code            BLOB NOT NULL,
