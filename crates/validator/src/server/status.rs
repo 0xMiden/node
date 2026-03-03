@@ -1,25 +1,28 @@
-use miden_node_proto::generated::server::validator_api::Status;
-use miden_node_proto::server::{GrpcEncode, GrpcInterface};
+use miden_node_proto::generated as grpc;
 
 use crate::server::ValidatorServer;
 
 #[tonic::async_trait]
-impl miden_node_proto::server::GrpcUnary<Status> for ValidatorServer {
+impl grpc::server::validator_api::Status for ValidatorServer {
     type Input = ();
-    type Output = Output;
+    type Output = ();
 
-    async fn handle(&self, _input: Self::Input) -> tonic::Result<Self::Output> {
-        Ok(Output)
-    }
-}
-
-pub struct Output;
-
-impl GrpcEncode<<Status as GrpcInterface>::Response> for Output {
-    fn encode(self) -> Result<<Status as GrpcInterface>::Response, tonic::Status> {
-        Ok(miden_node_proto::generated::validator::ValidatorStatus {
+    async fn full(&self, _request: ()) -> tonic::Result<grpc::validator::ValidatorStatus> {
+        Ok(grpc::validator::ValidatorStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "OK".to_string(),
         })
+    }
+
+    async fn handle(&self, _input: Self::Input) -> tonic::Result<Self::Output> {
+        unimplemented!()
+    }
+
+    fn decode(_request: ()) -> tonic::Result<Self::Input> {
+        unimplemented!()
+    }
+
+    fn encode(_output: Self::Output) -> tonic::Result<grpc::validator::ValidatorStatus> {
+        unimplemented!()
     }
 }
