@@ -238,7 +238,7 @@ async fn capacity_is_respected() {
     result.sort_unstable();
     assert_eq!(expected, result);
 
-    assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
+    assert_matches::assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
         assert_eq!(err.code(), tonic::Code::ResourceExhausted);
     });
 
