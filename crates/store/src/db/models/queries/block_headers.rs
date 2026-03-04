@@ -296,39 +296,6 @@ pub(crate) fn mark_block_proven(
     Ok(count)
 }
 
-/// Select block numbers that have not yet been proven, ordered ascending.
-///
-/// The genesis block (block 0) is excluded because it is never proven.
-/// Results are limited to at most `limit` rows.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT block_num
-/// FROM block_headers
-/// WHERE is_proven = 0
-///   AND block_num > 0
-/// ORDER BY block_num ASC
-/// LIMIT ?
-/// ```
-pub(crate) fn select_unproven_blocks(
-    conn: &mut SqliteConnection,
-    limit: i64,
-) -> Result<Vec<BlockNumber>, DatabaseError> {
-    let block_nums: Vec<i64> =
-        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
-            .filter(schema::block_headers::is_proven.eq(false))
-            .filter(schema::block_headers::block_num.gt(0i64))
-            .order(schema::block_headers::block_num.asc())
-            .limit(limit)
-            .load(conn)?;
-    block_nums
-        .into_iter()
-        .map(BlockNumber::from_raw_sql)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Into::into)
-}
-
 /// Select the highest block number that has been proven.
 ///
 /// Returns `None` if no blocks have been proven yet (genesis is never proven).
