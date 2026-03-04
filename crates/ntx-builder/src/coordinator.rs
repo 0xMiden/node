@@ -5,7 +5,6 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
@@ -217,10 +216,12 @@ impl Coordinator {
 
             // Determine target actors for each note.
             for note in network_notes {
-                let NetworkNote::SingleTarget(note) = note;
-                let network_account_id = note.account_id();
-                if self.actor_registry.contains_key(&network_account_id) {
-                    target_account_ids.insert(network_account_id);
+                let account = note.target_account_id();
+                let account = NetworkAccountId::try_from(account)
+                    .expect("network note target account should be a network account");
+
+                if self.actor_registry.contains_key(&account) {
+                    target_account_ids.insert(account);
                 }
             }
         }
@@ -247,16 +248,13 @@ impl Coordinator {
                 network_notes,
                 account_delta,
             } => {
-                let notes: Vec<SingleTargetNetworkNote> = network_notes
-                    .iter()
-                    .map(|n| {
-                        let NetworkNote::SingleTarget(note) = n;
-                        note.clone()
-                    })
-                    .collect();
-
                 self.db
-                    .handle_transaction_added(*id, account_delta.clone(), notes, nullifiers.clone())
+                    .handle_transaction_added(
+                        *id,
+                        account_delta.clone(),
+                        network_notes.clone(),
+                        nullifiers.clone(),
+                    )
                     .await?;
                 Ok(WriteEventResult {
                     accounts_to_notify: Vec::new(),

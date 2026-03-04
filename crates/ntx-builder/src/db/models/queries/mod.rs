@@ -5,11 +5,12 @@ use std::collections::HashSet;
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
+use miden_standards::note::AccountTargetNetworkNote;
+use miden_tx::utils::Serializable;
 
 use crate::actor::account_effect::NetworkAccountEffect;
 use crate::db::models::conv as conversions;
@@ -99,7 +100,7 @@ pub fn add_transaction(
     conn: &mut SqliteConnection,
     tx_id: &TransactionId,
     account_delta: Option<&AccountUpdateDetails>,
-    notes: &[SingleTargetNetworkNote],
+    notes: &[AccountTargetNetworkNote],
     nullifiers: &[Nullifier],
 ) -> Result<(), DatabaseError> {
     let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
@@ -140,9 +141,13 @@ pub fn add_transaction(
     // (the nullifier PK would otherwise cause a constraint violation).
     for note in notes {
         let insert = NoteInsert {
-            nullifier: conversions::nullifier_to_bytes(&note.nullifier()),
-            account_id: conversions::network_account_id_to_bytes(note.account_id()),
-            note_data: conversions::single_target_note_to_bytes(note),
+            nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
+            account_id: conversions::network_account_id_to_bytes(
+                note.target_account_id()
+                    .try_into()
+                    .expect("network note's target account must be a network account"),
+            ),
+            note_data: note.as_note().to_bytes(),
             attempt_count: 0,
             last_attempt: None,
             created_by: Some(tx_id_bytes.clone()),

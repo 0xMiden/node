@@ -19,6 +19,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     AccountVaultDelta,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotDelta,
@@ -950,8 +951,8 @@ fn sql_account_storage_map_values_insertion() {
     queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block2).unwrap();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 2, 3, 4]);
-    let key2 = Word::from([5u32, 6, 7, 8]);
+    let key1 = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
+    let key2 = StorageMapKey::new(Word::from([5u32, 6, 7, 8]));
     let value1 = Word::from([10u32, 11, 12, 13]);
     let value2 = Word::from([20u32, 21, 22, 23]);
     let value3 = Word::from([30u32, 31, 32, 33]);
@@ -1009,9 +1010,9 @@ fn select_storage_map_sync_values() {
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(5);
 
-    let key1 = num_to_word(1);
-    let key2 = num_to_word(2);
-    let key3 = num_to_word(3);
+    let key1 = StorageMapKey::from_index(1u32);
+    let key2 = StorageMapKey::from_index(2u32);
+    let key3 = StorageMapKey::from_index(3u32);
     let value1 = num_to_word(10);
     let value2 = num_to_word(20);
     let value3 = num_to_word(30);
@@ -1440,11 +1441,11 @@ async fn genesis_with_account_storage_map() {
 
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(1u32),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(2u32),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -1497,7 +1498,7 @@ async fn genesis_with_account_assets_and_storage() {
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(100), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::from_index(100u32),
         Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]),
     )])
     .unwrap();
@@ -1594,7 +1595,7 @@ async fn genesis_with_multiple_accounts() {
         .unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(5), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::from_index(5u32),
         Word::from([Felt::new(15), Felt::new(25), Felt::new(35), Felt::new(45)]),
     )])
     .unwrap();
@@ -2005,7 +2006,7 @@ fn db_roundtrip_storage_map_values() {
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
         .unwrap();
     let slot_name = StorageSlotName::mock(5);
-    let key = num_to_word(12345);
+    let key = StorageMapKey::from_index(12345u32);
     let value = num_to_word(67890);
 
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
@@ -2051,11 +2052,11 @@ fn db_roundtrip_account_storage_with_maps() {
     // Create storage with both value slots and map slots
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(1u32),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(2u32),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -2289,9 +2290,9 @@ fn test_prune_history() {
 
     // Insert storage map values at different blocks
     let slot_name = StorageSlotName::mock(5);
-    let map_key_old = num_to_word(10);
-    let map_key_cutoff = num_to_word(20);
-    let map_key_recent = num_to_word(30);
+    let map_key_old = StorageMapKey::from_index(10u32);
+    let map_key_cutoff = StorageMapKey::from_index(20u32);
+    let map_key_recent = StorageMapKey::from_index(30u32);
     let value_1 = num_to_word(111);
     let value_2 = num_to_word(222);
     let value_3 = num_to_word(333);
@@ -2456,13 +2457,12 @@ fn db_roundtrip_transactions() {
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
 
-    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
-        .unwrap();
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
 
     // Build two transaction headers with distinct data
-    let tx1 = mock_block_transaction(account_id, 1);
-    let tx2 = mock_block_transaction(account_id, 2);
+    let tx1 = mock_block_transaction(bob, 1);
+    let tx2 = mock_block_transaction(bob, 2);
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx1.clone(), tx2.clone()]);
 
     // Insert
@@ -2470,12 +2470,9 @@ fn db_roundtrip_transactions() {
     assert_eq!(count, 2, "Should insert 2 transactions");
 
     // Retrieve
-    let (last_block, records) = queries::select_transactions_records(
-        &mut conn,
-        &[account_id],
-        BlockNumber::GENESIS..=block_num,
-    )
-    .unwrap();
+    let (last_block, records) =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
     assert_eq!(last_block, block_num, "Last block should match");
     assert_eq!(records.len(), 2, "Should retrieve 2 transactions");
 
@@ -2487,42 +2484,21 @@ fn db_roundtrip_transactions() {
             .iter()
             .find(|tx| tx.id() == record.transaction_id)
             .expect("Retrieved transaction should match one of the originals");
-        assert_eq!(
-            record.transaction_id,
-            original.id(),
-            "TransactionId DB roundtrip must be symmetric"
-        );
-        assert_eq!(
-            record.account_id,
-            original.account_id(),
-            "AccountId DB roundtrip must be symmetric"
-        );
-        assert_eq!(record.block_num, block_num, "Block number must match");
-        assert_eq!(
-            record.initial_state_commitment,
-            original.initial_state_commitment(),
-            "Initial state commitment DB roundtrip must be symmetric"
-        );
-        assert_eq!(
-            record.final_state_commitment,
-            original.final_state_commitment(),
-            "Final state commitment DB roundtrip must be symmetric"
-        );
+        // Asset symmetry
+        assert_eq!(record.transaction_id, original.id(),);
+        assert_eq!(record.account_id, original.account_id(),);
+        assert_eq!(record.block_num, block_num);
+        assert_eq!(record.initial_state_commitment, original.initial_state_commitment(),);
+        assert_eq!(record.final_state_commitment, original.final_state_commitment(),);
 
         // Input notes are stored as nullifiers only
         let expected_nullifiers: Vec<Nullifier> =
             original.input_notes().iter().map(InputNoteCommitment::nullifier).collect();
-        assert_eq!(
-            record.nullifiers, expected_nullifiers,
-            "Nullifiers (from input notes) DB roundtrip must be symmetric"
-        );
+        assert_eq!(record.nullifiers, expected_nullifiers,);
 
         // Output notes are stored as note IDs only
         let expected_note_ids: Vec<NoteId> =
             original.output_notes().iter().map(NoteHeader::id).collect();
-        assert_eq!(
-            record.output_notes, expected_note_ids,
-            "Output note IDs DB roundtrip must be symmetric"
-        );
+        assert_eq!(record.output_notes, expected_note_ids,);
     }
 }
