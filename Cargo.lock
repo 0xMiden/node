@@ -2586,9 +2586,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto"
-version = "0.19.4"
+version = "0.19.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e28b6e110f339c2edc2760a8cb94863f0a055ee658a49bc90c8560eff2feef4"
+checksum = "999926d48cf0929a39e06ce22299084f11d307ca9e765801eb56bf192b07054b"
 dependencies = [
  "blake3",
  "cc",
@@ -2621,9 +2621,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto-derive"
-version = "0.19.4"
+version = "0.19.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40e95b9c7c99ed6bbf073d9e02721d812dedd2c195019c0a0e0a3dbb9cbf034"
+checksum = "3550b5656b791fec59c0b6089b4d0368db746a34749ccd47e59afb01aa877e9e"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -2922,6 +2922,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "regex",
  "serde",
+ "tempfile",
  "termtree",
  "thiserror 2.0.18",
  "tokio",

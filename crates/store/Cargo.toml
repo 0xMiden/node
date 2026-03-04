@@ -55,6 +55,7 @@ miden-protocol        = { default-features = true, features = ["testing"], works
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
 regex                 = { version = "1.11" }
+tempfile              = { workspace = true }
 termtree              = { version = "0.5" }
 
 [features]
