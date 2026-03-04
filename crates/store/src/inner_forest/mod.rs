@@ -230,7 +230,7 @@ impl InnerForest {
     // PUBLIC INTERFACE
     // --------------------------------------------------------------------------------------------
 
-    /// Applies account updates from a block to the forest.
+    /// Updates the forest with account vault and storage changes from a delta.
     ///
     /// Iterates through account updates and applies each delta to the forest.
     /// Private accounts should be filtered out before calling this method.
@@ -282,6 +282,7 @@ impl InnerForest {
         let account_id = delta.id();
         let is_full_state = delta.is_full_state();
 
+        // Validate full-state invariants in debug builds.
         #[cfg(debug_assertions)]
         if is_full_state {
             let has_vault_root = self.vault_roots.keys().any(|(id, _)| *id == account_id);
@@ -294,16 +295,18 @@ impl InnerForest {
             );
         }
 
+        // Apply vault changes.
         if is_full_state {
             self.insert_account_vault(block_num, account_id, delta.vault())?;
         } else if !delta.vault().is_empty() {
             self.update_account_vault(block_num, account_id, delta.vault())?;
         }
 
+        // Apply storage map changes.
         if is_full_state {
-            self.insert_account_storage(block_num, account_id, delta.storage());
+            self.insert_account_storage(block_num, account_id, delta.storage())?;
         } else if !delta.storage().is_empty() {
-            self.update_account_storage(block_num, account_id, delta.storage());
+            self.update_account_storage(block_num, account_id, delta.storage())?;
         }
 
         Ok(())
@@ -353,11 +356,77 @@ impl InnerForest {
         Ok(())
     }
 
-    /// Updates the forest with vault changes from a delta. The vault delta is assumed to be
-    /// non-empty.
+    fn insert_account_storage(
+        &mut self,
+        block_num: BlockNumber,
+        account_id: AccountId,
+        storage_delta: &AccountStorageDelta,
+    ) -> Result<(), InnerForestError> {
+        for (slot_name, map_delta) in storage_delta.maps() {
+            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
+            assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+
+            let raw_map_entries: Vec<(Word, Word)> =
+                Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
+                    if value == EMPTY_WORD {
+                        None
+                    } else {
+                        Some((Word::from(key), value))
+                    }
+                }));
+
+            if raw_map_entries.is_empty() {
+                self.storage_map_roots
+                    .insert((account_id, slot_name.clone(), block_num), prev_root);
+                self.storage_entries
+                    .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
+
+                continue;
+            }
+
+            let hashed_entries: Vec<(Word, Word)> = Vec::from_iter(
+                raw_map_entries.iter().map(|(key, value)| (StorageMap::hash_key(*key), *value)),
+            );
+
+            let new_root = self.forest.batch_insert(prev_root, hashed_entries.iter().copied())?;
+
+            self.storage_map_roots
+                .insert((account_id, slot_name.clone(), block_num), new_root);
+
+            let num_entries = raw_map_entries.len();
+
+            let map_entries = BTreeMap::from_iter(raw_map_entries);
+            self.storage_entries
+                .insert((account_id, slot_name.clone(), block_num), map_entries);
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                %account_id,
+                %block_num,
+                ?slot_name,
+                delta_entries = num_entries,
+                "Inserted storage map into forest"
+            );
+        }
+        Ok(())
+    }
+
+    // ASSET VAULT DELTA PROCESSING
+    // --------------------------------------------------------------------------------------------
+
+    /// Updates the forest with vault changes from a delta and returns the new root.
     ///
     /// Processes both fungible and non-fungible asset changes, building entries for the vault SMT
     /// and tracking the new root.
+    ///
+    /// # Arguments
+    ///
+    /// * `is_full_state` - If `true`, delta values are absolute (new account or DB reconstruction).
+    ///   If `false`, delta values are relative changes applied to previous state.
+    ///
+    /// # Returns
+    ///
+    /// The new vault root after applying the delta.
     ///
     /// # Errors
     ///
@@ -471,124 +540,47 @@ impl InnerForest {
             .unwrap_or_default()
     }
 
-    /// Inserts all storage maps from the provided storage delta into the forest.
+    /// Updates the forest with storage map changes from a delta and returns updated roots.
     ///
-    /// Assumes that storage maps for the provided account are not in the forest already.
-    fn insert_account_storage(
-        &mut self,
-        block_num: BlockNumber,
-        account_id: AccountId,
-        delta: &AccountStorageDelta,
-    ) {
-        for (slot_name, map_delta) in delta.maps() {
-            // get the latest root for this map, and make sure the root is for an empty tree
-            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
-            assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
-
-            // build a vector of raw entries and filter out any empty values; such values
-            // shouldn't be present in full-state deltas, but it is good to exclude them
-            // explicitly
-            let raw_map_entries: Vec<(Word, Word)> = map_delta
-                .entries()
-                .iter()
-                .filter_map(|(&key, &value)| {
-                    if value == EMPTY_WORD {
-                        None
-                    } else {
-                        Some((Word::from(key), value))
-                    }
-                })
-                .collect();
-
-            // if the delta is empty, make sure we create an entry in the storage map roots map
-            // and storage entries map (so storage_map_entries() queries work)
-            if raw_map_entries.is_empty() {
-                self.storage_map_roots
-                    .insert((account_id, slot_name.clone(), block_num), prev_root);
-                self.storage_entries
-                    .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
-
-                continue;
-            }
-
-            // hash the keys before inserting into the forest, matching how `StorageMap`
-            // hashes keys before inserting into the SMT.
-            let hashed_entries: Vec<(Word, Word)> = raw_map_entries
-                .iter()
-                .map(|(key, value)| (StorageMap::hash_key(*key), *value))
-                .collect();
-
-            // insert the updates into the forest and update storage map roots map
-            let new_root = self
-                .forest
-                .batch_insert(prev_root, hashed_entries.iter().copied())
-                .expect("forest insertion should succeed");
-
-            self.storage_map_roots
-                .insert((account_id, slot_name.clone(), block_num), new_root);
-
-            assert!(!raw_map_entries.is_empty(), "a non-empty delta should have entries");
-            let num_entries = raw_map_entries.len();
-
-            // keep track of the state of storage map entries (using raw keys for delta merging)
-            // TODO: this is a temporary solution until the LargeSmtForest is implemented as
-            // tracking multiple versions of all storage maps will be prohibitively expensive
-            let map_entries = BTreeMap::from_iter(raw_map_entries);
-            self.storage_entries
-                .insert((account_id, slot_name.clone(), block_num), map_entries);
-
-            tracing::debug!(
-                target: crate::COMPONENT,
-                %account_id,
-                %block_num,
-                ?slot_name,
-                delta_entries = num_entries,
-                "Inserted storage map into forest"
-            );
-        }
-    }
-
-    /// Updates the forest with storage map changes from a delta.
+    /// Processes storage map slot deltas, building SMTs for each modified slot
+    /// and tracking the new roots and accumulated entries.
     ///
-    /// Processes storage map slot deltas, building SMTs for each modified slot and tracking the
-    /// new roots and accumulated entries.
+    /// # Arguments
+    ///
+    /// * `is_full_state` - If `true`, delta values are absolute (new account or DB reconstruction).
+    ///   If `false`, delta values are relative changes applied to previous state.
+    ///
+    /// # Returns
+    ///
+    /// A map from slot name to the new storage map root for that slot.
     fn update_account_storage(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        delta: &AccountStorageDelta,
-    ) {
-        assert!(!delta.is_empty(), "expected the delta not to be empty");
+        storage_delta: &AccountStorageDelta,
+    ) -> Result<BTreeMap<StorageSlotName, Word>, InnerForestError> {
+        let mut updated_roots = BTreeMap::new();
 
-        for (slot_name, map_delta) in delta.maps() {
-            // map delta shouldn't be empty, but if it is for some reason, there is nothing to do
-            if map_delta.is_empty() {
+        for (slot_name, map_delta) in storage_delta.maps() {
+            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
+
+            let delta_entries = Vec::from_iter(
+                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
+            );
+
+            if delta_entries.is_empty() {
                 continue;
             }
 
-            // update the storage map tree in the forest and add an entry to the storage map roots
-            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
-            let delta_entries: Vec<(Word, Word)> =
-                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)).collect();
+            let hashed_entries =
+                delta_entries.iter().map(|(key, value)| (StorageMap::hash_key(*key), *value));
 
-            // Hash the keys before inserting into the forest, matching how StorageMap
-            // hashes keys before inserting into the SMT.
-            let hashed_entries: Vec<(Word, Word)> = delta_entries
-                .iter()
-                .map(|(key, value)| (StorageMap::hash_key(*key), *value))
-                .collect();
-
-            let new_root = self
-                .forest
-                .batch_insert(prev_root, hashed_entries.iter().copied())
-                .expect("forest insertion should succeed");
+            let updated_root = self.forest.batch_insert(prev_root, hashed_entries)?;
 
             self.storage_map_roots
-                .insert((account_id, slot_name.clone(), block_num), new_root);
+                .insert((account_id, slot_name.clone(), block_num), updated_root);
+            updated_roots.insert(slot_name.clone(), updated_root);
 
-            // merge the delta with the latest entries in the map (using raw keys)
-            // TODO: this is a temporary solution until the LargeSmtForest is implemented as
-            // tracking multiple versions of all storage maps will be prohibitively expensive
             let mut latest_entries = self.get_latest_storage_map_entries(account_id, slot_name);
             for (key, value) in &delta_entries {
                 if *value == EMPTY_WORD {
@@ -610,6 +602,8 @@ impl InnerForest {
                 "Updated storage map in forest"
             );
         }
+
+        Ok(updated_roots)
     }
 
     // TODO: tie in-memory forest retention to DB pruning policy once forest queries rely on it.
