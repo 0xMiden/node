@@ -18,6 +18,7 @@ use miden_protocol::account::{
     AccountId,
     AccountStorageHeader,
     StorageMap,
+    StorageMapKey,
     StorageSlotHeader,
     StorageSlotName,
 };
@@ -198,7 +199,7 @@ pub(super) fn select_vault_balances_by_faucet_ids(
 pub(super) fn apply_storage_delta(
     header: &AccountStorageHeader,
     delta: &AccountStorageDelta,
-    map_entries: &BTreeMap<StorageSlotName, BTreeMap<Word, Word>>,
+    map_entries: &BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
 ) -> Result<AccountStorageHeader, DatabaseError> {
     let mut value_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
     let mut map_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
@@ -215,9 +216,9 @@ pub(super) fn apply_storage_delta(
         let mut entries = map_entries.get(slot_name).cloned().unwrap_or_default();
         for (key, value) in map_delta.entries() {
             if *value == EMPTY_WORD {
-                entries.remove(&(*key).into());
+                entries.remove(&(*key).into_inner());
             } else {
-                entries.insert((*key).into(), *value);
+                entries.insert((*key).into_inner(), *value);
             }
         }
 

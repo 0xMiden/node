@@ -24,6 +24,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     StorageMap,
+    StorageMapKey,
     StorageSlot,
     StorageSlotName,
 };
@@ -430,12 +431,12 @@ fn optimized_delta_updates_storage_map_header() {
 
     let mut conn = setup_test_db();
 
-    let map_key = Word::from([
+    let map_key = StorageMapKey::new(Word::from([
         Felt::new(MAP_KEY_VALUES[0]),
         Felt::new(MAP_KEY_VALUES[1]),
         Felt::new(MAP_KEY_VALUES[2]),
         Felt::new(MAP_KEY_VALUES[3]),
-    ]);
+    ]));
     let map_value_initial = Word::from([
         Felt::new(MAP_VALUE_INITIAL[0]),
         Felt::new(MAP_VALUE_INITIAL[1]),
