@@ -1,6 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
+use miden_crypto::hash::rpo::Rpo256;
+use miden_crypto::merkle::smt::ForestInMemoryBackend;
+use miden_node_proto::domain::account::AccountStorageMapDetails;
+use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
@@ -11,11 +14,25 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::crypto::merkle::smt::{SMT_DEPTH, SmtForest};
+use miden_protocol::crypto::merkle::smt::{
+    ForestOperation,
+    LargeSmtForest,
+    LargeSmtForestError,
+    LineageId,
+    RootInfo,
+    SMT_DEPTH,
+    SmtUpdateBatch,
+    TreeId,
+};
 use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
-use miden_protocol::errors::{AccountError, AssetError, StorageMapError};
+use miden_protocol::errors::{AssetError, StorageMapError};
+use miden_protocol::utils::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
+use tracing::instrument;
+
+use crate::COMPONENT;
+pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
 
 #[cfg(test)]
 mod tests;
@@ -26,21 +43,9 @@ mod tests;
 #[derive(Debug, Error)]
 pub enum InnerForestError {
     #[error(transparent)]
-    Account(#[from] AccountError),
-    #[error(transparent)]
     Asset(#[from] AssetError),
     #[error(transparent)]
-    Merkle(#[from] MerkleError),
-    #[error(
-        "balance underflow: account {account_id}, faucet {faucet_id}, \
-         previous balance {prev_balance}, delta {delta}"
-    )]
-    BalanceUnderflow {
-        account_id: AccountId,
-        faucet_id: AccountId,
-        prev_balance: u64,
-        delta: i64,
-    },
+    Forest(#[from] LargeSmtForestError),
 }
 
 #[derive(Debug, Error)]
@@ -60,31 +65,19 @@ pub enum WitnessError {
 
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct InnerForest {
-    /// `SmtForest` for efficient account storage reconstruction.
+    /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
-    forest: SmtForest,
-
-    /// Maps (`account_id`, `slot_name`, `block_num`) to SMT root.
-    /// Populated during block import for all storage map slots.
-    storage_map_roots: BTreeMap<(AccountId, StorageSlotName, BlockNumber), Word>,
-
-    /// Maps (`account_id`, `slot_name`, `block_num`) to all key-value entries in that storage map.
-    /// Accumulated from deltas - each block's entries include all entries up to that point.
-    storage_entries: BTreeMap<(AccountId, StorageSlotName, BlockNumber), BTreeMap<Word, Word>>,
-
-    /// Maps (`account_id`, `block_num`) to vault SMT root.
-    /// Tracks asset vault versions across all blocks with structural sharing.
-    vault_roots: BTreeMap<(AccountId, BlockNumber), Word>,
+    forest: LargeSmtForest<ForestInMemoryBackend>,
 }
 
 impl InnerForest {
     pub(crate) fn new() -> Self {
-        Self {
-            forest: SmtForest::new(),
-            storage_map_roots: BTreeMap::new(),
-            storage_entries: BTreeMap::new(),
-            vault_roots: BTreeMap::new(),
-        }
+        Self { forest: Self::create_forest() }
+    }
+
+    fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
+        let backend = ForestInMemoryBackend::new();
+        LargeSmtForest::new(backend).expect("in-memory backend should initialize")
     }
 
     // HELPERS
@@ -95,45 +88,146 @@ impl InnerForest {
         *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
     }
 
-    /// Retrieves the most recent vault root for an account.
-    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
-        self.vault_roots
-            .range((account_id, BlockNumber::GENESIS)..=(account_id, BlockNumber::MAX))
-            .next_back()
-            .map_or_else(Self::empty_smt_root, |(_, root)| *root)
+    #[cfg(test)]
+    fn tree_id_for_root(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> TreeId {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        self.lookup_tree_id(lineage, block_num)
     }
 
-    /// Retrieves a vault root for the specified account at or before the specified block.
+    #[cfg(test)]
+    fn tree_id_for_vault_root(&self, account_id: AccountId, block_num: BlockNumber) -> TreeId {
+        let lineage = Self::vault_lineage_id(account_id);
+        self.lookup_tree_id(lineage, block_num)
+    }
+
+    #[expect(clippy::unused_self)]
+    fn lookup_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> TreeId {
+        TreeId::new(lineage, block_num.as_u64())
+    }
+
+    fn storage_lineage_id(account_id: AccountId, slot_name: &StorageSlotName) -> LineageId {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&account_id.to_bytes());
+        bytes.extend_from_slice(slot_name.as_str().as_bytes());
+        LineageId::new(Rpo256::hash(&bytes).as_bytes())
+    }
+
+    fn vault_lineage_id(account_id: AccountId) -> LineageId {
+        LineageId::new(Rpo256::hash(&account_id.to_bytes()).as_bytes())
+    }
+
+    fn build_forest_operations(
+        entries: impl IntoIterator<Item = (Word, Word)>,
+    ) -> Vec<ForestOperation> {
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                if value == EMPTY_WORD {
+                    ForestOperation::remove(key)
+                } else {
+                    ForestOperation::insert(key, value)
+                }
+            })
+            .collect()
+    }
+
+    fn apply_forest_updates(
+        &mut self,
+        lineage: LineageId,
+        block_num: BlockNumber,
+        operations: Vec<ForestOperation>,
+    ) -> Word {
+        let updates = if operations.is_empty() {
+            SmtUpdateBatch::empty()
+        } else {
+            SmtUpdateBatch::new(operations.into_iter())
+        };
+        let version = block_num.as_u64();
+        let tree = if self.forest.latest_version(lineage).is_some() {
+            self.forest
+                .update_tree(lineage, version, updates)
+                .expect("forest update should succeed")
+        } else {
+            self.forest
+                .add_lineage(lineage, version, updates)
+                .expect("forest update should succeed")
+        };
+        tree.root()
+    }
+
+    fn map_forest_error(error: LargeSmtForestError) -> MerkleError {
+        match error {
+            LargeSmtForestError::Merkle(merkle) => merkle,
+            other => MerkleError::InternalError(other.as_report()),
+        }
+    }
+
+    fn map_forest_error_to_witness(error: LargeSmtForestError) -> WitnessError {
+        match error {
+            LargeSmtForestError::Merkle(merkle) => WitnessError::MerkleError(merkle),
+            other => WitnessError::MerkleError(MerkleError::InternalError(other.as_report())),
+        }
+    }
+
+    // ACCESSORS
+    // --------------------------------------------------------------------------------------------
+
+    fn get_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> Option<TreeId> {
+        let tree = self.lookup_tree_id(lineage, block_num);
+        match self.forest.root_info(tree) {
+            RootInfo::LatestVersion(_) | RootInfo::HistoricalVersion(_) => Some(tree),
+            RootInfo::Missing => {
+                let latest_version = self.forest.latest_version(lineage)?;
+                if latest_version <= block_num.as_u64() {
+                    Some(TreeId::new(lineage, latest_version))
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn get_tree_root(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
+        let tree = self.get_tree_id(lineage, block_num)?;
+        match self.forest.root_info(tree) {
+            RootInfo::LatestVersion(root) | RootInfo::HistoricalVersion(root) => Some(root),
+            RootInfo::Missing => None,
+        }
+    }
+
+    /// Retrieves a vault root for the specified account and block.
+    #[cfg(test)]
     pub(crate) fn get_vault_root(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
     ) -> Option<Word> {
-        self.vault_roots
-            .range((account_id, BlockNumber::GENESIS)..=(account_id, block_num))
-            .next_back()
-            .map(|(_, root)| *root)
+        let lineage = Self::vault_lineage_id(account_id);
+        self.get_tree_root(lineage, block_num)
     }
 
-    /// Retrieves the storage map root for an account slot at or before the specified block.
+    /// Retrieves the storage map root for an account slot at the specified block.
+    #[cfg(test)]
     pub(crate) fn get_storage_map_root(
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
     ) -> Option<Word> {
-        self.storage_map_roots
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), block_num),
-            )
-            .next_back()
-            .map(|(_, root)| *root)
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        self.get_tree_root(lineage, block_num)
     }
 
+    // WITNESSES and PROOFS
+    // --------------------------------------------------------------------------------------------
+
     /// Retrieves a storage map witness for the specified account and storage slot.
-    ///
-    /// Finds the most recent witness at or before the specified block number.
     ///
     /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
     /// get the actual key into the storage map.
@@ -144,11 +238,10 @@ impl InnerForest {
         block_num: BlockNumber,
         raw_key: Word,
     ) -> Result<StorageMapWitness, WitnessError> {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let key = StorageMap::hash_key(raw_key);
-        let root = self
-            .get_storage_map_root(account_id, slot_name, block_num)
-            .ok_or(WitnessError::RootNotFound)?;
-        let proof = self.forest.open(root, key)?;
+        let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
     }
@@ -161,70 +254,40 @@ impl InnerForest {
         block_num: BlockNumber,
         asset_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let root = self.get_vault_root(account_id, block_num).ok_or(WitnessError::RootNotFound)?;
-        let witnessees = asset_keys
-            .into_iter()
-            .map(|key| {
-                let proof = self.forest.open(root, key.into())?;
+        let lineage = Self::vault_lineage_id(account_id);
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let witnessees: Result<Vec<_>, WitnessError> =
+            Result::from_iter(asset_keys.into_iter().map(|key| {
+                let proof = self
+                    .forest
+                    .open(tree, key.into())
+                    .map_err(Self::map_forest_error_to_witness)?;
                 let asset = AssetWitness::new(proof)?;
                 Ok(asset)
-            })
-            .collect::<Result<Vec<_>, WitnessError>>()?;
-        Ok(witnessees)
+            }));
+        witnessees
     }
 
     /// Opens a storage map and returns storage map details with SMT proofs for the given keys.
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
-    pub(crate) fn open_storage_map(
+    pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
         slot_name: StorageSlotName,
         block_num: BlockNumber,
         raw_keys: &[Word],
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
-        let root = self.get_storage_map_root(account_id, &slot_name, block_num)?;
+        let lineage = Self::storage_lineage_id(account_id, &slot_name);
+        let tree = self.get_tree_id(lineage, block_num)?;
 
-        // Collect SMT proofs for each key
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
             let key = StorageMap::hash_key(*raw_key);
-            self.forest.open(root, key)
+            self.forest.open(tree, key).map_err(Self::map_forest_error)
         }));
 
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
-    }
-
-    /// Returns all key-value entries for a specific account storage slot at or before a block.
-    ///
-    /// Uses range query semantics: finds the most recent entries at or before `block_num`.
-    /// Returns `None` if no entries exist for this account/slot up to the given block.
-    /// Returns `LimitExceeded` if there are too many entries to return.
-    pub(crate) fn storage_map_entries(
-        &self,
-        account_id: AccountId,
-        slot_name: StorageSlotName,
-        block_num: BlockNumber,
-    ) -> Option<AccountStorageMapDetails> {
-        // Find the most recent entries at or before block_num
-        let entries = self
-            .storage_entries
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), block_num),
-            )
-            .next_back()
-            .map(|(_, entries)| entries)?;
-
-        if entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
-            return Some(AccountStorageMapDetails {
-                slot_name,
-                entries: StorageMapEntries::LimitExceeded,
-            });
-        }
-        let entries = Vec::from_iter(entries.iter().map(|(k, v)| (*k, *v)));
-
-        Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries))
     }
 
     // PUBLIC INTERFACE
@@ -243,6 +306,7 @@ impl InnerForest {
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
+    #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,
@@ -259,6 +323,9 @@ impl InnerForest {
                 "Updated forest with account delta"
             );
         }
+
+        self.prune(block_num);
+
         Ok(())
     }
 
@@ -282,19 +349,6 @@ impl InnerForest {
         let account_id = delta.id();
         let is_full_state = delta.is_full_state();
 
-        // Validate full-state invariants in debug builds.
-        #[cfg(debug_assertions)]
-        if is_full_state {
-            let has_vault_root = self.vault_roots.keys().any(|(id, _)| *id == account_id);
-            let has_storage_root = self.storage_map_roots.keys().any(|(id, ..)| *id == account_id);
-            let has_storage_entries = self.storage_entries.keys().any(|(id, ..)| *id == account_id);
-
-            assert!(
-                !has_vault_root && !has_storage_root && !has_storage_entries,
-                "full-state delta should not be applied to existing account"
-            );
-        }
-
         // Apply vault changes.
         if is_full_state {
             self.insert_account_vault(block_num, account_id, delta.vault())?;
@@ -304,14 +358,26 @@ impl InnerForest {
 
         // Apply storage map changes.
         if is_full_state {
-            self.insert_account_storage(block_num, account_id, delta.storage())?;
+            self.insert_account_storage(block_num, account_id, delta.storage());
         } else if !delta.storage().is_empty() {
-            self.update_account_storage(block_num, account_id, delta.storage())?;
+            self.update_account_storage(block_num, account_id, delta.storage());
         }
 
         Ok(())
     }
 
+    // ASSET VAULT DELTA PROCESSING
+    // --------------------------------------------------------------------------------------------
+
+    /// Retrieves the most recent vault SMT root for an account. If no vault root is found for the
+    /// account, returns an empty SMT root.
+    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
+        let lineage = Self::vault_lineage_id(account_id);
+        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
+    }
+
+    /// Inserts asset vault data into the forest for the specified account. Assumes that asset
+    /// vault for this account does not yet exist in the forest.
     fn insert_account_vault(
         &mut self,
         block_num: BlockNumber,
@@ -319,10 +385,25 @@ impl InnerForest {
         vault_delta: &AccountVaultDelta,
     ) -> Result<(), InnerForestError> {
         let prev_root = self.get_latest_vault_root(account_id);
+        let lineage = Self::vault_lineage_id(account_id);
         assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+        assert!(
+            self.forest.latest_version(lineage).is_none(),
+            "account should not be in the forest"
+        );
 
         if vault_delta.is_empty() {
-            self.vault_roots.insert((account_id, block_num), prev_root);
+            let lineage = Self::vault_lineage_id(account_id);
+            let new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                %account_id,
+                %block_num,
+                %new_root,
+                vault_entries = 0,
+                "Inserted vault into forest"
+            );
             return Ok(());
         }
 
@@ -335,37 +416,49 @@ impl InnerForest {
             entries.push((asset.vault_key().into(), asset.into()));
         }
 
+        // process non-fungible assets
         for (&asset, action) in vault_delta.non_fungible().iter() {
-            debug_assert_eq!(action, &NonFungibleDeltaAction::Add);
-            entries.push((asset.vault_key().into(), asset.into()));
+            let asset_vault_key = asset.vault_key().into();
+            match action {
+                NonFungibleDeltaAction::Add => entries.push((asset_vault_key, asset.into())),
+                NonFungibleDeltaAction::Remove => entries.push((asset_vault_key, EMPTY_WORD)),
+            }
         }
 
         let num_entries = entries.len();
 
-        let new_root = self.forest.batch_insert(prev_root, entries)?;
-
-        self.vault_roots.insert((account_id, block_num), new_root);
+        let lineage = Self::vault_lineage_id(account_id);
+        let operations = Self::build_forest_operations(entries);
+        let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
             %account_id,
             %block_num,
+            %new_root,
             vault_entries = num_entries,
             "Inserted vault into forest"
         );
         Ok(())
     }
 
+    /// Updates the forest with storage map changes from a delta and returns updated roots.
+    ///
+    /// Assumes that storage maps for the provided account are not in the forest already.
     fn insert_account_storage(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
         storage_delta: &AccountStorageDelta,
-    ) -> Result<(), InnerForestError> {
+    ) {
         for (slot_name, map_delta) in storage_delta.maps() {
+            // get the latest root for this map, and make sure the root is for an empty tree
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
 
+            // build a vector of raw entries and filter out any empty values; such values
+            // shouldn't be present in full-state deltas, but it is good to exclude them
+            // explicitly
             let raw_map_entries: Vec<(Word, Word)> =
                 Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
                     if value == EMPTY_WORD {
@@ -376,39 +469,38 @@ impl InnerForest {
                 }));
 
             if raw_map_entries.is_empty() {
-                self.storage_map_roots
-                    .insert((account_id, slot_name.clone(), block_num), prev_root);
-                self.storage_entries
-                    .insert((account_id, slot_name.clone(), block_num), BTreeMap::new());
+                let lineage = Self::storage_lineage_id(account_id, slot_name);
+                let _new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
 
                 continue;
             }
 
-            let hashed_entries: Vec<(Word, Word)> = Vec::from_iter(
-                raw_map_entries.iter().map(|(key, value)| (StorageMap::hash_key(*key), *value)),
+            let hashed_entries = Vec::from_iter(
+                raw_map_entries
+                    .iter()
+                    .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
             );
 
-            let new_root = self.forest.batch_insert(prev_root, hashed_entries.iter().copied())?;
-
-            self.storage_map_roots
-                .insert((account_id, slot_name.clone(), block_num), new_root);
+            let lineage = Self::storage_lineage_id(account_id, slot_name);
+            assert!(
+                self.forest.latest_version(lineage).is_none(),
+                "account should not be in the forest"
+            );
+            let operations = Self::build_forest_operations(hashed_entries);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             let num_entries = raw_map_entries.len();
-
-            let map_entries = BTreeMap::from_iter(raw_map_entries);
-            self.storage_entries
-                .insert((account_id, slot_name.clone(), block_num), map_entries);
 
             tracing::debug!(
                 target: crate::COMPONENT,
                 %account_id,
                 %block_num,
                 ?slot_name,
+                %new_root,
                 delta_entries = num_entries,
                 "Inserted storage map into forest"
             );
         }
-        Ok(())
     }
 
     // ASSET VAULT DELTA PROCESSING
@@ -436,41 +528,43 @@ impl InnerForest {
         block_num: BlockNumber,
         account_id: AccountId,
         vault_delta: &AccountVaultDelta,
-    ) -> Result<Word, InnerForestError> {
-        let prev_root = self.get_latest_vault_root(account_id);
+    ) -> Result<(), InnerForestError> {
+        assert!(!vault_delta.is_empty(), "expected the delta not to be empty");
+
+        // get the previous vault root; the root could be for an empty or non-empty SMT
+        let lineage = Self::vault_lineage_id(account_id);
+        let prev_tree =
+            self.forest.latest_version(lineage).map(|version| TreeId::new(lineage, version));
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
         // Process fungible assets
         for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
-            let key: Word = FungibleAsset::new(*faucet_id, 0)?.vault_key().into();
+            let delta_abs = amount_delta.unsigned_abs();
+            let delta = FungibleAsset::new(*faucet_id, delta_abs)?;
+            let key = Word::from(delta.vault_key());
 
-            let new_amount = {
-                // amount delta is a change that must be applied to previous balance.
-                //
-                // TODO: SmtForest only exposes `fn open()` which computes a full Merkle proof. We
-                // only need the leaf, so a direct `fn get()` method would be faster.
-                let prev_amount = self
-                    .forest
-                    .open(prev_root, key)
-                    .ok()
-                    .and_then(|proof| proof.get(&key))
-                    .and_then(|word| FungibleAsset::try_from(word).ok())
-                    .map_or(0, |asset| asset.amount());
-
-                let new_balance = i128::from(prev_amount) + i128::from(*amount_delta);
-                u64::try_from(new_balance).map_err(|_| InnerForestError::BalanceUnderflow {
-                    account_id,
-                    faucet_id: *faucet_id,
-                    prev_balance: prev_amount,
-                    delta: *amount_delta,
-                })?
+            let empty = FungibleAsset::new(*faucet_id, 0)?;
+            let asset = if let Some(tree) = prev_tree {
+                self.forest
+                    .get(tree, key)?
+                    .map(FungibleAsset::try_from)
+                    .transpose()?
+                    .unwrap_or(empty)
+            } else {
+                empty
             };
 
-            let value = if new_amount == 0 {
+            let updated = if *amount_delta < 0 {
+                asset.sub(delta)?
+            } else {
+                asset.add(delta)?
+            };
+
+            let value = if updated.amount() == 0 {
                 EMPTY_WORD
             } else {
-                FungibleAsset::new(*faucet_id, new_amount)?.into()
+                Word::from(updated)
             };
             entries.push((key, value));
         }
@@ -484,25 +578,21 @@ impl InnerForest {
             entries.push((asset.vault_key().into(), value));
         }
 
-        if entries.is_empty() {
-            self.vault_roots.insert((account_id, block_num), prev_root);
-            return Ok(prev_root);
-        }
+        let vault_entries = entries.len();
 
-        let num_entries = entries.len();
-
-        let new_root = self.forest.batch_insert(prev_root, entries)?;
-
-        self.vault_roots.insert((account_id, block_num), new_root);
+        let lineage = Self::vault_lineage_id(account_id);
+        let operations = Self::build_forest_operations(entries);
+        let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
             %account_id,
             %block_num,
-            vault_entries = num_entries,
+            %new_root,
+            %vault_entries,
             "Updated vault in forest"
         );
-        Ok(new_root)
+        Ok(())
     }
 
     // STORAGE MAP DELTA PROCESSING
@@ -514,36 +604,11 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: &StorageSlotName,
     ) -> Word {
-        self.storage_map_roots
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..=(account_id, slot_name.clone(), BlockNumber::MAX),
-            )
-            .next_back()
-            .map_or_else(Self::empty_smt_root, |(_, root)| *root)
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        self.forest.latest_root(lineage).map_or_else(Self::empty_smt_root, |root| root)
     }
 
-    /// Retrieves the most recent entries in the specified storage map. If no storage map exists
-    /// returns an empty map.
-    fn get_latest_storage_map_entries(
-        &self,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-    ) -> BTreeMap<Word, Word> {
-        self.storage_entries
-            .range(
-                (account_id, slot_name.clone(), BlockNumber::GENESIS)
-                    ..(account_id, slot_name.clone(), BlockNumber::MAX),
-            )
-            .next_back()
-            .map(|(_, entries)| entries.clone())
-            .unwrap_or_default()
-    }
-
-    /// Updates the forest with storage map changes from a delta and returns updated roots.
-    ///
-    /// Processes storage map slot deltas, building SMTs for each modified slot
-    /// and tracking the new roots and accumulated entries.
+    /// Updates the forest with storage map changes from a delta.
     ///
     /// # Arguments
     ///
@@ -558,53 +623,58 @@ impl InnerForest {
         block_num: BlockNumber,
         account_id: AccountId,
         storage_delta: &AccountStorageDelta,
-    ) -> Result<BTreeMap<StorageSlotName, Word>, InnerForestError> {
-        let mut updated_roots = BTreeMap::new();
-
+    ) {
         for (slot_name, map_delta) in storage_delta.maps() {
-            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
-
-            let delta_entries = Vec::from_iter(
-                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
-            );
-
-            if delta_entries.is_empty() {
+            // map delta shouldn't be empty, but if it is for some reason, there is nothing to do
+            if map_delta.is_empty() {
                 continue;
             }
 
-            let hashed_entries =
-                delta_entries.iter().map(|(key, value)| (StorageMap::hash_key(*key), *value));
+            // update the storage map tree in the forest and add an entry to the storage map roots
+            let lineage = Self::storage_lineage_id(account_id, slot_name);
+            let delta_entries: Vec<(Word, Word)> = Vec::from_iter(
+                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
+            );
 
-            let updated_root = self.forest.batch_insert(prev_root, hashed_entries)?;
+            let hashed_entries = Vec::from_iter(
+                delta_entries
+                    .iter()
+                    .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
+            );
 
-            self.storage_map_roots
-                .insert((account_id, slot_name.clone(), block_num), updated_root);
-            updated_roots.insert(slot_name.clone(), updated_root);
-
-            let mut latest_entries = self.get_latest_storage_map_entries(account_id, slot_name);
-            for (key, value) in &delta_entries {
-                if *value == EMPTY_WORD {
-                    latest_entries.remove(key);
-                } else {
-                    latest_entries.insert(*key, *value);
-                }
-            }
-
-            self.storage_entries
-                .insert((account_id, slot_name.clone(), block_num), latest_entries);
+            let operations = Self::build_forest_operations(hashed_entries);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             tracing::debug!(
                 target: crate::COMPONENT,
                 %account_id,
                 %block_num,
                 ?slot_name,
+                %new_root,
                 delta_entries = delta_entries.len(),
                 "Updated storage map in forest"
             );
         }
-
-        Ok(updated_roots)
     }
 
-    // TODO: tie in-memory forest retention to DB pruning policy once forest queries rely on it.
+    // PRUNING
+    // --------------------------------------------------------------------------------------------
+
+    /// Prunes old entries from the in-memory forest data structures.
+    ///
+    /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
+    ///
+    /// Returns the number of pruned roots for observability.
+    #[instrument(target = COMPONENT, skip_all, ret, fields(block.number = %chain_tip))]
+    pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
+        let cutoff_block = chain_tip
+            .checked_sub(HISTORICAL_BLOCK_RETENTION)
+            .unwrap_or(BlockNumber::GENESIS);
+        let before = self.forest.roots().count();
+
+        self.forest.truncate(cutoff_block.as_u64());
+
+        let after = self.forest.roots().count();
+        before.saturating_sub(after)
+    }
 }
