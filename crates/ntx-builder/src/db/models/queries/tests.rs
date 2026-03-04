@@ -2,7 +2,6 @@
 
 use diesel::prelude::*;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountComponentMetadata,
@@ -59,7 +58,7 @@ fn mock_tx_id(seed: u64) -> TransactionId {
 fn mock_single_target_note(
     network_account_id: NetworkAccountId,
     seed: u8,
-) -> SingleTargetNetworkNote {
+) -> AccountTargetNetworkNote {
     let mut rng = ChaCha20Rng::from_seed([seed; 32]);
     let sender = AccountIdBuilder::new()
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -71,7 +70,7 @@ fn mock_single_target_note(
 
     let note = NoteBuilder::new(sender, rng).attachment(target).build().unwrap();
 
-    SingleTargetNetworkNote::try_from(note).expect("note should be single-target network note")
+    AccountTargetNetworkNote::new(note).expect("note should be single-target network note")
 }
 
 /// Counts the total number of rows in the `notes` table.
@@ -124,7 +123,7 @@ fn purge_inflight_clears_all_inflight_state() {
 
     // Mark note as consumed by another tx.
     let tx_id2 = mock_tx_id(2);
-    add_transaction(conn, &tx_id2, None, &[], &[note.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id2, None, &[], &[note.as_note().nullifier()]).unwrap();
 
     // Verify consumed_by is set.
     let consumed_count: i64 = schema::notes::table
@@ -162,15 +161,21 @@ fn transaction_added_inserts_notes_and_marks_consumed() {
     assert_eq!(count_notes(conn), 1);
 
     // Add transaction that creates note2 and consumes note1.
-    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note2), &[note1.nullifier()])
-        .unwrap();
+    add_transaction(
+        conn,
+        &tx_id,
+        None,
+        std::slice::from_ref(&note2),
+        &[note1.as_note().nullifier()],
+    )
+    .unwrap();
 
     // Should now have 2 notes total.
     assert_eq!(count_notes(conn), 2);
 
     // note1 should be consumed.
     let consumed: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note1.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note1.as_note().nullifier()))
         .select(schema::notes::consumed_by)
         .first(conn)
         .unwrap();
@@ -178,7 +183,7 @@ fn transaction_added_inserts_notes_and_marks_consumed() {
 
     // note2 should have created_by set.
     let created: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note2.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note2.as_note().nullifier()))
         .select(schema::notes::created_by)
         .first(conn)
         .unwrap();
@@ -219,7 +224,7 @@ fn block_committed_promotes_inflight_notes_to_committed() {
 
     // Verify created_by is set.
     let created: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
         .select(schema::notes::created_by)
         .first(conn)
         .unwrap();
@@ -230,7 +235,7 @@ fn block_committed_promotes_inflight_notes_to_committed() {
 
     // created_by should now be NULL (promoted to committed).
     let created: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
         .select(schema::notes::created_by)
         .first(conn)
         .unwrap();
@@ -250,7 +255,7 @@ fn block_committed_deletes_consumed_notes() {
 
     // Consume it via a transaction.
     let tx_id = mock_tx_id(1);
-    add_transaction(conn, &tx_id, None, &[], &[note.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id, None, &[], &[note.as_note().nullifier()]).unwrap();
 
     // Commit the block.
     let block_num = BlockNumber::from(1u32);
@@ -309,11 +314,11 @@ fn transactions_reverted_restores_consumed_notes() {
 
     // Consume it via a transaction.
     let tx_id = mock_tx_id(1);
-    add_transaction(conn, &tx_id, None, &[], &[note.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id, None, &[], &[note.as_note().nullifier()]).unwrap();
 
     // Verify consumed.
     let consumed: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
         .select(schema::notes::consumed_by)
         .first(conn)
         .unwrap();
@@ -325,7 +330,7 @@ fn transactions_reverted_restores_consumed_notes() {
 
     // Note should be un-consumed.
     let consumed: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
         .select(schema::notes::consumed_by)
         .first(conn)
         .unwrap();
@@ -394,13 +399,13 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
 
     // Consume one note.
     let tx_id = mock_tx_id(1);
-    add_transaction(conn, &tx_id, None, &[], &[note_consumed.nullifier()]).unwrap();
+    add_transaction(conn, &tx_id, None, &[], &[note_consumed.as_note().nullifier()]).unwrap();
 
     // Mark one note as failed many times (exceed max_attempts=3).
     let block_num = BlockNumber::from(100u32);
-    notes_failed(conn, &[note_failed.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_failed.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_failed.nullifier()], block_num).unwrap();
+    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
+    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
+    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
 
     // Query available notes with max_attempts=3.
     let result = available_notes(conn, account_id, block_num, 3).unwrap();
@@ -408,7 +413,7 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
     // Only note_good should be available (note_consumed is consumed, note_failed exceeded
     // attempts).
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].to_inner().nullifier(), note_good.nullifier());
+    assert_eq!(result[0].nullifier(), note_good.as_note().nullifier());
 }
 
 #[test]
@@ -427,7 +432,7 @@ fn available_notes_only_returns_notes_for_specified_account() {
     let result = available_notes(conn, account_id_1, block_num, 30).unwrap();
 
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].to_inner().nullifier(), note_acct1.nullifier());
+    assert_eq!(result[0].nullifier(), note_acct1.as_note().nullifier());
 }
 
 // NOTES FAILED TESTS
@@ -443,11 +448,11 @@ fn notes_failed_increments_attempt_count() {
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
 
     let block_num = BlockNumber::from(5u32);
-    notes_failed(conn, &[note.nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note.nullifier()], block_num).unwrap();
+    notes_failed(conn, &[note.as_note().nullifier()], block_num).unwrap();
+    notes_failed(conn, &[note.as_note().nullifier()], block_num).unwrap();
 
     let (attempt_count, last_attempt): (i32, Option<i64>) = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.nullifier()))
+        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
         .select((schema::notes::attempt_count, schema::notes::last_attempt))
         .first(conn)
         .unwrap();
@@ -493,7 +498,7 @@ fn note_script_insert_and_lookup() {
 
     // Extract a NoteScript from a mock note.
     let account_id = mock_network_account_id();
-    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into();
+    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into_note();
     let script = note.script().clone();
     let root = script.root();
 
@@ -520,7 +525,7 @@ fn note_script_insert_is_idempotent() {
     let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
-    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into();
+    let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into_note();
     let script = note.script().clone();
     let root = script.root();
 

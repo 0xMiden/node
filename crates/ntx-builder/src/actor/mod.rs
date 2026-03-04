@@ -17,13 +17,14 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteScript, Nullifier};
+use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::actor::inflight_note::InflightNetworkNote;
 use crate::block_producer::BlockProducerClient;
 use crate::builder::ChainState;
 use crate::db::Db;
@@ -386,10 +387,7 @@ impl AccountActor {
             Err(err) => {
                 tracing::error!(err = err.as_report(), "network transaction failed");
                 self.mode = ActorMode::NoViableNotes;
-                let nullifiers: Vec<_> = notes
-                    .into_iter()
-                    .map(|note| Note::from(note.into_inner()).nullifier())
-                    .collect();
+                let nullifiers: Vec<_> = notes.iter().map(InflightNetworkNote::nullifier).collect();
                 self.mark_notes_failed(&nullifiers, block_num).await;
             },
         }

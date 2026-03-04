@@ -263,8 +263,8 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 
         // Read the map key.
         let map_key = read_root::<GetWitnessesError>(request.map_key, "MapKey")
-             .map(StorageMapKey::new)
-             .map_err(invalid_argument)?;
+            .map(StorageMapKey::new)
+            .map_err(invalid_argument)?;
 
         // Read the slot name.
         let slot_name = StorageSlotName::new(request.slot_name).map_err(|err| {

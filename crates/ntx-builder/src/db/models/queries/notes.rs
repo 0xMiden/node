@@ -3,9 +3,10 @@
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{Note, Nullifier};
+use miden_standards::note::AccountTargetNetworkNote;
+use miden_tx::utils::{Deserializable, Serializable};
 
 use crate::actor::inflight_note::InflightNetworkNote;
 use crate::db::models::conv as conversions;
@@ -54,13 +55,16 @@ pub struct NoteInsert {
 /// ```
 pub fn insert_committed_notes(
     conn: &mut SqliteConnection,
-    notes: &[SingleTargetNetworkNote],
+    notes: &[AccountTargetNetworkNote],
 ) -> Result<(), DatabaseError> {
     for note in notes {
         let row = NoteInsert {
-            nullifier: conversions::nullifier_to_bytes(&note.nullifier()),
-            account_id: conversions::network_account_id_to_bytes(note.account_id()),
-            note_data: conversions::single_target_note_to_bytes(note),
+            nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
+            account_id: conversions::network_account_id_to_bytes(
+                NetworkAccountId::try_from(note.target_account_id())
+                    .expect("account ID of a network note should be a network account"),
+            ),
+            note_data: note.as_note().to_bytes(),
             attempt_count: 0,
             last_attempt: None,
             created_by: None,
@@ -161,6 +165,11 @@ fn note_row_to_inflight(
     attempt_count: usize,
     last_attempt: Option<BlockNumber>,
 ) -> Result<InflightNetworkNote, DatabaseError> {
-    let note = conversions::single_target_note_from_bytes(note_data)?;
+    let note = Note::read_from_bytes(note_data)
+        .map_err(|source| DatabaseError::deserialization("failed to parse note", source))?;
+    let note = AccountTargetNetworkNote::new(note).map_err(|source| {
+        DatabaseError::deserialization("failed to convert to network note", source)
+    })?;
+
     Ok(InflightNetworkNote::from_parts(note, attempt_count, last_attempt))
 }

@@ -31,6 +31,7 @@
 
 - Fixed `bundled start` panicking due to duplicate `data_directory` clap argument name between `BundledCommand::Start` and `NtxBuilderConfig` ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
+- Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 
 ## v0.13.7 (2026-02-25)
 
@@ -79,34 +80,35 @@
 
 ### Enhancements
 
-- Cleanup old account data from the database on apply block ([#1304](https://github.com/0xMiden/node/issues/1304)).
-- Added block validation endpoint to validator and integrated with block producer ([#1382](https://github.com/0xMiden/node/pull/1381)).
-- Added support for timeouts in the WASM remote prover clients ([#1383](https://github.com/0xMiden/node/pull/1383)).
-- Added mempool statistics to the block producer status in the `miden-network-monitor` binary ([#1392](https://github.com/0xMiden/node/pull/1392)).
-- Added `GetLimits` endpoint to the RPC server ([#1410](https://github.com/0xMiden/node/pull/1410)).
-- Added chain tip to the block producer status ([#1419](https://github.com/0xMiden/node/pull/1419)).
-- Added success rate to the `miden-network-monitor` binary ([#1420](https://github.com/0xMiden/node/pull/1420)).
-- The mempool's transaction capacity is now configurable ([#1433](https://github.com/0xMiden/node/pull/1433)).
-- Added pagination to `GetNetworkAccountIds` store endpoint ([#1452](https://github.com/0xMiden/node/pull/1452)).
-- Integrated NTX Builder with validator via `SubmitProvenTransaction` RPC ([#1453](https://github.com/0xMiden/node/pull/1453)).
-- Integrated RPC stack with Validator component for transaction validation ([#1457](https://github.com/0xMiden/node/pull/1457)).
-- Added partial storage map queries to RPC ([#1428](https://github.com/0xMiden/node/pull/1428)).
-- Added explorer status to the `miden-network-monitor` binary ([#1450](https://github.com/0xMiden/node/pull/1450)).
-- Added validated transactions check to block validation logic in Validator ([#1460](https://github.com/0xMiden/node/pull/1460)).
-- Added gRPC-Web probe support to the `miden-network-monitor` binary ([#1484](https://github.com/0xMiden/node/pull/1484)).
-- Added DB schema change check ([#1268](https://github.com/0xMiden/node/pull/1485)).
-- Added foreign account support to validator ([#1493](https://github.com/0xMiden/node/pull/1493)).
-- Decoupled ntx-builder from block-producer startup by loading network accounts asynchronously via a background task ([#1495](https://github.com/0xMiden/node/pull/1495)).
-- Improved DB query performance for account queries ([#1496](https://github.com/0xMiden/node/pull/1496)).
-- The network monitor now marks the chain as unhealthy if it fails to create new blocks ([#1512](https://github.com/0xMiden/node/pull/1512)).
-- Limited number of storage map keys in `GetAccount` requests ([#1517](https://github.com/0xMiden/node/pull/1517)).
-- Block producer now detects if it is desync'd from the store's chain tip and aborts ([#1520](https://github.com/0xMiden/node/pull/1520)).
-- Pin tool versions in CI ([#1523](https://github.com/0xMiden/node/pull/1523)).
-- Add `GetVaultAssetWitnesses` and `GetStorageMapWitness` RPC endpoints to store ([#1529](https://github.com/0xMiden/node/pull/1529)).
-- Add check to ensure tree store state is in sync with database storage ([#1532](https://github.com/0xMiden/node/issues/1534)).
-- Ensure store terminates on nullifier tree or account tree root vs header mismatch (#[#1569](https://github.com/0xMiden/node/pull/1569)).
-- Added support for foreign accounts to `NtxDataStore` and add `GetAccount` endpoint to NTX Builder gRPC store client ([#1521](https://github.com/0xMiden/node/pull/1521)).
-- Use paged queries for tree rebuilding to reduce memory usage during startup ([#1536](https://github.com/0xMiden/node/pull/1536)).
+- Cleanup old account data from the database on apply block ([#1304](https://github.com/0xMiden/miden-node/issues/1304)).
+- Added block validation endpoint to validator and integrated with block producer ([#1382](https://github.com/0xMiden/miden-node/pull/1381)).
+- Added support for timeouts in the WASM remote prover clients ([#1383](https://github.com/0xMiden/miden-node/pull/1383)).
+- Added mempool statistics to the block producer status in the `miden-network-monitor` binary ([#1392](https://github.com/0xMiden/miden-node/pull/1392)).
+- Added `GetLimits` endpoint to the RPC server ([#1410](https://github.com/0xMiden/miden-node/pull/1410)).
+- Added chain tip to the block producer status ([#1419](https://github.com/0xMiden/miden-node/pull/1419)).
+- Added success rate to the `miden-network-monitor` binary ([#1420](https://github.com/0xMiden/miden-node/pull/1420)).
+- The mempool's transaction capacity is now configurable ([#1433](https://github.com/0xMiden/miden-node/pull/1433)).
+- Added pagination to `GetNetworkAccountIds` store endpoint ([#1452](https://github.com/0xMiden/miden-node/pull/1452)).
+- Integrated NTX Builder with validator via `SubmitProvenTransaction` RPC ([#1453](https://github.com/0xMiden/miden-node/pull/1453)).
+- Integrated RPC stack with Validator component for transaction validation ([#1457](https://github.com/0xMiden/miden-node/pull/1457)).
+- Added partial storage map queries to RPC ([#1428](https://github.com/0xMiden/miden-node/pull/1428)).
+- Added explorer status to the `miden-network-monitor` binary ([#1450](https://github.com/0xMiden/miden-node/pull/1450)).
+- Added validated transactions check to block validation logic in Validator ([#1460](https://github.com/0xMiden/miden-node/pull/1460)).
+- Added gRPC-Web probe support to the `miden-network-monitor` binary ([#1484](https://github.com/0xMiden/miden-node/pull/1484)).
+- Added DB schema change check ([#1268](https://github.com/0xMiden/miden-node/pull/1485)).
+- Added foreign account support to validator ([#1493](https://github.com/0xMiden/miden-node/pull/1493)).
+- Decoupled ntx-builder from block-producer startup by loading network accounts asynchronously via a background task ([#1495](https://github.com/0xMiden/miden-node/pull/1495)).
+- Improved DB query performance for account queries ([#1496](https://github.com/0xMiden/miden-node/pull/1496)).
+- The network monitor now marks the chain as unhealthy if it fails to create new blocks ([#1512](https://github.com/0xMiden/miden-node/pull/1512)).
+- Limited number of storage map keys in `GetAccount` requests ([#1517](https://github.com/0xMiden/miden-node/pull/1517)).
+- Block producer now detects if it is desync'd from the store's chain tip and aborts ([#1520](https://github.com/0xMiden/miden-node/pull/1520)).
+- Pin tool versions in CI ([#1523](https://github.com/0xMiden/miden-node/pull/1523)).
+- Add `GetVaultAssetWitnesses` and `GetStorageMapWitness` RPC endpoints to store ([#1529](https://github.com/0xMiden/miden-node/pull/1529)).
+- Add check to ensure tree store state is in sync with database storage ([#1532](https://github.com/0xMiden/miden-node/issues/1534)).
+- Improve speed of account updates ([#1567](https://github.com/0xMiden/miden-node/pull/1567)).
+- Ensure store terminates on nullifier tree or account tree root vs header mismatch (#[#1569](https://github.com/0xMiden/miden-node/pull/1569)).
+- Added support for foreign accounts to `NtxDataStore` and add `GetAccount` endpoint to NTX Builder gRPC store client ([#1521](https://github.com/0xMiden/miden-node/pull/1521)).
+- Use paged queries for tree rebuilding to reduce memory usage during startup ([#1536](https://github.com/0xMiden/miden-node/pull/1536)).
 
 ### Changes
 

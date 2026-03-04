@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::Mul;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_proto::domain::note::NetworkNote;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{OutputNote, TransactionId};
+use miden_standards::note::NetworkNoteExt;
 use tokio::sync::mpsc;
 
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -83,7 +83,13 @@ impl SubscriptionProvider {
         let network_notes = tx
             .output_notes()
             .filter_map(|note| match note {
-                OutputNote::Full(inner) => NetworkNote::try_from(inner.clone()).ok(),
+                // We check first to avoid cloning non-network notes.
+                OutputNote::Full(inner) => inner.is_network_note().then_some(
+                    inner
+                        .clone()
+                        .into_account_target_network_note()
+                        .expect("we just checked that this is a network note"),
+                ),
                 _ => None,
             })
             .collect();
