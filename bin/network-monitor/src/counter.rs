@@ -41,6 +41,9 @@ use rand_chacha::ChaCha20Rng;
 use tokio::sync::{Mutex, watch};
 use tracing::{error, info, instrument, warn};
 
+/// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
+const RESYNC_FAILURE_THRESHOLD: usize = 3;
+
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
@@ -395,6 +398,7 @@ pub async fn run_increment_task(
 
     let mut rng = ChaCha20Rng::from_os_rng();
     let mut interval = tokio::time::interval(config.counter_increment_interval);
+    let mut consecutive_failures: usize = 0;
 
     loop {
         interval.tick().await;
@@ -414,6 +418,8 @@ pub async fn run_increment_task(
         .await
         {
             Ok((tx_id, final_account, block_height)) => {
+                consecutive_failures = 0;
+
                 let target_value = handle_increment_success(
                     &mut wallet_account,
                     &final_account,
@@ -433,7 +439,21 @@ pub async fn run_increment_task(
                 }
             },
             Err(e) => {
+                consecutive_failures += 1;
                 last_error = Some(handle_increment_failure(&mut details, &e));
+
+                if consecutive_failures >= RESYNC_FAILURE_THRESHOLD {
+                    if try_resync_wallet_account(
+                        &mut rpc_client,
+                        &mut wallet_account,
+                        &mut data_store,
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        consecutive_failures = 0;
+                    }
+                }
             },
         }
 
@@ -476,6 +496,37 @@ fn handle_increment_success(
     let new_expected = expected_counter_value.fetch_add(1, Ordering::Relaxed) + 1;
 
     Ok(new_expected)
+}
+
+/// Re-sync the wallet account from the RPC after repeated failures.
+#[instrument(
+    parent = None,
+    target = COMPONENT,
+    name = "network_monitor.counter.try_resync_wallet_account",
+    skip_all,
+    fields(account.id = %wallet_account.id()),
+    level = "warn",
+    err,
+)]
+async fn try_resync_wallet_account(
+    rpc_client: &mut RpcClient,
+    wallet_account: &mut Account,
+    data_store: &mut MonitorDataStore,
+) -> Result<()> {
+    let fresh_account = fetch_wallet_account(rpc_client, wallet_account.id())
+        .await
+        .inspect_err(|e| {
+            error!(account.id = %wallet_account.id(), err = ?e, "failed to re-sync wallet account from RPC");
+        })?
+        .context("wallet account not found on-chain during re-sync")
+        .inspect_err(|e| {
+            error!(account.id = %wallet_account.id(), err = ?e, "wallet account not found on-chain during re-sync");
+        })?;
+
+    info!(account.id = %wallet_account.id(), "wallet account re-synced from RPC");
+    *wallet_account = fresh_account;
+    data_store.update_account(wallet_account.clone());
+    Ok(())
 }
 
 /// Handle the failure path when creating/submitting the network note fails.
