@@ -83,9 +83,7 @@ impl SubscriptionProvider {
         let network_notes = tx
             .output_notes()
             .filter_map(|note| match note {
-                OutputNote::Full(inner) => {
-                    inner.clone().into_account_target_network_note().ok()
-                },
+                OutputNote::Full(inner) => inner.clone().into_account_target_network_note().ok(),
                 _ => None,
             })
             .collect();
