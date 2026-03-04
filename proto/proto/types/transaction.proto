@@ -57,5 +57,5 @@ message TransactionHeader {
     repeated primitives.Digest nullifiers = 4;
 
     // Output notes of the transaction.
-    repeated note.NoteSyncRecord output_notes = 5;
+    repeated note.CommittedNoteInfo output_notes = 5;
 }

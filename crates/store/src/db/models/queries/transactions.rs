@@ -151,12 +151,12 @@ impl TransactionSummaryRowInsert {
         // - 16 bytes for account ID
         // - 64 bytes for initial + final state commitments (32 bytes each)
         // - 32 bytes per input note (nullifier size)
-        // - 500 bytes per output note (estimated size when converted to NoteSyncRecord)
+        // - 200 bytes per output note (estimated size when converted to CommittedNoteInfo)
         //
         // Note: 500 bytes per output note is an over-estimate but ensures we don't
         // exceed memory limits when these transactions are later converted to proto records.
         let nullifiers_size = (transaction_header.input_notes().num_notes() * 32) as usize;
-        let output_notes_size = transaction_header.output_notes().len() * 500;
+        let output_notes_size = transaction_header.output_notes().len() * 200;
         let size_in_bytes = (HEADER_BASE_SIZE + nullifiers_size + output_notes_size) as i64;
 
         Self {

@@ -477,7 +477,7 @@ message SyncNotesResponse {
     primitives.MerklePath mmr_path = 3;
 
     // List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    repeated note.NoteSyncRecord notes = 4;
+    repeated note.CommittedNoteInfo notes = 4;
 }
 
 // SYNC CHAIN MMR

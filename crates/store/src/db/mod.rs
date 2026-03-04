@@ -186,18 +186,16 @@ impl From<NoteRecord> for proto::note::CommittedNote {
     }
 }
 
-impl From<NoteRecord> for proto::note::NoteSyncRecord {
+impl From<NoteRecord> for proto::note::CommittedNoteInfo {
     fn from(value: NoteRecord) -> Self {
-        let note_id = value.note_id.into();
-        let note_index_in_block = value.note_index.leaf_index_value().into();
-        let metadata = value.metadata.into();
-        let inclusion_path = value.inclusion_path.into();
-
-        proto::note::NoteSyncRecord {
-            note_id: Some(note_id),
-            note_index_in_block,
-            metadata: Some(metadata),
-            inclusion_path: Some(inclusion_path),
+        proto::note::CommittedNoteInfo {
+            metadata: Some(value.metadata.into()),
+            inclusion_proof: Some(proto::note::NoteInclusionInBlockProof {
+                note_id: Some(value.note_id.into()),
+                block_num: value.block_num.as_u32(),
+                note_index_in_block: value.note_index.leaf_index_value().into(),
+                inclusion_path: Some(value.inclusion_path.into()),
+            }),
         }
     }
 }
@@ -217,13 +215,16 @@ pub struct NoteSyncRecord {
     pub inclusion_path: SparseMerklePath,
 }
 
-impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
+impl From<NoteSyncRecord> for proto::note::CommittedNoteInfo {
     fn from(note: NoteSyncRecord) -> Self {
-        Self {
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            note_id: Some(note.note_id.into()),
+        proto::note::CommittedNoteInfo {
             metadata: Some(note.metadata.into()),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
+            inclusion_proof: Some(proto::note::NoteInclusionInBlockProof {
+                note_id: Some(note.note_id.into()),
+                block_num: note.block_num.as_u32(),
+                note_index_in_block: note.note_index.leaf_index_value().into(),
+                inclusion_path: Some(note.inclusion_path.into()),
+            }),
         }
     }
 }

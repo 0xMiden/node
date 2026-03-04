@@ -48,6 +48,20 @@ message NoteMetadata {
     bytes attachment = 4;
 }
 
+// A compact, fixed-size representation of note metadata for sync responses.
+// Contains the readable metadata fields plus a commitment digest instead of
+// the full attachment data. Use GetNotesById to retrieve full metadata.
+message NoteMetadataHeader {
+    // The account which sent the note.
+    account.AccountId sender = 1;
+    // The type of the note.
+    NoteType note_type = 2;
+    // A value which can be used by the recipient(s) to identify notes intended for them.
+    fixed32 tag = 3;
+    // The commitment to the full note metadata: hash(header_word || attachment_word).
+    primitives.Digest metadata_commitment = 4;
+}
+
 // Represents a note.
 //
 // The note is composed of the note metadata and its serialized details.
@@ -105,19 +119,15 @@ message NoteInclusionInBlockProof {
     primitives.SparseMerklePath inclusion_path = 4;
 }
 
-// Represents proof of a note inclusion in the block.
-message NoteSyncRecord {
-    // A unique identifier of the note which is a 32-byte commitment to the underlying note data.
-    NoteId note_id = 1;
-
-    // The index of the note in the block.
-    uint32 note_index_in_block = 2;
-
-    // The note's metadata.
-    NoteMetadata metadata = 3;
-
-    // The note's inclusion proof in the block.
-    primitives.SparseMerklePath inclusion_path = 4;
+// A compact summary of a committed note for sync responses.
+//
+// Contains a fixed-size metadata header instead of full metadata, and the
+// note's inclusion proof in a block.
+message CommittedNoteInfo {
+    // Compact metadata header (sender, type, tag, commitment).
+    NoteMetadataHeader metadata = 1;
+    // The data needed to prove that the note is present in the chain.
+    NoteInclusionInBlockProof inclusion_proof = 2;
 }
 
 // Represents a commitment to a note script.

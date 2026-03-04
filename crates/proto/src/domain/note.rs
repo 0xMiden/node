@@ -126,6 +126,17 @@ impl From<NoteMetadata> for proto::note::NoteMetadata {
     }
 }
 
+impl From<NoteMetadata> for proto::note::NoteMetadataHeader {
+    fn from(val: NoteMetadata) -> Self {
+        proto::note::NoteMetadataHeader {
+            sender: Some(val.sender().into()),
+            note_type: proto::note::NoteType::from(val.note_type()) as i32,
+            tag: val.tag().as_u32(),
+            metadata_commitment: Some(val.to_commitment().into()),
+        }
+    }
+}
+
 impl From<Word> for proto::note::NoteId {
     fn from(digest: Word) -> Self {
         Self { id: Some(digest.into()) }

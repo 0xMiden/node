@@ -148,7 +148,7 @@ pub async fn bench_sync_nullifiers(
         let note_ids = response
             .notes
             .iter()
-            .map(|n| n.note_id.unwrap())
+            .map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
             .collect::<Vec<proto::note::NoteId>>();
 
         // Get the notes nullifiers, limiting to 20 notes maximum
