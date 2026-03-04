@@ -1,4 +1,4 @@
-name: Publish (main)
+name: Publish crates
 
 permissions:
   contents: read
@@ -17,26 +17,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ github.event.release.tag_name }}
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
-      # Ensure the release tag refers to the latest commit on the release branch.
-      # Compare the commit SHA that triggered the workflow with the HEAD of the branch we just
-      # checked out.
-      - name: Verify release was triggered from release branch HEAD
+      - name: Log release info
         run: |
-          tag_sha="${{ github.sha }}"
-          branch_sha="$(git rev-parse HEAD)"
-          release_branch="${{ github.event.release.target_commitish }}"
-
-          echo "Tag points to:                    $tag_sha"
-          echo "Current $release_branch HEAD is:  $branch_sha"
-
-          if [ "$tag_sha" != "$branch_sha" ]; then
-            echo "::error::The release tag was not created from the latest commit on $release_branch. Aborting."
-            exit 1
-          fi
-          echo "Release tag matches $release_branch HEAD — continuing."
+          echo "Publishing release ${{ github.event.release.tag_name }}"
+          echo "Commit: $(git rev-parse HEAD)"
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - name: Install dependencies
