@@ -46,22 +46,22 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "=0.14.0-alpha.1" }
-miden-node-block-producer       = { path = "crates/block-producer", version = "=0.14.0-alpha.1" }
-miden-node-db                   = { path = "crates/db", version = "=0.14.0-alpha.1" }
-miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "=0.14.0-alpha.1" }
-miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "=0.14.0-alpha.1" }
-miden-node-proto                = { path = "crates/proto", version = "=0.14.0-alpha.1" }
-miden-node-proto-build          = { path = "proto", version = "=0.14.0-alpha.1" }
-miden-node-rpc                  = { path = "crates/rpc", version = "=0.14.0-alpha.1" }
-miden-node-store                = { path = "crates/store", version = "=0.14.0-alpha.1" }
+miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "=0.14.0-alpha.2" }
+miden-node-block-producer       = { path = "crates/block-producer", version = "=0.14.0-alpha.2" }
+miden-node-db                   = { path = "crates/db", version = "=0.14.0-alpha.2" }
+miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "=0.14.0-alpha.2" }
+miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "=0.14.0-alpha.2" }
+miden-node-proto                = { path = "crates/proto", version = "=0.14.0-alpha.2" }
+miden-node-proto-build          = { path = "proto", version = "=0.14.0-alpha.2" }
+miden-node-rpc                  = { path = "crates/rpc", version = "=0.14.0-alpha.2" }
+miden-node-store                = { path = "crates/store", version = "=0.14.0-alpha.2" }
 miden-node-test-macro           = { path = "crates/test-macro" }
-miden-node-utils                = { path = "crates/utils", version = "=0.14.0-alpha.1" }
-miden-node-validator            = { path = "crates/validator", version = "=0.14.0-alpha.1" }
-miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "=0.14.0-alpha.1" }
+miden-node-utils                = { path = "crates/utils", version = "=0.14.0-alpha.2" }
+miden-node-validator            = { path = "crates/validator", version = "=0.14.0-alpha.2" }
+miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "=0.14.0-alpha.2" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
-miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "=0.14.0-alpha.1" }
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "=0.14.0-alpha.2" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
 miden-block-prover    = { version = "=0.14.0-alpha.1" }
