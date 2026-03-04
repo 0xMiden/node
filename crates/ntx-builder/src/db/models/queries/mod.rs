@@ -139,8 +139,12 @@ pub fn add_transaction(
     // (the nullifier PK would otherwise cause a constraint violation).
     for note in notes {
         let insert = NoteInsert {
-            nullifier: note.as_note().nullifier().to_bytes(),
-            account_id: note.target_account_id().to_bytes(),
+            nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
+            account_id: conversions::network_account_id_to_bytes(
+                note.target_account_id()
+                    .try_into()
+                    .expect("network note's target account must be a network account"),
+            ),
             note_data: note.as_note().to_bytes(),
             attempt_count: 0,
             last_attempt: None,
@@ -154,7 +158,7 @@ pub fn add_transaction(
 
     // Mark consumed notes: set consumed_by = tx_id for matching nullifiers.
     for nullifier in nullifiers {
-        let nullifier_bytes = nullifier.to_bytes();
+        let nullifier_bytes = conversions::nullifier_to_bytes(nullifier);
 
         // Only mark notes that are not already consumed.
         diesel::update(
