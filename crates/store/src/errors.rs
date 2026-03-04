@@ -275,7 +275,7 @@ pub enum SyncChainMmrError {
     NoProvenBlocks,
     #[error("database error")]
     #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
+    DatabaseError(#[source] DatabaseError),
 }
 
 impl From<diesel::result::Error> for StateSyncError {
