@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
-use miden_protocol::account::{Account, AccountId, PartialAccount, PartialStorage};
+use miden_protocol::account::{Account, AccountId, PartialAccount, PartialStorage, StorageMapKey};
 use miden_protocol::assembly::{
     DefaultSourceManager,
     Library,
@@ -308,7 +308,7 @@ impl DataStore for MonitorDataStore {
         &self,
         _account_id: AccountId,
         _map_root: Word,
-        _map_key: Word,
+        _map_key: StorageMapKey,
     ) -> Result<miden_protocol::account::StorageMapWitness, DataStoreError> {
         unimplemented!("Not needed")
     }

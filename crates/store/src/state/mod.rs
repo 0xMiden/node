@@ -23,7 +23,7 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::formatting::format_array;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, StorageMapWitness, StorageSlotName};
+use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
@@ -840,7 +840,7 @@ impl State {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        raw_key: Word,
+        raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
         let witness = self
             .forest

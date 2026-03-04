@@ -60,6 +60,8 @@ pub(crate) struct ApplyBlockData<'a> {
 
 /// Apply a new block to the state
 ///
+/// # Arguments
+///
 /// # Returns
 ///
 /// Number of records inserted and/or updated.
