@@ -14,7 +14,7 @@ use tracing::{info, instrument};
 
 use crate::COMPONENT;
 use crate::errors::GetBlockInputsError;
-use crate::server::proof_scheduler::ProofSchedulerHandle;
+use crate::server::proof_scheduler::ProofSchedulerNotifier;
 use crate::state::State;
 
 // STORE API
@@ -24,7 +24,7 @@ use crate::state::State;
 pub struct StoreApi {
     pub(super) state: Arc<State>,
     /// Handle used to notify proof scheduler of newly committed blocks.
-    pub(super) proof_scheduler: ProofSchedulerHandle,
+    pub(super) proof_scheduler: ProofSchedulerNotifier,
 }
 
 impl StoreApi {

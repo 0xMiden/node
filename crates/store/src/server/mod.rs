@@ -116,21 +116,21 @@ impl Store {
 
         // Spawn the proof scheduler as a background task. It will immediately pick up any
         // unproven blocks from previous runs and begin proving them.
-        let (proof_scheduler_handle, proof_scheduler_task) =
+        let (proof_scheduler_notifier, proof_scheduler_task) =
             proof_scheduler::spawn(state.db().clone(), block_prover, state.block_store());
 
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),
-            proof_scheduler: proof_scheduler_handle.clone(),
+            proof_scheduler: proof_scheduler_notifier.clone(),
         });
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
             state: Arc::clone(&state),
-            proof_scheduler: proof_scheduler_handle.clone(),
+            proof_scheduler: proof_scheduler_notifier.clone(),
         });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
-                proof_scheduler: proof_scheduler_handle,
+                proof_scheduler: proof_scheduler_notifier,
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())

@@ -44,11 +44,11 @@ const MAX_PROVING_BATCH_SIZE: i64 = 16;
 
 /// Handle returned when spawning the proof scheduler, used to notify it of new blocks.
 #[derive(Clone)]
-pub struct ProofSchedulerHandle {
+pub struct ProofSchedulerNotifier {
     notify: Arc<Notify>,
 }
 
-impl ProofSchedulerHandle {
+impl ProofSchedulerNotifier {
     /// Notify the scheduler that a new block has been committed and may need proving.
     #[instrument(target = COMPONENT, name = "proof_scheduler.notify", skip_all)]
     pub fn notify_block_committed(&self) {
@@ -65,13 +65,13 @@ pub fn spawn(
     db: Arc<Db>,
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
-) -> (ProofSchedulerHandle, JoinHandle<Result<(), ProofSchedulerError>>) {
+) -> (ProofSchedulerNotifier, JoinHandle<Result<(), ProofSchedulerError>>) {
     let notify = Arc::new(Notify::new());
-    let handle = ProofSchedulerHandle { notify: Arc::clone(&notify) };
+    let notifier = ProofSchedulerNotifier { notify: Arc::clone(&notify) };
 
     let join_handle = tokio::spawn(run(db, block_prover, block_store, notify));
 
-    (handle, join_handle)
+    (notifier, join_handle)
 }
 
 /// Main loop of the proof scheduler.
