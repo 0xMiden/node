@@ -503,7 +503,7 @@ message SyncChainMmrRequest {
 
     // The finality level to use when clamping the upper bound of the block range.
     //
-    // When set to `FINALITY_COMMITTED` (default), the upper bound is clamped to the chain tip.
+    // When set to `FINALITY_UNSPECIFIED` or `FINALITY_COMMITTED`, the upper bound is clamped to the chain tip.
     // When set to `FINALITY_PROVEN`, the upper bound is clamped to the latest proven block.
     Finality finality = 2;
 }
