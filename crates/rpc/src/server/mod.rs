@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use accept::AcceptHeaderLayer;
@@ -78,12 +79,32 @@ impl Rpc {
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
+        let rate_limiter = {
+            let config = tower_governor::governor::GovernorConfigBuilder::default()
+                .per_second(10)
+                .burst_size(20)
+                .use_headers()
+                .finish()
+                .context("config parameters are inconsistent, i.e. burst < per second")?;
+            let limiter = Arc::clone(config.limiter());
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    // avoid a DoS vector
+                    limiter.retain_recent();
+                }
+            });
+            tower_governor::GovernorLayer::new(config)
+        };
+
         tonic::transport::Server::builder()
             .accept_http1(true)
             .timeout(self.grpc_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
+            .layer(rate_limiter)
             // Note: must come before the accept layer, as otherwise accept rejections
             // do _not_ get CORS headers applied, masking the accept error in
             // web-clients (which would experience CORS rejection).
