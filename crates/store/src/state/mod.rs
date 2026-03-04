@@ -184,12 +184,12 @@ impl State {
 
     /// Returns the database.
     pub(crate) fn db(&self) -> Arc<Db> {
-        self.db.clone()
+        Arc::clone(&self.db)
     }
 
     /// Returns the block store.
     pub(crate) fn block_store(&self) -> Arc<BlockStore> {
-        self.block_store.clone()
+        Arc::clone(&self.block_store)
     }
 
     // STATE ACCESSORS
