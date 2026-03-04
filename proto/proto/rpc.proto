@@ -485,10 +485,11 @@ message SyncNotesResponse {
 
 // The finality level for chain data queries.
 enum Finality {
+    FINALITY_UNSPECIFIED = 0;
     // Return data up to the latest committed block (default).
-    FINALITY_COMMITTED = 0;
+    FINALITY_COMMITTED = 1;
     // Return data only up to the latest proven block.
-    FINALITY_PROVEN = 1;
+    FINALITY_PROVEN = 2;
 }
 
 // Chain MMR synchronization request.

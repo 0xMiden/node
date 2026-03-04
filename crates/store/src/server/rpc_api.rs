@@ -168,7 +168,7 @@ impl rpc_server::Rpc for StoreApi {
 
         // Determine the effective tip based on the requested finality level.
         let effective_tip = match request.finality() {
-            proto::rpc::Finality::Committed => chain_tip,
+            proto::rpc::Finality::Unspecified | proto::rpc::Finality::Committed => chain_tip,
             proto::rpc::Finality::Proven => self
                 .state
                 .db()
