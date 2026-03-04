@@ -31,6 +31,7 @@
 
 - Fixed `bundled start` panicking due to duplicate `data_directory` clap argument name between `BundledCommand::Start` and `NtxBuilderConfig` ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
+- Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 
 ## v0.13.7 (2026-02-25)
 

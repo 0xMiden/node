@@ -5,7 +5,6 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_proto::domain::note::{NetworkNote, SingleTargetNetworkNote};
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{Semaphore, mpsc};
@@ -239,10 +238,12 @@ impl Coordinator {
 
             // Determine target actors for each note.
             for note in network_notes {
-                let NetworkNote::SingleTarget(note) = note;
-                let network_account_id = note.account_id();
-                if let Some(actor) = self.actor_registry.get(&network_account_id) {
-                    target_actors.insert(network_account_id, actor);
+                let account = note.target_account_id();
+                let account = NetworkAccountId::try_from(account)
+                    .expect("network note target account should be a network account");
+
+                if let Some(actor) = self.actor_registry.get(&account) {
+                    target_actors.insert(account, actor);
                 }
             }
         }
@@ -268,16 +269,13 @@ impl Coordinator {
                 network_notes,
                 account_delta,
             } => {
-                let notes: Vec<SingleTargetNetworkNote> = network_notes
-                    .iter()
-                    .map(|n| {
-                        let NetworkNote::SingleTarget(note) = n;
-                        note.clone()
-                    })
-                    .collect();
-
                 self.db
-                    .handle_transaction_added(*id, account_delta.clone(), notes, nullifiers.clone())
+                    .handle_transaction_added(
+                        *id,
+                        account_delta.clone(),
+                        network_notes.clone(),
+                        nullifiers.clone(),
+                    )
                     .await?;
                 Ok(Vec::new())
             },

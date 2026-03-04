@@ -212,14 +212,6 @@ impl NetworkTransactionBuilder {
             .await
             .context("failed to load notes from store")?;
 
-        let notes: Vec<_> = notes
-            .into_iter()
-            .map(|n| {
-                let miden_node_proto::domain::note::NetworkNote::SingleTarget(note) = n;
-                note
-            })
-            .collect();
-
         // Write account and notes to DB.
         self.db
             .sync_account_from_store(account_id, account.clone(), notes.clone())

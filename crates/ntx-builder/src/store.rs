@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
-use miden_node_proto::domain::note::NetworkNote;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::{self as proto};
@@ -26,6 +25,7 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::AccountInputs;
+use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::utils::{Deserializable, Serializable};
 use thiserror::Error;
 use tracing::{info, instrument};
@@ -196,7 +196,7 @@ impl StoreClient {
         &self,
         network_account_id: NetworkAccountId,
         block_num: u32,
-    ) -> Result<Vec<NetworkNote>, StoreError> {
+    ) -> Result<Vec<AccountTargetNetworkNote>, StoreError> {
         // Upper bound of each note is ~10KB. Limit page size to ~10MB.
         const PAGE_SIZE: u64 = 1024;
 
@@ -215,7 +215,7 @@ impl StoreClient {
 
             all_notes.reserve(resp.notes.len());
             for note in resp.notes {
-                all_notes.push(NetworkNote::try_from(note)?);
+                all_notes.push(AccountTargetNetworkNote::try_from(note)?);
             }
 
             match resp.next_token {
