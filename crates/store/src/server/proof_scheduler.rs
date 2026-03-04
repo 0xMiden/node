@@ -1,27 +1,26 @@
 //! Background task that drives deferred block proving.
 //!
-//! The [`ProofScheduler`] is spawned as an internal Store task. It:
+//! The [`proof_scheduler`] is spawned as an internal Store task. It:
 //!
-//! 1. On startup, queries the DB for all unproven blocks (handles restart recovery).
-//! 2. Listens on a [`tokio::sync::Notify`] for newly committed blocks.
-//! 3. Proves blocks concurrently, but resolves completions in FIFO order via [`FuturesOrdered`].
-//!    This ensures the ancestor rule: a block's proof is only persisted after all ancestor proofs
-//!    have been persisted.
-//! 4. On transient errors (DB reads, prover failures, timeouts), the scheduler abandons the current
-//!    batch, re-queries unproven blocks, and retries from scratch.
+//! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`] and `latest_proven_block` locally.
+//! 2. Maintains up to [`MAX_CONCURRENT_PROOFS`] in-flight proving jobs via a [`JoinSet`].
+//! 3. Marks blocks as proven in the database **sequentially** — a block is only marked after all
+//!    its ancestors have been marked. Completed proofs that arrive out-of-order are buffered
+//!    locally until the sequential gap is filled.
+//! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is re-queued for
+//!    proving while other in-flight jobs continue uninterrupted.
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::StreamExt;
-use futures::stream::FuturesOrdered;
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::Serializable;
 use miden_remote_prover_client::RemoteProverClientError;
-use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+use tokio::sync::watch;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{error, info, instrument};
 
 use crate::COMPONENT;
@@ -36,48 +35,33 @@ use crate::server::block_prover_client::{BlockProver, StoreProverError};
 /// Overall timeout for proving a single block.
 const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
 
-/// Maximum number of unproven blocks to process in a single batch.
-const MAX_PROVING_BATCH_SIZE: i64 = 16;
+/// Maximum number of blocks being proven concurrently.
+const MAX_CONCURRENT_PROOFS: usize = 8;
 
 // PROOF SCHEDULER
 // ================================================================================================
 
-/// Handle returned when spawning the proof scheduler, used to notify it of new blocks.
-#[derive(Clone)]
-pub struct ProofSchedulerNotifier {
-    notify: Arc<Notify>,
-}
-
-impl ProofSchedulerNotifier {
-    /// Notify the scheduler that a new block has been committed and may need proving.
-    #[instrument(target = COMPONENT, name = "proof_scheduler.notify", skip_all)]
-    pub fn notify_block_committed(&self) {
-        self.notify.notify_one();
-    }
-}
-
 /// Spawns the proof scheduler as a background tokio task.
 ///
-/// Returns a [`ProofSchedulerHandle`] that should be used to notify the scheduler when new
-/// blocks are committed, and a [`JoinHandle`] that resolves when the scheduler encounters a
-/// fatal error or completes unexpectedly.
+/// The scheduler uses `chain_tip_rx` to learn about newly committed blocks and
+/// `latest_proven_block` as the starting point for sequential proof tracking.
+///
+/// Returns a [`JoinHandle`] that resolves when the scheduler encounters a fatal error or
+/// completes unexpectedly.
 pub fn spawn(
     db: Arc<Db>,
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
-) -> (ProofSchedulerNotifier, JoinHandle<Result<(), ProofSchedulerError>>) {
-    let notify = Arc::new(Notify::new());
-    let notifier = ProofSchedulerNotifier { notify: Arc::clone(&notify) };
-
-    let join_handle = tokio::spawn(run(db, block_prover, block_store, notify));
-
-    (notifier, join_handle)
+    chain_tip_rx: watch::Receiver<BlockNumber>,
+    latest_proven_block: BlockNumber,
+) -> JoinHandle<Result<(), ProofSchedulerError>> {
+    tokio::spawn(run(db, block_prover, block_store, chain_tip_rx, latest_proven_block))
 }
 
 /// Main loop of the proof scheduler.
 ///
-/// Uses [`FuturesOrdered`] to run proving concurrently while resolving completions in block
-/// order. This provides natural backpressure and ensures proofs are persisted sequentially.
+/// Maintains a pool of concurrent proving jobs via [`JoinSet`], fills them up to
+/// [`MAX_CONCURRENT_PROOFS`], and drains completed results in block-number order.
 ///
 /// Returns `Err` on irrecoverable errors (missing/corrupt proving inputs, DB write failures).
 /// Transient errors are retried internally.
@@ -85,137 +69,212 @@ async fn run(
     db: Arc<Db>,
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
-    notify: Arc<Notify>,
+    mut chain_tip_rx: watch::Receiver<BlockNumber>,
+    latest_proven_block: BlockNumber,
 ) -> Result<(), ProofSchedulerError> {
-    info!(target: COMPONENT, "Proof scheduler started");
+    info!(target: COMPONENT, %latest_proven_block, "Proof scheduler started");
+
+    // The latest block that has been sequentially marked as proven in the DB.
+    let mut latest_proven = latest_proven_block;
+    // The current chain tip as observed from the watch channel.
+    let mut chain_tip = *chain_tip_rx.borrow_and_update();
+    // Completed proof results waiting for sequential drain.
+    let mut results: BTreeSet<BlockNumber> = BTreeSet::new();
+    // In-flight proving tasks.
+    let mut join_set: JoinSet<Result<BlockNumber, ProveBlockError>> = JoinSet::new();
+    // Block numbers currently being proven.
+    // Used to avoid double-scheduling a block that failed and needs retry.
+    let mut in_flight: BTreeSet<BlockNumber> = BTreeSet::new();
+    // Blocks that need to be (re-)scheduled for proving.
+    let mut pending: BTreeSet<BlockNumber> = BTreeSet::new();
+
+    // Seed the pending set with all blocks that need proving.
+    for block_num in block_range(latest_proven.child(), chain_tip) {
+        pending.insert(block_num);
+    }
 
     loop {
-        // Capture the notify permit before retrieving unproven blocks from the database.
-        // This ensures that a notify fired between the database query and the wait on the permit
-        // will be captured; meaning we don't block unnecessarily until the next notify.
-        let notified = notify.notified();
+        // Fill the job pool up to capacity from the pending set.
+        while in_flight.len() < MAX_CONCURRENT_PROOFS {
+            let Some(&block_num) = pending.first() else {
+                break;
+            };
+            pending.remove(&block_num);
+            in_flight.insert(block_num);
 
-        // Query all unproven blocks. This handles both startup recovery and new blocks.
-        let unproven_blocks = match db.select_unproven_blocks(MAX_PROVING_BATCH_SIZE).await {
-            Ok(blocks) => blocks,
-            Err(err) => {
-                error!(target: COMPONENT, %err, "Failed to query unproven blocks, retrying");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
-            },
-        };
+            let db = Arc::clone(&db);
+            let block_prover = Arc::clone(&block_prover);
+            let block_store = Arc::clone(&block_store);
+            join_set.spawn(async move {
+                prove_and_save(&db, &block_prover, &block_store, block_num).await
+            });
+        }
 
-        // Wait for notify if there are no unproven blocks.
-        if unproven_blocks.is_empty() {
-            notified.await;
+        // If there's nothing in flight and nothing pending, wait for new blocks.
+        if in_flight.is_empty() && pending.is_empty() {
+            if chain_tip_rx.changed().await.is_err() {
+                info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
+                return Ok(());
+            }
+            enqueue_new_blocks(&chain_tip_rx, &mut chain_tip, &mut pending);
             continue;
         }
 
-        // Construct proving jobs and drain results in order.
-        // On any failure we break immediately — dropping remaining futures cancels them.
-        // The outer loop will re-query unproven blocks and restart the sequence, ensuring
-        // we never persist a proof while an ancestor block is still unproven.
-        let mut proving_futures = order_proving_jobs(&db, &block_prover, &unproven_blocks);
-        while let Some(timeout_result) = proving_futures.next().await {
-            match timeout_result {
-                // Save proof to file, then mark as proven in DB.
-                Ok((block_num, proof)) => {
-                    block_store
-                        .save_proof(block_num, &proof.to_bytes())
-                        .await
-                        .map_err(ProofSchedulerError::PersistProofFailed)?;
-                    db.mark_block_proven(block_num)
-                        .await
-                        .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
-                },
+        // Wait for either a job to complete or the chain tip to advance.
+        tokio::select! {
+            // Proving task completed.
+            Some(join_result) = join_set.join_next() => {
+                match join_result {
+                    // Proof successful.
+                    Ok(Ok(block_num)) => {
+                        info!(target: COMPONENT, %block_num, "Block proof completed");
+                        in_flight.remove(&block_num);
+                        results.insert(block_num);
+                    },
 
-                // Abort on fatal errors.
-                Err(ProveBlockError::Fatal(err)) => return Err(err),
+                    // Transient errors, requeue.
+                    Ok(Err(ProveBlockError::Transient(block_num, err))) => {
+                        error!(
+                            target: COMPONENT,
+                            %block_num, %err,
+                            "Block proving failed (transient), re-queuing"
+                        );
+                        in_flight.remove(&block_num);
+                        pending.insert(block_num);
+                    },
+                    Ok(Err(ProveBlockError::Timeout(block_num))) => {
+                        error!(
+                            target: COMPONENT,
+                            %block_num,
+                            "Block proving timed out, re-queuing"
+                        );
+                        in_flight.remove(&block_num);
+                        pending.insert(block_num);
+                    },
 
-                // Log transient errors and restart proof scheduler loop.
-                Err(ProveBlockError::Transient(err)) => {
-                    error!(
-                        target: COMPONENT,
-                        %err,
-                        "Block proving failed, abandoning batch and retrying next iteration"
-                    );
-                    break;
-                },
-                Err(ProveBlockError::Timeout) => {
-                    error!(
-                        target: COMPONENT,
-                        "Block proving timed out, abandoning batch and retrying next iteration"
-                    );
-                    break;
-                },
-            }
+                    // Irrecoverable errors.
+                    Ok(Err(ProveBlockError::Fatal(err))) => return Err(err),
+                    Err(join_err) => {
+                        // Task panicked or was cancelled — treat as fatal.
+                        return Err(ProofSchedulerError::TaskPanicked(join_err.to_string()));
+                    },
+                }
+            },
+
+            // New chain tip received.
+            result = chain_tip_rx.changed() => {
+                if result.is_err() {
+                    info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
+                    return Ok(());
+                }
+                enqueue_new_blocks(&chain_tip_rx, &mut chain_tip, &mut pending);
+            },
         }
+
+        // Drain completed proofs sequentially.
+        drain_sequential_results(&db, &mut results, &mut latest_proven).await?;
     }
 }
 
-/// Submits all unproven blocks into a [`FuturesOrdered`]. Each future runs the full
-/// prove-with-retries pipeline concurrently, but completions are polled in submission
-/// (i.e. block) order.
-fn order_proving_jobs(
-    db: &Arc<Db>,
-    block_prover: &Arc<BlockProver>,
-    unproven_blocks: &[BlockNumber],
-) -> FuturesOrdered<
-    impl std::future::Future<Output = Result<(BlockNumber, BlockProof), ProveBlockError>>,
-> {
-    let mut futures = FuturesOrdered::new();
-    for &block_num in unproven_blocks {
-        // Clone the resources for each future.
-        let db = Arc::clone(db);
-        let block_prover = Arc::clone(block_prover);
-        // Define the future.
-        let fut = async move {
-            // Prove block with timeout.
-            let timeout_result = tokio::time::timeout(
-                BLOCK_PROVE_TIMEOUT,
-                prove_block(&db, &block_prover, block_num),
-            )
-            .await;
-            // Handle proving result.
-            match timeout_result {
-                Ok(proof_result) => proof_result.map(|proof| (block_num, proof)),
-                Err(_elapsed) => Err(ProveBlockError::Timeout),
-            }
-        };
-        futures.push_back(fut);
+/// Reads and sets the latest chain tip from the watch channel and adds any new block numbers to the
+/// pending set.
+fn enqueue_new_blocks(
+    chain_tip_rx: &watch::Receiver<BlockNumber>,
+    chain_tip: &mut BlockNumber,
+    pending: &mut BTreeSet<BlockNumber>,
+) {
+    let new_chain_tip = *chain_tip_rx.borrow();
+    for block_num in block_range(chain_tip.child(), new_chain_tip) {
+        pending.insert(block_num);
     }
-    futures
+    *chain_tip = new_chain_tip;
+}
+
+/// Returns an iterator over block numbers from `start` to `end` inclusive.
+///
+/// Returns an empty iterator if `start > end`.
+fn block_range(start: BlockNumber, end: BlockNumber) -> impl Iterator<Item = BlockNumber> {
+    let start = start.as_u32();
+    let end = end.as_u32();
+    (start..=end).map(BlockNumber::from)
+}
+
+/// Drains completed proofs from the results in sequential block-number order,
+/// marking each as proven in the database.
+///
+/// Does nothing if the next expected block in sequence has not been proven.
+async fn drain_sequential_results(
+    db: &Db,
+    results: &mut BTreeSet<BlockNumber>,
+    latest_proven: &mut BlockNumber,
+) -> Result<(), ProofSchedulerError> {
+    loop {
+        let next = latest_proven.child();
+        if !results.remove(&next) {
+            break;
+        }
+        db.mark_block_proven(next)
+            .await
+            .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
+        info!(target: COMPONENT, block_num = %next, "Block marked as proven");
+        *latest_proven = next;
+    }
+    Ok(())
 }
 
 // PROVE BLOCK
 // ================================================================================================
 
-/// Proves a single block.
+/// Proves a single block, saves the proof to the block store, and returns the block number.
 ///
-/// Loads proving inputs from the DB, deserializes them, and invokes the block prover.
-/// blocks.
-#[instrument(target = COMPONENT, name = "proof_scheduler.prove_block", skip_all, fields(%block_num))]
+/// This function encapsulates the full lifecycle of a single proof job: loading inputs from the
+/// DB, invoking the prover (with a timeout), and persisting the proof to disk.
+///
+/// The caller is responsible for marking the block as proven in the DB.
+#[instrument(target = COMPONENT, name = "proof_scheduler.prove_and_save", skip_all, fields(%block_num))]
+async fn prove_and_save(
+    db: &Db,
+    block_prover: &BlockProver,
+    block_store: &BlockStore,
+    block_num: BlockNumber,
+) -> Result<BlockNumber, ProveBlockError> {
+    // Prove block with timeout.
+    let proof =
+        match tokio::time::timeout(BLOCK_PROVE_TIMEOUT, prove_block(db, block_prover, block_num))
+            .await
+        {
+            Ok(Ok(proof)) => proof,
+            Ok(Err(err)) => return Err(err),
+            Err(_elapsed) => return Err(ProveBlockError::Timeout(block_num)),
+        };
+
+    // Save proof to the block store.
+    block_store
+        .save_proof(block_num, &proof.to_bytes())
+        .await
+        .map_err(|e| ProveBlockError::Fatal(ProofSchedulerError::PersistProofFailed(e)))?;
+
+    Ok(block_num)
+}
+
+/// Proves a single block by loading inputs from the DB and invoking the block prover.
 async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
     block_num: BlockNumber,
 ) -> Result<BlockProof, ProveBlockError> {
-    // Load proving inputs from the DB.
-    // All committed blocks should have inputs apart from the genesis block, which should
-    // never be queried by this function.
     let request = db
         .select_block_proving_inputs(block_num)
         .await
-        .map_err(ProveBlockError::from)?
+        .map_err(|err| ProveBlockError::from_db_error(block_num, err))?
         .ok_or_else(|| {
             ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(block_num))
         })?;
 
-    // Prove the block.
     let proof = block_prover
         .prove(request.tx_batches, request.block_inputs, &request.block_header)
         .await
-        .map_err(ProveBlockError::from)?;
+        .map_err(|err| ProveBlockError::from_prover_error(block_num, err))?;
 
     Ok(proof)
 }
@@ -229,29 +288,27 @@ enum ProveBlockError {
     /// An irrecoverable error that should cause node shutdown.
     Fatal(ProofSchedulerError),
     /// A transient error (DB read, prover failure). The outer loop will retry.
-    Transient(Box<dyn std::error::Error + Send + Sync + 'static>),
+    Transient(BlockNumber, Box<dyn std::error::Error + Send + Sync + 'static>),
     /// The overall proving timeout was exceeded. Retriable on next iteration.
-    Timeout,
+    Timeout(BlockNumber),
 }
 
-impl From<DatabaseError> for ProveBlockError {
-    fn from(err: DatabaseError) -> Self {
+impl ProveBlockError {
+    fn from_db_error(block_num: BlockNumber, err: DatabaseError) -> Self {
         match err {
             DatabaseError::DeserializationError(err) => {
                 Self::Fatal(ProofSchedulerError::DeserializationFailed(err))
             },
-            _ => Self::Transient(err.into()),
+            _ => Self::Transient(block_num, err.into()),
         }
     }
-}
 
-impl From<StoreProverError> for ProveBlockError {
-    fn from(err: StoreProverError) -> Self {
+    fn from_prover_error(block_num: BlockNumber, err: StoreProverError) -> Self {
         match err {
             StoreProverError::RemoteProvingFailed(RemoteProverClientError::InvalidEndpoint(
                 uri,
             )) => Self::Fatal(ProofSchedulerError::InvalidProverEndpoint(uri)),
-            _ => Self::Transient(err.into()),
+            _ => Self::Transient(block_num, err.into()),
         }
     }
 }

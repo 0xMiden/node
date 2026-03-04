@@ -13,7 +13,7 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::utils::Deserializable;
 use tonic::{Request, Response, Status};
-use tracing::Instrument;
+use tracing::{Instrument, error};
 
 use crate::errors::ApplyBlockError;
 use crate::server::api::{
@@ -106,6 +106,7 @@ impl block_producer_server::BlockProducer for StoreApi {
         let this = self.clone();
         tokio::spawn(
             async move {
+                let block_num = header.block_num();
                 let signed_block = SignedBlock::new(header, body, signature)
                     .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
                 // Note: This is an internal endpoint, so its safe to expose the full error
@@ -114,7 +115,9 @@ impl block_producer_server::BlockProducer for StoreApi {
                     .apply_block(signed_block, Some(proving_inputs))
                     .await
                     .inspect(|_| {
-                        this.proof_scheduler.notify_block_committed();
+                        if let Err(err) = this.chain_tip_sender.send(block_num) {
+                            error!("Failed to send chain tip: {:?}", err);
+                        }
                     })
                     .map_err(|err| {
                         span.set_error(&err);

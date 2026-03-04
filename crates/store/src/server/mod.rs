@@ -114,23 +114,39 @@ impl Store {
             Arc::new(BlockProver::local())
         };
 
+        // Initialize the chain tip watch channel and read the latest proven block from the DB.
+        let chain_tip = state.latest_block_num().await;
+        let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
+
+        let latest_proven_block = state
+            .db()
+            .select_latest_proven_block_num()
+            .await
+            .context("failed to read latest proven block number")?
+            .unwrap_or(miden_protocol::block::BlockNumber::GENESIS);
+
         // Spawn the proof scheduler as a background task. It will immediately pick up any
         // unproven blocks from previous runs and begin proving them.
-        let (proof_scheduler_notifier, proof_scheduler_task) =
-            proof_scheduler::spawn(state.db().clone(), block_prover, state.block_store());
+        let proof_scheduler_task = proof_scheduler::spawn(
+            state.db().clone(),
+            block_prover,
+            state.block_store(),
+            chain_tip_rx,
+            latest_proven_block,
+        );
 
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),
-            proof_scheduler: proof_scheduler_notifier.clone(),
+            chain_tip_sender: chain_tip_sender.clone(),
         });
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
             state: Arc::clone(&state),
-            proof_scheduler: proof_scheduler_notifier.clone(),
+            chain_tip_sender: chain_tip_sender.clone(),
         });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
-                proof_scheduler: proof_scheduler_notifier,
+                chain_tip_sender,
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())

@@ -45,6 +45,8 @@ pub enum ProofSchedulerError {
     MarkBlockProvenFailed(#[source] DatabaseError),
     #[error("invalid remote prover endpoint: {0}")]
     InvalidProverEndpoint(String),
+    #[error("proof scheduler task panicked: {0}")]
+    TaskPanicked(String),
 }
 
 // DATABASE ERRORS
