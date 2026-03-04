@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
+use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
@@ -112,7 +112,7 @@ impl Db {
         &self,
         tx_id: TransactionId,
         account_delta: Option<AccountUpdateDetails>,
-        notes: Vec<SingleTargetNetworkNote>,
+        notes: Vec<AccountTargetNetworkNote>,
         nullifiers: Vec<Nullifier>,
     ) -> Result<()> {
         self.inner
@@ -173,7 +173,7 @@ impl Db {
         &self,
         account_id: NetworkAccountId,
         account: Account,
-        notes: Vec<SingleTargetNetworkNote>,
+        notes: Vec<AccountTargetNetworkNote>,
     ) -> Result<()> {
         self.inner
             .transact("sync_account_from_store", move |conn| {

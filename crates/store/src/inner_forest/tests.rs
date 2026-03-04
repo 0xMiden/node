@@ -1,4 +1,4 @@
-use miden_protocol::account::AccountCode;
+use miden_protocol::account::{AccountCode, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
@@ -323,7 +323,7 @@ fn test_update_storage_map() {
     let block_num = BlockNumber::GENESIS.child();
 
     let slot_name = StorageSlotName::mock(3);
-    let key = Word::from([1u32, 2, 3, 4]);
+    let key = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
     let value = Word::from([5u32, 6, 7, 8]);
 
     let mut map_delta = StorageMapDelta::default();
@@ -403,8 +403,8 @@ fn test_storage_map_incremental_updates() {
     let account_id = dummy_account();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 0, 0, 0]);
-    let key2 = Word::from([2u32, 0, 0, 0]);
+    let key1 = StorageMapKey::from_index(1u32);
+    let key2 = StorageMapKey::from_index(2u32);
     let value1 = Word::from([10u32, 0, 0, 0]);
     let value2 = Word::from([20u32, 0, 0, 0]);
     let value3 = Word::from([30u32, 0, 0, 0]);
@@ -443,6 +443,54 @@ fn test_storage_map_incremental_updates() {
     assert_ne!(root_1, root_2);
     assert_ne!(root_2, root_3);
     assert_ne!(root_1, root_3);
+}
+
+#[test]
+fn test_storage_map_removals() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    const SLOT_INDEX: usize = 3;
+    const VALUE_1: [u32; 4] = [10, 0, 0, 0];
+    const VALUE_2: [u32; 4] = [20, 0, 0, 0];
+
+    let mut forest = InnerForest::new();
+    let account_id = dummy_account();
+    let slot_name = StorageSlotName::mock(SLOT_INDEX);
+    let key_1 = StorageMapKey::from_index(1);
+    let key_2 = StorageMapKey::from_index(2);
+    let value_1 = Word::from(VALUE_1);
+    let value_2 = Word::from(VALUE_2);
+
+    let block_1 = BlockNumber::GENESIS.child();
+    let mut map_delta_1 = StorageMapDelta::default();
+    map_delta_1.insert(key_1, value_1);
+    map_delta_1.insert(key_2, value_2);
+    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_1))]);
+    let storage_delta_1 = AccountStorageDelta::from_raw(raw_1);
+    let delta_1 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_1);
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let block_2 = block_1.child();
+    let map_delta_2 = StorageMapDelta::from_iters([key_1], []);
+    let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_2))]);
+    let storage_delta_2 = AccountStorageDelta::from_raw(raw_2);
+    let delta_2 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_2);
+    forest.update_account(block_2, &delta_2).unwrap();
+
+    let entries = forest
+        .storage_map_entries(account_id, slot_name, block_2)
+        .expect("storage entries should be available");
+
+    let StorageMapEntries::AllEntries(entries) = entries.entries else {
+        panic!("expected entries without proofs");
+    };
+
+    let entries_by_key = BTreeMap::from_iter(entries);
+    assert_eq!(entries_by_key.len(), 1);
+    assert_eq!(entries_by_key.get(&key_2), Some(&value_2));
+    assert!(!entries_by_key.contains_key(&key_1));
 }
 
 #[test]
