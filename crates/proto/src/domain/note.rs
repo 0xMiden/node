@@ -281,6 +281,10 @@ impl TryFrom<Note> for SingleTargetNetworkNote {
     type Error = NetworkNoteError;
 
     fn try_from(note: Note) -> Result<Self, Self::Error> {
+        if note.metadata().note_type() != NoteType::Public {
+            return Err(NetworkNoteError::PrivateNote);
+        }
+
         // Single-target network notes are identified by having a NetworkAccountTarget attachment
         let attachment = note.metadata().attachment();
         let account_target = NetworkAccountTarget::try_from(attachment)
@@ -318,6 +322,8 @@ where
 pub enum NetworkNoteError {
     #[error("note does not have a valid NetworkAccountTarget attachment: {0}")]
     InvalidAttachment(#[source] NetworkAccountTargetError),
+    #[error("note is private")]
+    PrivateNote,
 }
 
 // NOTE SCRIPT

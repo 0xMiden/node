@@ -4,7 +4,14 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
+use diesel::{
+    BoolExpressionMethods,
+    Connection,
+    ExpressionMethods,
+    QueryableByName,
+    RunQueryDsl,
+    SqliteConnection,
+};
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
 use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
@@ -31,8 +38,8 @@ use crate::COMPONENT;
 use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::queries::StorageMapValuesPage;
-use crate::db::models::{Page, queries};
+use crate::db::models::queries::{NetworkNoteType, StorageMapValuesPage};
+use crate::db::models::{Page, deserialize_raw_vec, queries};
 use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
 use crate::genesis::GenesisBlock;
 
@@ -330,7 +337,37 @@ impl Db {
 
         let me = Db { pool };
         me.query("migrations", apply_migrations).await?;
+        me.fixup_network_note_classification().await?;
         Ok(me)
+    }
+
+    /// Temporary fixup of private notes which were misclassified as network notes.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    async fn fixup_network_note_classification(&self) -> Result<()> {
+        let notes = self
+            .transact("fixup network notes", move |conn| {
+                let updated = diesel::update(schema::notes::table)
+                    .filter(
+                        schema::notes::network_note_type
+                            .eq(NetworkNoteType::SingleTarget as i32)
+                            .and(schema::notes::nullifier.is_null()),
+                    )
+                    .set(schema::notes::network_note_type.eq(NetworkNoteType::None as i32))
+                    .returning(schema::notes::note_id)
+                    .get_results::<Vec<u8>>(conn)?;
+
+                deserialize_raw_vec::<_, NoteId>(updated).map_err(DatabaseError::from)
+            })
+            .await?;
+
+        for note in notes {
+            tracing::info!(
+                note.id = %note,
+                "Fixed private note misclassified as network note"
+            );
+        }
+
+        Ok(())
     }
 
     /// Loads all the nullifiers from the DB.
