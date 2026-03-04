@@ -552,12 +552,11 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     let entries = entries
                         .into_iter()
                         .map(|entry| {
-                            let key = StorageMapKey::new(
-                                entry
+                            let key = entry
                                     .key
                                     .ok_or(StorageMapEntry::missing_field(stringify!(key)))?
-                                    .try_into()?,
-                            );
+                                    .try_into()
+                                    .map(StorageMapKey::new)?;
                             let value = entry
                                 .value
                                 .ok_or(StorageMapEntry::missing_field(stringify!(value)))?

@@ -262,9 +262,9 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             read_account_id::<GetWitnessesError>(request.account_id).map_err(invalid_argument)?;
 
         // Read the map key.
-        let map_key = StorageMapKey::new(
-            read_root::<GetWitnessesError>(request.map_key, "MapKey").map_err(invalid_argument)?,
-        );
+        let map_key = read_root::<GetWitnessesError>(request.map_key, "MapKey")
+             .map(StorageMapKey::new)
+             .map_err(invalid_argument)?;
 
         // Read the slot name.
         let slot_name = StorageSlotName::new(request.slot_name).map_err(|err| {
