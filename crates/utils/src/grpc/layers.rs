@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -18,9 +19,21 @@ pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
 pub fn rate_limit_concurrent_connections(grpc_options: GrpcOptions) -> GlobalConcurrencyLimitLayer {
     // TODO this uses a semaphore internally, and we should strive to move to an `AtomicU64` with
     // ordering relaxed
-    tower::limit::GlobalConcurrencyLimitLayer::new(
+    tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(rate_limit_with_semaphore(
+        grpc_options,
+    ))
+}
+
+pub fn rate_limit_with_semaphore(grpc_options: GrpcOptions) -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(
         (grpc_options.max_global_concurrent_connections as usize).min(Semaphore::MAX_PERMITS),
-    )
+    ))
+}
+
+pub fn rate_limit_concurrent_connections_with_semaphore(
+    sema: Arc<Semaphore>,
+) -> GlobalConcurrencyLimitLayer {
+    tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(sema)
 }
 
 pub fn rate_limit_per_ip(
