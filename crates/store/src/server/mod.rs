@@ -43,7 +43,11 @@ pub struct Store {
     /// Server-side timeout for an individual gRPC request.
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub grpc_request_timeout: Duration,
+    pub grpc_max_connection_age: Duration,
+    pub grpc_burst_size: u64,
+    pub grpc_replenish_per_sec: u64,
+    pub grpc_max_global_concurrent_connections: u64,
 }
 
 impl Store {
@@ -94,7 +98,7 @@ impl Store {
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
         info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
-            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout,
+            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_request_timeout,
             "Loading database");
 
         let (termination_ask, mut termination_signal) =
@@ -165,7 +169,7 @@ impl Store {
             tonic::transport::Server::builder()
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
+                .timeout(self.grpc_request_timeout)
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -176,7 +180,7 @@ impl Store {
             tonic::transport::Server::builder()
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
+                .timeout(self.grpc_request_timeout)
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -187,7 +191,7 @@ impl Store {
             tonic::transport::Server::builder()
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
+                .timeout(self.grpc_request_timeout)
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
                 .add_service(reflection_service_alpha)

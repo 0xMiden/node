@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::u64;
 
 use metrics::SeedingMetrics;
 use miden_air::ExecutionProof;
@@ -550,7 +551,11 @@ pub async fn start_store(
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_request_timeout: Duration::from_secs(30),
+            grpc_max_connection_age: Duration::from_hours(1),
+            grpc_burst_size: u64::MAX,
+            grpc_replenish_per_sec: u64::MAX,
+            grpc_max_global_concurrent_connections: 10_000,
         }
         .serve()
         .await

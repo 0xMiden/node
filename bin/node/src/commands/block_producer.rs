@@ -8,7 +8,7 @@ use url::Url;
 use super::{ENV_BLOCK_PRODUCER_URL, ENV_STORE_BLOCK_PRODUCER_URL};
 use crate::commands::{
     BlockProducerConfig,
-    DEFAULT_TIMEOUT,
+    DEFAULT_REQUEST_TIMEOUT,
     ENV_ENABLE_OTEL,
     ENV_VALIDATOR_BLOCK_PRODUCER_URL,
     duration_to_human_readable_string,
@@ -45,7 +45,7 @@ pub enum BlockProducerCommand {
         /// This may occur if the server is overloaded or due to an internal bug.
         #[arg(
             long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
+            default_value = &duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
             value_parser = humantime::parse_duration,
             value_name = "DURATION"
         )]

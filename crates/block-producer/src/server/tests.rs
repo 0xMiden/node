@@ -154,7 +154,11 @@ async fn start_store(
             block_producer_listener,
             block_prover_url: None,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_request_timeout: Duration::from_secs(30),
+            grpc_max_connection_age: Duration::from_hours(1),
+            grpc_burst_size: u64::MAX,
+            grpc_replenish_per_sec: u64::MAX,
+            grpc_max_global_concurrent_connections: u64::MAX,
         }
         .serve()
         .await

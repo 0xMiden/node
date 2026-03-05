@@ -10,7 +10,7 @@ use miden_protocol::utils::Deserializable;
 use url::Url;
 
 use crate::commands::{
-    DEFAULT_TIMEOUT,
+    DEFAULT_REQUEST_TIMEOUT,
     ENV_DATA_DIRECTORY,
     ENV_ENABLE_OTEL,
     ENV_VALIDATOR_KEY,
@@ -38,7 +38,7 @@ pub enum ValidatorCommand {
         /// Maximum duration a gRPC request is allocated before being dropped by the server.
         #[arg(
             long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
+            default_value = &duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
             value_parser = humantime::parse_duration,
             value_name = "DURATION"
         )]

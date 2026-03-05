@@ -16,7 +16,11 @@ use super::{
     ENV_STORE_RPC_URL,
 };
 use crate::commands::{
-    DEFAULT_TIMEOUT,
+    DEFAULT_BURST_SIZE,
+    DEFAULT_MAX_CONNECTION_AGE,
+    DEFAULT_MAX_GLOBAL_CONNECTIONS,
+    DEFAULT_REPLENISH_PER_SEC,
+    DEFAULT_REQUEST_TIMEOUT,
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
@@ -85,11 +89,46 @@ pub enum StoreCommand {
         /// This may occur if the server is overloaded or due to an internal bug.
         #[arg(
             long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
+            default_value = &duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
             value_parser = humantime::parse_duration,
             value_name = "DURATION"
         )]
-        grpc_timeout: Duration,
+        grpc_request_timeout: Duration,
+
+        /// Maximum duration of a connection before we drop it on the server side irrespective of
+        /// activity.
+        #[arg(
+            long = "grpc.max_connection_age",
+            default_value = &duration_to_human_readable_string(DEFAULT_MAX_CONNECTION_AGE),
+            value_parser = humantime::parse_duration,
+            value_name = "MAX_CONNECTION_AGE"
+        )]
+        grpc_max_connection_age: Duration,
+
+        /// Number of connections to be served before the "API tokens" need to be replenished
+        /// per IP address.
+        #[arg(
+            long = "grpc.max_connection_age",
+            default_value = DEFAULT_BURST_SIZE.to_string(),
+            value_name = "BURST_SIZE"
+        )]
+        grpc_burst_size: u64,
+
+        /// Number of requests to unlock per second.
+        #[arg(
+            long = "grpc.replenish_per_sec",
+            default_value = DEFAULT_REPLENISH_PER_SEC.to_string(),
+            value_name = "REPLENISH_PER_SEC"
+        )]
+        grpc_replenish_per_sec: u64,
+
+        /// Number of global concurrent connections.
+        #[arg(
+            long = "grpc.max_global_connections",
+            default_value = DEFAULT_MAX_GLOBAL_CONNECTIONS.to_string(),
+            value_name = "MAX_GLOBAL_CONNECTIONS"
+        )]
+        grpc_max_global_concurrent_connections: u64,
     },
 }
 
@@ -118,7 +157,11 @@ impl StoreCommand {
                 block_prover_url,
                 data_directory,
                 enable_otel: _,
-                grpc_timeout,
+                grpc_request_timeout,
+                grpc_max_connection_age,
+                grpc_burst_size,
+                grpc_replenish_per_sec,
+                grpc_max_global_concurrent_connections,
             } => {
                 Self::start(
                     rpc_url,
@@ -126,7 +169,11 @@ impl StoreCommand {
                     block_producer_url,
                     block_prover_url,
                     data_directory,
-                    grpc_timeout,
+                    grpc_request_timeout,
+                    grpc_max_connection_age,
+                    grpc_burst_size,
+                    grpc_replenish_per_sec,
+                    grpc_max_global_concurrent_connections,
                 )
                 .await
             },
@@ -147,7 +194,11 @@ impl StoreCommand {
         block_producer_url: Url,
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
-        grpc_timeout: Duration,
+        grpc_request_timeout: Duration,
+        grpc_max_connection_age: Duration,
+        grpc_burst_size: u64,
+        grpc_replenish_per_sec: u64,
+        grpc_max_global_concurrent_connections: u64,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
@@ -176,7 +227,11 @@ impl StoreCommand {
             ntx_builder_listener,
             block_producer_listener,
             data_directory,
-            grpc_timeout,
+            grpc_request_timeout,
+            grpc_max_connection_age,
+            grpc_burst_size,
+            grpc_replenish_per_sec,
+            grpc_max_global_concurrent_connections,
         }
         .serve()
         .await

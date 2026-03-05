@@ -121,7 +121,8 @@ async fn rpc_rate_limits_per_ip() {
 
     let url = rpc_addr.to_string();
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
-    let mut rpc_client = connect_rpc(url.clone(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))).await;
+    let mut rpc_client =
+        connect_rpc(url.clone(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))).await;
 
     let mut results = Vec::new();
     for _ in 0..25 {
@@ -136,8 +137,7 @@ async fn rpc_rate_limits_per_ip() {
             .is_some_and(|err| err.code() == tonic::Code::ResourceExhausted)
     }));
 
-    let mut other_client =
-        connect_rpc(url, Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)))).await;
+    let mut other_client = connect_rpc(url, Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)))).await;
     let other_response = send_request(&mut other_client).await;
     assert!(other_response.is_ok());
 
@@ -417,7 +417,11 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_request_timeout: Duration::from_secs(30),
+            grpc_max_connection_age: Duration::from_hours(1),
+            grpc_burst_size: 128,
+            grpc_replenish_per_sec: 16,
+            grpc_max_global_concurrent_connections: 1000,
         }
         .serve()
         .await
@@ -462,7 +466,11 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_request_timeout: Duration::from_secs(30),
+            grpc_max_connection_age: Duration::from_hours(1),
+            grpc_burst_size: 128,
+            grpc_replenish_per_sec: 16,
+            grpc_max_global_concurrent_connections: 1000,
         }
         .serve()
         .await
@@ -504,7 +512,11 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(10),
+            grpc_request_timeout: Duration::from_secs(10),
+            grpc_max_connection_age: Duration::from_hours(1),
+            grpc_burst_size: 128,
+            grpc_replenish_per_sec: 16,
+            grpc_max_global_concurrent_connections: 1000,
         }
         .serve()
         .await

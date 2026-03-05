@@ -48,7 +48,12 @@ const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 const ENV_NTX_DATA_DIRECTORY: &str = "MIDEN_NODE_NTX_DATA_DIRECTORY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
+const DEFAULT_REPLENISH_PER_SEC: u64 = 16;
+const DEFAULT_BURST_SIZE: u64 = 128;
+const DEFAULT_MAX_GLOBAL_CONNECTIONS: u64 = 1_000;
+
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 
 // Formats a Duration into a human-readable string for display in clap help text.
