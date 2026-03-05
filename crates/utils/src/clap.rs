@@ -41,7 +41,7 @@ pub struct GrpcOptions {
     /// Number of connections to be served before the "API tokens" need to be replenished
     /// per IP address.
     #[arg(
-        long = "grpc.max_connection_age",
+        long = "grpc.burst_size",
         default_value_t = DEFAULT_BURST_SIZE,
         value_name = "BURST_SIZE"
     )]
