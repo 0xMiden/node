@@ -1,9 +1,9 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
-use miden_node_proto::clients::{Builder, RpcClient};
+use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::Store;
@@ -111,6 +111,36 @@ async fn rpc_server_accepts_requests_without_accept_header() {
     assert!(response.is_ok());
 
     // Shutdown to avoid runtime drop error.
+    shutdown_store(store_runtime).await;
+}
+
+#[tokio::test]
+async fn rpc_rate_limits_per_ip() {
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+
+    let url = rpc_addr.to_string();
+    let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
+    let mut rpc_client = connect_rpc(url.clone(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))).await;
+
+    let mut results = Vec::new();
+    for _ in 0..25 {
+        results.push(send_request(&mut rpc_client).await);
+    }
+
+    assert!(results.iter().any(|result| result.is_ok()));
+    assert!(results.iter().any(|result| {
+        result
+            .as_ref()
+            .err()
+            .is_some_and(|err| err.code() == tonic::Code::ResourceExhausted)
+    }));
+
+    let mut other_client =
+        connect_rpc(url, Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)))).await;
+    let other_response = send_request(&mut other_client).await;
+    assert!(other_response.is_ok());
+
     shutdown_store(store_runtime).await;
 }
 
@@ -348,6 +378,17 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
+async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
+    let mut endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
+        .expect("Url type always results in valid endpoint");
+    if let Some(local_address) = local_address {
+        endpoint = endpoint.local_address(Some(local_address));
+    }
+    let channel = endpoint.connect().await.expect("Failed to build channel");
+    let interceptor = Interceptor::default();
+    RpcClient::with_interceptor(channel, interceptor)
+}
+
 /// Binds a socket on an available port, runs the RPC server on it, and
 /// returns a client to talk to the server, along with the socket address.
 async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
@@ -385,15 +426,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
     let url = rpc_addr.to_string();
     // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
-    let rpc_client: RpcClient = Builder::new(url)
-        .without_tls()
-        .with_timeout(Duration::from_secs(10))
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect::<RpcClient>()
-        .await
-        .expect("Failed to build client");
+    let rpc_client = connect_rpc(url, None).await;
 
     (rpc_client, rpc_addr, store_listener)
 }

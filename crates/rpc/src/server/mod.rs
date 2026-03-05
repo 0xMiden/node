@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,8 +11,12 @@ use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::server::TcpConnectInfo;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower_governor::GovernorError;
+use tower_governor::key_extractor::KeyExtractor;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use url::Url;
@@ -22,6 +27,21 @@ use crate::server::health::HealthCheckLayer;
 mod accept;
 mod api;
 mod health;
+
+#[derive(Clone, Copy, Debug)]
+struct RpcPeerIpExtractor;
+
+impl KeyExtractor for RpcPeerIpExtractor {
+    type Key = IpAddr;
+
+    fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
+        req.extensions()
+            .get::<TcpConnectInfo>()
+            .and_then(TcpConnectInfo::remote_addr)
+            .map(|addr| addr.ip())
+            .ok_or(GovernorError::UnableToExtractKey)
+    }
+}
 
 /// The RPC server component.
 ///
@@ -81,8 +101,9 @@ impl Rpc {
 
         let rate_limiter = {
             let config = tower_governor::governor::GovernorConfigBuilder::default()
-                .per_second(10)
-                .burst_size(20)
+                .key_extractor(RpcPeerIpExtractor)
+                .per_millisecond(10)
+                .burst_size(128)
                 .use_headers()
                 .finish()
                 .context("config parameters are inconsistent, i.e. burst < per second")?;
@@ -104,6 +125,7 @@ impl Rpc {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
+            .layer(GlobalConcurrencyLimitLayer::new(1_000))
             .layer(rate_limiter)
             // Note: must come before the accept layer, as otherwise accept rejections
             // do _not_ get CORS headers applied, masking the accept error in
