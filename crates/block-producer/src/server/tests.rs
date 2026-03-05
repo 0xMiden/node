@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use fs_err as fs;
 use miden_node_proto::generated::block_producer::api_client as block_producer_client;
 use miden_node_store::{GenesisState, Store};
 use miden_node_utils::clap::GrpcOptions;
@@ -14,6 +15,8 @@ use tonic::transport::{Channel, Endpoint};
 use url::Url;
 
 use crate::{BlockProducer, DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
+
+const ACCOUNT_TREE_STORAGE_DIR: &str = "accounttree";
 
 /// Tests that the block producer starts up correctly even when the store is not initially
 /// available. The block producer should retry with exponential backoff until the store becomes
@@ -131,6 +134,8 @@ async fn start_store(
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
+    fs::create_dir_all(data_directory.join(ACCOUNT_TREE_STORAGE_DIR))
+        .expect("account tree directory should be created");
     Store::bootstrap(genesis_state.clone(), data_directory)
         .await
         .expect("store should bootstrap");

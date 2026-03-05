@@ -159,8 +159,7 @@ impl Store {
             }
         });
 
-        // FIXME TODO use Arc::new(Semaphore::new()) and share between GlobalConcurrencyLimitLayer
-        // services
+        let concurrency_semaphore = grpc::concurrency_semaphore(self.grpc_options);
 
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
@@ -170,7 +169,7 @@ impl Store {
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
+                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
                 .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
@@ -185,7 +184,7 @@ impl Store {
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
+                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
                 .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
@@ -201,7 +200,7 @@ impl Store {
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
+                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
                 .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(block_producer_service)
                 .add_service(reflection_service)

@@ -82,8 +82,8 @@ impl GrpcOptions {
         Self {
             request_timeout: Duration::from_hours(24),
             max_connection_age: Duration::from_hours(24),
-            burst_size: u64::MAX,
-            replenish_per_sec: u64::MAX,
+            burst_size: 100_000,
+            replenish_per_sec: 100_000,
             max_global_concurrent_connections: u64::MAX,
         }
     }
