@@ -12,26 +12,31 @@ use tower_governor::key_extractor::SmartIpKeyExtractor;
 use super::connect_info::ConnectInfoInterceptor;
 use crate::clap::GrpcOptions;
 
+/// Creates the gRPC interceptor layer that attaches connection metadata.
 pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
     InterceptorLayer::new(ConnectInfoInterceptor)
 }
 
+/// Builds a global concurrency limit layer using the configured semaphore.
 pub fn rate_limit_concurrent_connections(grpc_options: GrpcOptions) -> GlobalConcurrencyLimitLayer {
     // TODO this uses a semaphore internally, and we should strive to move to an `AtomicU64` with
     // ordering relaxed
     tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(concurrency_semaphore(grpc_options))
 }
 
+/// Builds the shared semaphore that caps total concurrent gRPC connections.
 pub fn concurrency_semaphore(grpc_options: GrpcOptions) -> Arc<Semaphore> {
     Arc::new(Semaphore::new(
         (grpc_options.max_global_concurrent_connections as usize).min(Semaphore::MAX_PERMITS),
     ))
 }
 
+/// Builds a global concurrency limit layer from an existing semaphore.
 pub fn rate_limit_with_semaphore(sema: Arc<Semaphore>) -> GlobalConcurrencyLimitLayer {
     tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(sema)
 }
 
+/// Creates a per-IP rate limit layer using the configured governor settings.
 pub fn rate_limit_per_ip(
     grpc_options: GrpcOptions,
 ) -> anyhow::Result<
