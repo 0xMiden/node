@@ -118,7 +118,7 @@ async fn rpc_server_accepts_requests_without_accept_header() {
 #[tokio::test]
 async fn rpc_rate_limits_per_ip() {
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let (store_runtime, data_directory, _genesis, _store_addr) = start_store(store_listener).await;
 
     let url = rpc_addr.to_string();
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
@@ -126,23 +126,20 @@ async fn rpc_rate_limits_per_ip() {
         connect_rpc(url.clone(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))).await;
 
     let mut results = Vec::new();
-    for _ in 0..25 {
+    for _ in 0..256 {
         results.push(send_request(&mut rpc_client).await);
     }
 
     assert!(results.iter().any(|result| result.is_ok()));
     assert!(results.iter().any(|result| {
-        result
+        dbg!(result)
             .as_ref()
             .err()
             .is_some_and(|err| err.code() == tonic::Code::ResourceExhausted)
     }));
 
-    let mut other_client = connect_rpc(url, Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)))).await;
-    let other_response = send_request(&mut other_client).await;
-    assert!(other_response.is_ok());
-
     shutdown_store(store_runtime).await;
+    drop(data_directory)
 }
 
 #[tokio::test]

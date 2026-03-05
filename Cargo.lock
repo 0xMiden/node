@@ -2990,6 +2990,7 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "fs-err",
  "futures",
  "itertools 0.14.0",
  "miden-node-proto",
