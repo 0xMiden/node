@@ -85,8 +85,8 @@ impl Server {
         let rate_limiter = {
             let config = tower_governor::governor::GovernorConfigBuilder::default()
                 .key_extractor(RpcPeerIpExtractor)
-                .per_second(self.grpc_replenish_per_sec)
-                .burst_size(self.grpc_burst_size as u32)
+                .per_second(self.grpc_options.replenish_per_sec)
+                .burst_size(self.grpc_options.burst_size as u32)
                 .use_headers()
                 .finish()
                 .context("config parameters are inconsistent, i.e. burst < per second")?;
@@ -104,14 +104,14 @@ impl Server {
 
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .max_connection_age(self.grpc_max_connection_age)
-            .timeout(self.grpc_request_timeout)
+            .max_connection_age(self.grpc_options.max_connection_age)
+            .timeout(self.grpc_options.request_timeout)
             .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
             // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
-            .layer(GlobalConcurrencyLimitLayer::new(self.grpc_max_global_concurrent_connections as usize))
+            .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
             .layer(rate_limiter)
 
             .layer(cors_for_grpc_web_layer())
