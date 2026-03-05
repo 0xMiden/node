@@ -418,11 +418,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
-            grpc_request_timeout: Duration::from_secs(30),
-            grpc_max_connection_age: Duration::from_hours(1),
-            grpc_burst_size: 128,
-            grpc_replenish_per_sec: 16,
-            grpc_max_global_concurrent_connections: 1000,
+            grpc_options: GrpcOptions::default(),
         }
         .serve()
         .await

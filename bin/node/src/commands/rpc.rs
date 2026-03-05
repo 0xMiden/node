@@ -61,11 +61,7 @@ impl RpcCommand {
             store_url,
             block_producer_url,
             validator_url,
-            grpc_request_timeout: grpc_options.request_timeout,
-            grpc_max_connection_age: grpc_options.max_connection_age,
-            grpc_burst_size: grpc_options.burst_size,
-            grpc_replenish_per_sec: grpc_options.replenish_per_sec,
-            grpc_max_global_concurrent_connections: grpc_options.max_global_concurrent_connections,
+            grpc_options,
         }
         .serve()
         .await

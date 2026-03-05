@@ -6,6 +6,7 @@ use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -55,19 +56,7 @@ pub struct Rpc {
     pub store_url: Url,
     pub block_producer_url: Option<Url>,
     pub validator_url: Url,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_request_timeout: Duration,
-    /// Maximum duration of a connection before we drop it.
-    pub grpc_max_connection_age: Duration,
-    /// Number of connections to be served before the "API tokens" need to be replenished
-    /// per IP address.
-    pub grpc_burst_size: u64,
-    /// Number of requests to unlock per second.
-    pub grpc_replenish_per_sec: u64,
-    /// Number of global concurrent connections.
-    pub grpc_max_global_concurrent_connections: u64,
+    pub grpc_options: GrpcOptions,
 }
 
 impl Rpc {
@@ -113,8 +102,8 @@ impl Rpc {
         let rate_limiter = {
             let config = tower_governor::governor::GovernorConfigBuilder::default()
                 .key_extractor(RpcPeerIpExtractor)
-                .per_second(self.grpc_replenish_per_sec)
-                .burst_size(self.grpc_burst_size as u32)
+                .per_second(self.grpc_options.replenish_per_sec)
+                .burst_size(self.grpc_options.burst_size as u32)
                 .use_headers()
                 .finish()
                 .context("config parameters are inconsistent, i.e. burst < per second")?;
@@ -132,14 +121,14 @@ impl Rpc {
 
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .max_connection_age(self.grpc_max_connection_age)
-            .timeout(self.grpc_request_timeout)
+            .max_connection_age(self.grpc_options.max_connection_age)
+            .timeout(self.grpc_options.request_timeout)
             .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
             // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
-            .layer(GlobalConcurrencyLimitLayer::new(self.grpc_max_global_concurrent_connections as usize))
+            .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
             .layer(rate_limiter)
             // Note: must come before the accept layer, as otherwise accept rejections
             // do _not_ get CORS headers applied, masking the accept error in

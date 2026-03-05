@@ -17,6 +17,7 @@ use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::service::InterceptorLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, instrument};
 use url::Url;
@@ -158,35 +159,73 @@ impl Store {
             }
         });
 
+        // FIXME TODO use Arc::new(Semaphore::new()) and share between GlobalConcurrencyLimitLayer
+        // services
+        let rate_limiter = || {
+            let config = tower_governor::governor::GovernorConfigBuilder::default()
+                .key_extractor(RpcPeerIpExtractor)
+                .per_second(self.grpc_options.replenish_per_sec)
+                .burst_size(self.grpc_options.burst_size as u32)
+                .use_headers()
+                .finish()
+                .context("config parameters are inconsistent, i.e. burst < per second")?;
+            let limiter = Arc::clone(config.limiter());
+            joinset.spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    // avoid a DoS vector
+                    limiter.retain_recent();
+                }
+            });
+            tower_governor::GovernorLayer::new(config)
+        };
+
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
+
             tonic::transport::Server::builder()
+.max_connection_age(self.grpc_options.max_connection_age)
+                .timeout(self.grpc_options.request_timeout)
+                .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_options.request_timeout)
-                .add_service(rpc_service)
+                // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
+                .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
+                .layer(rate_limiter)                .add_service(rpc_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
                 .serve_with_incoming(TcpListenerStream::new(self.rpc_listener)),
         );
 
         join_set.spawn(
+
             tonic::transport::Server::builder()
+                .max_connection_age(self.grpc_options.max_connection_age)
+                .timeout(self.grpc_options.request_timeout)
+                .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_options.request_timeout)
-                .add_service(ntx_builder_service)
+                // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
+                .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
+                .layer(rate_limiter)                .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
                 .serve_with_incoming(TcpListenerStream::new(self.ntx_builder_listener)),
         );
 
         join_set.spawn(
+
             tonic::transport::Server::builder()
+                .accept_http1(true)
+                .max_connection_age(self.grpc_options.max_connection_age)
+                .timeout(self.grpc_options.request_timeout)
+                .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_options.request_timeout)
-                .add_service(block_producer_service)
+                // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
+                .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
+                .layer(rate_limiter)                .add_service(block_producer_service)
                 .add_service(reflection_service)
                 .add_service(reflection_service_alpha)
                 .serve_with_incoming(TcpListenerStream::new(self.block_producer_listener)),
