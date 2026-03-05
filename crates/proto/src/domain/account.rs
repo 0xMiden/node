@@ -19,14 +19,48 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
+use miden_protocol::errors::{AccountError, AssetError, StorageSlotNameError};
 use miden_protocol::note::NoteAttachment;
 use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
 use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
 use thiserror::Error;
 
 use super::try_convert;
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::domain::digest::DigestConversionError;
+use crate::domain::merkle::MerkleConversionError;
+use crate::errors::{MissingFieldHelper, ProtoConversionError};
 use crate::generated::{self as proto};
+
+// ACCOUNT CONVERSION ERROR
+// ================================================================================================
+
+#[derive(Debug, Error)]
+pub enum AccountConversionError {
+    #[error(transparent)]
+    Proto(#[from] ProtoConversionError),
+    #[error(transparent)]
+    Digest(#[from] DigestConversionError),
+    #[error(transparent)]
+    Merkle(#[from] MerkleConversionError),
+    #[error("account error")]
+    AccountError(#[from] AccountError),
+    #[error("asset error")]
+    AssetError(#[from] AssetError),
+    #[error("storage slot name error")]
+    StorageSlotNameError(#[from] StorageSlotNameError),
+    #[error("enum variant discriminant out of range")]
+    EnumDiscriminantOutOfRange,
+    #[error("value is not in the range 0..MODULUS")]
+    NotAValidFelt,
+    #[error("account code missing")]
+    AccountCodeMissing,
+}
+
+impl From<AccountConversionError> for tonic::Status {
+    fn from(value: AccountConversionError) -> Self {
+        tonic::Status::invalid_argument(value.to_string())
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -54,10 +88,11 @@ impl Debug for proto::account::AccountId {
 // ------------------------------------------------------------------------------------------------
 
 impl TryFrom<proto::account::AccountId> for AccountId {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(account_id: proto::account::AccountId) -> Result<Self, Self::Error> {
-        AccountId::read_from_bytes(&account_id.id).map_err(|_| ConversionError::NotAValidFelt)
+        AccountId::read_from_bytes(&account_id.id)
+            .map_err(|_| AccountConversionError::NotAValidFelt)
     }
 }
 
@@ -115,7 +150,7 @@ impl From<&AccountInfo> for proto::account::AccountDetails {
 //================================================================================================
 
 impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::account::AccountStorageHeader) -> Result<Self, Self::Error> {
         let proto::account::AccountStorageHeader { slots } = value;
@@ -126,10 +161,10 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
                 let slot_name = StorageSlotName::new(slot.slot_name)?;
                 let slot_type = storage_slot_type_from_raw(slot.slot_type)?;
                 let commitment =
-                    slot.commitment.ok_or(ConversionError::NotAValidFelt)?.try_into()?;
+                    slot.commitment.ok_or(AccountConversionError::NotAValidFelt)?.try_into()?;
                 Ok(StorageSlotHeader::new(slot_name, slot_type, commitment))
             })
-            .collect::<Result<Vec<_>, ConversionError>>()?;
+            .collect::<Result<Vec<_>, AccountConversionError>>()?;
 
         Ok(AccountStorageHeader::new(slot_headers)?)
     }
@@ -147,7 +182,7 @@ pub struct AccountRequest {
 }
 
 impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::rpc::AccountRequest) -> Result<Self, Self::Error> {
         let proto::rpc::AccountRequest { account_id, block_num, details } = value;
@@ -171,7 +206,7 @@ pub struct AccountDetailRequest {
 }
 
 impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetailRequest {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(
         value: proto::rpc::account_request::AccountDetailRequest,
@@ -203,7 +238,7 @@ pub struct StorageMapRequest {
 impl TryFrom<proto::rpc::account_request::account_detail_request::StorageMapDetailRequest>
     for StorageMapRequest
 {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(
         value: proto::rpc::account_request::account_detail_request::StorageMapDetailRequest,
@@ -232,7 +267,7 @@ impl
         proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData,
     > for SlotData
 {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(
         value: proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData,
@@ -242,7 +277,7 @@ impl
         Ok(match value {
             ProtoSlotData::AllEntries(true) => SlotData::All,
             ProtoSlotData::AllEntries(false) => {
-                return Err(ConversionError::EnumDiscriminantOutOfRange);
+                return Err(AccountConversionError::EnumDiscriminantOutOfRange);
             },
             ProtoSlotData::MapKeys(keys) => {
                 let keys = try_convert(keys.map_keys).collect::<Result<Vec<_>, _>>()?;
@@ -256,7 +291,7 @@ impl
 //================================================================================================
 
 impl TryFrom<proto::account::AccountHeader> for AccountHeader {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::account::AccountHeader) -> Result<Self, Self::Error> {
         let proto::account::AccountHeader {
@@ -279,7 +314,7 @@ impl TryFrom<proto::account::AccountHeader> for AccountHeader {
         let code_commitment = code_commitment
             .ok_or(proto::account::AccountHeader::missing_field(stringify!(code_commitment)))?
             .try_into()?;
-        let nonce = nonce.try_into().map_err(|_e| ConversionError::NotAValidFelt)?;
+        let nonce = nonce.try_into().map_err(|_e| AccountConversionError::NotAValidFelt)?;
 
         Ok(AccountHeader::new(
             account_id,
@@ -365,7 +400,7 @@ impl AccountVaultDetails {
 }
 
 impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::rpc::AccountVaultDetails) -> Result<Self, Self::Error> {
         let proto::rpc::AccountVaultDetails { too_many_assets, assets } = value;
@@ -373,14 +408,15 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         if too_many_assets {
             Ok(Self::LimitExceeded)
         } else {
-            let parsed_assets =
-                Result::<Vec<_>, ConversionError>::from_iter(assets.into_iter().map(|asset| {
+            let parsed_assets = Result::<Vec<_>, AccountConversionError>::from_iter(
+                assets.into_iter().map(|asset| {
                     let asset = asset
                         .asset
                         .ok_or(proto::primitives::Asset::missing_field(stringify!(asset)))?;
                     let asset = Word::try_from(asset)?;
-                    Asset::try_from(asset).map_err(ConversionError::AssetError)
-                }))?;
+                    Asset::try_from(asset).map_err(AccountConversionError::AssetError)
+                }),
+            )?;
             Ok(Self::Assets(parsed_assets))
         }
     }
@@ -516,7 +552,7 @@ impl AccountStorageMapDetails {
 impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
     for AccountStorageMapDetails
 {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(
         value: proto::rpc::account_storage_details::AccountStorageMapDetails,
@@ -545,7 +581,8 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     return Err(
                         proto::rpc::account_storage_details::AccountStorageMapDetails::missing_field(
                             stringify!(entries),
-                        ),
+                        )
+                        .into(),
                     );
                 },
                 Some(ProtoEntries::AllEntries(AllMapEntries { entries })) => {
@@ -563,7 +600,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                                 .try_into()?;
                             Ok((key, value))
                         })
-                        .collect::<Result<Vec<_>, ConversionError>>()?;
+                        .collect::<Result<Vec<_>, AccountConversionError>>()?;
                     StorageMapEntries::AllEntries(entries)
                 },
                 Some(ProtoEntries::EntriesWithProofs(MapEntriesWithProofs { entries })) => {
@@ -573,9 +610,9 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                             let smt_opening = entry.proof.ok_or(
                                 StorageMapEntryWithProof::missing_field(stringify!(proof)),
                             )?;
-                            SmtProof::try_from(smt_opening)
+                            SmtProof::try_from(smt_opening).map_err(AccountConversionError::from)
                         })
-                        .collect::<Result<Vec<_>, ConversionError>>()?;
+                        .collect::<Result<Vec<_>, AccountConversionError>>()?;
                     StorageMapEntries::EntriesWithProofs(proofs)
                 },
             }
@@ -668,7 +705,7 @@ impl AccountStorageDetails {
 }
 
 impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::rpc::AccountStorageDetails) -> Result<Self, Self::Error> {
         let proto::rpc::AccountStorageDetails { header, map_details } = value;
@@ -694,11 +731,13 @@ impl From<AccountStorageDetails> for proto::rpc::AccountStorageDetails {
     }
 }
 
-const fn storage_slot_type_from_raw(slot_type: u32) -> Result<StorageSlotType, ConversionError> {
+const fn storage_slot_type_from_raw(
+    slot_type: u32,
+) -> Result<StorageSlotType, AccountConversionError> {
     Ok(match slot_type {
         0 => StorageSlotType::Value,
         1 => StorageSlotType::Map,
-        _ => return Err(ConversionError::EnumDiscriminantOutOfRange),
+        _ => return Err(AccountConversionError::EnumDiscriminantOutOfRange),
     })
 }
 
@@ -720,7 +759,7 @@ pub struct AccountResponse {
 }
 
 impl TryFrom<proto::rpc::AccountResponse> for AccountResponse {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::rpc::AccountResponse) -> Result<Self, Self::Error> {
         let proto::rpc::AccountResponse { block_num, witness, details } = value;
@@ -781,7 +820,7 @@ impl AccountDetails {
 }
 
 impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::rpc::account_response::AccountDetails) -> Result<Self, Self::Error> {
         let proto::rpc::account_response::AccountDetails {
@@ -844,7 +883,7 @@ impl From<AccountDetails> for proto::rpc::account_response::AccountDetails {
 // ================================================================================================
 
 impl TryFrom<proto::account::AccountWitness> for AccountWitness {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(account_witness: proto::account::AccountWitness) -> Result<Self, Self::Error> {
         let witness_id = account_witness
@@ -860,12 +899,12 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitness {
             .ok_or(proto::account::AccountWitness::missing_field(stringify!(path)))?
             .try_into()?;
 
-        AccountWitness::new(witness_id, commitment, path).map_err(|err| {
-            ConversionError::deserialization_error(
+        Ok(AccountWitness::new(witness_id, commitment, path).map_err(|err| {
+            ProtoConversionError::deserialization_error(
                 "AccountWitness",
                 DeserializationError::InvalidValue(err.to_string()),
             )
-        })
+        })?)
     }
 }
 
@@ -890,7 +929,7 @@ pub struct AccountWitnessRecord {
 }
 
 impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(
         account_witness_record: proto::account::AccountWitness,
@@ -911,7 +950,7 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
             .try_into()?;
 
         let witness = AccountWitness::new(witness_id, commitment, path).map_err(|err| {
-            ConversionError::deserialization_error(
+            ProtoConversionError::deserialization_error(
                 "AccountWitness",
                 DeserializationError::InvalidValue(err.to_string()),
             )
@@ -961,7 +1000,7 @@ impl Display for AccountState {
 }
 
 impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> for AccountState {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(
         from: proto::store::transaction_inputs::AccountTransactionInputRecord,
@@ -1005,13 +1044,13 @@ impl From<AccountState> for proto::store::transaction_inputs::AccountTransaction
 // ================================================================================================
 
 impl TryFrom<proto::primitives::Asset> for Asset {
-    type Error = ConversionError;
+    type Error = AccountConversionError;
 
     fn try_from(value: proto::primitives::Asset) -> Result<Self, Self::Error> {
         let inner = value.asset.ok_or(proto::primitives::Asset::missing_field("asset"))?;
         let word = Word::try_from(inner)?;
 
-        Asset::try_from(word).map_err(ConversionError::AssetError)
+        Asset::try_from(word).map_err(AccountConversionError::AssetError)
     }
 }
 

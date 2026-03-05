@@ -1,6 +1,6 @@
 use miden_node_proto::convert;
 use miden_node_proto::domain::block::InvalidBlockRange;
-use miden_node_proto::errors::MissingFieldHelper;
+use miden_node_proto::errors::{ConversionError, MissingFieldHelper};
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -164,7 +164,7 @@ impl rpc_server::Rpc for StoreApi {
         let block_range = request
             .block_range
             .ok_or_else(|| proto::rpc::SyncChainMmrRequest::missing_field(stringify!(block_range)))
-            .map_err(SyncChainMmrError::DeserializationFailed)?;
+            .map_err(|e| SyncChainMmrError::DeserializationFailed(ConversionError::from(e)))?;
 
         let block_from = BlockNumber::from(block_range.block_from);
         if block_from > chain_tip {
@@ -246,7 +246,9 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         debug!(target: COMPONENT, ?request);
         let request = request.into_inner();
-        let account_request = request.try_into().map_err(GetAccountError::DeserializationFailed)?;
+        let account_request = request
+            .try_into()
+            .map_err(|e| GetAccountError::DeserializationFailed(ConversionError::from(e)))?;
 
         let account_data = self.state.get_account(account_request).await?;
 
