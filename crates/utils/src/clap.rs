@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::u64;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
 const DEFAULT_REPLENISH_PER_SEC: u64 = 16;
 const DEFAULT_BURST_SIZE: u64 = 128;
@@ -77,6 +78,16 @@ impl Default for GrpcOptions {
 }
 
 impl GrpcOptions {
+    pub fn test() -> Self {
+        Self {
+            request_timeout: TEST_REQUEST_TIMEOUT,
+            max_connection_age: DEFAULT_MAX_CONNECTION_AGE,
+            burst_size: DEFAULT_BURST_SIZE,
+            replenish_per_sec: DEFAULT_REPLENISH_PER_SEC,
+            max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
+        }
+    }
+
     /// Return a gRPC config for benchmarking.
     pub fn bench() -> Self {
         Self {

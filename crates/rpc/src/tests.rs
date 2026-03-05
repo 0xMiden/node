@@ -44,6 +44,7 @@ use crate::Rpc;
 /// Byte offset of the account delta commitment in serialized `ProvenTransaction`.
 /// Layout: `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
 const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Creates a minimal account and its delta for testing proven transaction building.
 fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
@@ -376,9 +377,11 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
+
 async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
     let mut endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
-        .expect("Url type always results in valid endpoint");
+        .expect("Url type always results in valid endpoint")
+        .timeout(REQUEST_TIMEOUT);
     if let Some(local_address) = local_address {
         endpoint = endpoint.local_address(Some(local_address));
     }
@@ -415,7 +418,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
-            grpc_options: GrpcOptions::default(),
+            grpc_options: GrpcOptions::test(),
         }
         .serve()
         .await
@@ -460,7 +463,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_options: GrpcOptions::default(),
+            grpc_options: GrpcOptions::test(),
         }
         .serve()
         .await
@@ -502,7 +505,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_options: GrpcOptions::default(),
+            grpc_options: GrpcOptions::test(),
         }
         .serve()
         .await
