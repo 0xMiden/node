@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
-
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
@@ -18,17 +16,12 @@ use super::{ENV_DATA_DIRECTORY, ENV_RPC_URL};
 use crate::commands::{
     BlockProducerConfig,
     BundledValidatorConfig,
-    DEFAULT_BURST_SIZE,
-    DEFAULT_MAX_CONNECTION_AGE,
-    DEFAULT_MAX_GLOBAL_CONNECTIONS,
-    DEFAULT_REPLENISH_PER_SEC,
-    DEFAULT_REQUEST_TIMEOUT,
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
+    GrpcOptions,
     NtxBuilderConfig,
     ValidatorKey,
-    duration_to_human_readable_string,
 };
 
 #[derive(clap::Subcommand)]
@@ -88,51 +81,8 @@ pub enum BundledCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        ///
-        /// This may occur if the server is overloaded or due to an internal bug.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_request_timeout: Duration,
-
-        /// Maximum duration of a connection before we drop it on the server side irrespective of
-        /// activity.
-        #[arg(
-            long = "grpc.max_connection_age",
-            default_value = &duration_to_human_readable_string(DEFAULT_MAX_CONNECTION_AGE),
-            value_parser = humantime::parse_duration,
-            value_name = "MAX_CONNECTION_AGE"
-        )]
-        grpc_max_connection_age: Duration,
-
-        /// Number of connections to be served before the "API tokens" need to be replenished
-        /// per IP address.
-        #[arg(
-            long = "grpc.max_connection_age",
-            default_value = DEFAULT_BURST_SIZE.to_string(),
-            value_name = "BURST_SIZE"
-        )]
-        grpc_burst_size: u64,
-
-        /// Number of requests to unlock per second.
-        #[arg(
-            long = "grpc.replenish_per_sec",
-            default_value = DEFAULT_REPLENISH_PER_SEC.to_string(),
-            value_name = "REPLENISH_PER_SEC"
-        )]
-        grpc_replenish_per_sec: u64,
-
-        /// Number of global concurrent connections.
-        #[arg(
-            long = "grpc.max_global_connections",
-            default_value = DEFAULT_MAX_GLOBAL_CONNECTIONS.to_string(),
-            value_name = "MAX_GLOBAL_CONNECTIONS"
-        )]
-        grpc_max_global_concurrent_connections: u64,
+        #[command(flatten)]
+        grpc_options: GrpcOptions,
     },
 }
 
@@ -164,11 +114,7 @@ impl BundledCommand {
                 ntx_builder,
                 validator,
                 enable_otel: _,
-                grpc_request_timeout,
-                grpc_max_connection_age,
-                grpc_burst_size,
-                grpc_replenish_per_sec,
-                grpc_max_global_concurrent_connections,
+                grpc_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -177,11 +123,7 @@ impl BundledCommand {
                     block_producer,
                     ntx_builder,
                     validator,
-                    grpc_request_timeout,
-                    grpc_max_connection_age,
-                    grpc_burst_size,
-                    grpc_replenish_per_sec,
-                    grpc_max_global_concurrent_connections,
+                    grpc_options,
                 )
                 .await
             },
@@ -196,11 +138,7 @@ impl BundledCommand {
         block_producer: BlockProducerConfig,
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
-        grpc_request_timeout: Duration,
-        grpc_max_connection_age: Duration,
-        grpc_burst_size: u64,
-        grpc_replenish_per_sec: u64,
-        grpc_max_global_concurrent_connections: u64,
+        grpc_options: GrpcOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -257,11 +195,11 @@ impl BundledCommand {
                     ntx_builder_listener: store_ntx_builder_listener,
                     data_directory: data_directory_clone,
                     block_prover_url,
-                    grpc_request_timeout,
-                    grpc_max_connection_age,
-                    grpc_burst_size,
-                    grpc_replenish_per_sec,
-                    grpc_max_global_concurrent_connections,
+                    grpc_request_timeout: grpc_options.request_timeout,
+                    grpc_max_connection_age: grpc_options.max_connection_age,
+                    grpc_burst_size: grpc_options.burst_size,
+                    grpc_replenish_per_sec: grpc_options.replenish_per_sec,
+                    grpc_max_global_concurrent_connections: grpc_options.max_global_concurrent_connections,
                 }
                 .serve()
                 .await
@@ -288,7 +226,7 @@ impl BundledCommand {
                             block_interval: block_producer.block_interval,
                             max_batches_per_block: block_producer.max_batches_per_block,
                             max_txs_per_batch: block_producer.max_txs_per_batch,
-                            grpc_timeout: grpc_request_timeout,
+                            grpc_timeout: grpc_options.request_timeout,
                             mempool_tx_capacity: block_producer.mempool_tx_capacity,
                         }
                         .serve()
@@ -312,11 +250,11 @@ impl BundledCommand {
                         store_url,
                         block_producer_url: Some(block_producer_url),
                         validator_url,
-                        grpc_request_timeout,
-                        grpc_max_connection_age,
-                        grpc_burst_size,
-                        grpc_replenish_per_sec,
-                        grpc_max_global_concurrent_connections,
+                        grpc_request_timeout: grpc_options.request_timeout,
+                        grpc_max_connection_age: grpc_options.max_connection_age,
+                        grpc_burst_size: grpc_options.burst_size,
+                        grpc_replenish_per_sec: grpc_options.replenish_per_sec,
+                        grpc_max_global_concurrent_connections: grpc_options.max_global_concurrent_connections,
                     }
                     .serve()
                     .await
@@ -370,7 +308,7 @@ impl BundledCommand {
                     async move {
                         Validator {
                             address,
-                            grpc_timeout: grpc_request_timeout,
+                            grpc_timeout: grpc_options.request_timeout,
                             signer,
                             data_directory,
                         }
