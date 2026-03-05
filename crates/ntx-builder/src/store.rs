@@ -4,7 +4,12 @@ use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{
+    AccountConversionError,
+    ConversionError,
+    DigestConversionError,
+    ProtoConversionError,
+};
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
@@ -101,9 +106,13 @@ impl StoreClient {
         match response.current_block_header {
             // There are new blocks compared to the builder's latest state
             Some(block) => {
-                let peaks = try_convert(response.current_peaks).collect::<Result<_, _>>()?;
-                let header =
-                    BlockHeader::try_from(block).map_err(StoreError::DeserializationError)?;
+                let peaks: Vec<Word> = try_convert(response.current_peaks)
+                    .collect::<Result<_, _>>()
+                    .map_err(|e: DigestConversionError| {
+                        StoreError::DeserializationError(ConversionError::from(e))
+                    })?;
+                let header = BlockHeader::try_from(block)
+                    .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))?;
 
                 let peaks = MmrPeaks::new(Forest::new(header.block_num().as_usize()), peaks)
                     .map_err(|_| {
@@ -140,9 +149,9 @@ impl StoreClient {
         // which implies details being public, so OK to error otherwise
         let account = match store_response.map(|acc| acc.details) {
             Some(Some(details)) => Some(Account::read_from_bytes(&details).map_err(|err| {
-                StoreError::DeserializationError(ConversionError::deserialization_error(
-                    "account", err,
-                ))
+                StoreError::DeserializationError(
+                    ProtoConversionError::deserialization_error("account", err).into(),
+                )
             })?),
             _ => None,
         };
@@ -178,14 +187,15 @@ impl StoreClient {
         let proto_response = self.inner.clone().get_account(proto_request).await?.into_inner();
 
         // Convert proto response to domain type.
-        let account_response =
-            AccountResponse::try_from(proto_response).map_err(StoreError::DeserializationError)?;
+        let account_response = AccountResponse::try_from(proto_response)
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))?;
 
         // Build partial account.
         let account_details = account_response
             .details
             .ok_or(StoreError::MissingDetails("account details".into()))?;
-        let partial_account = build_minimal_foreign_account(&account_details)?;
+        let partial_account = build_minimal_foreign_account(&account_details)
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))?;
 
         Ok(AccountInputs::new(partial_account, account_response.witness))
     }
@@ -216,7 +226,10 @@ impl StoreClient {
 
             all_notes.reserve(resp.notes.len());
             for note in resp.notes {
-                all_notes.push(AccountTargetNetworkNote::try_from(note)?);
+                all_notes.push(
+                    AccountTargetNetworkNote::try_from(note)
+                        .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))?,
+                );
             }
 
             match resp.next_token {
@@ -317,10 +330,9 @@ impl StoreClient {
             .into_iter()
             .map(|account_id| {
                 let account_id = AccountId::read_from_bytes(&account_id.id).map_err(|err| {
-                    StoreError::DeserializationError(ConversionError::deserialization_error(
-                        "account_id",
-                        err,
-                    ))
+                    StoreError::DeserializationError(
+                        ProtoConversionError::deserialization_error("account_id", err).into(),
+                    )
                 })?;
                 NetworkAccountId::try_from(account_id).map_err(|_| {
                     StoreError::MalformedResponse(
@@ -330,12 +342,12 @@ impl StoreClient {
             })
             .collect::<Result<Vec<NetworkAccountId>, StoreError>>()?;
 
-        let pagination_info = response.pagination_info.ok_or(
-            ConversionError::MissingFieldInProtobufRepresentation {
+        let pagination_info = response.pagination_info.ok_or(ConversionError::from(
+            ProtoConversionError::MissingField {
                 entity: "NetworkAccountIdList",
                 field_name: "pagination_info",
             },
-        )?;
+        ))?;
 
         Ok((accounts, pagination_info))
     }
@@ -373,7 +385,7 @@ impl StoreClient {
         script
             .map(NoteScript::try_from)
             .transpose()
-            .map_err(StoreError::DeserializationError)
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))
     }
 
     #[instrument(target = COMPONENT, name = "store.client.get_vault_asset_witnesses", skip_all, err)]
@@ -406,10 +418,12 @@ impl StoreClient {
             let smt_opening = asset_witness.proof.ok_or_else(|| {
                 StoreError::MalformedResponse("missing proof in vault asset witness".to_string())
             })?;
-            let proof: SmtProof =
-                smt_opening.try_into().map_err(StoreError::DeserializationError)?;
-            let witness = AssetWitness::new(proof)
-                .map_err(|err| StoreError::DeserializationError(ConversionError::from(err)))?;
+            let proof: SmtProof = smt_opening
+                .try_into()
+                .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))?;
+            let witness = AssetWitness::new(proof).map_err(|err| {
+                StoreError::DeserializationError(AccountConversionError::from(err).into())
+            })?;
 
             asset_witnesses.push(witness);
         }
@@ -445,7 +459,9 @@ impl StoreClient {
             StoreError::MalformedResponse("missing proof in storage map witness".to_string())
         })?;
 
-        let proof: SmtProof = smt_opening.try_into().map_err(StoreError::DeserializationError)?;
+        let proof: SmtProof = smt_opening
+            .try_into()
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))?;
 
         // Create the storage map witness using the proof and raw map key.
         let witness = StorageMapWitness::new(proof, [map_key]).map_err(|_err| {
@@ -480,12 +496,12 @@ pub enum StoreError {
 /// to retrieve foreign account data during transaction execution.
 pub fn build_minimal_foreign_account(
     account_details: &AccountDetails,
-) -> Result<PartialAccount, ConversionError> {
+) -> Result<PartialAccount, AccountConversionError> {
     // Derive account code.
     let account_code_bytes = account_details
         .account_code
         .as_ref()
-        .ok_or(ConversionError::AccountCodeMissing)?;
+        .ok_or(AccountConversionError::AccountCodeMissing)?;
     let account_code = AccountCode::from_bytes(account_code_bytes)?;
 
     // Derive partial storage. Storage maps are not required for foreign accounts.

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::{BlockProducerClient, Builder, StoreRpcClient, ValidatorClient};
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::DigestConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
 use miden_node_proto::generated::{self as proto};
@@ -243,12 +243,11 @@ impl api_server::Api for RpcService {
         // Validation checking for correct NoteId's
         let note_ids = request.get_ref().ids.clone();
 
-        let _: Vec<Word> =
-            try_convert(note_ids)
-                .collect::<Result<_, _>>()
-                .map_err(|err: ConversionError| {
-                    Status::invalid_argument(err.as_report_context("invalid NoteId"))
-                })?;
+        let _: Vec<Word> = try_convert(note_ids).collect::<Result<_, _>>().map_err(
+            |err: DigestConversionError| {
+                Status::invalid_argument(err.as_report_context("invalid NoteId"))
+            },
+        )?;
 
         self.store.clone().get_notes_by_id(request).await
     }
@@ -534,11 +533,13 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 
 /// Cached RPC query parameter limits.
 static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
-    use QueryParamAccountIdLimit as AccountId;
-    use QueryParamNoteIdLimit as NoteId;
-    use QueryParamNoteTagLimit as NoteTag;
-    use QueryParamNullifierLimit as Nullifier;
-    use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
+    use {
+        QueryParamAccountIdLimit as AccountId,
+        QueryParamNoteIdLimit as NoteId,
+        QueryParamNoteTagLimit as NoteTag,
+        QueryParamNullifierLimit as Nullifier,
+        QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal,
+    };
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([

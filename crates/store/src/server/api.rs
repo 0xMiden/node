@@ -1,7 +1,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{
+    AccountConversionError,
+    ConversionError,
+    DigestConversionError,
+    ProtoConversionError,
+};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
@@ -109,8 +114,11 @@ where
     E: From<ConversionError>,
 {
     block_range.ok_or_else(|| {
-        ConversionError::MissingFieldInProtobufRepresentation { entity, field_name: "block_range" }
-            .into()
+        ConversionError::from(ProtoConversionError::MissingField {
+            entity,
+            field_name: "block_range",
+        })
+        .into()
     })
 }
 
@@ -123,12 +131,11 @@ pub fn read_root<E>(
 where
     E: From<ConversionError>,
 {
-    root.ok_or_else(|| ConversionError::MissingFieldInProtobufRepresentation {
-        entity,
-        field_name: "root",
+    root.ok_or_else(|| {
+        ConversionError::from(ProtoConversionError::MissingField { entity, field_name: "root" })
     })?
     .try_into()
-    .map_err(Into::into)
+    .map_err(|e: DigestConversionError| ConversionError::from(e).into())
 }
 
 /// Converts a collection of proto primitives to Words, returning a specific error type if
@@ -137,13 +144,13 @@ pub fn convert_digests_to_words<E, I>(digests: I) -> Result<Vec<Word>, E>
 where
     E: From<ConversionError>,
     I: IntoIterator,
-    I::Item: TryInto<Word, Error = ConversionError>,
+    I::Item: TryInto<Word, Error = DigestConversionError>,
 {
     digests
         .into_iter()
         .map(TryInto::try_into)
-        .collect::<Result<Vec<_>, ConversionError>>()
-        .map_err(Into::into)
+        .collect::<Result<Vec<_>, DigestConversionError>>()
+        .map_err(|e| ConversionError::from(e).into())
 }
 
 /// Reads account IDs from a request, returning a specific error type if conversion fails
@@ -155,8 +162,8 @@ where
         .iter()
         .cloned()
         .map(AccountId::try_from)
-        .collect::<Result<_, ConversionError>>()
-        .map_err(Into::into)
+        .collect::<Result<_, AccountConversionError>>()
+        .map_err(|e| ConversionError::from(e).into())
 }
 
 pub fn read_account_id<E>(id: Option<proto::account::AccountId>) -> Result<AccountId, E>
@@ -164,15 +171,15 @@ where
     E: From<ConversionError>,
 {
     id.ok_or_else(|| {
-        ConversionError::deserialization_error(
+        ConversionError::from(ProtoConversionError::deserialization_error(
             "AccountId",
             miden_protocol::crypto::utils::DeserializationError::InvalidValue(
                 "Missing account ID".to_string(),
             ),
-        )
+        ))
     })?
     .try_into()
-    .map_err(Into::into)
+    .map_err(|e: AccountConversionError| ConversionError::from(e).into())
 }
 
 #[instrument(
@@ -189,7 +196,7 @@ where
     nullifiers
         .iter()
         .copied()
-        .map(TryInto::try_into)
+        .map(|d| Nullifier::try_from(d).map_err(ConversionError::from))
         .collect::<Result<_, ConversionError>>()
         .map_err(Into::into)
 }
