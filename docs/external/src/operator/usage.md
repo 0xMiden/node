@@ -118,6 +118,17 @@ miden-node bundled start \
   --rpc.url http://0.0.0.0:57291
 ```
 
+### gRPC server limits and timeouts
+
+The RPC component enforces per-request timeouts, per-IP rate limits, and global concurrency caps. Configure these
+settings for bundled or standalone RPC with the following options:
+
+- `--grpc.timeout` (default `10s`): Maximum request duration before the server drops the request.
+- `--grpc.max_connection_age` (default `30m`): Maximum lifetime of a connection before the server closes it.
+- `--grpc.burst_size` (default `128`): Per-IP burst capacity before rate limiting kicks in.
+- `--grpc.replenish_per_sec` (default `16`): Per-IP request credits replenished per second.
+- `--grpc.max_global_connections` (default `1000`): Maximum concurrent gRPC connections across all clients.
+
 ## Systemd
 
 Our [Debian packages](./installation.md#debian-package) install a systemd service which operates the node in `bundled`
