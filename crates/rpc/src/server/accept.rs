@@ -41,6 +41,7 @@ pub enum GenesisNegotiation {
 #[derive(Clone)]
 pub struct AcceptHeaderLayer {
     supported_versions: VersionReq,
+    expected_pre: semver::Prerelease,
     genesis_commitment: Word,
     /// RPC method names for which the `genesis` parameter is mandatory.
     ///
@@ -84,6 +85,7 @@ impl AcceptHeaderLayer {
 
         AcceptHeaderLayer {
             supported_versions,
+            expected_pre: rpc_version.pre.clone(),
             genesis_commitment,
             require_genesis_methods: Vec::new(),
         }
@@ -168,15 +170,29 @@ impl AcceptHeaderLayer {
             }
 
             // Skip those that don't match the version requirement.
+            // The VersionReq checks major.minor compatibility. Pre-release tags are
+            // checked separately because semver's VersionReq matching excludes
+            // pre-release versions when the comparator has no pre-release component,
+            // which makes it impossible to use a single VersionReq for both stable
+            // and pre-release version matching with patch flexibility.
             let version = media_type
                 .get_param(Self::VERSION)
                 .map(|value| Version::parse(value.unquoted_str().as_ref()))
                 .transpose()
                 .map_err(AcceptHeaderError::InvalidVersion)?;
-            if let Some(version) = version
-                && !self.supported_versions.matches(&version)
-            {
-                continue;
+            if let Some(version) = &version {
+                // Check major.minor match (ignoring pre-release for this check).
+                let stable_version = Version {
+                    pre: semver::Prerelease::EMPTY,
+                    ..version.clone()
+                };
+                if !self.supported_versions.matches(&stable_version) {
+                    continue;
+                }
+                // Check pre-release tag matches exactly.
+                if version.pre != self.expected_pre {
+                    continue;
+                }
             }
 
             // Skip if the genesis commitment does not match, or if it is required but missing.
@@ -413,6 +429,7 @@ mod tests {
     #[case::invalid_genesis("application/vnd.miden; genesis=aaa")]
     #[case::version_too_old("application/vnd.miden; version=0.1.0")]
     #[case::version_too_new("application/vnd.miden; version=0.3.0")]
+    #[case::version_prerelease_rejected_by_stable("application/vnd.miden; version=0.2.3-alpha.1")]
     #[case::zero_weighting("application/vnd.miden; q=0.0")]
     #[case::wildcard_subtype("application/*")]
     #[test]
@@ -497,5 +514,42 @@ mod tests {
     #[test]
     fn qvalue_default_is_one() {
         assert_eq!(QValue::default(), QValue::new(1_000));
+    }
+
+    mod prerelease {
+        use semver::Version;
+
+        use super::*;
+
+        impl AcceptHeaderLayer {
+            fn for_prerelease_tests() -> Self {
+                let version = Version::parse("0.14.0-alpha.3").unwrap();
+                Self::new(&version, Word::try_from(TEST_GENESIS_COMMITMENT).unwrap())
+            }
+        }
+
+        #[rstest::rstest]
+        #[case::empty("")]
+        #[case::wildcard("*/*")]
+        #[case::media_type_only("application/vnd.miden")]
+        #[case::exact_prerelease("application/vnd.miden; version=0.14.0-alpha.3")]
+        #[case::different_patch_same_prerelease("application/vnd.miden; version=0.14.1-alpha.3")]
+        #[test]
+        fn prerelease_should_pass(#[case] accept: &'static str) {
+            AcceptHeaderLayer::for_prerelease_tests()
+                .negotiate(accept, super::super::GenesisNegotiation::Optional)
+                .unwrap();
+        }
+
+        #[rstest::rstest]
+        #[case::different_prerelease_number("application/vnd.miden; version=0.14.0-alpha.1")]
+        #[case::different_prerelease_tag("application/vnd.miden; version=0.14.0-beta.3")]
+        #[case::stable_version("application/vnd.miden; version=0.14.0")]
+        #[test]
+        fn prerelease_should_be_rejected(#[case] accept: &'static str) {
+            AcceptHeaderLayer::for_prerelease_tests()
+                .negotiate(accept, super::super::GenesisNegotiation::Optional)
+                .unwrap_err();
+        }
     }
 }
