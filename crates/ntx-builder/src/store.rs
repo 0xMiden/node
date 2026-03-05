@@ -16,6 +16,7 @@ use miden_protocol::account::{
     AccountId,
     PartialAccount,
     PartialStorage,
+    StorageMapKey,
     StorageMapWitness,
     StorageSlotName,
 };
@@ -421,7 +422,7 @@ impl StoreClient {
         &self,
         account_id: AccountId,
         slot_name: StorageSlotName,
-        map_key: Word,
+        map_key: StorageMapKey,
         block_num: Option<BlockNumber>,
     ) -> Result<StorageMapWitness, StoreError> {
         // Construct proto request.
