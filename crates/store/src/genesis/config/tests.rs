@@ -3,6 +3,7 @@ use std::path::Path;
 
 use assert_matches::assert_matches;
 use miden_protocol::ONE;
+use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 
 use super::*;
@@ -354,7 +355,30 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
 
     // Verify the genesis state can be converted to a block
-    let _block = state.into_block().await?;
+    let block = state.into_block().await?;
+
+    // Verify that non-private accounts (Public and Network) get full Delta details,
+    // not Private. This is the key check: Network accounts like the AggLayer bridge
+    // and faucets must have their full details stored so the ntx-builder can find them.
+    for update in block.inner().body().updated_accounts() {
+        let is_private = update.account_id().is_private();
+        match update.details() {
+            AccountUpdateDetails::Delta(_) => {
+                assert!(
+                    !is_private,
+                    "Private account {:?} should not have Delta details",
+                    update.account_id()
+                );
+            },
+            AccountUpdateDetails::Private => {
+                assert!(
+                    is_private,
+                    "Non-private account {:?} should have Delta details, not Private",
+                    update.account_id()
+                );
+            },
+        }
+    }
 
     Ok(())
 }
