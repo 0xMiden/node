@@ -10,6 +10,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use miden_node_utils::clap::{GrpcOptions, duration_to_human_readable_string};
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
@@ -48,79 +49,7 @@ const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 const ENV_NTX_DATA_DIRECTORY: &str = "MIDEN_NODE_NTX_DATA_DIRECTORY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
-const DEFAULT_REPLENISH_PER_SEC: u64 = 16;
-const DEFAULT_BURST_SIZE: u64 = 128;
-const DEFAULT_MAX_GLOBAL_CONNECTIONS: u64 = 1_000;
-
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-
-// Formats a Duration into a human-readable string for display in clap help text.
-fn duration_to_human_readable_string(duration: Duration) -> String {
-    humantime::format_duration(duration).to_string()
-}
-
-#[derive(clap::Args, Copy, Clone)]
-pub struct GrpcOptions {
-    /// Maximum duration a gRPC request is allocated before being dropped by the server.
-    ///
-    /// This may occur if the server is overloaded or due to an internal bug.
-    #[arg(
-        long = "grpc.timeout",
-        default_value = &duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
-        value_parser = humantime::parse_duration,
-        value_name = "DURATION"
-    )]
-    pub request_timeout: Duration,
-
-    /// Maximum duration of a connection before we drop it on the server side irrespective of
-    /// activity.
-    #[arg(
-        long = "grpc.max_connection_age",
-        default_value = &duration_to_human_readable_string(DEFAULT_MAX_CONNECTION_AGE),
-        value_parser = humantime::parse_duration,
-        value_name = "MAX_CONNECTION_AGE"
-    )]
-    pub max_connection_age: Duration,
-
-    /// Number of connections to be served before the "API tokens" need to be replenished
-    /// per IP address.
-    #[arg(
-        long = "grpc.max_connection_age",
-        default_value = DEFAULT_BURST_SIZE.to_string(),
-        value_name = "BURST_SIZE"
-    )]
-    pub burst_size: u64,
-
-    /// Number of requests to unlock per second.
-    #[arg(
-        long = "grpc.replenish_per_sec",
-        default_value = DEFAULT_REPLENISH_PER_SEC.to_string(),
-        value_name = "REPLENISH_PER_SEC"
-    )]
-    pub replenish_per_sec: u64,
-
-    /// Number of global concurrent connections.
-    #[arg(
-        long = "grpc.max_global_connections",
-        default_value = DEFAULT_MAX_GLOBAL_CONNECTIONS.to_string(),
-        value_name = "MAX_GLOBAL_CONNECTIONS"
-    )]
-    pub max_global_concurrent_connections: u64,
-}
-
-impl Default for GrpcOptions {
-    fn default() -> Self {
-        Self {
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            max_connection_age: DEFAULT_MAX_CONNECTION_AGE,
-            burst_size: DEFAULT_BURST_SIZE,
-            replenish_per_sec: DEFAULT_REPLENISH_PER_SEC,
-            max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
-        }
-    }
-}
 
 /// Configuration for the Validator key used to sign blocks.
 ///

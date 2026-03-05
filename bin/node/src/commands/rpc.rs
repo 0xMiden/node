@@ -1,10 +1,11 @@
 use anyhow::Context;
 use miden_node_rpc::Rpc;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
 use super::{ENV_BLOCK_PRODUCER_URL, ENV_RPC_URL, ENV_STORE_RPC_URL, ENV_VALIDATOR_URL};
-use crate::commands::{ENV_ENABLE_OTEL, GrpcOptions};
+use crate::commands::ENV_ENABLE_OTEL;
 
 #[derive(clap::Subcommand)]
 pub enum RpcCommand {

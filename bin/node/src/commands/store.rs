@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+
 use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
@@ -165,11 +166,7 @@ impl StoreCommand {
             ntx_builder_listener,
             block_producer_listener,
             data_directory,
-            grpc_request_timeout: grpc_options.request_timeout,
-            grpc_max_connection_age: grpc_options.max_connection_age,
-            grpc_burst_size: grpc_options.burst_size,
-            grpc_replenish_per_sec: grpc_options.replenish_per_sec,
-            grpc_max_global_concurrent_connections: grpc_options.max_global_concurrent_connections,
+            grpc_options,
         }
         .serve()
         .await

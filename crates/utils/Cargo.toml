@@ -39,6 +39,8 @@ tracing-forest        = { features = ["chrono"], optional = true, version = "0.3
 tracing-opentelemetry = { version = "0.32" }
 tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
+humantime             = { workspace = true }
+clap                  = { workspace = true }
 
 [build-dependencies]
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }

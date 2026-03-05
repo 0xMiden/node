@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -19,7 +21,6 @@ use crate::commands::{
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    GrpcOptions,
     NtxBuilderConfig,
     ValidatorKey,
 };
@@ -195,11 +196,7 @@ impl BundledCommand {
                     ntx_builder_listener: store_ntx_builder_listener,
                     data_directory: data_directory_clone,
                     block_prover_url,
-                    grpc_request_timeout: grpc_options.request_timeout,
-                    grpc_max_connection_age: grpc_options.max_connection_age,
-                    grpc_burst_size: grpc_options.burst_size,
-                    grpc_replenish_per_sec: grpc_options.replenish_per_sec,
-                    grpc_max_global_concurrent_connections: grpc_options.max_global_concurrent_connections,
+                    grpc_options,
                 }
                 .serve()
                 .await
@@ -226,7 +223,7 @@ impl BundledCommand {
                             block_interval: block_producer.block_interval,
                             max_batches_per_block: block_producer.max_batches_per_block,
                             max_txs_per_batch: block_producer.max_txs_per_batch,
-                            grpc_timeout: grpc_options.request_timeout,
+                            grpc_options,
                             mempool_tx_capacity: block_producer.mempool_tx_capacity,
                         }
                         .serve()
@@ -254,7 +251,8 @@ impl BundledCommand {
                         grpc_max_connection_age: grpc_options.max_connection_age,
                         grpc_burst_size: grpc_options.burst_size,
                         grpc_replenish_per_sec: grpc_options.replenish_per_sec,
-                        grpc_max_global_concurrent_connections: grpc_options.max_global_concurrent_connections,
+                        grpc_max_global_concurrent_connections: grpc_options
+                            .max_global_concurrent_connections,
                     }
                     .serve()
                     .await
@@ -308,7 +306,7 @@ impl BundledCommand {
                     async move {
                         Validator {
                             address,
-                            grpc_timeout: grpc_options.request_timeout,
+                            grpc_options,
                             signer,
                             data_directory,
                         }

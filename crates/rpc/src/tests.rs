@@ -8,6 +8,7 @@ use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -466,11 +467,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_request_timeout: Duration::from_secs(30),
-            grpc_max_connection_age: Duration::from_hours(1),
-            grpc_burst_size: 128,
-            grpc_replenish_per_sec: 16,
-            grpc_max_global_concurrent_connections: 1000,
+            grpc_options: GrpcOptions::default(),
         }
         .serve()
         .await
@@ -512,11 +509,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_request_timeout: Duration::from_secs(10),
-            grpc_max_connection_age: Duration::from_hours(1),
-            grpc_burst_size: 128,
-            grpc_replenish_per_sec: 16,
-            grpc_max_global_concurrent_connections: 1000,
+            grpc_options: GrpcOptions::default(),
         }
         .serve()
         .await

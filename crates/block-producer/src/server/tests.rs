@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use miden_node_proto::generated::block_producer::api_client as block_producer_client;
 use miden_node_store::{GenesisState, Store};
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::fee::test_fee_params;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::testing::random_secret_key::random_secret_key;
@@ -39,7 +40,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         validator_listener.local_addr().expect("failed to get validator address")
     };
 
-    let grpc_timeout = Duration::from_secs(30);
+    let grpc_options = GrpcOptions::default();
 
     // start the validator
     task::spawn(async move {
@@ -47,7 +48,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         let data_directory = temp_dir.path().to_path_buf();
         Validator {
             address: validator_addr,
-            grpc_timeout,
+            grpc_options,
             signer: ValidatorSigner::new_local(random_secret_key()),
             data_directory,
         }
@@ -71,7 +72,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             block_interval: Duration::from_millis(500),
             max_txs_per_batch: DEFAULT_MAX_TXS_PER_BATCH,
             max_batches_per_block: DEFAULT_MAX_BATCHES_PER_BLOCK,
-            grpc_timeout,
+            grpc_options,
             mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
         }
         .serve()
@@ -154,11 +155,7 @@ async fn start_store(
             block_producer_listener,
             block_prover_url: None,
             data_directory: dir,
-            grpc_request_timeout: Duration::from_secs(30),
-            grpc_max_connection_age: Duration::from_hours(1),
-            grpc_burst_size: u64::MAX,
-            grpc_replenish_per_sec: u64::MAX,
-            grpc_max_global_concurrent_connections: u64::MAX,
+            grpc_options: GrpcOptions::bench(),
         }
         .serve()
         .await

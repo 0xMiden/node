@@ -10,6 +10,7 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::block_producer::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -21,6 +22,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::Status;
+use tonic::server::Grpc;
+use tonic::service::InterceptorLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, instrument};
 use url::Url;
@@ -66,10 +69,8 @@ pub struct BlockProducer {
     pub max_txs_per_batch: usize,
     /// The maximum number of batches per block.
     pub max_batches_per_block: usize,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    /// Server-side gRPC options.
+    pub grpc_options: GrpcOptions,
 
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
@@ -155,7 +156,7 @@ impl BlockProducer {
                 let mempool = mempool.clone();
                 async move {
                     BlockProducerRpcServer::new(mempool, store)
-                        .serve(listener, self.grpc_timeout)
+                        .serve(listener, self.grpc_options)
                         .await
                 }
             })
@@ -238,7 +239,7 @@ impl BlockProducerRpcServer {
     // SERVER STARTUP
     // --------------------------------------------------------------------------------------------
 
-    async fn serve(self, listener: TcpListener, timeout: Duration) -> anyhow::Result<()> {
+    async fn serve(self, listener: TcpListener, grpc_options: GrpcOptions) -> anyhow::Result<()> {
         // Start background task to periodically update cached mempool stats
         self.spawn_mempool_stats_updater().await;
 
@@ -260,7 +261,7 @@ impl BlockProducerRpcServer {
         tonic::transport::Server::builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            .timeout(timeout)
+            .timeout(grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(self))
             .add_service(reflection_service)
             .add_service(reflection_service_alpha)

@@ -3229,8 +3229,10 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "clap",
  "http 1.4.0",
  "http-body-util",
+ "humantime",
  "itertools 0.14.0",
  "lru",
  "miden-node-rocksdb-cxx-linkage-fix",

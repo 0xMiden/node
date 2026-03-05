@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -15,7 +15,6 @@ use crate::commands::{
     ENV_VALIDATOR_KEY,
     ENV_VALIDATOR_KMS_KEY_ID,
     ENV_VALIDATOR_URL,
-    GrpcOptions,
     INSECURE_VALIDATOR_KEY_HEX,
 };
 
