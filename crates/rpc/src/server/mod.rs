@@ -1,24 +1,16 @@
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::Duration;
-
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
+use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::service::InterceptorLayer;
-use tonic::transport::server::TcpConnectInfo;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
-use tower::limit::GlobalConcurrencyLimitLayer;
-use tower_governor::GovernorError;
-use tower_governor::key_extractor::KeyExtractor;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use url::Url;
@@ -28,23 +20,7 @@ use crate::server::health::HealthCheckLayer;
 
 mod accept;
 mod api;
-mod connect_info;
 mod health;
-
-#[derive(Clone, Copy, Debug)]
-struct RpcPeerIpExtractor;
-
-impl KeyExtractor for RpcPeerIpExtractor {
-    type Key = IpAddr;
-
-    fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
-        req.extensions()
-            .get::<TcpConnectInfo>()
-            .and_then(TcpConnectInfo::remote_addr)
-            .map(|addr| addr.ip())
-            .ok_or(GovernorError::UnableToExtractKey)
-    }
-}
 
 /// The RPC server component.
 ///
@@ -99,37 +75,16 @@ impl Rpc {
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
-        let rate_limiter = {
-            let config = tower_governor::governor::GovernorConfigBuilder::default()
-                .key_extractor(RpcPeerIpExtractor)
-                .per_second(self.grpc_options.replenish_per_sec)
-                .burst_size(self.grpc_options.burst_size as u32)
-                .use_headers()
-                .finish()
-                .context("config parameters are inconsistent, i.e. burst < per second")?;
-            let limiter = Arc::clone(config.limiter());
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(60));
-                loop {
-                    interval.tick().await;
-                    // avoid a DoS vector
-                    limiter.retain_recent();
-                }
-            });
-            tower_governor::GovernorLayer::new(config)
-        };
-
         tonic::transport::Server::builder()
             .accept_http1(true)
             .max_connection_age(self.grpc_options.max_connection_age)
             .timeout(self.grpc_options.request_timeout)
-            .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(grpc::connect_info_layer())
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
-            // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
-            .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
-            .layer(rate_limiter)
+            .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
+            .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
             // Note: must come before the accept layer, as otherwise accept rejections
             // do _not_ get CORS headers applied, masking the accept error in
             // web-clients (which would experience CORS rejection).

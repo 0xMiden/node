@@ -24,6 +24,7 @@ bytes                 = { version = "1.10" }
 http                  = { workspace = true }
 http-body-util        = { version = "0.1" }
 itertools             = { workspace = true }
+governor = { version = "0.10"}
 lru                   = { workspace = true }
 miden-protocol        = { workspace = true }
 opentelemetry         = { version = "0.31" }
@@ -34,6 +35,8 @@ thiserror             = { workspace = true }
 tokio                 = { workspace = true }
 tonic                 = { default-features = true, workspace = true }
 tower-http            = { features = ["catch-panic"], workspace = true }
+tower                 = { features = ["limit"], workspace = true }
+tower_governor        = { version = "0.8" }
 tracing               = { workspace = true }
 tracing-forest        = { features = ["chrono"], optional = true, version = "0.3" }
 tracing-opentelemetry = { version = "0.32" }

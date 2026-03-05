@@ -12,6 +12,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
+use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::batch::ProvenBatch;
@@ -22,8 +23,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::Status;
-use tonic::server::Grpc;
-use tonic::service::InterceptorLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, instrument};
 use url::Url;
@@ -259,36 +258,15 @@ impl BlockProducerRpcServer {
 
         // Build the gRPC server with the API service and trace layer.
 
-        let rate_limiter = {
-            let config = tower_governor::governor::GovernorConfigBuilder::default()
-                .key_extractor(RpcPeerIpExtractor)
-                .per_second(self.grpc_options.replenish_per_sec)
-                .burst_size(self.grpc_options.burst_size as u32)
-                .use_headers()
-                .finish()
-                .context("config parameters are inconsistent, i.e. burst < per second")?;
-            let limiter = Arc::clone(config.limiter());
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(60));
-                loop {
-                    interval.tick().await;
-                    // avoid a DoS vector
-                    limiter.retain_recent();
-                }
-            });
-            tower_governor::GovernorLayer::new(config)
-        };
-
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .max_connection_age(self.grpc_options.max_connection_age)
-            .timeout(self.grpc_options.request_timeout)
-            .layer(InterceptorLayer::new(connect_info::ConnectInfoInterceptor))
+            .max_connection_age(grpc_options.max_connection_age)
+            .timeout(grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(grpc::connect_info_layer())
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            // TODO uses a semaphore, we might want to move to a single atomic in relaxed ordering
-            .layer(GlobalConcurrencyLimitLayer::new(self.grpc_options.max_global_concurrent_connections as usize))
-            .layer(rate_limiter)
+            .layer(grpc::rate_limit_concurrent_connections(grpc_options))
+            .layer(grpc::rate_limit_per_ip(grpc_options)?)
             .add_service(api_server::ApiServer::new(self))
             .add_service(reflection_service)
             .add_service(reflection_service_alpha)
