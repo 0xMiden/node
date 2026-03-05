@@ -73,7 +73,7 @@ impl<S: BlockSigner> GenesisState<S> {
             .accounts
             .iter()
             .map(|account| {
-                let account_update_details = if account.id().is_public() {
+                let account_update_details = if !account.id().is_private() {
                     AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone())?)
                 } else {
                     AccountUpdateDetails::Private
