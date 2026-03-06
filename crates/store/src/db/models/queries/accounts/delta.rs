@@ -189,6 +189,39 @@ pub(super) fn select_vault_balances_by_faucet_ids(
     Ok(balances)
 }
 
+/// Selects the latest vault assets for an account.
+///
+/// Queries only the current vault state (`is_latest = true`) rather than historical entries,
+/// which is needed for reconstructing the current `AssetVault` before applying a delta.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT vault_key, asset
+/// FROM account_vault_assets
+/// WHERE account_id = ?1 AND is_latest = 1
+/// ```
+pub(super) fn select_latest_vault_assets(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+) -> Result<Vec<Asset>, DatabaseError> {
+    use schema::account_vault_assets as vault;
+
+    let entries: Vec<(Vec<u8>, Option<Vec<u8>>)> =
+        SelectDsl::select(vault::table, (vault::vault_key, vault::asset))
+            .filter(vault::account_id.eq(account_id.to_bytes()))
+            .filter(vault::is_latest.eq(true))
+            .load(conn)?;
+
+    let mut assets = Vec::new();
+    for (_vault_key_bytes, maybe_asset_bytes) in entries {
+        if let Some(asset_bytes) = maybe_asset_bytes {
+            assets.push(Asset::read_from_bytes(&asset_bytes)?);
+        }
+    }
+    Ok(assets)
+}
+
 // HELPER FUNCTIONS
 // ================================================================================================
 
