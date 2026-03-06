@@ -102,8 +102,10 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
     );
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    conn.transaction(|conn| queries::insert_block_header(conn, &block_header, &dummy_signature))
-        .unwrap();
+    conn.transaction(|conn| {
+        queries::insert_block_header(conn, &block_header, &dummy_signature, None)
+    })
+    .unwrap();
 }
 
 #[test]
@@ -739,7 +741,7 @@ fn db_block_header() {
     // test insertion
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    queries::insert_block_header(conn, &block_header, &dummy_signature).unwrap();
+    queries::insert_block_header(conn, &block_header, &dummy_signature, None).unwrap();
 
     // test fetch unknown block header
     let block_number = 1;
@@ -771,7 +773,7 @@ fn db_block_header() {
     );
 
     let dummy_signature = SecretKey::new().sign(block_header2.commitment());
-    queries::insert_block_header(conn, &block_header2, &dummy_signature).unwrap();
+    queries::insert_block_header(conn, &block_header2, &dummy_signature, None).unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
@@ -1829,7 +1831,7 @@ fn db_roundtrip_block_header() {
 
     // Insert
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    queries::insert_block_header(&mut conn, &block_header, &dummy_signature).unwrap();
+    queries::insert_block_header(&mut conn, &block_header, &dummy_signature, None).unwrap();
 
     // Retrieve
     let retrieved =

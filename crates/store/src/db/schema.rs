@@ -49,6 +49,8 @@ diesel::table! {
         block_header -> Binary,
         signature -> Binary,
         commitment -> Binary,
+        is_proven -> Bool,
+        proving_inputs -> Nullable<Binary>,
     }
 }
 

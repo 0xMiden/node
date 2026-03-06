@@ -30,6 +30,7 @@ mod api;
 mod block_producer;
 pub mod block_prover_client;
 mod ntx_builder;
+pub mod proof_scheduler;
 mod rpc_api;
 
 /// The store server.
@@ -89,6 +90,7 @@ impl Store {
     /// Serves the store APIs (rpc, ntx-builder, block-producer) and DB maintenance background task.
     ///
     /// Note: this blocks until the server dies.
+    #[expect(clippy::too_many_lines)]
     pub async fn serve(self) -> anyhow::Result<()> {
         let rpc_address = self.rpc_listener.local_addr()?;
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
@@ -112,18 +114,39 @@ impl Store {
             Arc::new(BlockProver::local())
         };
 
+        // Initialize the chain tip watch channel and read the latest proven block from the DB.
+        let chain_tip = state.latest_block_num().await;
+        let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
+
+        let latest_proven_block = state
+            .db()
+            .select_latest_proven_block_num()
+            .await
+            .context("failed to read latest proven block number")?
+            .unwrap_or(miden_protocol::block::BlockNumber::GENESIS);
+
+        // Spawn the proof scheduler as a background task. It will immediately pick up any
+        // unproven blocks from previous runs and begin proving them.
+        let proof_scheduler_task = proof_scheduler::spawn(
+            state.db().clone(),
+            block_prover,
+            state.block_store(),
+            chain_tip_rx,
+            latest_proven_block,
+        );
+
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),
-            block_prover: Arc::clone(&block_prover),
+            chain_tip_sender: chain_tip_sender.clone(),
         });
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
             state: Arc::clone(&state),
-            block_prover: Arc::clone(&block_prover),
+            chain_tip_sender: chain_tip_sender.clone(),
         });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
-                block_prover: Arc::clone(&block_prover),
+                chain_tip_sender,
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_rpc_api_descriptor())
@@ -200,6 +223,13 @@ impl Store {
             result = service => result,
             Some(err) = termination_signal.recv() => {
                 Err(anyhow::anyhow!("received termination signal").context(err))
+            },
+            result = proof_scheduler_task => {
+                match result {
+                    Ok(Ok(())) => Err(anyhow::anyhow!("proof scheduler exited unexpectedly")),
+                    Ok(Err(err)) => Err(anyhow::anyhow!("proof scheduler fatal error").context(err)),
+                    Err(join_err) => Err(anyhow::anyhow!("proof scheduler panicked").context(join_err)),
+                }
             }
         }
     }

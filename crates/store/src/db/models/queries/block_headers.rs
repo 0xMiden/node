@@ -13,6 +13,7 @@ use diesel::{
 };
 use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::BlockProofRequest;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::utils::{Deserializable, Serializable};
@@ -205,16 +206,7 @@ pub struct BlockHeaderInsert {
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,
     pub commitment: Vec<u8>,
-}
-impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
-    fn from((header, signature): (&BlockHeader, &Signature)) -> Self {
-        Self {
-            block_num: header.block_num().to_raw_sql(),
-            block_header: header.to_bytes(),
-            signature: signature.to_bytes(),
-            commitment: BlockHeaderCommitment::new(header).to_raw_sql(),
-        }
-    }
+    pub proving_inputs: Option<Vec<u8>>,
 }
 
 /// Insert a [`BlockHeader`] to the DB using the given [`SqliteConnection`].
@@ -236,10 +228,96 @@ pub(crate) fn insert_block_header(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,
     signature: &Signature,
+    proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
-    let block_header = BlockHeaderInsert::from((block_header, signature));
-    let count = diesel::insert_into(schema::block_headers::table)
-        .values(&[block_header])
-        .execute(conn)?;
+    let row = BlockHeaderInsert {
+        block_num: block_header.block_num().to_raw_sql(),
+        block_header: block_header.to_bytes(),
+        signature: signature.to_bytes(),
+        commitment: BlockHeaderCommitment::new(block_header).to_raw_sql(),
+        proving_inputs: proving_inputs.map(|inputs| inputs.to_bytes()),
+    };
+    let count = diesel::insert_into(schema::block_headers::table).values(&[row]).execute(conn)?;
     Ok(count)
+}
+
+/// Select the proving inputs for a given block number.
+///
+/// # Returns
+///
+/// `None` if the block does not exist or has no proving inputs stored.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT proving_inputs
+/// FROM block_headers
+/// WHERE block_num = ?1
+/// ```
+pub(crate) fn select_block_proving_inputs(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Option<BlockProofRequest>, DatabaseError> {
+    let inputs: Option<Option<Vec<u8>>> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::proving_inputs)
+            .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
+            .get_result(conn)
+            .optional()?;
+    inputs
+        .flatten()
+        .map(|bytes| BlockProofRequest::read_from_bytes(&bytes))
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// Mark a committed block as proven.
+///
+/// Sets the `is_proven` flag to `true` for the row with the given `block_num`.
+///
+/// # Returns
+///
+/// The number of affected rows (expected: 1).
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    fields(block_num = %block_num),
+    err,
+)]
+pub(crate) fn mark_block_proven(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<usize, DatabaseError> {
+    let count = diesel::update(
+        schema::block_headers::table
+            .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
+    )
+    .set(schema::block_headers::is_proven.eq(true))
+    .execute(conn)?;
+    Ok(count)
+}
+
+/// Select the highest block number that has been proven.
+///
+/// Returns `None` if no blocks have been proven yet (genesis is never proven).
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num
+/// FROM block_headers
+/// WHERE is_proven = 1
+/// ORDER BY block_num DESC
+/// LIMIT 1
+/// ```
+pub(crate) fn select_latest_proven_block_num(
+    conn: &mut SqliteConnection,
+) -> Result<Option<BlockNumber>, DatabaseError> {
+    let block_num: Option<i64> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
+            .filter(schema::block_headers::is_proven.eq(true))
+            .order(schema::block_headers::block_num.desc())
+            .first(conn)
+            .optional()?;
+
+    block_num.map(BlockNumber::from_raw_sql).transpose().map_err(Into::into)
 }

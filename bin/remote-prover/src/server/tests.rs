@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use assert_matches::assert_matches;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
@@ -239,7 +238,7 @@ async fn capacity_is_respected() {
     result.sort_unstable();
     assert_eq!(expected, result);
 
-    assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
+    assert_matches::assert_matches!(first.err().or(second.err()).or(third.err()), Some(err) => {
         assert_eq!(err.code(), tonic::Code::ResourceExhausted);
     });
 

@@ -30,6 +30,25 @@ use tonic::Status;
 use crate::db::models::conv::DatabaseTypeConversionError;
 use crate::inner_forest::{InnerForestError, WitnessError};
 
+// PROOF SCHEDULER ERRORS
+// =================================================================================================
+
+#[derive(Debug, Error)]
+pub enum ProofSchedulerError {
+    #[error("no proving inputs found for block {0}")]
+    MissingProvingInputs(BlockNumber),
+    #[error("failed to deserialize proving inputs for block")]
+    DeserializationFailed(#[source] DeserializationError),
+    #[error("failed to write block proof to file")]
+    PersistProofFailed(#[source] std::io::Error),
+    #[error("failed to mark block as proven in database")]
+    MarkBlockProvenFailed(#[source] DatabaseError),
+    #[error("invalid remote prover endpoint: {0}")]
+    InvalidProverEndpoint(String),
+    #[error("proof scheduler task panicked: {0}")]
+    TaskPanicked(String),
+}
+
 // DATABASE ERRORS
 // =================================================================================================
 
@@ -254,6 +273,11 @@ pub enum SyncChainMmrError {
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),
+    #[error("no proven blocks available")]
+    NoProvenBlocks,
+    #[error("database error")]
+    #[grpc(internal)]
+    DatabaseError(#[source] DatabaseError),
 }
 
 impl From<diesel::result::Error> for StateSyncError {

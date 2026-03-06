@@ -11,6 +11,7 @@
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
+- Added finality field for `SyncChainMmr` requests ([#1725](https://github.com/0xMiden/miden-node/pull/1725)).
 
 ### Changes
 
