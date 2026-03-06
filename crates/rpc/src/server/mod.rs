@@ -1,10 +1,10 @@
-use std::time::Duration;
-
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
+use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
@@ -32,10 +32,7 @@ pub struct Rpc {
     pub store_url: Url,
     pub block_producer_url: Option<Url>,
     pub validator_url: Url,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub grpc_options: GrpcOptions,
 }
 
 impl Rpc {
@@ -80,10 +77,14 @@ impl Rpc {
 
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .timeout(self.grpc_timeout)
+            .max_connection_age(self.grpc_options.max_connection_age)
+            .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(grpc::connect_info_layer())
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(HealthCheckLayer)
+            .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
+            .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
             // Note: must come before the accept layer, as otherwise accept rejections
             // do _not_ get CORS headers applied, masking the accept error in
             // web-clients (which would experience CORS rejection).

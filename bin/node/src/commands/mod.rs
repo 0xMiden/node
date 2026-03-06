@@ -10,6 +10,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use miden_node_utils::clap::{GrpcOptions, duration_to_human_readable_string};
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
@@ -48,13 +49,7 @@ const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 const ENV_NTX_DATA_DIRECTORY: &str = "MIDEN_NODE_NTX_DATA_DIRECTORY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-
-// Formats a Duration into a human-readable string for display in clap help text.
-fn duration_to_human_readable_string(duration: Duration) -> String {
-    humantime::format_duration(duration).to_string()
-}
 
 /// Configuration for the Validator key used to sign blocks.
 ///

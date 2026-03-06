@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
+use std::u64;
 
 use metrics::SeedingMetrics;
 use miden_air::ExecutionProof;
@@ -9,6 +10,7 @@ use miden_node_block_producer::store::StoreClient;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_store::{DataDirectory, GenesisState, Store};
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -550,7 +552,7 @@ pub async fn start_store(
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_options: GrpcOptions::bench(),
         }
         .serve()
         .await

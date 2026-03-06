@@ -10,6 +10,8 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
+use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -40,10 +42,7 @@ pub struct Store {
     /// URL for the Block Prover client. Uses local prover if `None`.
     pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub grpc_options: GrpcOptions,
 }
 
 impl Store {
@@ -94,7 +93,7 @@ impl Store {
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
         info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
-            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout,
+            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_options.request_timeout,
             "Loading database");
 
         let (termination_ask, mut termination_signal) =
@@ -160,12 +159,18 @@ impl Store {
             }
         });
 
+        let concurrency_semaphore = grpc::concurrency_semaphore(self.grpc_options);
+
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
             tonic::transport::Server::builder()
+                .max_connection_age(self.grpc_options.max_connection_age)
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
+                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
+                .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -174,9 +179,13 @@ impl Store {
 
         join_set.spawn(
             tonic::transport::Server::builder()
+                .max_connection_age(self.grpc_options.max_connection_age)
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
+                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
+                .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -185,9 +194,14 @@ impl Store {
 
         join_set.spawn(
             tonic::transport::Server::builder()
+                .accept_http1(true)
+                .max_connection_age(self.grpc_options.max_connection_age)
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
+                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
+                .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
                 .add_service(reflection_service_alpha)

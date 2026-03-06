@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -10,14 +10,12 @@ use miden_protocol::utils::Deserializable;
 use url::Url;
 
 use crate::commands::{
-    DEFAULT_TIMEOUT,
     ENV_DATA_DIRECTORY,
     ENV_ENABLE_OTEL,
     ENV_VALIDATOR_KEY,
     ENV_VALIDATOR_KMS_KEY_ID,
     ENV_VALIDATOR_URL,
     INSECURE_VALIDATOR_KEY_HEX,
-    duration_to_human_readable_string,
 };
 
 #[derive(clap::Subcommand)]
@@ -35,14 +33,8 @@ pub enum ValidatorCommand {
         #[arg(long = "enable-otel", default_value_t = true, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_timeout: Duration,
+        #[command(flatten)]
+        grpc_options: GrpcOptions,
 
         /// Directory in which to store the validator's data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -80,7 +72,7 @@ impl ValidatorCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
             url,
-            grpc_timeout,
+            grpc_options,
             validator_key,
             data_directory,
             kms_key_id,
@@ -93,24 +85,24 @@ impl ValidatorCommand {
         // Run validator with KMS key backend if key id provided.
         if let Some(kms_key_id) = kms_key_id {
             let signer = ValidatorSigner::new_kms(kms_key_id).await?;
-            Self::serve(address, grpc_timeout, signer, data_directory).await
+            Self::serve(address, grpc_options, signer, data_directory).await
         } else {
             let signer = SecretKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
             let signer = ValidatorSigner::new_local(signer);
-            Self::serve(address, grpc_timeout, signer, data_directory).await
+            Self::serve(address, grpc_options, signer, data_directory).await
         }
     }
 
     /// Runs the validator component until failure.
     async fn serve(
         address: SocketAddr,
-        grpc_timeout: Duration,
+        grpc_options: GrpcOptions,
         signer: ValidatorSigner,
         data_directory: PathBuf,
     ) -> anyhow::Result<()> {
         Validator {
             address,
-            grpc_timeout,
+            grpc_options,
             signer,
             data_directory,
         }

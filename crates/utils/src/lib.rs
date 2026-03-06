@@ -1,3 +1,4 @@
+pub mod clap;
 pub mod cors;
 pub mod crypto;
 #[cfg(feature = "testing")]

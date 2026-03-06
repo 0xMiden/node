@@ -1,13 +1,14 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
-use miden_node_proto::clients::{Builder, RpcClient};
+use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -43,6 +44,7 @@ use crate::Rpc;
 /// Byte offset of the account delta commitment in serialized `ProvenTransaction`.
 /// Layout: `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
 const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Creates a minimal account and its delta for testing proven transaction building.
 fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
@@ -112,6 +114,33 @@ async fn rpc_server_accepts_requests_without_accept_header() {
 
     // Shutdown to avoid runtime drop error.
     shutdown_store(store_runtime).await;
+}
+
+#[tokio::test]
+async fn rpc_rate_limits_per_ip() {
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+
+    let url = rpc_addr.to_string();
+    let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
+    let mut rpc_client =
+        connect_rpc(url.clone(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))).await;
+
+    let mut results = Vec::new();
+    for _ in 0..256 {
+        results.push(send_request(&mut rpc_client).await);
+    }
+
+    assert!(results.iter().any(|result| result.is_ok()));
+    assert!(results.iter().any(|result| {
+        dbg!(result)
+            .as_ref()
+            .err()
+            .is_some_and(|err| err.code() == tonic::Code::ResourceExhausted)
+    }));
+
+    shutdown_store(store_runtime).await;
+    drop(data_directory)
 }
 
 #[tokio::test]
@@ -348,6 +377,19 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
+
+async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
+    let mut endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
+        .expect("Url type always results in valid endpoint")
+        .timeout(REQUEST_TIMEOUT);
+    if let Some(local_address) = local_address {
+        endpoint = endpoint.local_address(Some(local_address));
+    }
+    let channel = endpoint.connect().await.expect("Failed to build channel");
+    let interceptor = Interceptor::default();
+    RpcClient::with_interceptor(channel, interceptor)
+}
+
 /// Binds a socket on an available port, runs the RPC server on it, and
 /// returns a client to talk to the server, along with the socket address.
 async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
@@ -376,7 +418,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_options: GrpcOptions::test(),
         }
         .serve()
         .await
@@ -385,15 +427,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
     let url = rpc_addr.to_string();
     // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
-    let rpc_client: RpcClient = Builder::new(url)
-        .without_tls()
-        .with_timeout(Duration::from_secs(10))
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect::<RpcClient>()
-        .await
-        .expect("Failed to build client");
+    let rpc_client = connect_rpc(url, None).await;
 
     (rpc_client, rpc_addr, store_listener)
 }
@@ -429,7 +463,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_options: GrpcOptions::test(),
         }
         .serve()
         .await
@@ -471,7 +505,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(10),
+            grpc_options: GrpcOptions::test(),
         }
         .serve()
         .await
