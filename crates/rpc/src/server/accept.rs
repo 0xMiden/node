@@ -45,6 +45,9 @@ pub struct AcceptHeaderLayer {
     /// Only the label is stored so that different pre-release numbers are accepted
     /// (e.g. a server at `alpha.3` accepts clients at `alpha.1`).
     expected_pre_label: Option<String>,
+    /// The patch version of the server. Used to enforce exact patch matching for pre-release
+    /// versions (patch flexibility only applies to stable versions).
+    expected_patch: u64,
     genesis_commitment: Word,
     /// RPC method names for which the `genesis` parameter is mandatory.
     ///
@@ -91,6 +94,7 @@ impl AcceptHeaderLayer {
         AcceptHeaderLayer {
             supported_versions,
             expected_pre_label,
+            expected_patch: rpc_version.patch,
             genesis_commitment,
             require_genesis_methods: Vec::new(),
         }
@@ -212,6 +216,13 @@ impl AcceptHeaderLayer {
                 }
                 // Check the pre-release label matches (ignoring the numeric suffix).
                 if pre_release_label(&version.pre) != self.expected_pre_label {
+                    continue;
+                }
+                // Pre-release versions must also match the patch version exactly
+                // (patch flexibility only applies to stable versions).
+                if self.expected_pre_label.is_some()
+                    && version.patch != self.expected_patch
+                {
                     continue;
                 }
             }
@@ -554,9 +565,7 @@ mod tests {
         #[case::wildcard("*/*")]
         #[case::media_type_only("application/vnd.miden")]
         #[case::exact_prerelease("application/vnd.miden; version=0.14.0-alpha.3")]
-        #[case::different_patch_same_prerelease("application/vnd.miden; version=0.14.1-alpha.3")]
         #[case::different_prerelease_number("application/vnd.miden; version=0.14.0-alpha.1")]
-        #[case::different_patch_different_number("application/vnd.miden; version=0.14.2-alpha.5")]
         #[test]
         fn prerelease_should_pass(#[case] accept: &'static str) {
             AcceptHeaderLayer::for_prerelease_tests()
@@ -565,6 +574,8 @@ mod tests {
         }
 
         #[rstest::rstest]
+        #[case::different_patch_same_prerelease("application/vnd.miden; version=0.14.1-alpha.3")]
+        #[case::different_patch_different_number("application/vnd.miden; version=0.14.2-alpha.5")]
         #[case::different_prerelease_tag("application/vnd.miden; version=0.14.0-beta.3")]
         #[case::stable_version("application/vnd.miden; version=0.14.0")]
         #[test]
