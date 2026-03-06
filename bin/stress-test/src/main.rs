@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
-use seeding::seed_store;
+use seeding::{seed_collector, seed_store};
 use store::{
     bench_sync_chain_mmr,
     bench_sync_notes,
@@ -39,6 +39,17 @@ pub enum Command {
         /// private accounts.
         #[arg(short, long, value_name = "PUBLIC_ACCOUNTS_PERCENTAGE", default_value = "0")]
         public_accounts_percentage: u8,
+    },
+
+    /// Seed the store with a single collector account that consumes notes across multiple blocks.
+    SeedCollector {
+        /// Directory in which to store the database and raw block data.
+        #[arg(short, long, value_name = "DATA_DIRECTORY")]
+        data_directory: PathBuf,
+
+        /// Number of blocks to generate.
+        #[arg(short, long, value_name = "NUM_BLOCKS")]
+        num_blocks: usize,
     },
 
     /// Benchmark the performance of the store endpoints.
@@ -105,6 +116,12 @@ async fn main() {
             public_accounts_percentage,
         } => {
             seed_store(data_directory, num_accounts, public_accounts_percentage).await;
+        },
+        Command::SeedCollector {
+            data_directory,
+            num_blocks,
+        } => {
+            seed_collector(data_directory, num_blocks).await;
         },
         Command::BenchmarkStore {
             endpoint,

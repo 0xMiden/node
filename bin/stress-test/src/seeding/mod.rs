@@ -1,3 +1,4 @@
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,9 @@ use miden_node_store::{DataDirectory, GenesisState, Store};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::account::delta::{
+    AccountStorageDelta, AccountUpdateDetails, AccountVaultDelta,
+};
 use miden_protocol::account::{
     Account,
     AccountBuilder,
@@ -70,6 +73,18 @@ mod metrics;
 const BATCHES_PER_BLOCK: usize = 16;
 const TRANSACTIONS_PER_BATCH: usize = 16;
 
+/// Notes emitted per block in collector seeding.
+const COLLECTOR_NOTES_PER_BLOCK: usize = 50;
+/// Multi-note transactions per block (each consuming [`COLLECTOR_NOTES_PER_MULTI_TX`] notes).
+const COLLECTOR_MULTI_NOTE_TXS: usize = 3;
+/// Notes consumed in each multi-note transaction.
+const COLLECTOR_NOTES_PER_MULTI_TX: usize = 4;
+/// Single-note transactions per block.
+const COLLECTOR_SINGLE_NOTE_TXS: usize = 18;
+/// Total notes consumed per block by the collector.
+const COLLECTOR_CONSUMES_PER_BLOCK: usize =
+    COLLECTOR_MULTI_NOTE_TXS * COLLECTOR_NOTES_PER_MULTI_TX + COLLECTOR_SINGLE_NOTE_TXS;
+
 pub const ACCOUNTS_FILENAME: &str = "accounts.txt";
 
 // SEED STORE
@@ -123,6 +138,182 @@ pub async fn seed_store(
 
     println!("Total time: {:.3} seconds", start.elapsed().as_secs_f64());
     println!("{metrics}");
+}
+
+/// Seeds the store with a single collector account that consumes notes across multiple blocks.
+///
+/// Each block emits [`COLLECTOR_NOTES_PER_BLOCK`] P2ID notes targeting the collector, and the
+/// collector consumes up to [`COLLECTOR_CONSUMES_PER_BLOCK`] notes from previous blocks.
+pub async fn seed_collector(data_directory: PathBuf, num_blocks: usize) {
+    let start = Instant::now();
+
+    let _ = fs_err::remove_dir_all(&data_directory);
+    fs_err::create_dir_all(&data_directory).expect("created data directory");
+
+    let faucet = create_faucet();
+    let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
+    let signer = EcdsaSecretKey::new();
+    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer);
+    let genesis_block = genesis_state
+        .into_block()
+        .await
+        .expect("genesis block should be created");
+    Store::bootstrap(&genesis_block, &data_directory).expect("store should bootstrap");
+
+    let (_, store_url) = start_store(data_directory.clone()).await;
+    let store_client = StoreClient::new(store_url);
+
+    let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
+    let data_directory =
+        miden_node_store::DataDirectory::load(data_directory).expect("data directory should exist");
+    let genesis_header = genesis_block.into_inner();
+    let metrics = generate_collector_blocks(
+        num_blocks,
+        faucet,
+        genesis_header,
+        &store_client,
+        data_directory,
+        accounts_filepath,
+    )
+    .await;
+
+    println!("Total time: {:.3} seconds", start.elapsed().as_secs_f64());
+    println!("{metrics}");
+}
+
+/// Generates blocks where a single collector account consumes many notes across transactions
+/// and blocks.
+///
+/// Each block: faucet emits [`COLLECTOR_NOTES_PER_BLOCK`] notes, collector consumes up to
+/// [`COLLECTOR_CONSUMES_PER_BLOCK`] notes from previous blocks. The surplus accumulates in a
+/// backlog so that notes are consumed across block boundaries.
+async fn generate_collector_blocks(
+    num_blocks: usize,
+    mut faucet: Account,
+    genesis_block: ProvenBlock,
+    store_client: &StoreClient,
+    data_directory: DataDirectory,
+    accounts_filepath: PathBuf,
+) -> SeedingMetrics {
+    use std::collections::VecDeque;
+
+    let mut metrics = SeedingMetrics::new(data_directory.database_path());
+
+    let coin_seed: [u64; 4] = rand::rng().random();
+    let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
+    let key_pair = {
+        let mut rng = rng.lock().unwrap();
+        SecretKey::with_rng(&mut *rng)
+    };
+
+    // Create the collector account (public, immutable code)
+    let mut collector = create_account(key_pair.public_key(), 0, AccountStorageMode::Public);
+    let collector_id = collector.id();
+
+    // Backlog of notes waiting to be consumed
+    let mut pending_notes: VecDeque<Note> = VecDeque::new();
+
+    let mut prev_block_header = genesis_block.header().clone();
+
+    for i in 0..num_blocks {
+        // Create notes targeting the collector
+        let notes: Vec<Note> = (0..COLLECTOR_NOTES_PER_BLOCK)
+            .map(|_| {
+                let mut rng = rng.lock().unwrap();
+                create_note(faucet.id(), collector_id, &mut rng)
+            })
+            .collect();
+
+        // Create the faucet emit transaction
+        let emit_note_tx = create_emit_note_tx(&prev_block_header, &mut faucet, notes.clone());
+
+        // Build consume transactions from the backlog (notes from previous blocks)
+        let num_to_consume = pending_notes.len().min(COLLECTOR_CONSUMES_PER_BLOCK);
+        let mut consume_txs = Vec::new();
+
+        if num_to_consume > 0 {
+            let pending_as_slice: Vec<Note> = pending_notes.iter().cloned().collect();
+            let batch_inputs = get_batch_inputs(
+                store_client,
+                &prev_block_header,
+                &pending_as_slice[..num_to_consume],
+                &mut metrics,
+            )
+            .await;
+
+            let mut consumed = 0;
+
+            // Multi-note transactions
+            for _ in 0..COLLECTOR_MULTI_NOTE_TXS {
+                let take = COLLECTOR_NOTES_PER_MULTI_TX.min(num_to_consume - consumed);
+                if take == 0 {
+                    break;
+                }
+                let input_notes: Vec<InputNote> = (0..take)
+                    .map(|_| {
+                        let note = pending_notes.pop_front().unwrap();
+                        let proof = batch_inputs.note_proofs.get(&note.id()).unwrap().clone();
+                        InputNote::authenticated(note, proof)
+                    })
+                    .collect();
+                consumed += take;
+                consume_txs.push(create_collector_consume_tx(
+                    &prev_block_header,
+                    &mut collector,
+                    input_notes,
+                ));
+            }
+
+            // Single-note transactions
+            for _ in 0..COLLECTOR_SINGLE_NOTE_TXS {
+                if consumed >= num_to_consume {
+                    break;
+                }
+                let note = pending_notes.pop_front().unwrap();
+                let proof = batch_inputs.note_proofs.get(&note.id()).unwrap().clone();
+                let input_note = InputNote::authenticated(note, proof);
+                consumed += 1;
+                consume_txs.push(create_collector_consume_tx(
+                    &prev_block_header,
+                    &mut collector,
+                    vec![input_note],
+                ));
+            }
+        }
+
+        // Assemble block transactions
+        let mut block_txs = Vec::with_capacity(1 + consume_txs.len());
+        block_txs.push(emit_note_tx);
+        block_txs.extend(consume_txs);
+
+        // Create batches (with same-account merging support)
+        let batches: Vec<ProvenBatch> = block_txs
+            .chunks(TRANSACTIONS_PER_BATCH)
+            .map(|txs| create_collector_batch(txs, &prev_block_header))
+            .collect();
+
+        // Apply block to store
+        let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
+        prev_block_header = apply_block(batches, block_inputs, store_client, &mut metrics).await;
+
+        let consumed = num_to_consume;
+        // Add this block's notes to the pending backlog
+        pending_notes.extend(notes);
+
+        println!(
+            "Block {i}: 1 emit + {} consume txs, {} pending notes",
+            consumed,
+            pending_notes.len()
+        );
+    }
+
+    metrics.record_store_size();
+
+    // Write collector account ID
+    let mut file = fs::File::create(accounts_filepath).await.unwrap();
+    file.write_all(format!("{collector_id}\n").as_bytes()).await.unwrap();
+
+    metrics
 }
 
 /// Generates batches of transactions to be inserted into the store.
@@ -436,6 +627,103 @@ fn create_consume_note_tx(
     .add_input_notes(vec![input_note])
     .account_update_details(details)
     .build()
+    .unwrap()
+}
+
+/// Creates a transaction where the collector account consumes the given input notes.
+///
+/// The collector is mutated in-place (assets added, nonce incremented) so that subsequent
+/// calls produce correctly chained account states.
+fn create_collector_consume_tx(
+    block_ref: &BlockHeader,
+    collector: &mut Account,
+    input_notes: Vec<InputNote>,
+) -> ProvenTransaction {
+    let init_hash = collector.initial_commitment();
+
+    for note in &input_notes {
+        note.note().assets().iter().for_each(|asset| {
+            collector.vault_mut().add_asset(*asset).unwrap();
+        });
+    }
+    collector.increment_nonce(ONE).unwrap();
+
+    let is_new_account = init_hash.is_empty();
+    let (details, account_delta_commitment) = if collector.is_public() {
+        if is_new_account {
+            // First transaction for a new public account requires a full-state delta
+            // (including code) so the store can construct the full account state.
+            let account_delta = AccountDelta::try_from(collector.clone()).unwrap();
+            let commitment = account_delta.to_commitment();
+            (AccountUpdateDetails::Delta(account_delta), commitment)
+        } else {
+            // Subsequent transactions use incremental deltas (without code) so that
+            // multiple transactions for the same account can be merged in a batch.
+            let mut vault_delta = AccountVaultDelta::default();
+            for note in &input_notes {
+                for asset in note.note().assets().iter() {
+                    vault_delta.add_asset(*asset).unwrap();
+                }
+            }
+            let account_delta = AccountDelta::new(
+                collector.id(),
+                AccountStorageDelta::new(),
+                vault_delta,
+                ONE,
+            )
+            .unwrap();
+            let commitment = account_delta.to_commitment();
+            (AccountUpdateDetails::Delta(account_delta), commitment)
+        }
+    } else {
+        (AccountUpdateDetails::Private, Word::empty())
+    };
+
+    ProvenTransactionBuilder::new(
+        collector.id(),
+        init_hash,
+        collector.to_commitment(),
+        account_delta_commitment,
+        block_ref.block_num(),
+        block_ref.commitment(),
+        fee_from_block(block_ref).unwrap(),
+        u32::MAX.into(),
+        ExecutionProof::new_dummy(),
+    )
+    .add_input_notes(input_notes)
+    .account_update_details(details)
+    .build()
+    .unwrap()
+}
+
+/// Creates a proven batch from a list of transactions and a reference block.
+///
+/// Supports multiple transactions for the same account by merging their updates.
+fn create_collector_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBatch {
+    let mut account_updates: BTreeMap<AccountId, BatchAccountUpdate> = BTreeMap::new();
+    for tx in txs {
+        let id = tx.account_id();
+        match account_updates.entry(id) {
+            Entry::Vacant(e) => {
+                e.insert(BatchAccountUpdate::from_transaction(tx));
+            },
+            Entry::Occupied(mut e) => {
+                e.get_mut().merge_proven_tx(tx).unwrap();
+            },
+        }
+    }
+    let input_notes = txs.iter().flat_map(|tx| tx.input_notes().iter().cloned()).collect();
+    let output_notes = txs.iter().flat_map(|tx| tx.output_notes().iter().cloned()).collect();
+    ProvenBatch::new(
+        BatchId::from_transactions(txs.iter()),
+        block_ref.commitment(),
+        block_ref.block_num(),
+        account_updates,
+        InputNotes::new(input_notes).unwrap(),
+        output_notes,
+        BlockNumber::MAX,
+        OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
+    )
     .unwrap()
 }
 
