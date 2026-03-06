@@ -220,9 +220,7 @@ impl AcceptHeaderLayer {
                 }
                 // Pre-release versions must also match the patch version exactly
                 // (patch flexibility only applies to stable versions).
-                if self.expected_pre_label.is_some()
-                    && version.patch != self.expected_patch
-                {
+                if self.expected_pre_label.is_some() && version.patch != self.expected_patch {
                     continue;
                 }
             }
