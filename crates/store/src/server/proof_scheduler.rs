@@ -5,10 +5,9 @@
 //! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`] and `latest_proven_block` locally.
 //! 2. Maintains up to [`MAX_CONCURRENT_PROOFS`] in-flight proving jobs via a [`JoinSet`].
 //! 3. Marks blocks as proven in the database **sequentially** — a block is only marked after all
-//!    its ancestors have been marked. Completed proofs that arrive out-of-order are buffered
-//!    locally until the sequential gap is filled.
-//! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is re-queued for
-//!    proving while other in-flight jobs continue uninterrupted.
+//!    its ancestors have been marked.
+//! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is retried
+//!    internally within its proving task.
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
@@ -98,39 +97,31 @@ async fn run(
     info!(target: COMPONENT, %latest_proven_block, "Proof scheduler started");
 
     // The latest block that has been sequentially marked as proven in the DB.
-    let mut latest_proven = latest_proven_block;
+    let mut latest_complete = latest_proven_block;
     // The current chain tip as observed from the watch channel.
     let mut chain_tip = *chain_tip_rx.borrow_and_update();
-    // Completed proof results waiting for sequential drain.
-    let mut results: BTreeSet<BlockNumber> = BTreeSet::new();
     // In-flight proving tasks.
     let mut join_set: PendingJoinSet<anyhow::Result<BlockNumber>> = PendingJoinSet::new();
     // Block numbers currently being proven.
-    // Used to avoid double-scheduling a block that failed and needs retry.
     let mut in_flight: BTreeSet<BlockNumber> = BTreeSet::new();
-    // Blocks that have been committed and need to be scheduled for proving.
-    let mut pending: BTreeSet<BlockNumber> = BTreeSet::new();
-
-    // Seed the pending set with all blocks that need proving.
-    for block_num in block_range(latest_proven.child(), chain_tip) {
-        pending.insert(block_num);
-    }
+    // The next block number to schedule for proving.
+    let mut next_to_schedule = latest_complete.child();
 
     loop {
-        // Fill the job pool up to capacity from the pending set.
-        while in_flight.len() < MAX_CONCURRENT_PROOFS {
-            let Some(&block_num) = pending.first() else {
-                break;
-            };
-            pending.remove(&block_num);
-            in_flight.insert(block_num);
+        // Fill the job pool up to capacity from the next unscheduled blocks.
+        while in_flight.len() < MAX_CONCURRENT_PROOFS
+            && next_to_schedule.as_u32() <= chain_tip.as_u32()
+        {
+            let scheduled = next_to_schedule;
+            in_flight.insert(scheduled);
 
             let db = Arc::clone(&db);
             let block_prover = Arc::clone(&block_prover);
             let block_store = Arc::clone(&block_store);
             join_set.spawn(async move {
-                prove_and_save(&db, &block_prover, &block_store, block_num).await
+                prove_and_save(&db, &block_prover, &block_store, scheduled).await
             });
+            next_to_schedule = scheduled.child();
         }
 
         // Wait for either a job to complete or the chain tip to advance.
@@ -141,7 +132,6 @@ async fn run(
                     Ok(Ok(block_num)) => {
                         info!(target: COMPONENT, %block_num, "Block proof completed");
                         in_flight.remove(&block_num);
-                        results.insert(block_num);
                     },
                     Ok(Err(err)) => return Err(err),
                     Err(join_err) => {
@@ -156,59 +146,22 @@ async fn run(
                     info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
                     return Ok(());
                 }
-                enqueue_new_blocks(&chain_tip_rx, &mut chain_tip, &mut pending);
+                chain_tip = *chain_tip_rx.borrow();
             },
         }
 
-        // Drain completed proofs sequentially.
-        drain_sequential_results(&db, &mut results, &mut latest_proven).await?;
-    }
-}
-
-/// Reads and sets the latest chain tip from the watch channel and adds any new block numbers to the
-/// pending set.
-fn enqueue_new_blocks(
-    chain_tip_rx: &watch::Receiver<BlockNumber>,
-    chain_tip: &mut BlockNumber,
-    pending: &mut BTreeSet<BlockNumber>,
-) {
-    let new_chain_tip = *chain_tip_rx.borrow();
-    for block_num in block_range(chain_tip.child(), new_chain_tip) {
-        pending.insert(block_num);
-    }
-    *chain_tip = new_chain_tip;
-}
-
-/// Returns an iterator over block numbers from `start` to `end` inclusive.
-///
-/// Returns an empty iterator if `start > end`.
-fn block_range(start: BlockNumber, end: BlockNumber) -> impl Iterator<Item = BlockNumber> {
-    let start = start.as_u32();
-    let end = end.as_u32();
-    (start..=end).map(BlockNumber::from)
-}
-
-/// Drains completed proofs from the results in sequential block-number order,
-/// marking each as proven in the database.
-///
-/// Does nothing if the next expected block in sequence has not been proven.
-async fn drain_sequential_results(
-    db: &Db,
-    results: &mut BTreeSet<BlockNumber>,
-    latest_proven: &mut BlockNumber,
-) -> Result<(), ProofSchedulerError> {
-    loop {
-        let next = latest_proven.child();
-        if !results.remove(&next) {
-            break;
+        // Mark completed proofs as proven sequentially.
+        // Find the lowest in-flight block.
+        let lowest_in_flight = in_flight.first().map_or(next_to_schedule, |&first| first);
+        // Mark all sequentially proven blocks as completed.
+        while latest_complete.child().as_u32() < lowest_in_flight.as_u32() {
+            latest_complete = latest_complete.child();
+            db.mark_block_proven(latest_complete)
+                .await
+                .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
+            info!(target: COMPONENT, block_num = %latest_complete, "Block marked as proven");
         }
-        db.mark_block_proven(next)
-            .await
-            .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
-        info!(target: COMPONENT, block_num = %next, "Block marked as proven");
-        *latest_proven = next;
     }
-    Ok(())
 }
 
 // PROVE BLOCK
