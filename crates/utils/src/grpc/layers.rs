@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use governor::middleware::StateInformationMiddleware;
 use tokio::sync::Semaphore;
 use tonic::service::InterceptorLayer;
@@ -19,8 +19,6 @@ pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
 
 /// Builds a global concurrency limit layer using the configured semaphore.
 pub fn rate_limit_concurrent_connections(grpc_options: GrpcOptions) -> GlobalConcurrencyLimitLayer {
-    // TODO this uses a semaphore internally, and we should strive to move to an `AtomicU64` with
-    // ordering relaxed
     tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(concurrency_semaphore(grpc_options))
 }
 
@@ -46,13 +44,21 @@ pub fn rate_limit_per_ip(
         tonic::body::Body,
     >,
 > {
+    ensure!(
+        grpc_options.replenish_per_sec > 0,
+        "grpc.replenish_per_sec must be greater than zero"
+    );
+    ensure!(
+        grpc_options.burst_size > 0,
+        "grpc.burst_size must be greater than zero"
+    );
     let config = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
         .per_second(grpc_options.replenish_per_sec)
         .burst_size(grpc_options.burst_size as u32)
         .use_headers()
         .finish()
-        .context("config parameters are inconsistent, i.e. burst < per second")?;
+        .context("invalid gRPC rate limit configuration")?;
     let limiter = std::sync::Arc::clone(config.limiter());
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));

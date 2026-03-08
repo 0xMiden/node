@@ -10,7 +10,6 @@ impl Interceptor for ConnectInfoInterceptor {
         let addr = request
             .remote_addr()
             .ok_or_else(|| Status::failed_precondition("Expected TCP connection"))?;
-        // TODO double check how to address proxy rate limiting based on i.e. `X-Real-IP`.
         request
             .metadata_mut()
             .insert("forwarded", format!("for={addr}").try_into().unwrap());
