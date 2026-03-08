@@ -55,4 +55,3 @@ serial_test           = "3.2"
 tempfile              = { workspace = true }
 tokio                 = { features = ["test-util"], workspace = true }
 winterfell            = { version = "0.13" }
-fs-err = { workspace =true}

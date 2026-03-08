@@ -48,18 +48,13 @@ pub fn rate_limit_per_ip(
         tonic::body::Body,
     >,
 > {
-    ensure!(
-        grpc_options.replenish_one_after_duration > 0,
-        "grpc.replenish_one_after_duration must be greater than zero"
-    );
-    ensure!(grpc_options.burst_size > 0, "grpc.burst_size must be greater than zero");
     let nanos_per_replenish = Duration::from_secs(1)
         .as_nanos()
-        .checked_div(u128::from(grpc_options.replenish_one_after_duration))
+        .checked_div(u128::from(grpc_options.replenish_n_per_second_per_ip.get()))
         .unwrap_or_default();
     ensure!(
         nanos_per_replenish > 0,
-        "grpc.replenish_per_sec must be less than or equal to 1000000000"
+        "grpc.replenish_n_per_second must be less than or equal to 1e9"
     );
     let replenish_period = Duration::from_nanos(
         u64::try_from(nanos_per_replenish).context("invalid gRPC rate limit configuration")?,
@@ -67,7 +62,7 @@ pub fn rate_limit_per_ip(
     let config = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
         .period(replenish_period)
-        .burst_size(grpc_options.burst_size)
+        .burst_size(grpc_options.burst_size.into())
         .use_headers()
         .finish()
         .context("invalid gRPC rate limit configuration")?;

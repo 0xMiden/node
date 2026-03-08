@@ -1,12 +1,13 @@
 //! Public module for share clap pieces to reduce duplication
 
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
-const DEFAULT_REPLENISH_ONE_AFTER_DURATION: u64 = 16;
-const DEFAULT_BURST_SIZE: u32 = 128;
+const DEFAULT_REPLENISH_N_PER_SECOND_PER_IP: NonZeroU64 = NonZeroU64::new(16).unwrap();
+const DEFAULT_BURST_SIZE: NonZeroU32 = NonZeroU32::new(128).unwrap();
 const DEFAULT_MAX_GLOBAL_CONNECTIONS: u64 = 1_000;
 
 // Formats a Duration into a human-readable string for display in clap help text
@@ -99,15 +100,15 @@ pub struct GrpcOptionsExternal {
         default_value_t = DEFAULT_BURST_SIZE,
         value_name = "BURST_SIZE"
     )]
-    pub burst_size: u32,
+    pub burst_size: NonZeroU32,
 
     /// Number of request credits replenished per second per IP.
     #[arg(
-        long = "grpc.replenish_one_after_duration",
-        default_value_t = DEFAULT_REPLENISH_ONE_AFTER_DURATION,
-        value_name = "REPLENISH_ONE_AFTER_DURATION"
+        long = "grpc.replenish_n_per_second",
+        default_value_t = DEFAULT_REPLENISH_N_PER_SECOND_PER_IP,
+        value_name = "DEFAULT_REPLENISH_N_PER_SECOND"
     )]
-    pub replenish_one_after_duration: u64,
+    pub replenish_n_per_second_per_ip: NonZeroU64,
 
     /// Number of global concurrent connections.
     #[arg(
@@ -124,7 +125,7 @@ impl Default for GrpcOptionsExternal {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_connection_age: DEFAULT_MAX_CONNECTION_AGE,
             burst_size: DEFAULT_BURST_SIZE,
-            replenish_one_after_duration: DEFAULT_REPLENISH_ONE_AFTER_DURATION,
+            replenish_n_per_second_per_ip: DEFAULT_REPLENISH_N_PER_SECOND_PER_IP,
             max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
         }
     }
@@ -136,7 +137,7 @@ impl GrpcOptionsExternal {
             request_timeout: TEST_REQUEST_TIMEOUT,
             max_connection_age: DEFAULT_MAX_CONNECTION_AGE,
             burst_size: DEFAULT_BURST_SIZE,
-            replenish_one_after_duration: DEFAULT_REPLENISH_ONE_AFTER_DURATION,
+            replenish_n_per_second_per_ip: DEFAULT_REPLENISH_N_PER_SECOND_PER_IP,
             max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
         }
     }
@@ -146,8 +147,8 @@ impl GrpcOptionsExternal {
         Self {
             request_timeout: Duration::from_hours(24),
             max_connection_age: Duration::from_hours(24),
-            burst_size: 100_000,
-            replenish_one_after_duration: 100_000,
+            burst_size: NonZeroU32::new(100_000).unwrap(),
+            replenish_n_per_second_per_ip: NonZeroU64::new(100_000).unwrap(),
             max_global_concurrent_connections: u64::MAX,
         }
     }

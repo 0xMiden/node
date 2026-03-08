@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
@@ -119,8 +120,8 @@ async fn rpc_server_accepts_requests_without_accept_header() {
 #[tokio::test]
 async fn rpc_rate_limits_per_ip() {
     let grpc_options = GrpcOptionsExternal {
-        burst_size: 8,
-        replenish_one_after_duration: 1,
+        burst_size: NonZeroU32::new(8).unwrap(),
+        replenish_n_per_second_per_ip: NonZeroU64::new(1).unwrap(),
         ..GrpcOptionsExternal::test()
     };
     let (_, rpc_addr, store_listener) = start_rpc_with_options(grpc_options).await;
