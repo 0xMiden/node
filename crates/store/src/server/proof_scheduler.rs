@@ -20,7 +20,7 @@ use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::Serializable;
 use miden_remote_prover_client::RemoteProverClientError;
 use tokio::sync::watch;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tracing::{error, info, instrument};
 
 use crate::COMPONENT;
@@ -37,6 +37,29 @@ const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
 
 /// Maximum number of blocks being proven concurrently.
 const MAX_CONCURRENT_PROOFS: usize = 8;
+
+/// A wrapper around [`JoinSet`] whose `join_next` returns [`std::future::pending`] when empty
+/// instead of `None`, making it safe to use directly in `tokio::select!` without a special case.
+struct PendingJoinSet<T>(JoinSet<T>);
+
+impl<T: Send + 'static> PendingJoinSet<T> {
+    fn new() -> Self {
+        Self(JoinSet::new())
+    }
+
+    fn spawn(&mut self, task: impl std::future::Future<Output = T> + Send + 'static) {
+        self.0.spawn(task);
+    }
+
+    /// Returns the result of the next completed task, or pends forever if the set is empty.
+    async fn join_next(&mut self) -> Result<T, JoinError> {
+        if self.0.is_empty() {
+            std::future::pending().await
+        } else {
+            self.0.join_next().await.expect("join set is not empty")
+        }
+    }
+}
 
 // PROOF SCHEDULER
 // ================================================================================================
@@ -81,7 +104,7 @@ async fn run(
     // Completed proof results waiting for sequential drain.
     let mut results: BTreeSet<BlockNumber> = BTreeSet::new();
     // In-flight proving tasks.
-    let mut join_set: JoinSet<anyhow::Result<BlockNumber>> = JoinSet::new();
+    let mut join_set: PendingJoinSet<anyhow::Result<BlockNumber>> = PendingJoinSet::new();
     // Block numbers currently being proven.
     // Used to avoid double-scheduling a block that failed and needs retry.
     let mut in_flight: BTreeSet<BlockNumber> = BTreeSet::new();
@@ -110,20 +133,10 @@ async fn run(
             });
         }
 
-        // If there's nothing in flight and nothing pending, wait for new blocks.
-        if in_flight.is_empty() && pending.is_empty() {
-            if chain_tip_rx.changed().await.is_err() {
-                info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
-                return Ok(());
-            }
-            enqueue_new_blocks(&chain_tip_rx, &mut chain_tip, &mut pending);
-            continue;
-        }
-
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
             // Proving task completed.
-            Some(join_result) = join_set.join_next() => {
+            join_result = join_set.join_next() => {
                 match join_result {
                     Ok(Ok(block_num)) => {
                         info!(target: COMPONENT, %block_num, "Block proof completed");
