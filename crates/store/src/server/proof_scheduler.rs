@@ -54,7 +54,7 @@ pub fn spawn(
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
     latest_proven_block: BlockNumber,
-) -> JoinHandle<Result<(), ProofSchedulerError>> {
+) -> JoinHandle<anyhow::Result<()>> {
     tokio::spawn(run(db, block_prover, block_store, chain_tip_rx, latest_proven_block))
 }
 
@@ -71,7 +71,7 @@ async fn run(
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     latest_proven_block: BlockNumber,
-) -> Result<(), ProofSchedulerError> {
+) -> anyhow::Result<()> {
     info!(target: COMPONENT, %latest_proven_block, "Proof scheduler started");
 
     // The latest block that has been sequentially marked as proven in the DB.
@@ -81,11 +81,11 @@ async fn run(
     // Completed proof results waiting for sequential drain.
     let mut results: BTreeSet<BlockNumber> = BTreeSet::new();
     // In-flight proving tasks.
-    let mut join_set: JoinSet<Result<BlockNumber, ProveBlockError>> = JoinSet::new();
+    let mut join_set: JoinSet<anyhow::Result<BlockNumber>> = JoinSet::new();
     // Block numbers currently being proven.
     // Used to avoid double-scheduling a block that failed and needs retry.
     let mut in_flight: BTreeSet<BlockNumber> = BTreeSet::new();
-    // Blocks that need to be (re-)scheduled for proving.
+    // Blocks that have been committed and need to be scheduled for proving.
     let mut pending: BTreeSet<BlockNumber> = BTreeSet::new();
 
     // Seed the pending set with all blocks that need proving.
@@ -125,38 +125,14 @@ async fn run(
             // Proving task completed.
             Some(join_result) = join_set.join_next() => {
                 match join_result {
-                    // Proof successful.
                     Ok(Ok(block_num)) => {
                         info!(target: COMPONENT, %block_num, "Block proof completed");
                         in_flight.remove(&block_num);
                         results.insert(block_num);
                     },
-
-                    // Transient errors, requeue.
-                    Ok(Err(ProveBlockError::Transient(block_num, err))) => {
-                        error!(
-                            target: COMPONENT,
-                            %block_num, %err,
-                            "Block proving failed (transient), re-queuing"
-                        );
-                        in_flight.remove(&block_num);
-                        pending.insert(block_num);
-                    },
-                    Ok(Err(ProveBlockError::Timeout(block_num))) => {
-                        error!(
-                            target: COMPONENT,
-                            %block_num,
-                            "Block proving timed out, re-queuing"
-                        );
-                        in_flight.remove(&block_num);
-                        pending.insert(block_num);
-                    },
-
-                    // Irrecoverable errors.
-                    Ok(Err(ProveBlockError::Fatal(err))) => return Err(err),
+                    Ok(Err(err)) => return Err(err),
                     Err(join_err) => {
-                        // Task panicked or was cancelled — treat as fatal.
-                        return Err(ProofSchedulerError::TaskPanicked(join_err.to_string()));
+                        anyhow::bail!("Proof task panicked: {join_err}")
                     },
                 }
             },
@@ -237,24 +213,37 @@ async fn prove_and_save(
     block_prover: &BlockProver,
     block_store: &BlockStore,
     block_num: BlockNumber,
-) -> Result<BlockNumber, ProveBlockError> {
-    // Prove block with timeout.
-    let proof =
-        match tokio::time::timeout(BLOCK_PROVE_TIMEOUT, prove_block(db, block_prover, block_num))
-            .await
+) -> anyhow::Result<BlockNumber> {
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        if attempts > 10 {
+            anyhow::bail!("Bailed after max attempts")
+        }
+        // Prove block with timeout.
+        let proof = match tokio::time::timeout(
+            BLOCK_PROVE_TIMEOUT,
+            prove_block(db, block_prover, block_num),
+        )
+        .await
         {
             Ok(Ok(proof)) => proof,
-            Ok(Err(err)) => return Err(err),
-            Err(_elapsed) => return Err(ProveBlockError::Timeout(block_num)),
+            Ok(Err(ProveBlockError::Fatal(err))) => anyhow::bail!("Fatal error: {err}"),
+            Ok(Err(ProveBlockError::Transient(err))) => {
+                error!("Transient error proving block {block_num}: {err}");
+                continue;
+            },
+            Err(_elapsed) => {
+                error!("Timed out proving block {block_num}");
+                continue;
+            },
         };
 
-    // Save proof to the block store.
-    block_store
-        .save_proof(block_num, &proof.to_bytes())
-        .await
-        .map_err(|e| ProveBlockError::Fatal(ProofSchedulerError::PersistProofFailed(e)))?;
+        // Save proof to the block store.
+        block_store.save_proof(block_num, &proof.to_bytes()).await?;
 
-    Ok(block_num)
+        return Ok(block_num);
+    }
 }
 
 /// Proves a single block by loading inputs from the DB and invoking the block prover.
@@ -266,7 +255,7 @@ async fn prove_block(
     let request = db
         .select_block_proving_inputs(block_num)
         .await
-        .map_err(|err| ProveBlockError::from_db_error(block_num, err))?
+        .map_err(ProveBlockError::from_db_error)?
         .ok_or_else(|| {
             ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(block_num))
         })?;
@@ -274,7 +263,7 @@ async fn prove_block(
     let proof = block_prover
         .prove(request.tx_batches, request.block_inputs, &request.block_header)
         .await
-        .map_err(|err| ProveBlockError::from_prover_error(block_num, err))?;
+        .map_err(ProveBlockError::from_prover_error)?;
 
     Ok(proof)
 }
@@ -288,27 +277,25 @@ enum ProveBlockError {
     /// An irrecoverable error that should cause node shutdown.
     Fatal(ProofSchedulerError),
     /// A transient error (DB read, prover failure). The outer loop will retry.
-    Transient(BlockNumber, Box<dyn std::error::Error + Send + Sync + 'static>),
-    /// The overall proving timeout was exceeded. Retriable on next iteration.
-    Timeout(BlockNumber),
+    Transient(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 impl ProveBlockError {
-    fn from_db_error(block_num: BlockNumber, err: DatabaseError) -> Self {
+    fn from_db_error(err: DatabaseError) -> Self {
         match err {
             DatabaseError::DeserializationError(err) => {
                 Self::Fatal(ProofSchedulerError::DeserializationFailed(err))
             },
-            _ => Self::Transient(block_num, err.into()),
+            _ => Self::Transient(err.into()),
         }
     }
 
-    fn from_prover_error(block_num: BlockNumber, err: StoreProverError) -> Self {
+    fn from_prover_error(err: StoreProverError) -> Self {
         match err {
             StoreProverError::RemoteProvingFailed(RemoteProverClientError::InvalidEndpoint(
                 uri,
             )) => Self::Fatal(ProofSchedulerError::InvalidProverEndpoint(uri)),
-            _ => Self::Transient(block_num, err.into()),
+            _ => Self::Transient(err.into()),
         }
     }
 }

@@ -39,14 +39,10 @@ pub enum ProofSchedulerError {
     MissingProvingInputs(BlockNumber),
     #[error("failed to deserialize proving inputs for block")]
     DeserializationFailed(#[source] DeserializationError),
-    #[error("failed to write block proof to file")]
-    PersistProofFailed(#[source] std::io::Error),
     #[error("failed to mark block as proven in database")]
     MarkBlockProvenFailed(#[source] DatabaseError),
     #[error("invalid remote prover endpoint: {0}")]
     InvalidProverEndpoint(String),
-    #[error("proof scheduler task panicked: {0}")]
-    TaskPanicked(String),
 }
 
 // DATABASE ERRORS
