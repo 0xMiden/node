@@ -103,17 +103,17 @@ async fn run(
     // In-flight proving tasks.
     let mut join_set: PendingJoinSet<anyhow::Result<BlockNumber>> = PendingJoinSet::new();
     // Block numbers currently being proven.
-    let mut in_flight: BTreeSet<BlockNumber> = BTreeSet::new();
+    let mut inflight: BTreeSet<BlockNumber> = BTreeSet::new();
     // The next block number to schedule for proving.
     let mut next_to_schedule = latest_complete.child();
 
     loop {
         // Fill the job pool up to capacity from the next unscheduled blocks.
-        while in_flight.len() < MAX_CONCURRENT_PROOFS
+        while inflight.len() < MAX_CONCURRENT_PROOFS
             && next_to_schedule.as_u32() <= chain_tip.as_u32()
         {
             let scheduled = next_to_schedule;
-            in_flight.insert(scheduled);
+            inflight.insert(scheduled);
 
             let db = Arc::clone(&db);
             let block_prover = Arc::clone(&block_prover);
@@ -131,7 +131,7 @@ async fn run(
                 match join_result {
                     Ok(Ok(block_num)) => {
                         info!(target: COMPONENT, %block_num, "Block proof completed");
-                        in_flight.remove(&block_num);
+                        inflight.remove(&block_num);
                     },
                     Ok(Err(err)) => return Err(err),
                     Err(join_err) => {
@@ -152,7 +152,7 @@ async fn run(
 
         // Mark completed proofs as proven sequentially.
         // Find the lowest in-flight block.
-        let lowest_in_flight = in_flight.first().map_or(next_to_schedule, |&first| first);
+        let lowest_in_flight = inflight.first().map_or(next_to_schedule, |&first| first);
         // Mark all sequentially proven blocks as completed.
         while latest_complete.child().as_u32() < lowest_in_flight.as_u32() {
             latest_complete = latest_complete.child();
