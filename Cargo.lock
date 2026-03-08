@@ -3142,7 +3142,6 @@ dependencies = [
  "tonic-web",
  "tower",
  "tower-http",
- "tower_governor",
  "tracing",
  "url",
 ]
