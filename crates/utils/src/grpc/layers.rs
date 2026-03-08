@@ -67,7 +67,7 @@ pub fn rate_limit_per_ip(
     let config = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
         .period(replenish_period)
-        .burst_size(grpc_options.burst_size as u32)
+        .burst_size(grpc_options.burst_size)
         .use_headers()
         .finish()
         .context("invalid gRPC rate limit configuration")?;

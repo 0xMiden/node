@@ -6,7 +6,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
 const DEFAULT_REPLENISH_ONE_AFTER_DURATION: u64 = 16;
-const DEFAULT_BURST_SIZE: u64 = 128;
+const DEFAULT_BURST_SIZE: u32 = 128;
 const DEFAULT_MAX_GLOBAL_CONNECTIONS: u64 = 1_000;
 
 // Formats a Duration into a human-readable string for display in clap help text
@@ -99,7 +99,7 @@ pub struct GrpcOptionsExternal {
         default_value_t = DEFAULT_BURST_SIZE,
         value_name = "BURST_SIZE"
     )]
-    pub burst_size: u64,
+    pub burst_size: u32,
 
     /// Number of request credits replenished per second per IP.
     #[arg(

@@ -134,8 +134,6 @@ async fn start_store(
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
-    fs::create_dir_all(data_directory.join(ACCOUNT_TREE_STORAGE_DIR))
-        .expect("account tree directory should be created");
     Store::bootstrap(genesis_state.clone(), data_directory)
         .await
         .expect("store should bootstrap");
