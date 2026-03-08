@@ -2,7 +2,7 @@ use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -32,7 +32,7 @@ pub struct Rpc {
     pub store_url: Url,
     pub block_producer_url: Option<Url>,
     pub validator_url: Url,
-    pub grpc_options: GrpcOptions,
+    pub grpc_options: GrpcOptionsExternal,
 }
 
 impl Rpc {

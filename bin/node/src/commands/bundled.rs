@@ -5,7 +5,7 @@ use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -83,7 +83,7 @@ pub enum BundledCommand {
         enable_otel: bool,
 
         #[command(flatten)]
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsExternal,
     },
 }
 
@@ -139,7 +139,7 @@ impl BundledCommand {
         block_producer: BlockProducerConfig,
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsExternal,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -196,7 +196,7 @@ impl BundledCommand {
                     ntx_builder_listener: store_ntx_builder_listener,
                     data_directory: data_directory_clone,
                     block_prover_url,
-                    grpc_options,
+                    grpc_options: grpc_options.into(),
                 }
                 .serve()
                 .await
@@ -223,7 +223,7 @@ impl BundledCommand {
                             block_interval: block_producer.block_interval,
                             max_batches_per_block: block_producer.max_batches_per_block,
                             max_txs_per_batch: block_producer.max_txs_per_batch,
-                            grpc_options,
+                            grpc_options: grpc_options.into(),
                             mempool_tx_capacity: block_producer.mempool_tx_capacity,
                         }
                         .serve()
@@ -301,7 +301,7 @@ impl BundledCommand {
                     async move {
                         Validator {
                             address,
-                            grpc_options,
+                            grpc_options: grpc_options.into(),
                             signer,
                             data_directory,
                         }

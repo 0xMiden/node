@@ -8,7 +8,7 @@ use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -39,7 +39,7 @@ pub struct Validator {
     /// Server-side timeout for an individual gRPC request.
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_options: GrpcOptions,
+    pub grpc_options: GrpcOptionsInternal,
 
     /// The signer used to sign blocks.
     pub signer: ValidatorSigner,

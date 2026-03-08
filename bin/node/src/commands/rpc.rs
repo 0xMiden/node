@@ -1,6 +1,6 @@
 use anyhow::Context;
 use miden_node_rpc::Rpc;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
@@ -36,7 +36,7 @@ pub enum RpcCommand {
         enable_otel: bool,
 
         #[command(flatten)]
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsExternal,
     },
 }
 

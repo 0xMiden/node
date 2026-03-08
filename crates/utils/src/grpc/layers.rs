@@ -10,7 +10,7 @@ use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::key_extractor::SmartIpKeyExtractor;
 
 use super::connect_info::ConnectInfoInterceptor;
-use crate::clap::GrpcOptions;
+use crate::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
 
 /// Creates the gRPC interceptor layer that attaches connection metadata.
 pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
@@ -18,12 +18,16 @@ pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
 }
 
 /// Builds a global concurrency limit layer using the configured semaphore.
-pub fn rate_limit_concurrent_connections(grpc_options: GrpcOptions) -> GlobalConcurrencyLimitLayer {
-    tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(concurrency_semaphore(grpc_options))
+pub fn rate_limit_concurrent_connections(
+    grpc_options: impl Into<GrpcOptionsInternal>,
+) -> GlobalConcurrencyLimitLayer {
+    tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(concurrency_semaphore(
+        grpc_options.into(),
+    ))
 }
 
 /// Builds the shared semaphore that caps total concurrent gRPC connections.
-pub fn concurrency_semaphore(grpc_options: GrpcOptions) -> Arc<Semaphore> {
+pub fn concurrency_semaphore(grpc_options: GrpcOptionsInternal) -> Arc<Semaphore> {
     Arc::new(Semaphore::new(
         (grpc_options.max_global_concurrent_connections as usize).min(Semaphore::MAX_PERMITS),
     ))
@@ -36,7 +40,7 @@ pub fn rate_limit_with_semaphore(sema: Arc<Semaphore>) -> GlobalConcurrencyLimit
 
 /// Creates a per-IP rate limit layer using the configured governor settings.
 pub fn rate_limit_per_ip(
-    grpc_options: GrpcOptions,
+    grpc_options: GrpcOptionsExternal,
 ) -> anyhow::Result<
     tower_governor::GovernorLayer<
         SmartIpKeyExtractor,
@@ -45,16 +49,24 @@ pub fn rate_limit_per_ip(
     >,
 > {
     ensure!(
-        grpc_options.replenish_per_sec > 0,
-        "grpc.replenish_per_sec must be greater than zero"
+        grpc_options.replenish_one_after_duration > 0,
+        "grpc.replenish_one_after_duration must be greater than zero"
     );
+    ensure!(grpc_options.burst_size > 0, "grpc.burst_size must be greater than zero");
+    let nanos_per_replenish = Duration::from_secs(1)
+        .as_nanos()
+        .checked_div(u128::from(grpc_options.replenish_one_after_duration))
+        .unwrap_or_default();
     ensure!(
-        grpc_options.burst_size > 0,
-        "grpc.burst_size must be greater than zero"
+        nanos_per_replenish > 0,
+        "grpc.replenish_per_sec must be less than or equal to 1000000000"
+    );
+    let replenish_period = Duration::from_nanos(
+        u64::try_from(nanos_per_replenish).context("invalid gRPC rate limit configuration")?,
     );
     let config = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
-        .per_second(grpc_options.replenish_per_sec)
+        .period(replenish_period)
         .burst_size(grpc_options.burst_size as u32)
         .use_headers()
         .finish()

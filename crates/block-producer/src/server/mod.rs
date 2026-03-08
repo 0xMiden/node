@@ -10,7 +10,7 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::block_producer::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -69,7 +69,7 @@ pub struct BlockProducer {
     /// The maximum number of batches per block.
     pub max_batches_per_block: usize,
     /// Server-side gRPC options.
-    pub grpc_options: GrpcOptions,
+    pub grpc_options: GrpcOptionsInternal,
 
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
@@ -238,7 +238,11 @@ impl BlockProducerRpcServer {
     // SERVER STARTUP
     // --------------------------------------------------------------------------------------------
 
-    async fn serve(self, listener: TcpListener, grpc_options: GrpcOptions) -> anyhow::Result<()> {
+    async fn serve(
+        self,
+        listener: TcpListener,
+        grpc_options: GrpcOptionsInternal,
+    ) -> anyhow::Result<()> {
         // Start background task to periodically update cached mempool stats
         self.spawn_mempool_stats_updater().await;
 
@@ -260,13 +264,10 @@ impl BlockProducerRpcServer {
 
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .max_connection_age(grpc_options.max_connection_age)
             .timeout(grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(grpc::connect_info_layer())
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(grpc::rate_limit_concurrent_connections(grpc_options))
-            .layer(grpc::rate_limit_per_ip(grpc_options)?)
             .add_service(api_server::ApiServer::new(self))
             .add_service(reflection_service)
             .add_service(reflection_service_alpha)

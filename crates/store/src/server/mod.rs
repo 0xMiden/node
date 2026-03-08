@@ -10,7 +10,7 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::signer::BlockSigner;
@@ -42,7 +42,7 @@ pub struct Store {
     /// URL for the Block Prover client. Uses local prover if `None`.
     pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
-    pub grpc_options: GrpcOptions,
+    pub grpc_options: GrpcOptionsInternal,
 }
 
 impl Store {
@@ -164,13 +164,10 @@ impl Store {
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
             tonic::transport::Server::builder()
-                .max_connection_age(self.grpc_options.max_connection_age)
                 .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
-                .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -179,13 +176,10 @@ impl Store {
 
         join_set.spawn(
             tonic::transport::Server::builder()
-                .max_connection_age(self.grpc_options.max_connection_age)
                 .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
-                .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -195,13 +189,10 @@ impl Store {
         join_set.spawn(
             tonic::transport::Server::builder()
                 .accept_http1(true)
-                .max_connection_age(self.grpc_options.max_connection_age)
                 .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(grpc::connect_info_layer())
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
-                .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
                 .add_service(reflection_service_alpha)

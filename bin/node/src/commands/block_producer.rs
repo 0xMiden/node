@@ -1,6 +1,6 @@
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
@@ -34,7 +34,7 @@ pub enum BlockProducerCommand {
         enable_otel: bool,
 
         #[clap(flatten)]
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsInternal,
     },
 }
 
@@ -116,7 +116,7 @@ mod tests {
                 mempool_tx_capacity: NonZeroUsize::new(1000).unwrap(),
             },
             enable_otel: false,
-            grpc_options: GrpcOptions::default(),
+            grpc_options: GrpcOptionsInternal::default(),
         };
         let result = cmd.handle().await;
         assert!(result.is_err());
@@ -141,7 +141,7 @@ mod tests {
                 mempool_tx_capacity: NonZeroUsize::new(1000).unwrap(),
             },
             enable_otel: false,
-            grpc_options: GrpcOptions::default(),
+            grpc_options: GrpcOptionsInternal::default(),
         };
         let result = cmd.handle().await;
         assert!(result.is_err());

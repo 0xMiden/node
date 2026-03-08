@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -34,7 +34,7 @@ pub enum ValidatorCommand {
         enable_otel: bool,
 
         #[command(flatten)]
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsInternal,
 
         /// Directory in which to store the validator's data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -96,7 +96,7 @@ impl ValidatorCommand {
     /// Runs the validator component until failure.
     async fn serve(
         address: SocketAddr,
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsInternal,
         signer: ValidatorSigner,
         data_directory: PathBuf,
     ) -> anyhow::Result<()> {

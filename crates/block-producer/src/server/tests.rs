@@ -4,7 +4,7 @@ use std::time::Duration;
 use fs_err as fs;
 use miden_node_proto::generated::block_producer::api_client as block_producer_client;
 use miden_node_store::{GenesisState, Store};
-use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::fee::test_fee_params;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::testing::random_secret_key::random_secret_key;
@@ -43,7 +43,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         validator_listener.local_addr().expect("failed to get validator address")
     };
 
-    let grpc_options = GrpcOptions::default();
+    let grpc_options = GrpcOptionsInternal::default();
 
     // start the validator
     task::spawn(async move {
@@ -160,7 +160,7 @@ async fn start_store(
             block_producer_listener,
             block_prover_url: None,
             data_directory: dir,
-            grpc_options: GrpcOptions::bench(),
+            grpc_options: GrpcOptionsInternal::bench(),
         }
         .serve()
         .await

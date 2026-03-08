@@ -10,7 +10,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
-use miden_node_utils::clap::{GrpcOptions, duration_to_human_readable_string};
+use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;

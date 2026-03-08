@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::ValidatorSigner;
@@ -18,7 +19,6 @@ use crate::commands::{
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
-    GrpcOptions,
     ValidatorKey,
 };
 
@@ -79,7 +79,7 @@ pub enum StoreCommand {
         enable_otel: bool,
 
         #[command(flatten)]
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsInternal,
     },
 }
 
@@ -137,7 +137,7 @@ impl StoreCommand {
         block_producer_url: Url,
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
-        grpc_options: GrpcOptions,
+        grpc_options: GrpcOptionsInternal,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
