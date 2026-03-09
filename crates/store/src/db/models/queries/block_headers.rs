@@ -280,7 +280,7 @@ pub(crate) fn select_block_proving_inputs(
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
-    fields(block_num = %block_num),
+    fields(block.number = %block_num),
     err,
 )]
 pub(crate) fn mark_block_proven(
