@@ -36,7 +36,7 @@ use crate::{COMPONENT, ValidatorSigner};
 pub struct Validator {
     /// The address of the validator component.
     pub address: SocketAddr,
-    /// Server-side timeout for an individual gRPC request.
+    /// gRPC server options for internal services (timeouts, connection caps).
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
     pub grpc_options: GrpcOptionsInternal,

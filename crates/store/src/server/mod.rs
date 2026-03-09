@@ -11,7 +11,6 @@ use miden_node_proto_build::{
     store_rpc_api_descriptor,
 };
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -159,15 +158,12 @@ impl Store {
             }
         });
 
-        let concurrency_semaphore = grpc::concurrency_semaphore(self.grpc_options);
-
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
             tonic::transport::Server::builder()
                 .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -179,7 +175,6 @@ impl Store {
                 .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -192,7 +187,6 @@ impl Store {
                 .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .layer(grpc::rate_limit_with_semaphore(concurrency_semaphore.clone()))
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
                 .add_service(reflection_service_alpha)

@@ -12,7 +12,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
-use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::batch::ProvenBatch;
@@ -267,7 +266,6 @@ impl BlockProducerRpcServer {
             .timeout(grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            .layer(grpc::rate_limit_concurrent_connections(grpc_options))
             .add_service(api_server::ApiServer::new(self))
             .add_service(reflection_service)
             .add_service(reflection_service_alpha)

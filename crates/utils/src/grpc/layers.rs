@@ -1,16 +1,14 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use governor::middleware::StateInformationMiddleware;
-use tokio::sync::Semaphore;
 use tonic::service::InterceptorLayer;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::key_extractor::SmartIpKeyExtractor;
 
 use super::connect_info::ConnectInfoInterceptor;
-use crate::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
+use crate::clap::GrpcOptionsExternal;
 
 /// Creates the gRPC interceptor layer that attaches connection metadata.
 pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
@@ -19,23 +17,11 @@ pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
 
 /// Builds a global concurrency limit layer using the configured semaphore.
 pub fn rate_limit_concurrent_connections(
-    grpc_options: impl Into<GrpcOptionsInternal>,
+    grpc_options: GrpcOptionsExternal,
 ) -> GlobalConcurrencyLimitLayer {
-    tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(concurrency_semaphore(
-        grpc_options.into(),
-    ))
-}
-
-/// Builds the shared semaphore that caps total concurrent gRPC connections.
-pub fn concurrency_semaphore(grpc_options: GrpcOptionsInternal) -> Arc<Semaphore> {
-    Arc::new(Semaphore::new(
-        (grpc_options.max_global_concurrent_connections as usize).min(Semaphore::MAX_PERMITS),
-    ))
-}
-
-/// Builds a global concurrency limit layer from an existing semaphore.
-pub fn rate_limit_with_semaphore(sema: Arc<Semaphore>) -> GlobalConcurrencyLimitLayer {
-    tower::limit::GlobalConcurrencyLimitLayer::with_semaphore(sema)
+    tower::limit::GlobalConcurrencyLimitLayer::new(
+        grpc_options.max_global_concurrent_connections as usize,
+    )
 }
 
 /// Creates a per-IP rate limit layer using the configured governor settings.

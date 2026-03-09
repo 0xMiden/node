@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use anyhow::Context;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
-use miden_node_utils::grpc;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use proof_kind::ProofKind;
@@ -91,7 +90,6 @@ impl Server {
             .timeout(grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            .layer(grpc::rate_limit_concurrent_connections(grpc_options))
             .layer(cors_for_grpc_web_layer())
             .layer(GrpcWebLayer::new())
             .add_service(prover_service)

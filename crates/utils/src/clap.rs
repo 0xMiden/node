@@ -28,36 +28,18 @@ pub struct GrpcOptionsInternal {
         value_name = "DURATION"
     )]
     pub request_timeout: Duration,
-
-    /// Number of global concurrent connections.
-    #[arg(
-        long = "grpc.max_global_connections",
-        default_value_t = DEFAULT_MAX_GLOBAL_CONNECTIONS,
-        value_name = "MAX_GLOBAL_CONNECTIONS"
-    )]
-    pub max_global_concurrent_connections: u64,
 }
 
 impl Default for GrpcOptionsInternal {
     fn default() -> Self {
-        Self {
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
-        }
+        Self { request_timeout: DEFAULT_REQUEST_TIMEOUT }
     }
 }
 
 impl From<GrpcOptionsExternal> for GrpcOptionsInternal {
     fn from(value: GrpcOptionsExternal) -> Self {
-        let GrpcOptionsExternal {
-            request_timeout,
-            max_global_concurrent_connections,
-            ..
-        } = value;
-        Self {
-            request_timeout,
-            max_global_concurrent_connections,
-        }
+        let GrpcOptionsExternal { request_timeout, .. } = value;
+        Self { request_timeout }
     }
 }
 
@@ -110,7 +92,7 @@ pub struct GrpcOptionsExternal {
     )]
     pub replenish_n_per_second_per_ip: NonZeroU64,
 
-    /// Number of global concurrent connections.
+    /// Maximum number of concurrent connections accepted by the server.
     #[arg(
         long = "grpc.max_global_connections",
         default_value_t = DEFAULT_MAX_GLOBAL_CONNECTIONS,
@@ -135,10 +117,7 @@ impl GrpcOptionsExternal {
     pub fn test() -> Self {
         Self {
             request_timeout: TEST_REQUEST_TIMEOUT,
-            max_connection_age: DEFAULT_MAX_CONNECTION_AGE,
-            burst_size: DEFAULT_BURST_SIZE,
-            replenish_n_per_second_per_ip: DEFAULT_REPLENISH_N_PER_SECOND_PER_IP,
-            max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
+            ..Default::default()
         }
     }
 
