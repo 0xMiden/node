@@ -8,7 +8,7 @@ const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
 const DEFAULT_REPLENISH_N_PER_SECOND_PER_IP: NonZeroU64 = NonZeroU64::new(16).unwrap();
 const DEFAULT_BURST_SIZE: NonZeroU32 = NonZeroU32::new(128).unwrap();
-const DEFAULT_MAX_GLOBAL_CONNECTIONS: u64 = 1_000;
+const DEFAULT_MAX_CONCURRENT_CONNECTIONS: u64 = 1_000;
 
 // Formats a Duration into a human-readable string for display in clap help text
 // and yields a &'static str by _leaking_ the string deliberately.
@@ -94,11 +94,11 @@ pub struct GrpcOptionsExternal {
 
     /// Maximum number of concurrent connections accepted by the server.
     #[arg(
-        long = "grpc.max_global_connections",
-        default_value_t = DEFAULT_MAX_GLOBAL_CONNECTIONS,
-        value_name = "MAX_GLOBAL_CONNECTIONS"
+        long = "grpc.max_concurrent_connections",
+        default_value_t = DEFAULT_MAX_CONCURRENT_CONNECTIONS,
+        value_name = "MAX_CONCURRENT_CONNECTIONS"
     )]
-    pub max_global_concurrent_connections: u64,
+    pub max_concurrent_connections: u64,
 }
 
 impl Default for GrpcOptionsExternal {
@@ -108,7 +108,7 @@ impl Default for GrpcOptionsExternal {
             max_connection_age: DEFAULT_MAX_CONNECTION_AGE,
             burst_size: DEFAULT_BURST_SIZE,
             replenish_n_per_second_per_ip: DEFAULT_REPLENISH_N_PER_SECOND_PER_IP,
-            max_global_concurrent_connections: DEFAULT_MAX_GLOBAL_CONNECTIONS,
+            max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
         }
     }
 }
@@ -128,7 +128,7 @@ impl GrpcOptionsExternal {
             max_connection_age: Duration::from_hours(24),
             burst_size: NonZeroU32::new(100_000).unwrap(),
             replenish_n_per_second_per_ip: NonZeroU64::new(100_000).unwrap(),
-            max_global_concurrent_connections: u64::MAX,
+            max_concurrent_connections: u64::MAX,
         }
     }
 }

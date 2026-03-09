@@ -19,9 +19,7 @@ pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
 pub fn rate_limit_concurrent_connections(
     grpc_options: GrpcOptionsExternal,
 ) -> GlobalConcurrencyLimitLayer {
-    tower::limit::GlobalConcurrencyLimitLayer::new(
-        grpc_options.max_global_concurrent_connections as usize,
-    )
+    tower::limit::GlobalConcurrencyLimitLayer::new(grpc_options.max_concurrent_connections as usize)
 }
 
 /// Creates a per-IP rate limit layer using the configured governor settings.
