@@ -1,7 +1,9 @@
 use miden_protocol::Word;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::note::Nullifier;
+use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
+use miden_protocol::utils::{Deserializable, Serializable};
 
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, MissingFieldHelper};
 use crate::generated as proto;
 
 // FROM TRANSACTION ID
@@ -54,5 +56,41 @@ impl TryFrom<proto::transaction::TransactionId> for TransactionId {
                 field_name: "id",
             })?
             .try_into()
+    }
+}
+
+// INPUT NOTE COMMITMENT
+// ================================================================================================
+
+impl From<InputNoteCommitment> for proto::transaction::InputNoteCommitment {
+    fn from(value: InputNoteCommitment) -> Self {
+        Self {
+            nullifier: Some(value.nullifier().into()),
+            header: value.header().cloned().map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::transaction::InputNoteCommitment) -> Result<Self, Self::Error> {
+        let nullifier: Nullifier = value
+            .nullifier
+            .ok_or_else(|| {
+                proto::transaction::InputNoteCommitment::missing_field(stringify!(nullifier))
+            })?
+            .try_into()?;
+
+        let header: Option<miden_protocol::note::NoteHeader> =
+            value.header.map(TryInto::try_into).transpose()?;
+
+        // InputNoteCommitment has private fields, so we reconstruct it via
+        // serialization roundtrip using its Serializable/Deserializable impls.
+        let mut bytes = Vec::new();
+        nullifier.write_into(&mut bytes);
+        header.write_into(&mut bytes);
+        InputNoteCommitment::read_from_bytes(&bytes)
+            .map_err(|err| ConversionError::deserialization_error("InputNoteCommitment", err))
     }
 }

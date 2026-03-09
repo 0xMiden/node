@@ -120,6 +120,17 @@ message NoteSyncRecord {
     primitives.SparseMerklePath inclusion_path = 4;
 }
 
+// Represents a note header.
+//
+// A note header consists of a note's ID and its metadata.
+message NoteHeader {
+    // A unique identifier of the note.
+    NoteId note_id = 1;
+
+    // The note's metadata.
+    NoteMetadata metadata = 2;
+}
+
 // Represents a commitment to a note script.
 message NoteScriptRoot {
     // Root of the note script.

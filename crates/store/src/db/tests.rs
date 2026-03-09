@@ -69,7 +69,7 @@ use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 use pretty_assertions::assert_eq;
 use rand::Rng;
 
-use super::{AccountInfo, NoteRecord, NullifierInfo};
+use super::{AccountInfo, NoteRecord, NullifierInfo, TransactionRecord};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{
     HISTORICAL_BLOCK_RETENTION,
@@ -2453,6 +2453,8 @@ fn test_prune_history() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_transactions() {
+    use miden_node_proto::generated as proto;
+
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
@@ -2460,45 +2462,45 @@ fn db_roundtrip_transactions() {
     let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
 
-    // Build two transaction headers with distinct data
-    let tx1 = mock_block_transaction(bob, 1);
-    let tx2 = mock_block_transaction(bob, 2);
-    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx1.clone(), tx2.clone()]);
+    let tx = mock_block_transaction(bob, 1);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
 
-    // Insert
-    let count = queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
-    assert_eq!(count, 2, "Should insert 2 transactions");
-
-    // Retrieve
-    let (last_block, records) =
+    let retrieved =
         queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
             .unwrap();
-    assert_eq!(last_block, block_num, "Last block should match");
-    assert_eq!(records.len(), 2, "Should retrieve 2 transactions");
+    let record = retrieved.1.first().expect("entry should exist");
 
-    // Verify each transaction roundtrips correctly.
-    // Records are ordered by (block_num, transaction_id), so match by ID.
-    let originals = [&tx1, &tx2];
-    for record in &records {
-        let original = originals
-            .iter()
-            .find(|tx| tx.id() == record.transaction_id)
-            .expect("Retrieved transaction should match one of the originals");
-        // Asset symmetry
-        assert_eq!(record.transaction_id, original.id(),);
-        assert_eq!(record.account_id, original.account_id(),);
-        assert_eq!(record.block_num, block_num);
-        assert_eq!(record.initial_state_commitment, original.initial_state_commitment(),);
-        assert_eq!(record.final_state_commitment, original.final_state_commitment(),);
+    let expected = TransactionRecord {
+        block_num,
+        transaction_id: tx.id(),
+        account_id: tx.account_id(),
+        initial_state_commitment: tx.initial_state_commitment(),
+        final_state_commitment: tx.final_state_commitment(),
+        input_notes: tx.input_notes().iter().cloned().collect(),
+        output_notes: tx.output_notes().to_vec(),
+        fee: tx.fee(),
+    };
 
-        // Input notes are stored as nullifiers only
-        let expected_nullifiers: Vec<Nullifier> =
-            original.input_notes().iter().map(InputNoteCommitment::nullifier).collect();
-        assert_eq!(record.nullifiers, expected_nullifiers,);
+    // Verify database roundtrip
+    assert_eq!(*record, expected);
 
-        // Output notes are stored as note IDs only
-        let expected_note_ids: Vec<NoteId> =
-            original.output_notes().iter().map(NoteHeader::id).collect();
-        assert_eq!(record.output_notes, expected_note_ids,);
-    }
+    // Proto conversion roundtrip
+    let record = retrieved.1.into_iter().next().unwrap();
+    let proto_record = record.into_proto();
+    let expected_proto = proto::rpc::TransactionRecord {
+        block_num: block_num.as_u32(),
+        header: Some(proto::transaction::TransactionHeader {
+            transaction_id: Some(tx.id().into()),
+            account_id: Some(tx.account_id().into()),
+            initial_state_commitment: Some(tx.initial_state_commitment().into()),
+            final_state_commitment: Some(tx.final_state_commitment().into()),
+            input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
+            fee: Some(Asset::from(tx.fee()).into()),
+        }),
+    };
+
+    // Proto conversion roundtrip
+    assert_eq!(proto_record, expected_proto);
 }
