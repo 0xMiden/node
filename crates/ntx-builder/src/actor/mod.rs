@@ -233,23 +233,19 @@ impl AccountActor {
 
     /// Runs the account actor, processing events and managing state until a reason to shutdown is
     /// encountered.
-    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> ActorShutdownReason {
+    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> Result<(), ActorShutdownReason> {
         let account_id = self.origin.id();
 
         // Determine initial mode by checking DB for available notes.
         let block_num = self.chain_state.read().await.chain_tip_header.block_num();
-        let has_notes = match self
+        let has_notes = self
             .db
             .has_available_notes(account_id, block_num, self.max_note_attempts)
             .await
             .map_err(|err| {
                 tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check for available notes");
                 ActorShutdownReason::DbError(account_id, err)
-            })
-        {
-            Ok(v) => v,
-            Err(reason) => return reason,
-        };
+            })?;
 
         if has_notes {
             self.mode = ActorMode::NotesAvailable;
@@ -267,25 +263,21 @@ impl AccountActor {
             };
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
-                    return ActorShutdownReason::Cancelled(account_id);
+                    return Err(ActorShutdownReason::Cancelled(account_id));
                 }
                 // Handle coordinator notifications. On notification, re-evaluate state from DB.
                 _ = self.notify.notified() => {
                     match self.mode {
                         ActorMode::TransactionInflight(awaited_id) => {
                             // Check DB: is the inflight tx still pending?
-                            let exists = match self
+                            let exists = self
                                 .db
                                 .transaction_exists(awaited_id)
                                 .await
                                 .map_err(|err| {
                                     tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check transaction status");
                                     ActorShutdownReason::DbError(account_id, err)
-                                })
-                            {
-                                Ok(v) => v,
-                                Err(reason) => return reason,
-                            };
+                                })?;
                             if !exists {
                                 self.mode = ActorMode::NotesAvailable;
                             }
@@ -297,27 +289,22 @@ impl AccountActor {
                 },
                 // Execute transactions.
                 permit = tx_permit_acquisition => {
-                    match permit {
-                        Ok(_permit) => {
-                            // Read the chain state.
-                            let chain_state = self.chain_state.read().await.clone();
+                    let _permit = permit.map_err(ActorShutdownReason::SemaphoreFailed)?;
 
-                            // Query DB for latest account and available notes.
-                            let tx_candidate = match self.select_candidate_from_db(
-                                account_id,
-                                chain_state,
-                            ).await?;
+                    // Read the chain state.
+                    let chain_state = self.chain_state.read().await.clone();
 
-                            if let Some(tx_candidate) = tx_candidate {
-                                self.execute_transactions(account_id, tx_candidate).await;
-                            } else {
-                                // No transactions to execute, wait for events.
-                                self.mode = ActorMode::NoViableNotes;
-                            }
-                        }
-                        Err(err) => {
-                            return ActorShutdownReason::SemaphoreFailed(err);
-                        }
+                    // Query DB for latest account and available notes.
+                    let tx_candidate = self.select_candidate_from_db(
+                        account_id,
+                        chain_state,
+                    ).await?;
+
+                    if let Some(tx_candidate) = tx_candidate {
+                        self.execute_transactions(account_id, tx_candidate).await;
+                    } else {
+                        // No transactions to execute, wait for events.
+                        self.mode = ActorMode::NoViableNotes;
                     }
                 }
             }

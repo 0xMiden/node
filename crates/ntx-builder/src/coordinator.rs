@@ -137,7 +137,10 @@ impl Coordinator {
 
         // Run the actor. Actor reads state from DB on startup.
         let semaphore = self.semaphore.clone();
-        self.actor_join_set.spawn(Box::pin(actor.run(semaphore)));
+        self.actor_join_set.spawn(Box::pin(async move {
+            // The actor loop runs indefinitely, it only exits via Err with a shutdown reason.
+            actor.run(semaphore).await.expect_err("actor loop runs indefinitely")
+        }));
 
         self.actor_registry.insert(account_id, handle);
         tracing::info!(account_id = %account_id, "Created actor for account prefix");
