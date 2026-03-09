@@ -11,6 +11,7 @@
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
+- Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
 
 ### Changes
 
@@ -82,6 +83,7 @@
 ### Enhancements
 
 - Cleanup old account data from the database on apply block ([#1304](https://github.com/0xMiden/miden-node/issues/1304)).
+- Added cleanup of old account data from the in-memory forest ([#1175](https://github.com/0xMiden/miden-node/issues/1175))
 - Added block validation endpoint to validator and integrated with block producer ([#1382](https://github.com/0xMiden/miden-node/pull/1381)).
 - Added support for timeouts in the WASM remote prover clients ([#1383](https://github.com/0xMiden/miden-node/pull/1383)).
 - Added mempool statistics to the block producer status in the `miden-network-monitor` binary ([#1392](https://github.com/0xMiden/miden-node/pull/1392)).

@@ -21,8 +21,11 @@ testing = ["miden-protocol/testing"]
 [dependencies]
 anyhow                = { workspace = true }
 bytes                 = { version = "1.10" }
+clap                  = { workspace = true }
+governor              = { version = "0.10" }
 http                  = { workspace = true }
 http-body-util        = { version = "0.1" }
+humantime             = { workspace = true }
 itertools             = { workspace = true }
 lru                   = { workspace = true }
 miden-protocol        = { workspace = true }
@@ -33,7 +36,9 @@ rand                  = { workspace = true }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
 tonic                 = { default-features = true, workspace = true }
+tower                 = { features = ["limit"], workspace = true }
 tower-http            = { features = ["catch-panic"], workspace = true }
+tower_governor        = { version = "0.8" }
 tracing               = { workspace = true }
 tracing-forest        = { features = ["chrono"], optional = true, version = "0.3" }
 tracing-opentelemetry = { version = "0.32" }
