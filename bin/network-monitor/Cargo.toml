@@ -38,5 +38,3 @@ tonic-health     = { workspace = true }
 tracing          = { workspace = true }
 url              = { features = ["serde"], workspace = true }
 
-[build-dependencies]
-miden-node-rocksdb-cxx-linkage-fix = { workspace = true }

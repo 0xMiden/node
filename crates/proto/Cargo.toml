@@ -36,7 +36,6 @@ proptest       = { version = "1.7" }
 build-rs                           = { workspace = true }
 fs-err                             = { workspace = true }
 miden-node-proto-build             = { features = ["internal"], workspace = true }
-miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 miette                             = { version = "7.6" }
 tonic-prost-build                  = { workspace = true }
 
