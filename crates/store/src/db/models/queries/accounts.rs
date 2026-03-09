@@ -28,6 +28,7 @@ use miden_protocol::account::{
     AccountStorageHeader,
     NonFungibleDeltaAction,
     StorageMap,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotName,
@@ -65,7 +66,7 @@ mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
 type StorageHeaderWithEntries =
-    (AccountStorageHeader, BTreeMap<StorageSlotName, BTreeMap<Word, Word>>);
+    (AccountStorageHeader, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>);
 
 // NETWORK ACCOUNT TYPE
 // ================================================================================================
@@ -618,7 +619,7 @@ pub(crate) fn select_all_network_account_ids(
 pub struct StorageMapValue {
     pub block_num: BlockNumber,
     pub slot_name: StorageSlotName,
-    pub key: Word,
+    pub key: StorageMapKey,
     pub value: Word,
 }
 
@@ -636,7 +637,7 @@ impl StorageMapValue {
         Ok(Self {
             block_num: BlockNumber::from_raw_sql(block_num)?,
             slot_name: StorageSlotName::from_raw_sql(slot_name)?,
-            key: Word::read_from_bytes(&key)?,
+            key: StorageMapKey::read_from_bytes(&key)?,
             value: Word::read_from_bytes(&value)?,
         })
     }
@@ -804,7 +805,7 @@ pub(crate) fn select_latest_account_storage_components(
 fn select_latest_storage_map_entries_all(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
@@ -820,7 +821,7 @@ fn select_latest_storage_map_entries_for_slots(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
     slot_names: &[StorageSlotName],
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     if slot_names.is_empty() {
@@ -853,7 +854,7 @@ fn select_latest_storage_map_entries_for_slot(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
     slot_name: &StorageSlotName,
-) -> Result<BTreeMap<Word, Word>, DatabaseError> {
+) -> Result<BTreeMap<StorageMapKey, Word>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
@@ -868,13 +869,14 @@ fn select_latest_storage_map_entries_for_slot(
 
 fn group_storage_map_entries(
     map_values: Vec<(String, Vec<u8>, Vec<u8>)>,
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<Word, Word>>, DatabaseError> {
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, BTreeMap<Word, Word>> = BTreeMap::new();
+) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>> =
+        BTreeMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
-        let key = Word::read_from_bytes(&key_bytes)?;
+        let key = StorageMapKey::read_from_bytes(&key_bytes)?;
         let value = Word::read_from_bytes(&value_bytes)?;
         map_entries_by_slot.entry(slot_name).or_default().insert(key, value);
     }
@@ -985,7 +987,7 @@ pub(crate) fn insert_account_storage_map_value(
     account_id: AccountId,
     block_num: BlockNumber,
     slot_name: StorageSlotName,
-    key: Word,
+    key: StorageMapKey,
     value: Word,
 ) -> Result<usize, DatabaseError> {
     let account_id = account_id.to_bytes();
@@ -1020,7 +1022,7 @@ pub(crate) fn insert_account_storage_map_value(
     Ok(update_count + insert_count)
 }
 
-type PendingStorageInserts = Vec<(AccountId, StorageSlotName, Word, Word)>;
+type PendingStorageInserts = Vec<(AccountId, StorageSlotName, StorageMapKey, Word)>;
 type PendingAssetInserts = Vec<(AccountId, AssetVaultKey, Option<Asset>)>;
 
 fn prepare_full_account_update(
@@ -1118,7 +1120,7 @@ fn prepare_partial_account_update(
     let mut storage = Vec::new();
     for (slot_name, map_delta) in delta.storage().maps() {
         for (key, value) in map_delta.entries() {
-            storage.push((account_id, slot_name.clone(), (*key).into(), *value));
+            storage.push((account_id, slot_name.clone(), (*key).into_inner(), *value));
         }
     }
 

@@ -24,7 +24,7 @@ use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, StorageMapWitness, StorageSlotName};
+use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
@@ -39,7 +39,6 @@ use tracing::{info, instrument};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
-use crate::db::models::queries::StorageMapValuesPage;
 use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
     ApplyBlockError,
@@ -812,15 +811,6 @@ impl State {
         })
     }
 
-    /// Returns storage map values for syncing within a block range.
-    pub(crate) async fn get_storage_map_sync_values(
-        &self,
-        account_id: AccountId,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<StorageMapValuesPage, DatabaseError> {
-        self.db.select_storage_map_sync_values(account_id, block_range, None).await
-    }
-
     /// Loads a block from the block store. Return `Ok(None)` if the block is not found.
     pub async fn load_block(
         &self,
@@ -886,7 +876,7 @@ impl State {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        raw_key: Word,
+        raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
         let witness = self
             .forest

@@ -10,7 +10,7 @@ use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
+use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetVaultKey};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -677,7 +677,7 @@ impl Db {
         }
 
         // Filter to the specific slot and collect latest values per key
-        let mut latest_values = BTreeMap::<Word, Word>::new();
+        let mut latest_values = BTreeMap::<StorageMapKey, Word>::new();
         for value in values {
             if value.slot_name == slot_name {
                 let raw_key = value.key;

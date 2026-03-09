@@ -31,6 +31,7 @@ use miden_protocol::account::{
     AccountVaultDelta,
     StorageMap,
     StorageMapDelta,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotDelta,
@@ -98,18 +99,19 @@ fn reconstruct_account_storage_at_block(
             .load(conn)?;
 
     // For each (slot_name, key) pair, keep only the latest entry
-    let mut latest_map_entries: BTreeMap<(StorageSlotName, Word), Word> = BTreeMap::new();
+    let mut latest_map_entries: BTreeMap<(StorageSlotName, StorageMapKey), Word> = BTreeMap::new();
     for (_, slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
         })?;
-        let key = Word::read_from_bytes(&key_bytes)?;
+        let key = StorageMapKey::read_from_bytes(&key_bytes)?;
         let value = Word::read_from_bytes(&value_bytes)?;
         latest_map_entries.entry((slot_name, key)).or_insert(value);
     }
 
     // Group entries by slot name
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(Word, Word)>> = BTreeMap::new();
+    let mut map_entries_by_slot: BTreeMap<StorageSlotName, Vec<(StorageMapKey, Word)>> =
+        BTreeMap::new();
     for ((slot_name, key), value) in latest_map_entries {
         map_entries_by_slot.entry(slot_name).or_default().push((key, value));
     }
@@ -204,7 +206,7 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
 
 fn create_account_with_map_storage(
     slot_name: StorageSlotName,
-    entries: Vec<(Word, Word)>,
+    entries: Vec<(StorageMapKey, Word)>,
 ) -> Account {
     let storage_map = StorageMap::with_entries(entries).unwrap();
     let component_storage = vec![StorageSlot::with_map(slot_name, storage_map)];
@@ -236,7 +238,7 @@ fn create_account_with_map_storage(
 fn assert_storage_map_slot_entries(
     storage: &AccountStorage,
     slot_name: &StorageSlotName,
-    expected: &BTreeMap<Word, Word>,
+    expected: &BTreeMap<StorageMapKey, Word>,
 ) {
     let slot = storage
         .slots()
@@ -712,9 +714,9 @@ fn test_select_latest_account_storage_ordering_semantics() {
     insert_block_header(&mut conn, block_num);
 
     let slot_name = StorageSlotName::mock(0);
-    let key_1 = Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let key_2 = Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let key_3 = Word::from([Felt::new(3), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_1 = StorageMapKey::from_index(1);
+    let key_2 = StorageMapKey::from_index(2);
+    let key_3 = StorageMapKey::from_index(3);
 
     let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
     let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
@@ -758,8 +760,8 @@ fn test_select_latest_account_storage_multiple_slots() {
     let slot_name_1 = StorageSlotName::mock(0);
     let slot_name_2 = StorageSlotName::mock(1);
 
-    let key_a = Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let key_b = Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_a = StorageMapKey::from_index(1);
+    let key_b = StorageMapKey::from_index(2);
 
     let value_a = Word::from([Felt::new(11), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
     let value_b = Word::from([Felt::new(22), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
@@ -822,8 +824,8 @@ fn test_select_latest_account_storage_slot_updates() {
     insert_block_header(&mut conn, block_2);
 
     let slot_name = StorageSlotName::mock(0);
-    let key_1 = Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let key_2 = Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let key_1 = StorageMapKey::from_index(1);
+    let key_2 = StorageMapKey::from_index(2);
 
     let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
     let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);

@@ -11,6 +11,7 @@ use miden_protocol::account::{
     AccountId,
     AccountStorageHeader,
     PartialAccount,
+    StorageMapKey,
     StorageMapWitness,
     StorageSlotName,
     StorageSlotType,
@@ -508,7 +509,7 @@ impl DataStore for NtxDataStore {
         &self,
         account_id: AccountId,
         map_root: Word,
-        map_key: Word,
+        map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
             // The slot name that corresponds to the given account ID and map root must have been

@@ -20,6 +20,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     AccountVaultDelta,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotDelta,
@@ -950,8 +951,8 @@ fn sql_account_storage_map_values_insertion() {
     queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block2).unwrap();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 2, 3, 4]);
-    let key2 = Word::from([5u32, 6, 7, 8]);
+    let key1 = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
+    let key2 = StorageMapKey::new(Word::from([5u32, 6, 7, 8]));
     let value1 = Word::from([10u32, 11, 12, 13]);
     let value2 = Word::from([20u32, 21, 22, 23]);
     let value3 = Word::from([30u32, 31, 32, 33]);
@@ -1017,9 +1018,9 @@ fn select_storage_map_sync_values() {
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(5);
 
-    let key1 = num_to_word(1);
-    let key2 = num_to_word(2);
-    let key3 = num_to_word(3);
+    let key1 = StorageMapKey::from_index(1u32);
+    let key2 = StorageMapKey::from_index(2u32);
+    let key3 = StorageMapKey::from_index(3u32);
     let value1 = num_to_word(10);
     let value2 = num_to_word(20);
     let value3 = num_to_word(30);
@@ -1129,7 +1130,7 @@ fn select_storage_map_sync_values_for_network_account() {
     let (account_id, _) =
         make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Network);
     let slot_name = StorageSlotName::mock(7);
-    let key = num_to_word(1);
+    let key = StorageMapKey::from_index(1);
     let value = num_to_word(10);
 
     queries::insert_account_storage_map_value(
@@ -1183,7 +1184,7 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
         account_id,
         block1,
         slot_name.clone(),
-        num_to_word(1),
+        StorageMapKey::from_index(1),
         num_to_word(11),
     )
     .unwrap();
@@ -1192,7 +1193,7 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
         account_id,
         block2,
         slot_name.clone(),
-        num_to_word(2),
+        StorageMapKey::from_index(2),
         num_to_word(22),
     )
     .unwrap();
@@ -1201,7 +1202,7 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
         account_id,
         block3,
         slot_name.clone(),
-        num_to_word(3),
+        StorageMapKey::from_index(3),
         num_to_word(33),
     )
     .unwrap();
@@ -1613,11 +1614,11 @@ async fn genesis_with_account_storage_map() {
 
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(1u32),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(2u32),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -1670,7 +1671,7 @@ async fn genesis_with_account_assets_and_storage() {
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(100), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::from_index(100u32),
         Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]),
     )])
     .unwrap();
@@ -1767,7 +1768,7 @@ async fn genesis_with_multiple_accounts() {
         .unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(5), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::from_index(5u32),
         Word::from([Felt::new(15), Felt::new(25), Felt::new(35), Felt::new(45)]),
     )])
     .unwrap();
@@ -2178,7 +2179,7 @@ fn db_roundtrip_storage_map_values() {
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
         .unwrap();
     let slot_name = StorageSlotName::mock(5);
-    let key = num_to_word(12345);
+    let key = StorageMapKey::from_index(12345u32);
     let value = num_to_word(67890);
 
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
@@ -2225,11 +2226,11 @@ fn db_roundtrip_account_storage_with_maps() {
     // Create storage with both value slots and map slots
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(1u32),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(2u32),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -2463,9 +2464,9 @@ fn test_prune_history() {
 
     // Insert storage map values at different blocks
     let slot_name = StorageSlotName::mock(5);
-    let map_key_old = num_to_word(10);
-    let map_key_cutoff = num_to_word(20);
-    let map_key_recent = num_to_word(30);
+    let map_key_old = StorageMapKey::from_index(10u32);
+    let map_key_cutoff = StorageMapKey::from_index(20u32);
+    let map_key_recent = StorageMapKey::from_index(30u32);
     let value_1 = num_to_word(111);
     let value_2 = num_to_word(222);
     let value_3 = num_to_word(333);
@@ -2657,7 +2658,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
         .unwrap();
 
         // Filter to the specific slot and get most recent value for each key
-        let mut latest_values: BTreeMap<Word, Word> = BTreeMap::new();
+        let mut latest_values: BTreeMap<StorageMapKey, Word> = BTreeMap::new();
         for value in storage_values.values {
             if value.slot_name == *slot_name {
                 latest_values.insert(value.key, value.value);
@@ -2669,7 +2670,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
         }
 
         // Build SMT from entries
-        let entries: Vec<(Word, Word)> = latest_values
+        let entries: Vec<(StorageMapKey, Word)> = latest_values
             .into_iter()
             .filter_map(|(key, value)| {
                 if value == EMPTY_WORD {
@@ -2689,7 +2690,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
 
         let mut smt = Smt::default();
         for (key, value) in entries {
-            smt.insert(miden_protocol::account::StorageMap::hash_key(key), value).unwrap();
+            smt.insert(key.hash().into(), value).unwrap();
         }
 
         Some(smt.root())
@@ -2717,8 +2718,8 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
     let slot_map = StorageSlotName::mock(1);
     let slot_value = StorageSlotName::mock(2);
 
-    let key1 = num_to_word(100);
-    let key2 = num_to_word(200);
+    let key1 = StorageMapKey::from_index(100);
+    let key2 = StorageMapKey::from_index(200);
     let value1 = num_to_word(1000);
     let value2 = num_to_word(2000);
     let value3 = num_to_word(3000);

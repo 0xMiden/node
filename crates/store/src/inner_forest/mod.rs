@@ -8,7 +8,7 @@ use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountV
 use miden_protocol::account::{
     AccountId,
     NonFungibleDeltaAction,
-    StorageMap,
+    StorageMapKey,
     StorageMapWitness,
     StorageSlotName,
 };
@@ -236,11 +236,11 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        raw_key: Word,
+        raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        let key = StorageMap::hash_key(raw_key);
+        let key = raw_key.hash().into();
         let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
@@ -277,14 +277,14 @@ impl InnerForest {
         account_id: AccountId,
         slot_name: StorageSlotName,
         block_num: BlockNumber,
-        raw_keys: &[Word],
+        raw_keys: &[StorageMapKey],
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, &slot_name);
         let tree = self.get_tree_id(lineage, block_num)?;
 
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
-            let key = StorageMap::hash_key(*raw_key);
-            self.forest.open(tree, key).map_err(Self::map_forest_error)
+            let key_hashed = raw_key.hash().into();
+            self.forest.open(tree, key_hashed).map_err(Self::map_forest_error)
         }));
 
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
@@ -456,15 +456,12 @@ impl InnerForest {
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
 
-            // build a vector of raw entries and filter out any empty values; such values
-            // shouldn't be present in full-state deltas, but it is good to exclude them
-            // explicitly
-            let raw_map_entries: Vec<(Word, Word)> =
+            let raw_map_entries: Vec<(StorageMapKey, Word)> =
                 Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
                     if value == EMPTY_WORD {
                         None
                     } else {
-                        Some((Word::from(key), value))
+                        Some((key.into_inner(), value))
                     }
                 }));
 
@@ -476,9 +473,7 @@ impl InnerForest {
             }
 
             let hashed_entries = Vec::from_iter(
-                raw_map_entries
-                    .iter()
-                    .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
+                raw_map_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),
             );
 
             let lineage = Self::storage_lineage_id(account_id, slot_name);
@@ -632,14 +627,12 @@ impl InnerForest {
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let lineage = Self::storage_lineage_id(account_id, slot_name);
-            let delta_entries: Vec<(Word, Word)> = Vec::from_iter(
-                map_delta.entries().iter().map(|(key, value)| ((*key).into(), *value)),
+            let delta_entries: Vec<(StorageMapKey, Word)> = Vec::from_iter(
+                map_delta.entries().iter().map(|(key, value)| (key.into_inner(), *value)),
             );
 
             let hashed_entries = Vec::from_iter(
-                delta_entries
-                    .iter()
-                    .map(|(raw_key, value)| (StorageMap::hash_key(*raw_key), *value)),
+                delta_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),
             );
 
             let operations = Self::build_forest_operations(hashed_entries);

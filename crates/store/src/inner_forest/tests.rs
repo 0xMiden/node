@@ -1,6 +1,6 @@
 use assert_matches::assert_matches;
 use miden_node_proto::domain::account::StorageMapEntries;
-use miden_protocol::account::AccountCode;
+use miden_protocol::account::{AccountCode, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::testing::account_id::{
@@ -172,8 +172,8 @@ fn forest_versions_are_continuous_for_sequential_updates() {
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(9);
-    let raw_key = Word::from([1u32, 0, 0, 0]);
-    let storage_key = StorageMap::hash_key(raw_key);
+    let raw_key = StorageMapKey::from_index(1u32);
+    let storage_key = raw_key.hash().into();
     let asset_key: Word = FungibleAsset::new(faucet_id, 0).unwrap().vault_key().into();
 
     for i in 1..=3u32 {
@@ -233,7 +233,7 @@ fn witness_queries_work_with_sparse_lineage_updates() {
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(6);
-    let raw_key = Word::from([1u32, 0, 0, 0]);
+    let raw_key = StorageMapKey::from_index(1u32);
     let value = Word::from([9u32, 0, 0, 0]);
 
     let block_1 = BlockNumber::GENESIS.child();
@@ -380,8 +380,8 @@ fn storage_map_incremental_updates() {
     let account_id = dummy_account();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 0, 0, 0]);
-    let key2 = Word::from([2u32, 0, 0, 0]);
+    let key1 = StorageMapKey::from_index(1u32);
+    let key2 = StorageMapKey::from_index(2u32);
     let value1 = Word::from([10u32, 0, 0, 0]);
     let value2 = Word::from([20u32, 0, 0, 0]);
     let value3 = Word::from([30u32, 0, 0, 0]);
@@ -429,16 +429,14 @@ fn test_storage_map_removals() {
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
     const SLOT_INDEX: usize = 3;
-    const KEY_1: [u32; 4] = [1, 0, 0, 0];
-    const KEY_2: [u32; 4] = [2, 0, 0, 0];
     const VALUE_1: [u32; 4] = [10, 0, 0, 0];
     const VALUE_2: [u32; 4] = [20, 0, 0, 0];
 
     let mut forest = InnerForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(SLOT_INDEX);
-    let key_1 = Word::from(KEY_1);
-    let key_2 = Word::from(KEY_2);
+    let key_1 = StorageMapKey::from_index(1);
+    let key_2 = StorageMapKey::from_index(2);
     let value_1 = Word::from(VALUE_1);
     let value_2 = Word::from(VALUE_2);
 
@@ -460,8 +458,8 @@ fn test_storage_map_removals() {
 
     let tree = forest.tree_id_for_root(account_id, &slot_name, block_2);
 
-    let key_2_hash = StorageMap::hash_key(key_2);
-    let key_1_hash = StorageMap::hash_key(key_1);
+    let key_2_hash = key_2.hash().into();
+    let key_1_hash = key_1.hash().into();
 
     let proof_key_2 = forest.forest.open(tree, key_2_hash).unwrap();
     assert_eq!(proof_key_2.get(&key_2_hash), Some(value_2));
@@ -487,7 +485,7 @@ fn storage_map_state_is_not_available_for_block_gaps() {
     let mut forest = InnerForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(4);
-    let raw_key = Word::from([KEY_VALUE, 0, 0, 0]);
+    let raw_key = StorageMapKey::from_index(KEY_VALUE);
 
     let block_1 = BlockNumber::from(BLOCK_FIRST);
     let mut map_delta_1 = StorageMapDelta::default();
@@ -587,7 +585,7 @@ fn storage_map_open_returns_proofs() {
 
     let mut map_delta = StorageMapDelta::default();
     for i in 0..20u32 {
-        let key = Word::from([i, 0, 0, 0]);
+        let key = StorageMapKey::from_index(i);
         let value = Word::from([0, 0, 0, i]);
         map_delta.insert(key, value);
     }
@@ -596,7 +594,7 @@ fn storage_map_open_returns_proofs() {
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
-    let keys: Vec<Word> = (0..20u32).map(|i| Word::from([i, 0, 0, 0])).collect();
+    let keys: Vec<StorageMapKey> = (0..20u32).map(StorageMapKey::from_index).collect();
     let result =
         forest.get_storage_map_details_for_keys(account_id, slot_name.clone(), block_num, &keys);
 
@@ -621,7 +619,7 @@ fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(SLOT_INDEX);
     let block_num = BlockNumber::GENESIS.child();
-    let raw_key = Word::from([KEY_VALUE, 0, 0, 0]);
+    let raw_key = StorageMapKey::from_index(KEY_VALUE);
     let value = Word::from([VALUE_VALUE, 0, 0, 0]);
 
     let mut map_delta = StorageMapDelta::default();
@@ -637,12 +635,12 @@ fn storage_map_key_hashing_and_raw_entries_are_consistent() {
         .get_storage_map_witness(account_id, &slot_name, block_num, raw_key)
         .unwrap();
     let proof: SmtProof = witness.into();
-    let hashed_key = StorageMap::hash_key(raw_key);
+    let hashed_key = raw_key.hash().into();
     // Witness proofs use hashed keys because SMT leaves are keyed by the hash.
     assert_eq!(proof.compute_root(), root);
     assert_eq!(proof.get(&hashed_key), Some(value));
     // Raw keys never appear in SMT proofs, only their hashed counterparts.
-    assert_eq!(proof.get(&raw_key), None);
+    assert_eq!(proof.get(&raw_key.into()), None);
 }
 
 // PRUNING TESTS
@@ -679,7 +677,10 @@ fn prune_removes_smt_roots_from_forest() {
             .unwrap();
         let storage_delta = if i.is_multiple_of(3) {
             let mut map_delta = StorageMapDelta::default();
-            map_delta.insert(Word::from([1u32, 0, 0, 0]), Word::from([99u32, i, i * i, i * i * i]));
+            map_delta.insert(
+                StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
+                Word::from([99u32, i, i * i, i * i * i]),
+            );
             let asd = AccountStorageDelta::new();
             asd.add_updated_maps([(slot_name.clone(), map_delta)])
         } else {
@@ -706,7 +707,7 @@ fn prune_removes_smt_roots_from_forest() {
     assert_matches!(forest.forest.open(retained_tree, asset_key), Ok(_));
     assert_matches!(forest.forest.open(pruned_tree, asset_key), Err(_));
 
-    let storage_key = StorageMap::hash_key(Word::from([1u32, 0, 0, 0]));
+    let storage_key = StorageMapKey::new(Word::from([1u32, 0, 0, 0])).hash().into();
     let storage_tree = forest.tree_id_for_root(account_id, &slot_name, pruned_block);
     assert_matches!(forest.forest.open(storage_tree, storage_key), Err(_));
 }
@@ -749,7 +750,7 @@ fn prune_roots_removes_old_entries() {
         let mut vault_delta = AccountVaultDelta::default();
         vault_delta.add_asset(dummy_fungible_asset(faucet_id, amount)).unwrap();
 
-        let key = Word::from([i, i * i, 5, 4]);
+        let key = StorageMapKey::new(Word::from([i, i * i, 5, 4]));
         let value = Word::from([0, 0, i * i * i, 77]);
         let mut map_delta = StorageMapDelta::default();
         map_delta.insert(key, value);
@@ -816,9 +817,15 @@ fn prune_handles_multiple_slots() {
     for i in 1..=TEST_CHAIN_LENGTH {
         let block_num = BlockNumber::from(i);
         let mut map_delta_a = StorageMapDelta::default();
-        map_delta_a.insert(Word::from([i, 0, 0, 0]), Word::from([i, 0, 0, 1]));
+        map_delta_a.insert(
+            StorageMapKey::new(Word::from([i, 0, 0, 0])),
+            Word::from([i, 0, 0, 1]),
+        );
         let mut map_delta_b = StorageMapDelta::default();
-        map_delta_b.insert(Word::from([i, 0, 0, 2]), Word::from([i, 0, 0, 3]));
+        map_delta_b.insert(
+            StorageMapKey::new(Word::from([i, 0, 0, 2])),
+            Word::from([i, 0, 0, 3]),
+        );
         let raw = BTreeMap::from_iter([
             (slot_a.clone(), StorageSlotDelta::Map(map_delta_a)),
             (slot_b.clone(), StorageSlotDelta::Map(map_delta_b)),
@@ -856,10 +863,16 @@ fn prune_preserves_most_recent_state_per_entity() {
     vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 1000)).unwrap();
 
     let mut map_delta_a = StorageMapDelta::default();
-    map_delta_a.insert(Word::from([1u32, 0, 0, 0]), Word::from([100u32, 0, 0, 0]));
+    map_delta_a.insert(
+        StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
+        Word::from([100u32, 0, 0, 0]),
+    );
 
     let mut map_delta_b = StorageMapDelta::default();
-    map_delta_b.insert(Word::from([2u32, 0, 0, 0]), Word::from([200u32, 0, 0, 0]));
+    map_delta_b.insert(
+        StorageMapKey::new(Word::from([2u32, 0, 0, 0])),
+        Word::from([200u32, 0, 0, 0]),
+    );
 
     let raw = BTreeMap::from_iter([
         (slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a)),
@@ -872,7 +885,10 @@ fn prune_preserves_most_recent_state_per_entity() {
     // Block 51: Update only map_a
     let block_at_51 = BlockNumber::from(51);
     let mut map_delta_a_new = StorageMapDelta::default();
-    map_delta_a_new.insert(Word::from([1u32, 0, 0, 0]), Word::from([999u32, 0, 0, 0]));
+    map_delta_a_new.insert(
+        StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
+        Word::from([999u32, 0, 0, 0]),
+    );
 
     let raw_at_51 =
         BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a_new))]);
@@ -914,7 +930,10 @@ fn prune_preserves_entries_within_retention_window() {
             .unwrap();
 
         let mut map_delta = StorageMapDelta::default();
-        map_delta.insert(Word::from([block_num, 0, 0, 0]), Word::from([block_num * 10, 0, 0, 0]));
+        map_delta.insert(
+            StorageMapKey::from_index(block_num),
+            Word::from([block_num * 10, 0, 0, 0]),
+        );
 
         let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
         let storage_delta = AccountStorageDelta::from_raw(raw);
