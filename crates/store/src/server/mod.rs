@@ -45,6 +45,8 @@ pub struct Store {
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
     pub grpc_timeout: Duration,
+    /// Maximum number of blocks being proven concurrently by the proof scheduler.
+    pub max_concurrent_proofs: usize,
 }
 
 impl Store {
@@ -133,6 +135,7 @@ impl Store {
             state.block_store(),
             chain_tip_rx,
             latest_proven_block,
+            self.max_concurrent_proofs,
         );
 
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {

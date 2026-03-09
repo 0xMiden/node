@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::ValidatorSigner;
@@ -90,6 +90,14 @@ pub enum StoreCommand {
             value_name = "DURATION"
         )]
         grpc_timeout: Duration,
+
+        /// Maximum number of concurrent block proofs to be scheduled.
+        #[arg(
+            long = "max-concurrent-proofs",
+            default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
+            value_name = "NUM"
+        )]
+        max_concurrent_proofs: usize,
     },
 }
 
@@ -119,6 +127,7 @@ impl StoreCommand {
                 data_directory,
                 enable_otel: _,
                 grpc_timeout,
+                max_concurrent_proofs,
             } => {
                 Self::start(
                     rpc_url,
@@ -127,6 +136,7 @@ impl StoreCommand {
                     block_prover_url,
                     data_directory,
                     grpc_timeout,
+                    max_concurrent_proofs,
                 )
                 .await
             },
@@ -148,6 +158,7 @@ impl StoreCommand {
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_timeout: Duration,
+        max_concurrent_proofs: usize,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
@@ -177,6 +188,7 @@ impl StoreCommand {
             block_producer_listener,
             data_directory,
             grpc_timeout,
+            max_concurrent_proofs,
         }
         .serve()
         .await

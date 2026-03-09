@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
-use miden_node_store::Store;
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -94,6 +94,14 @@ pub enum BundledCommand {
             value_name = "DURATION"
         )]
         grpc_timeout: Duration,
+
+        /// Maximum number of concurrent block proofs to be scheduled.
+        #[arg(
+            long = "max-concurrent-proofs",
+            default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
+            value_name = "NUM"
+        )]
+        max_concurrent_proofs: usize,
     },
 }
 
@@ -126,6 +134,7 @@ impl BundledCommand {
                 validator,
                 enable_otel: _,
                 grpc_timeout,
+                max_concurrent_proofs,
             } => {
                 Self::start(
                     rpc_url,
@@ -135,13 +144,14 @@ impl BundledCommand {
                     ntx_builder,
                     validator,
                     grpc_timeout,
+                    max_concurrent_proofs,
                 )
                 .await
             },
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         block_prover_url: Option<Url>,
@@ -150,6 +160,7 @@ impl BundledCommand {
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
         grpc_timeout: Duration,
+        max_concurrent_proofs: usize,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -207,6 +218,7 @@ impl BundledCommand {
                     data_directory: data_directory_clone,
                     block_prover_url,
                     grpc_timeout,
+                    max_concurrent_proofs,
                 }
                 .serve()
                 .await

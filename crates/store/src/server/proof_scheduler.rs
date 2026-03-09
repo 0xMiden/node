@@ -3,7 +3,7 @@
 //! The [`proof_scheduler`] is spawned as an internal Store task. It:
 //!
 //! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`] and `latest_proven_block` locally.
-//! 2. Maintains up to [`MAX_CONCURRENT_PROOFS`] in-flight proving jobs via a [`JoinSet`].
+//! 2. Maintains up to `max_concurrent_proofs` in-flight proving jobs via a [`JoinSet`].
 //! 3. Marks blocks as proven in the database **sequentially** — a block is only marked after all
 //!    its ancestors have been marked.
 //! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is retried
@@ -34,8 +34,8 @@ use crate::server::block_prover_client::{BlockProver, StoreProverError};
 /// Overall timeout for proving a single block.
 const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
 
-/// Maximum number of blocks being proven concurrently.
-const MAX_CONCURRENT_PROOFS: usize = 8;
+/// Default maximum number of blocks being proven concurrently.
+pub const DEFAULT_MAX_CONCURRENT_PROOFS: usize = 8;
 
 /// A wrapper around [`JoinSet`] whose `join_next` returns [`std::future::pending`] when empty
 /// instead of `None`, making it safe to use directly in `tokio::select!` without a special case.
@@ -76,14 +76,22 @@ pub fn spawn(
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
     latest_proven_block: BlockNumber,
+    max_concurrent_proofs: usize,
 ) -> JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(run(db, block_prover, block_store, chain_tip_rx, latest_proven_block))
+    tokio::spawn(run(
+        db,
+        block_prover,
+        block_store,
+        chain_tip_rx,
+        latest_proven_block,
+        max_concurrent_proofs,
+    ))
 }
 
 /// Main loop of the proof scheduler.
 ///
 /// Maintains a pool of concurrent proving jobs via [`JoinSet`], fills them up to
-/// [`MAX_CONCURRENT_PROOFS`], and drains completed results in block-number order.
+/// `max_concurrent_proofs`, and drains completed results in block-number order.
 ///
 /// Returns `Err` on irrecoverable errors (missing/corrupt proving inputs, DB write failures).
 /// Transient errors are retried internally.
@@ -93,6 +101,7 @@ async fn run(
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     latest_proven_block: BlockNumber,
+    max_concurrent_proofs: usize,
 ) -> anyhow::Result<()> {
     info!(target: COMPONENT, %latest_proven_block, "Proof scheduler started");
 
@@ -109,7 +118,7 @@ async fn run(
 
     loop {
         // Fill the job pool up to capacity from the next unscheduled blocks.
-        while inflight.len() < MAX_CONCURRENT_PROOFS
+        while inflight.len() < max_concurrent_proofs
             && next_to_schedule.as_u32() <= chain_tip.as_u32()
         {
             let scheduled = next_to_schedule;

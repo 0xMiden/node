@@ -556,6 +556,7 @@ pub async fn start_store(
             block_producer_listener,
             data_directory: dir,
             grpc_timeout: Duration::from_secs(30),
+            max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
         }
         .serve()
         .await
