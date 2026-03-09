@@ -1,0 +1,11 @@
+[profile.ci]
+# CI-specific behavior: fail fast wastes runner time on large suites.
+fail-fast = false
+# Retry once to reduce flakes without hiding persistent failures.
+retries = 1
+# Report long runners and terminate them to cap wall-clock time.
+slow-timeout = { period = "300s", terminate-after = 4 }
+# Surface failures early to reduce rerun cycles.
+failure-output = "immediate-final"
+# Show skipped tests in CI output to explain shard gaps quickly.
+status-level = "skip"

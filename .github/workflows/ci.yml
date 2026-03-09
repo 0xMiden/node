@@ -29,6 +29,9 @@ env:
   RUST_CACHE_KEY: rust-cache-2026.02.02
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
+  # Disable incremental compilation in CI to avoid extra work for builds
+  # that will not be incrementally reused, reducing build time and disk use.
+  CARGO_INCREMENTAL: 0
 
 # Limits workflow concurrency to only the latest commit in the PR.
 concurrency:
@@ -116,6 +119,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [build]
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        total: [4]
     steps:
       - uses: actions/checkout@v6
       - name: Rustup
@@ -129,9 +137,11 @@ jobs:
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
       - name: Build tests
-        run: cargo nextest run --all-features --workspace --no-run
+        # Shared build per shard; compilation is not partitioned.
+        run: cargo nextest run --profile ci --all-features --workspace --no-run
       - name: Run tests
-        run: cargo nextest run --all-features --workspace
+        # Hash-based sharding balances long tests to reduce wall-clock time.
+        run: cargo nextest run --profile ci --all-features --workspace --partition hash:${{ matrix.shard }}/${{ matrix.total }}
       - name: Doc tests
         run: cargo test --doc --workspace --all-features
 
