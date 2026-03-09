@@ -118,6 +118,6 @@ impl State {
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<StorageMapValuesPage, DatabaseError> {
-        self.db.select_storage_map_sync_values(account_id, block_range).await
+        self.db.select_storage_map_sync_values(account_id, block_range, None).await
     }
 }

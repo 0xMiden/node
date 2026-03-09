@@ -2836,9 +2836,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto-derive"
-version = "0.19.4"
+version = "0.19.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40e95b9c7c99ed6bbf073d9e02721d812dedd2c195019c0a0e0a3dbb9cbf034"
+checksum = "3550b5656b791fec59c0b6089b4d0368db746a34749ccd47e59afb01aa877e9e"
 dependencies = [
  "quote",
  "syn 2.0.114",
