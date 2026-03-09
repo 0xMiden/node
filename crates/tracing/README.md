@@ -19,10 +19,10 @@ pub async fn apply_block(&self, block: ProvenBlock) -> Result<(), ApplyBlockErro
 
 ## Enhanced Error Reporting
 
-When an error occurs, the full error chain is recorded:
+When an error occurs, the full error chain is recorded (matching `tracing::instrument` style):
 
 ```text
-ERROR apply_block: error.report = "failed to apply block
+ERROR apply_block: error = "failed to apply block
 caused by: database error
 caused by: SQLite error: table 'blocks' has 10 columns but 9 values were supplied"
 ```

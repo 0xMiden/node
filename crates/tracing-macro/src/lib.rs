@@ -60,20 +60,20 @@ use syn::{ItemFn, ReturnType, parse_macro_input};
 pub fn instrument_with_err_report(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr2 = TokenStream2::from(attr.clone());
     let input = parse_macro_input!(item as ItemFn);
-    
+
     // Check if 'err' is present in the attributes
     let attr_str = attr2.to_string();
     let has_err = attr_str.contains("err");
-    
+
     // Check if the function returns a Result
     let returns_result = match &input.sig.output {
         ReturnType::Default => false,
         ReturnType::Type(_, ty) => {
             let ty_str = quote! { #ty }.to_string();
             ty_str.contains("Result")
-        }
+        },
     };
-    
+
     if has_err && returns_result {
         generate_with_error_reporting(attr2, input).into()
     } else {
@@ -84,23 +84,24 @@ pub fn instrument_with_err_report(attr: TokenStream, item: TokenStream) -> Token
             #[::tracing::instrument(#attr2)]
             #vis #sig
             #block
-        }.into()
+        }
+        .into()
     }
 }
 
 fn generate_with_error_reporting(attr: TokenStream2, input: ItemFn) -> TokenStream2 {
     let ItemFn { attrs, vis, sig, block } = input;
-    
+
     // Remove 'err' from the attributes we pass to tracing::instrument
     // since we handle error reporting ourselves
     let tracing_attr = remove_err_from_attr(&attr);
-    
+
     // Get the return type for type annotation
     let result_type = match &sig.output {
         ReturnType::Type(_, ty) => quote! { #ty },
         ReturnType::Default => quote! { () },
     };
-    
+
     // Use absolute paths via the miden_node_tracing crate
     quote! {
         #(#attrs)*
@@ -108,27 +109,24 @@ fn generate_with_error_reporting(attr: TokenStream2, input: ItemFn) -> TokenStre
         #vis #sig
         {
             let __result: #result_type = #block;
-            
+
             if let ::core::result::Result::Err(ref __err) = __result {
                 // Use ErrorReport to get the full error chain
                 let __report = {
                     use ::miden_node_tracing::ErrorReport as _;
                     __err.as_report()
                 };
-                
+
                 // Record the error event with the full report
-                ::miden_node_tracing::error!(
-                    error.report = %__report,
-                    "operation failed"
-                );
-                
+                ::miden_node_tracing::error!(error = %__report);
+
                 // Set OpenTelemetry span status if available
                 {
                     use ::miden_node_tracing::OpenTelemetrySpanExt as _;
                     ::miden_node_tracing::Span::current().set_error(__err as &dyn ::std::error::Error);
                 }
             }
-            
+
             __result
         }
     }
@@ -138,14 +136,14 @@ fn remove_err_from_attr(attr: &TokenStream2) -> TokenStream2 {
     // Simple string-based removal of 'err' from the attribute
     // This handles both 'err' and 'err,' patterns
     let attr_str = attr.to_string();
-    
+
     // Remove 'err,' or ', err' or 'err' patterns
     let cleaned = attr_str
         .replace(", err,", ",")
         .replace(", err", "")
         .replace("err,", "")
         .replace("err", "");
-    
+
     // Parse the cleaned string back into tokens
     cleaned.parse().unwrap_or_else(|_| attr.clone())
 }
@@ -184,7 +182,10 @@ mod tests {
 
     #[test]
     fn test_remove_err_from_attr_with_ret() {
-        let attr: TokenStream2 = "level = \"debug\", target = COMPONENT, err, ret(level = \"debug\")".parse().unwrap();
+        let attr: TokenStream2 =
+            "level = \"debug\", target = COMPONENT, err, ret(level = \"debug\")"
+                .parse()
+                .unwrap();
         let result = remove_err_from_attr(&attr);
         let result_str = result.to_string();
         assert!(!result_str.contains(", err,"), "Should remove ', err,': {result_str}");
@@ -205,7 +206,7 @@ mod tests {
             ReturnType::Type(_, ty) => {
                 let ty_str = quote! { #ty }.to_string();
                 ty_str.contains("Result")
-            }
+            },
         };
         assert!(returns_result, "Should detect Result return type");
 
@@ -220,7 +221,7 @@ mod tests {
             ReturnType::Type(_, ty) => {
                 let ty_str = quote! { #ty }.to_string();
                 ty_str.contains("Result")
-            }
+            },
         };
         assert!(!returns_result, "Should not detect Result for i32 return type");
 
@@ -235,7 +236,7 @@ mod tests {
             ReturnType::Type(_, ty) => {
                 let ty_str = quote! { #ty }.to_string();
                 ty_str.contains("Result")
-            }
+            },
         };
         assert!(!returns_result, "Should not detect Result for unit return type");
     }

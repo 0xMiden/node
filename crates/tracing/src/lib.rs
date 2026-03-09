@@ -23,16 +23,12 @@
 
 // Re-export the instrument macro
 pub use miden_node_tracing_macro::instrument_with_err_report;
-
 // Re-export ErrorReport from miden-node-utils
 pub use miden_node_utils::ErrorReport;
-
-// Re-export tracing types needed by the macro
-pub use tracing::{Span, Level, Instrument, event, error};
-pub use tracing::field::Empty as FieldEmpty;
-
-// Re-export OpenTelemetry types needed by the macro
-pub use opentelemetry::trace::Status as OtelStatus;
-
 // Re-export OpenTelemetrySpanExt from miden-node-utils
 pub use miden_node_utils::tracing::OpenTelemetrySpanExt;
+// Re-export OpenTelemetry types needed by the macro
+pub use opentelemetry::trace::Status as OtelStatus;
+pub use tracing::field::Empty as FieldEmpty;
+// Re-export tracing types needed by the macro
+pub use tracing::{Instrument, Level, Span, error, event};
