@@ -39,7 +39,6 @@ const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE"
 const ENV_VALIDATOR_INSECURE_SECRET_KEY: &str = "MIDEN_NODE_VALIDATOR_INSECURE_SECRET_KEY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 
 // Formats a Duration into a human-readable string for display in clap help text.

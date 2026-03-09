@@ -10,6 +10,7 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::BlockSigner;
@@ -36,10 +37,7 @@ pub struct Store {
     pub ntx_builder_listener: TcpListener,
     pub block_producer_listener: TcpListener,
     pub data_directory: PathBuf,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub grpc_options: GrpcOptionsInternal,
 }
 
 impl Store {
@@ -89,7 +87,7 @@ impl Store {
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
         info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
-            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout,
+            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_options.request_timeout,
             "Loading database");
 
         let (termination_ask, mut termination_signal) =
@@ -147,9 +145,9 @@ impl Store {
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
             tonic::transport::Server::builder()
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -158,9 +156,9 @@ impl Store {
 
         join_set.spawn(
             tonic::transport::Server::builder()
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
                 .add_service(reflection_service_alpha.clone())
@@ -169,9 +167,10 @@ impl Store {
 
         join_set.spawn(
             tonic::transport::Server::builder()
+                .accept_http1(true)
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
                 .add_service(reflection_service_alpha)

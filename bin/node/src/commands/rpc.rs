@@ -1,12 +1,11 @@
-use std::time::Duration;
-
 use anyhow::Context;
 use miden_node_rpc::Rpc;
+use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
 use super::{ENV_BLOCK_PRODUCER_URL, ENV_RPC_URL, ENV_STORE_RPC_URL, ENV_VALIDATOR_URL};
-use crate::commands::{DEFAULT_TIMEOUT, ENV_ENABLE_OTEL, duration_to_human_readable_string};
+use crate::commands::ENV_ENABLE_OTEL;
 
 #[derive(clap::Subcommand)]
 pub enum RpcCommand {
@@ -36,16 +35,8 @@ pub enum RpcCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        ///
-        /// This may occur if the server is overloaded or due to an internal bug.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_timeout: Duration,
+        #[command(flatten)]
+        grpc_options: GrpcOptionsExternal,
     },
 }
 
@@ -57,7 +48,7 @@ impl RpcCommand {
             block_producer_url,
             validator_url,
             enable_otel: _,
-            grpc_timeout,
+            grpc_options,
         } = self;
 
         let listener = url.to_socket().context("Failed to extract socket address from RPC URL")?;
@@ -70,7 +61,7 @@ impl RpcCommand {
             store_url,
             block_producer_url,
             validator_url,
-            grpc_timeout,
+            grpc_options,
         }
         .serve()
         .await

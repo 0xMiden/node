@@ -1,3 +1,4 @@
+pub mod clap;
 pub mod config;
 pub mod cors;
 pub mod crypto;
