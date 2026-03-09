@@ -37,4 +37,3 @@ tonic            = { features = ["codegen", "tls-native-roots", "transport"], wo
 tonic-health     = { workspace = true }
 tracing          = { workspace = true }
 url              = { features = ["serde"], workspace = true }
-
