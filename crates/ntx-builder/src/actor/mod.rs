@@ -281,7 +281,7 @@ impl AccountActor {
                                     tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check transaction status");
                                     ActorShutdownReason::DbError(account_id, err)
                                 })?;
-                            if !exists {
+                            if exists {
                                 self.mode = ActorMode::NotesAvailable;
                             }
                         },
