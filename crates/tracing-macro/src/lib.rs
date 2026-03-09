@@ -41,15 +41,13 @@ use syn::{ItemFn, ReturnType, parse_macro_input};
 /// - `name = "..."` - Sets a custom span name (default: function name)
 /// - `err` - Record errors with full error chain (enhanced by this macro)
 /// - `ret` / `ret(level = "...")` - Record return values
-/// - `skip(arg1, arg2)` - Skip specific arguments from span fields
-/// - `skip_all` - Skip all arguments from span fields
 /// - `fields(key = value, ...)` - Add custom fields to the span
-/// - `parent = None` - Create a root span (no parent)
+/// - `root` - Create a root span
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use miden_node_tracing::instrument_with_err_report;
+/// use miden_node_tracing::instrument;
 ///
 /// #[instrument_with_err_report(target = COMPONENT, skip_all, err)]
 /// pub async fn apply_block(&self, block: ProvenBlock) -> Result<(), ApplyBlockError> {
@@ -57,7 +55,7 @@ use syn::{ItemFn, ReturnType, parse_macro_input};
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn instrument_with_err_report(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr2 = TokenStream2::from(attr.clone());
     let input = parse_macro_input!(item as ItemFn);
 
@@ -149,113 +147,4 @@ fn remove_err_from_attr(attr: &TokenStream2) -> TokenStream2 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_remove_err_from_attr_trailing() {
-        let attr: TokenStream2 = "target = COMPONENT, skip_all, err".parse().unwrap();
-        let result = remove_err_from_attr(&attr);
-        let result_str = result.to_string();
-        assert!(!result_str.contains("err"), "Should remove 'err': {result_str}");
-        assert!(result_str.contains("target"), "Should keep 'target': {result_str}");
-        assert!(result_str.contains("skip_all"), "Should keep 'skip_all': {result_str}");
-    }
-
-    #[test]
-    fn test_remove_err_from_attr_middle() {
-        let attr: TokenStream2 = "target = COMPONENT, err, skip_all".parse().unwrap();
-        let result = remove_err_from_attr(&attr);
-        let result_str = result.to_string();
-        assert!(!result_str.contains("err"), "Should remove 'err': {result_str}");
-        assert!(result_str.contains("target"), "Should keep 'target': {result_str}");
-        assert!(result_str.contains("skip_all"), "Should keep 'skip_all': {result_str}");
-    }
-
-    #[test]
-    fn test_remove_err_from_attr_only() {
-        let attr: TokenStream2 = "err".parse().unwrap();
-        let result = remove_err_from_attr(&attr);
-        let result_str = result.to_string();
-        assert!(!result_str.contains("err"), "Should remove 'err': {result_str}");
-    }
-
-    #[test]
-    fn test_remove_err_from_attr_with_ret() {
-        let attr: TokenStream2 =
-            "level = \"debug\", target = COMPONENT, err, ret(level = \"debug\")"
-                .parse()
-                .unwrap();
-        let result = remove_err_from_attr(&attr);
-        let result_str = result.to_string();
-        assert!(!result_str.contains(", err,"), "Should remove ', err,': {result_str}");
-        assert!(result_str.contains("level"), "Should keep 'level': {result_str}");
-        assert!(result_str.contains("ret"), "Should keep 'ret': {result_str}");
-    }
-
-    #[test]
-    fn test_returns_result_detection() {
-        // Test with Result type
-        let fn_with_result: syn::ItemFn = syn::parse_quote! {
-            fn test_fn() -> Result<(), Error> {
-                Ok(())
-            }
-        };
-        let returns_result = match &fn_with_result.sig.output {
-            ReturnType::Default => false,
-            ReturnType::Type(_, ty) => {
-                let ty_str = quote! { #ty }.to_string();
-                ty_str.contains("Result")
-            },
-        };
-        assert!(returns_result, "Should detect Result return type");
-
-        // Test without Result type
-        let fn_without_result: syn::ItemFn = syn::parse_quote! {
-            fn test_fn() -> i32 {
-                42
-            }
-        };
-        let returns_result = match &fn_without_result.sig.output {
-            ReturnType::Default => false,
-            ReturnType::Type(_, ty) => {
-                let ty_str = quote! { #ty }.to_string();
-                ty_str.contains("Result")
-            },
-        };
-        assert!(!returns_result, "Should not detect Result for i32 return type");
-
-        // Test with no return type
-        let fn_no_return: syn::ItemFn = syn::parse_quote! {
-            fn test_fn() {
-                println!("hello");
-            }
-        };
-        let returns_result = match &fn_no_return.sig.output {
-            ReturnType::Default => false,
-            ReturnType::Type(_, ty) => {
-                let ty_str = quote! { #ty }.to_string();
-                ty_str.contains("Result")
-            },
-        };
-        assert!(!returns_result, "Should not detect Result for unit return type");
-    }
-
-    #[test]
-    fn test_err_detection_in_attrs() {
-        // Test with err present
-        let attr_with_err = "target = COMPONENT, skip_all, err";
-        assert!(attr_with_err.contains("err"), "Should find 'err'");
-
-        // Test without err
-        let attr_without_err = "target = COMPONENT, skip_all";
-        assert!(!attr_without_err.contains("err"), "Should not find 'err'");
-
-        // Test with err in field name (should still match, but that's acceptable)
-        let attr_with_error_field = "target = COMPONENT, fields(error = true)";
-        // Note: This is a known limitation - "error" contains "err"
-        // In practice this doesn't cause issues because if someone uses fields(error=...)
-        // they likely don't intend to use our error reporting anyway
-        assert!(attr_with_error_field.contains("err"), "Contains 'err' substring");
-    }
-}
+mod tests;

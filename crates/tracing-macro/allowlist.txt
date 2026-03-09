@@ -1,0 +1,2 @@
+account.id
+nullifier.id
