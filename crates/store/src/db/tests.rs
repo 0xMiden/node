@@ -1250,7 +1250,7 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
                 account_id,
                 block1,
                 slot_name_for_db.clone(),
-                num_to_word(1),
+                num_to_storage_map_key(1),
                 num_to_word(10),
             )?;
             queries::insert_account_storage_map_value(
@@ -1258,7 +1258,7 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
                 account_id,
                 block2,
                 slot_name_for_db.clone(),
-                num_to_word(2),
+                num_to_storage_map_key(2),
                 num_to_word(20),
             )?;
             queries::insert_account_storage_map_value(
@@ -1266,7 +1266,7 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
                 account_id,
                 block3,
                 slot_name_for_db.clone(),
-                num_to_word(3),
+                num_to_storage_map_key(3),
                 num_to_word(30),
             )?;
             Ok::<_, DatabaseError>(())
@@ -1289,6 +1289,10 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
     [Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)].into()
+}
+
+fn num_to_storage_map_key(n: u64) -> StorageMapKey {
+    StorageMapKey::new(Word::from([Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)]))
 }
 
 fn num_to_nullifier(n: u64) -> Nullifier {
@@ -2852,8 +2856,8 @@ fn inner_forest_shared_roots_not_deleted_prematurely() {
     let block53 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 3);
     let slot_name = StorageSlotName::mock(1);
 
-    let key1 = num_to_word(100);
-    let key2 = num_to_word(200);
+    let key1 = num_to_storage_map_key(100);
+    let key2 = num_to_storage_map_key(200);
     let value1 = num_to_word(1000);
     let value2 = num_to_word(2000);
 
@@ -2998,8 +3002,8 @@ fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
 
     let slot_map = StorageSlotName::mock(1);
 
-    let key1 = num_to_word(100);
-    let key2 = num_to_word(200);
+    let key1 = num_to_storage_map_key(100);
+    let key2 = num_to_storage_map_key(200);
     let value1 = num_to_word(1000);
     let value2 = num_to_word(2000);
 
@@ -3230,7 +3234,7 @@ fn inner_forest_preserves_most_recent_storage_map_only() {
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     let slot_map = StorageSlotName::mock(1);
-    let key1 = num_to_word(100);
+    let key1 = num_to_storage_map_key(100);
     let value1 = num_to_word(1000);
 
     // Block 1: Create storage map
@@ -3347,7 +3351,7 @@ fn inner_forest_preserves_mixed_slots_independently() {
     let slot_map_b = StorageSlotName::mock(2);
     let slot_value = StorageSlotName::mock(3);
 
-    let key1 = num_to_word(100);
+    let key1 = num_to_storage_map_key(100);
     let value1 = num_to_word(1000);
     let value_slot_data = num_to_word(5000);
 

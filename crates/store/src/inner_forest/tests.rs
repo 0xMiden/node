@@ -425,7 +425,6 @@ fn storage_map_incremental_updates() {
 fn test_storage_map_removals() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::StorageMap;
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
     const SLOT_INDEX: usize = 3;
@@ -608,7 +607,6 @@ fn storage_map_open_returns_proofs() {
 fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::StorageMap;
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
     const SLOT_INDEX: usize = 4;
@@ -817,15 +815,9 @@ fn prune_handles_multiple_slots() {
     for i in 1..=TEST_CHAIN_LENGTH {
         let block_num = BlockNumber::from(i);
         let mut map_delta_a = StorageMapDelta::default();
-        map_delta_a.insert(
-            StorageMapKey::new(Word::from([i, 0, 0, 0])),
-            Word::from([i, 0, 0, 1]),
-        );
+        map_delta_a.insert(StorageMapKey::new(Word::from([i, 0, 0, 0])), Word::from([i, 0, 0, 1]));
         let mut map_delta_b = StorageMapDelta::default();
-        map_delta_b.insert(
-            StorageMapKey::new(Word::from([i, 0, 0, 2])),
-            Word::from([i, 0, 0, 3]),
-        );
+        map_delta_b.insert(StorageMapKey::new(Word::from([i, 0, 0, 2])), Word::from([i, 0, 0, 3]));
         let raw = BTreeMap::from_iter([
             (slot_a.clone(), StorageSlotDelta::Map(map_delta_a)),
             (slot_b.clone(), StorageSlotDelta::Map(map_delta_b)),
@@ -863,16 +855,12 @@ fn prune_preserves_most_recent_state_per_entity() {
     vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 1000)).unwrap();
 
     let mut map_delta_a = StorageMapDelta::default();
-    map_delta_a.insert(
-        StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
-        Word::from([100u32, 0, 0, 0]),
-    );
+    map_delta_a
+        .insert(StorageMapKey::new(Word::from([1u32, 0, 0, 0])), Word::from([100u32, 0, 0, 0]));
 
     let mut map_delta_b = StorageMapDelta::default();
-    map_delta_b.insert(
-        StorageMapKey::new(Word::from([2u32, 0, 0, 0])),
-        Word::from([200u32, 0, 0, 0]),
-    );
+    map_delta_b
+        .insert(StorageMapKey::new(Word::from([2u32, 0, 0, 0])), Word::from([200u32, 0, 0, 0]));
 
     let raw = BTreeMap::from_iter([
         (slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a)),
@@ -885,10 +873,8 @@ fn prune_preserves_most_recent_state_per_entity() {
     // Block 51: Update only map_a
     let block_at_51 = BlockNumber::from(51);
     let mut map_delta_a_new = StorageMapDelta::default();
-    map_delta_a_new.insert(
-        StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
-        Word::from([999u32, 0, 0, 0]),
-    );
+    map_delta_a_new
+        .insert(StorageMapKey::new(Word::from([1u32, 0, 0, 0])), Word::from([999u32, 0, 0, 0]));
 
     let raw_at_51 =
         BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a_new))]);
@@ -930,10 +916,8 @@ fn prune_preserves_entries_within_retention_window() {
             .unwrap();
 
         let mut map_delta = StorageMapDelta::default();
-        map_delta.insert(
-            StorageMapKey::from_index(block_num),
-            Word::from([block_num * 10, 0, 0, 0]),
-        );
+        map_delta
+            .insert(StorageMapKey::from_index(block_num), Word::from([block_num * 10, 0, 0, 0]));
 
         let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
         let storage_delta = AccountStorageDelta::from_raw(raw);
