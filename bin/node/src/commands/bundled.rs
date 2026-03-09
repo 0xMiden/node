@@ -96,16 +96,21 @@ impl BundledCommand {
                 genesis_config_file,
                 validator_key,
             } => {
-                // Currently the bundled bootstrap is identical to the store's bootstrap.
-                crate::commands::store::StoreCommand::Bootstrap {
-                    data_directory,
-                    accounts_directory,
-                    genesis_config_file,
+                // Run validator bootstrap to create genesis block + account files.
+                crate::commands::validator::bootstrap_genesis(
+                    &data_directory,
+                    &accounts_directory,
+                    genesis_config_file.as_ref(),
                     validator_key,
-                }
-                .handle()
+                )
                 .await
-                .context("failed to bootstrap the store component")
+                .context("failed to bootstrap genesis block")?;
+
+                // Feed the genesis block file into the store bootstrap.
+                let genesis_block_path =
+                    data_directory.join(crate::commands::validator::GENESIS_BLOCK_FILENAME);
+                crate::commands::store::bootstrap_store(&data_directory, &genesis_block_path)
+                    .context("failed to bootstrap the store component")
             },
             BundledCommand::Start {
                 rpc_url,

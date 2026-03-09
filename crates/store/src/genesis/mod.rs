@@ -35,7 +35,7 @@ pub struct GenesisState<S> {
 }
 
 /// A type-safety wrapper ensuring that genesis block data can only be created from
-/// [`GenesisState`].
+/// [`GenesisState`] or validated from a [`ProvenBlock`] via [`GenesisBlock::try_from`].
 pub struct GenesisBlock(ProvenBlock);
 
 impl GenesisBlock {
@@ -45,6 +45,27 @@ impl GenesisBlock {
 
     pub fn into_inner(self) -> ProvenBlock {
         self.0
+    }
+}
+
+impl TryFrom<ProvenBlock> for GenesisBlock {
+    type Error = anyhow::Error;
+
+    fn try_from(block: ProvenBlock) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            block.header().block_num() == BlockNumber::GENESIS,
+            "expected genesis block number (0), got {}",
+            block.header().block_num(),
+        );
+
+        anyhow::ensure!(
+            block
+                .signature()
+                .verify(block.header().commitment(), block.header().validator_key()),
+            "genesis block signature verification failed",
+        );
+
+        Ok(Self(block))
     }
 }
 
