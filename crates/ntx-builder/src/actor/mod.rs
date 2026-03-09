@@ -60,6 +60,9 @@ pub enum ActorShutdownReason {
     Cancelled(NetworkAccountId),
     /// Occurs when the actor encounters a database error it cannot recover from.
     DbError(NetworkAccountId, miden_node_db::DatabaseError),
+    /// Occurs when an account actor detects that its account has been removed from the database
+    /// (e.g. due to a reverted account creation).
+    AccountRemoved(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -330,7 +333,7 @@ impl AccountActor {
             })?;
 
         let Some(account) = latest_account else {
-            return Ok(None);
+            return Err(ActorShutdownReason::AccountRemoved(account_id));
         };
 
         let notes: Vec<_> = notes.into_iter().take(max_notes).collect();

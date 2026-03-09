@@ -264,7 +264,8 @@ impl NetworkTransactionBuilder {
                 self.coordinator.notify_accounts(&result.accounts_to_notify);
                 Ok(())
             },
-            // Notify affected actors and cancel reverted account creations.
+            // Notify affected actors (reverted account actors will self-cancel when they
+            // detect their account has been removed from the DB).
             MempoolEvent::TransactionsReverted(_) => {
                 // Write event effects to DB first.
                 let result = self
@@ -274,11 +275,6 @@ impl NetworkTransactionBuilder {
                     .context("failed to write TransactionsReverted to DB")?;
 
                 self.coordinator.notify_accounts(&result.accounts_to_notify);
-
-                // Cancel actors for reverted account creations.
-                for account_id in &result.accounts_to_cancel {
-                    self.coordinator.cancel_actor(account_id);
-                }
                 Ok(())
             },
         }

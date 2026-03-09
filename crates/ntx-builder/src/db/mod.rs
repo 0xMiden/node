@@ -147,11 +147,11 @@ impl Db {
 
     /// Handles a `TransactionsReverted` mempool event by undoing transaction effects.
     ///
-    /// Returns affected accounts and fully reverted accounts.
+    /// Returns all affected account IDs that should be notified.
     pub async fn handle_transactions_reverted(
         &self,
         tx_ids: Vec<TransactionId>,
-    ) -> Result<queries::RevertResult> {
+    ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_transactions_reverted", move |conn| {
                 queries::revert_transaction(conn, &tx_ids)

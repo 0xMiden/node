@@ -21,8 +21,6 @@ use crate::db::Db;
 pub struct WriteEventResult {
     /// Accounts that should be notified of state changes.
     pub accounts_to_notify: Vec<NetworkAccountId>,
-    /// Accounts whose creation was reverted and should be cancelled.
-    pub accounts_to_cancel: Vec<NetworkAccountId>,
 }
 
 // ACTOR HANDLE
@@ -183,6 +181,11 @@ impl Coordinator {
                     tracing::error!(account_id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
                     Ok(())
                 },
+                ActorShutdownReason::AccountRemoved(account_id) => {
+                    self.actor_registry.remove(&account_id);
+                    tracing::info!(account_id = %account_id, "Account actor shut down: account removed");
+                    Ok(())
+                },
             },
             Some(Err(err)) => {
                 tracing::error!(err = %err, "actor task failed");
@@ -259,10 +262,7 @@ impl Coordinator {
                         nullifiers.clone(),
                     )
                     .await?;
-                Ok(WriteEventResult {
-                    accounts_to_notify: Vec::new(),
-                    accounts_to_cancel: Vec::new(),
-                })
+                Ok(WriteEventResult { accounts_to_notify: Vec::new() })
             },
             MempoolEvent::BlockCommitted { header, txs } => {
                 let affected_accounts = self
@@ -273,26 +273,13 @@ impl Coordinator {
                         header.as_ref().clone(),
                     )
                     .await?;
-                Ok(WriteEventResult {
-                    accounts_to_notify: affected_accounts,
-                    accounts_to_cancel: Vec::new(),
-                })
+                Ok(WriteEventResult { accounts_to_notify: affected_accounts })
             },
             MempoolEvent::TransactionsReverted(tx_ids) => {
-                let result =
+                let affected_accounts =
                     self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await?;
-                Ok(WriteEventResult {
-                    accounts_to_notify: result.affected_accounts,
-                    accounts_to_cancel: result.reverted_accounts,
-                })
+                Ok(WriteEventResult { accounts_to_notify: affected_accounts })
             },
-        }
-    }
-
-    /// Cancels an actor by its account ID.
-    pub fn cancel_actor(&mut self, account_id: &NetworkAccountId) {
-        if let Some(handle) = self.actor_registry.remove(account_id) {
-            handle.cancel_token.cancel();
         }
     }
 }
