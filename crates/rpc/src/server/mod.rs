@@ -94,7 +94,6 @@ impl Rpc {
                     .with_genesis_enforced_method("SubmitProvenTransaction")
                     .with_genesis_enforced_method("SubmitProvenBatch"),
             )
-            .layer(cors_for_grpc_web_layer())
             // Enables gRPC-web support.
             .layer(GrpcWebLayer::new())
             .add_service(api_service)

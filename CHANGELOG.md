@@ -1,12 +1,26 @@
 # Changelog
 
-## v0.13.5 (TBD)
+## v0.13.8 (TBD)
+
+- Private notes with the network note attachment are no longer incorrectly considered as network notes (#[#1736](https://github.com/0xMiden/node/pull/1736)).
+- Fixed network monitor looping on stale wallet nonce after node restarts by re-syncing wallet state from RPC after repeated failures ([#1748](https://github.com/0xMiden/node/pull/1748)).
+
+## v0.13.7 (2026-02-25)
+
+- Updated `SyncAccountStorageMaps` and `SyncAccountVault` to allow all accounts with public state, including network accounts ([#1711](https://github.com/0xMiden/node/pull/1711)).
+
+## v0.13.6 (2026-02-25)
+
+- Fixed CORS headers missing from version-rejection responses ([#1707](https://github.com/0xMiden/node/pull/1707)).
+
+## v0.13.5 (2026-02-19)
 
 - OpenTelemetry traces are now flushed before program termination on panic ([#1643](https://github.com/0xMiden/miden-node/pull/1643)).
 - Added support for the note transport layer in the network monitor ([#1660](https://github.com/0xMiden/miden-node/pull/1660)).
 - Debian packages now include debug symbols ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
 - Debian packages now have coredumps enabled ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
 - Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1763](https://github.com/0xMiden/node/issues/1763)).
+- Fixed storage map keys not being hashed before insertion into the store's SMT forest ([#1681](https://github.com/0xMiden/miden-node/pull/1681)).
 
 ## v0.13.4 (2026-02-04)
 
@@ -39,6 +53,7 @@
 
 ### Enhancements
 
+- Added cleanup of old account data from the in-memory forest ([#1175](https://github.com/0xMiden/miden-node/issues/1175))
 - Added block validation endpoint to validator and integrated with block producer ([#1382](https://github.com/0xMiden/miden-node/pull/1381)).
 - Added support for timeouts in the WASM remote prover clients ([#1383](https://github.com/0xMiden/miden-node/pull/1383)).
 - Added mempool statistics to the block producer status in the `miden-network-monitor` binary ([#1392](https://github.com/0xMiden/miden-node/pull/1392)).
