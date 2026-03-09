@@ -265,103 +265,66 @@ pub fn commit_block(
     Ok(affected_accounts.into_iter().collect())
 }
 
-/// Result of reverting transactions.
-pub struct RevertResult {
-    /// All accounts affected by the reverted transactions (need notification).
-    pub affected_accounts: Vec<NetworkAccountId>,
-    /// Accounts whose creation was fully reverted (need cancellation).
-    pub reverted_accounts: Vec<NetworkAccountId>,
-}
-
 /// Handles a `TransactionsReverted` event by undoing transaction effects.
 ///
-/// Returns a [`RevertResult`] containing all affected account IDs (for notification) and account
-/// IDs whose creation was fully reverted (for cancellation).
+/// Returns all affected account IDs (for notification). Accounts whose creation was fully
+/// reverted are included.
 ///
 /// # Raw SQL
 ///
 /// Per reverted transaction:
 ///
 /// ```sql
-/// -- Find affected accounts
-/// SELECT account_id FROM accounts WHERE transaction_id = ?1
+/// DELETE FROM accounts WHERE transaction_id = ?1 RETURNING account_id
 ///
-/// -- Delete inflight account rows
-/// DELETE FROM accounts WHERE transaction_id = ?1
-///
-/// -- Check if account creation was fully reverted
-/// SELECT COUNT(*) FROM accounts WHERE account_id = ?1
-///
-/// -- Delete inflight-created notes
 /// DELETE FROM notes WHERE created_by = ?1
 ///
-/// -- Collect accounts of notes to restore
-/// SELECT account_id FROM notes WHERE consumed_by = ?1
-///
-/// -- Restore consumed notes
-/// UPDATE notes SET consumed_by = NULL WHERE consumed_by = ?1
+/// UPDATE notes SET consumed_by = NULL WHERE consumed_by = ?1 RETURNING account_id
 /// ```
 pub fn revert_transaction(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
-) -> Result<RevertResult, DatabaseError> {
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    use diesel::sql_types::Binary;
+
     let mut affected_accounts = HashSet::new();
-    let mut reverted_accounts = Vec::new();
 
     for tx_id in tx_ids {
         let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
 
-        // Find accounts affected by this transaction.
-        let affected_account_ids: Vec<Vec<u8>> = schema::accounts::table
-            .filter(schema::accounts::transaction_id.eq(&tx_id_bytes))
-            .select(schema::accounts::account_id)
-            .load(conn)?;
-
-        for account_id_bytes in &affected_account_ids {
-            affected_accounts.insert(conversions::network_account_id_from_bytes(account_id_bytes)?);
-        }
-
-        // Delete inflight account rows for this tx.
-        diesel::delete(
-            schema::accounts::table.filter(schema::accounts::transaction_id.eq(&tx_id_bytes)),
+        // Delete inflight account rows and collect affected account IDs.
+        let deleted_accounts: Vec<AccountIdRow> = diesel::sql_query(
+            "DELETE FROM accounts WHERE transaction_id = ?1 RETURNING account_id",
         )
-        .execute(conn)?;
+        .bind::<Binary, _>(&tx_id_bytes)
+        .load(conn)?;
 
-        // Check if any affected accounts had their creation fully reverted
-        // (no committed row and no remaining inflight rows).
-        for account_id_bytes in &affected_account_ids {
-            let remaining: i64 = schema::accounts::table
-                .filter(schema::accounts::account_id.eq(account_id_bytes))
-                .count()
-                .get_result(conn)?;
-
-            if remaining == 0 {
-                let account_id = conversions::network_account_id_from_bytes(account_id_bytes)?;
-                reverted_accounts.push(account_id);
-            }
+        for row in &deleted_accounts {
+            affected_accounts.insert(conversions::network_account_id_from_bytes(&row.account_id)?);
         }
 
         // Delete inflight-created notes (created_by = tx_id).
         diesel::delete(schema::notes::table.filter(schema::notes::created_by.eq(&tx_id_bytes)))
             .execute(conn)?;
 
-        // Collect accounts of notes consumed by this tx before restoring them.
-        let restored_note_accounts: Vec<Vec<u8>> = schema::notes::table
-            .filter(schema::notes::consumed_by.eq(&tx_id_bytes))
-            .select(schema::notes::account_id)
-            .load(conn)?;
-        for account_id_bytes in &restored_note_accounts {
-            affected_accounts.insert(conversions::network_account_id_from_bytes(account_id_bytes)?);
-        }
+        // Restore consumed notes and collect affected account IDs.
+        let restored_accounts: Vec<AccountIdRow> = diesel::sql_query(
+            "UPDATE notes SET consumed_by = NULL WHERE consumed_by = ?1 RETURNING account_id",
+        )
+        .bind::<Binary, _>(&tx_id_bytes)
+        .load(conn)?;
 
-        // Un-nullify consumed notes (set consumed_by = NULL where consumed_by = tx_id).
-        diesel::update(schema::notes::table.filter(schema::notes::consumed_by.eq(&tx_id_bytes)))
-            .set(schema::notes::consumed_by.eq(None::<Vec<u8>>))
-            .execute(conn)?;
+        for row in &restored_accounts {
+            affected_accounts.insert(conversions::network_account_id_from_bytes(&row.account_id)?);
+        }
     }
 
-    Ok(RevertResult {
-        affected_accounts: affected_accounts.into_iter().collect(),
-        reverted_accounts,
-    })
+    Ok(affected_accounts.into_iter().collect())
+}
+
+/// Helper row type for `RETURNING account_id` queries.
+#[derive(diesel::QueryableByName)]
+struct AccountIdRow {
+    #[diesel(sql_type = diesel::sql_types::Binary)]
+    account_id: Vec<u8>,
 }
