@@ -1,7 +1,7 @@
 use tonic::service::Interceptor;
 use tonic::{Request, Status};
 
-// Extracts the IP for `Governor`, which handles connection management and rate-limits requests.
+// Extracts the IP for connection management and rate-limiting requests, called `Governor`.
 #[derive(Debug, Clone)]
 pub struct ConnectInfoInterceptor;
 
