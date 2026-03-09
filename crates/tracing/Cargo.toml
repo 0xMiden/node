@@ -1,0 +1,22 @@
+[package]
+categories  = ["development-tools::debugging"]
+description = "Tracing utilities for Miden node with enhanced error reporting"
+keywords    = ["miden", "node", "tracing"]
+name        = "miden-node-tracing"
+
+edition.workspace      = true
+license.workspace      = true
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+miden-node-tracing-macro = { workspace = true }
+miden-node-utils         = { workspace = true }
+tracing                  = { workspace = true }
+tracing-opentelemetry    = { version = "0.32" }
+opentelemetry            = { version = "0.31" }

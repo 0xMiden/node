@@ -1,0 +1,23 @@
+[package]
+categories  = ["development-tools::procedural-macro-helpers"]
+description = "Procedural macro for tracing instrumentation with full error report context"
+keywords    = ["miden", "node", "tracing"]
+name        = "miden-node-tracing-macro"
+
+edition.workspace      = true
+license.workspace      = true
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote       = "1.0"
+syn         = { features = ["full", "extra-traits", "parsing"], version = "2.0" }

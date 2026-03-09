@@ -10,6 +10,7 @@ use miden_protocol::transaction::ProvenTransaction;
 use miden_tx::utils::Serializable;
 use tokio_stream::StreamExt;
 use tonic::Status;
+// Use standard tracing for Status errors (which don't impl std::error::Error)
 use tracing::{info, instrument};
 use url::Url;
 

@@ -2945,6 +2945,7 @@ dependencies = [
  "miden-node-proto-build",
  "miden-node-store",
  "miden-node-test-macro",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-node-validator",
  "miden-protocol",
@@ -3003,6 +3004,7 @@ dependencies = [
  "miden-node-db",
  "miden-node-proto",
  "miden-node-test-macro",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
@@ -3073,6 +3075,7 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -3119,6 +3122,7 @@ dependencies = [
  "miden-node-proto-build",
  "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-test-macro",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
@@ -3167,6 +3171,26 @@ dependencies = [
 name = "miden-node-test-macro"
 version = "0.1.0"
 dependencies = [
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "miden-node-tracing"
+version = "0.14.0-alpha.1"
+dependencies = [
+ "miden-node-tracing-macro",
+ "miden-node-utils",
+ "opentelemetry",
+ "tracing",
+ "tracing-opentelemetry",
+]
+
+[[package]]
+name = "miden-node-tracing-macro"
+version = "0.14.0-alpha.1"
+dependencies = [
+ "proc-macro2",
  "quote",
  "syn 2.0.114",
 ]
