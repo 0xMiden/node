@@ -63,15 +63,12 @@ sequenceDiagram
 
 - ✅ Protobuf schema and gRPC server scaffolding.
 - ✅ Transaction submission handler.
-
-### In Development
-
-- 🚧 Transaction re-execution logic.
-- 🚧 Database schema and impl.
-- 🚧 Block validation logic.
-- 🚧 Block signing logic.
-- 🚧 Integration with RPC.
-- 🚧 Integration with block producer consensus.
+- ✅ Transaction re-execution logic.
+- ✅ Database schema and impl.
+- ✅ Block validation logic.
+- ✅ Block signing logic (AWS KMS and local).
+- ✅ Integration with RPC.
+- ✅ Integration with block producer consensus.
 
 ## API
 
