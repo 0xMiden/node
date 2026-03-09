@@ -12,13 +12,48 @@ use miden_protocol::block::{
     SignedBlock,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::errors::{AccountError, FeeError};
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::{Deserializable, Serializable};
 use thiserror::Error;
 
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::domain::account::AccountConversionError;
+use crate::domain::digest::DigestConversionError;
+use crate::domain::merkle::MerkleConversionError;
+use crate::domain::note::NoteConversionError;
+use crate::domain::nullifier::NullifierConversionError;
+use crate::errors::{MissingFieldHelper, ProtoConversionError};
 use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
+
+// BLOCK CONVERSION ERROR
+// ================================================================================================
+
+#[derive(Debug, Error)]
+pub enum BlockConversionError {
+    #[error(transparent)]
+    Proto(#[from] ProtoConversionError),
+    #[error(transparent)]
+    Digest(#[from] DigestConversionError),
+    #[error(transparent)]
+    Account(#[from] AccountConversionError),
+    #[error(transparent)]
+    Merkle(#[from] MerkleConversionError),
+    #[error(transparent)]
+    Note(#[from] NoteConversionError),
+    #[error(transparent)]
+    Nullifier(#[from] NullifierConversionError),
+    #[error("fee parameters error")]
+    FeeError(#[from] FeeError),
+    #[error("account error")]
+    AccountError(#[from] AccountError),
+}
+
+impl From<BlockConversionError> for tonic::Status {
+    fn from(value: BlockConversionError) -> Self {
+        tonic::Status::invalid_argument(value.to_string())
+    }
+}
 
 // BLOCK NUMBER
 // ================================================================================================
@@ -64,7 +99,7 @@ impl From<BlockHeader> for proto::blockchain::BlockHeader {
 }
 
 impl TryFrom<&proto::blockchain::BlockHeader> for BlockHeader {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
 
     fn try_from(value: &proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
         value.try_into()
@@ -72,7 +107,7 @@ impl TryFrom<&proto::blockchain::BlockHeader> for BlockHeader {
 }
 
 impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
 
     fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
         Ok(BlockHeader::new(
@@ -138,7 +173,7 @@ impl From<BlockBody> for proto::blockchain::BlockBody {
 }
 
 impl TryFrom<&proto::blockchain::BlockBody> for BlockBody {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
 
     fn try_from(value: &proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
         value.try_into()
@@ -146,10 +181,10 @@ impl TryFrom<&proto::blockchain::BlockBody> for BlockBody {
 }
 
 impl TryFrom<proto::blockchain::BlockBody> for BlockBody {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
     fn try_from(value: proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
-        BlockBody::read_from_bytes(&value.block_body)
-            .map_err(|source| ConversionError::deserialization_error("BlockBody", source))
+        Ok(BlockBody::read_from_bytes(&value.block_body)
+            .map_err(|source| ProtoConversionError::deserialization_error("BlockBody", source))?)
     }
 }
 
@@ -173,7 +208,7 @@ impl From<SignedBlock> for proto::blockchain::SignedBlock {
 }
 
 impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
 
     fn try_from(value: &proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
         value.try_into()
@@ -181,7 +216,7 @@ impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
 }
 
 impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
     fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
         let header = value
             .header
@@ -236,7 +271,7 @@ impl From<BlockInputs> for proto::store::BlockInputs {
 }
 
 impl TryFrom<proto::store::BlockInputs> for BlockInputs {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
 
     fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
         let latest_block_header: BlockHeader = response
@@ -251,7 +286,7 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
                 let witness_record: AccountWitnessRecord = entry.try_into()?;
                 Ok((witness_record.account_id, witness_record.witness))
             })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+            .collect::<Result<BTreeMap<_, _>, BlockConversionError>>()?;
 
         let nullifier_witnesses = response
             .nullifier_witnesses
@@ -260,17 +295,19 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
                 let witness: NullifierWitnessRecord = entry.try_into()?;
                 Ok((witness.nullifier, NullifierWitness::new(witness.proof)))
             })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+            .collect::<Result<BTreeMap<_, _>, BlockConversionError>>()?;
 
         let unauthenticated_note_proofs = response
             .unauthenticated_note_proofs
             .iter()
-            .map(<(NoteId, NoteInclusionProof)>::try_from)
-            .collect::<Result<_, ConversionError>>()?;
+            .map(|p| {
+                <(NoteId, NoteInclusionProof)>::try_from(p).map_err(BlockConversionError::from)
+            })
+            .collect::<Result<_, BlockConversionError>>()?;
 
         let partial_block_chain = PartialBlockchain::read_from_bytes(&response.partial_block_chain)
             .map_err(|source| {
-                ConversionError::deserialization_error("PartialBlockchain", source)
+                ProtoConversionError::deserialization_error("PartialBlockchain", source)
             })?;
 
         Ok(BlockInputs::new(
@@ -287,10 +324,10 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
 // ================================================================================================
 
 impl TryFrom<proto::blockchain::ValidatorPublicKey> for PublicKey {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
     fn try_from(public_key: proto::blockchain::ValidatorPublicKey) -> Result<Self, Self::Error> {
-        PublicKey::read_from_bytes(&public_key.validator_key)
-            .map_err(|source| ConversionError::deserialization_error("PublicKey", source))
+        Ok(PublicKey::read_from_bytes(&public_key.validator_key)
+            .map_err(|source| ProtoConversionError::deserialization_error("PublicKey", source))?)
     }
 }
 
@@ -310,10 +347,10 @@ impl From<&PublicKey> for proto::blockchain::ValidatorPublicKey {
 // ================================================================================================
 
 impl TryFrom<proto::blockchain::BlockSignature> for Signature {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
     fn try_from(signature: proto::blockchain::BlockSignature) -> Result<Self, Self::Error> {
-        Signature::read_from_bytes(&signature.signature)
-            .map_err(|source| ConversionError::deserialization_error("Signature", source))
+        Ok(Signature::read_from_bytes(&signature.signature)
+            .map_err(|source| ProtoConversionError::deserialization_error("Signature", source))?)
     }
 }
 
@@ -333,7 +370,7 @@ impl From<&Signature> for proto::blockchain::BlockSignature {
 // ================================================================================================
 
 impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
-    type Error = ConversionError;
+    type Error = BlockConversionError;
     fn try_from(fee_params: proto::blockchain::FeeParameters) -> Result<Self, Self::Error> {
         let native_asset_id = fee_params.native_asset_id.map(AccountId::try_from).ok_or(
             proto::blockchain::FeeParameters::missing_field(stringify!(native_asset_id)),

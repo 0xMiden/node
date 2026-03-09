@@ -1,8 +1,27 @@
 use miden_protocol::Word;
 use miden_protocol::transaction::TransactionId;
+use thiserror::Error;
 
-use crate::errors::ConversionError;
+use crate::domain::digest::DigestConversionError;
+use crate::errors::{MissingFieldHelper, ProtoConversionError};
 use crate::generated as proto;
+
+// TRANSACTION CONVERSION ERROR
+// ================================================================================================
+
+#[derive(Debug, Error)]
+pub enum TransactionConversionError {
+    #[error(transparent)]
+    Proto(#[from] ProtoConversionError),
+    #[error(transparent)]
+    Digest(#[from] DigestConversionError),
+}
+
+impl From<TransactionConversionError> for tonic::Status {
+    fn from(value: TransactionConversionError) -> Self {
+        tonic::Status::invalid_argument(value.to_string())
+    }
+}
 
 // FROM TRANSACTION ID
 // ================================================================================================
@@ -35,7 +54,7 @@ impl From<TransactionId> for proto::transaction::TransactionId {
 // ================================================================================================
 
 impl TryFrom<proto::primitives::Digest> for TransactionId {
-    type Error = ConversionError;
+    type Error = DigestConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         let digest: Word = value.try_into()?;
@@ -44,15 +63,13 @@ impl TryFrom<proto::primitives::Digest> for TransactionId {
 }
 
 impl TryFrom<proto::transaction::TransactionId> for TransactionId {
-    type Error = ConversionError;
+    type Error = TransactionConversionError;
 
     fn try_from(value: proto::transaction::TransactionId) -> Result<Self, Self::Error> {
         value
             .id
-            .ok_or(ConversionError::MissingFieldInProtobufRepresentation {
-                entity: "TransactionId",
-                field_name: "id",
-            })?
+            .ok_or(proto::transaction::TransactionId::missing_field("id"))?
             .try_into()
+            .map_err(TransactionConversionError::from)
     }
 }

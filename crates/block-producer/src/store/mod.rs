@@ -94,7 +94,7 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
         let found_unauthenticated_notes = response
             .found_unauthenticated_notes
             .into_iter()
-            .map(Word::try_from)
+            .map(|d| Word::try_from(d).map_err(ConversionError::from))
             .collect::<Result<_, ConversionError>>()?;
 
         let current_block_height = response.block_height.into();
@@ -148,11 +148,17 @@ impl StoreClient {
             .await?
             .into_inner()
             .block_header
-            .ok_or(miden_node_proto::generated::blockchain::BlockHeader::missing_field(
-                "block_header",
-            ))?;
+            .ok_or_else(|| {
+                StoreError::DeserializationError(
+                    miden_node_proto::generated::blockchain::BlockHeader::missing_field(
+                        "block_header",
+                    )
+                    .into(),
+                )
+            })?;
 
-        BlockHeader::try_from(response).map_err(Into::into)
+        BlockHeader::try_from(response)
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))
     }
 
     #[instrument(target = COMPONENT, name = "store.client.get_tx_inputs", skip_all, err)]
@@ -219,7 +225,9 @@ impl StoreClient {
 
         let store_response = self.client.clone().get_block_inputs(request).await?.into_inner();
 
-        store_response.try_into().map_err(Into::into)
+        store_response
+            .try_into()
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))
     }
 
     #[instrument(target = COMPONENT, name = "store.client.get_batch_inputs", skip_all, err)]
@@ -235,7 +243,9 @@ impl StoreClient {
 
         let store_response = self.client.clone().get_batch_inputs(request).await?.into_inner();
 
-        store_response.try_into().map_err(Into::into)
+        store_response
+            .try_into()
+            .map_err(|e| StoreError::DeserializationError(ConversionError::from(e)))
     }
 
     #[instrument(target = COMPONENT, name = "store.client.apply_block", skip_all, err)]

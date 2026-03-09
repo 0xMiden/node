@@ -4,9 +4,31 @@ use miden_protocol::block::BlockHeader;
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::{Deserializable, Serializable};
+use thiserror::Error;
 
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::domain::block::BlockConversionError;
+use crate::domain::note::NoteConversionError;
+use crate::errors::{MissingFieldHelper, ProtoConversionError};
 use crate::generated as proto;
+
+// BATCH CONVERSION ERROR
+// ================================================================================================
+
+#[derive(Debug, Error)]
+pub enum BatchConversionError {
+    #[error(transparent)]
+    Proto(#[from] ProtoConversionError),
+    #[error(transparent)]
+    Block(#[from] BlockConversionError),
+    #[error(transparent)]
+    Note(#[from] NoteConversionError),
+}
+
+impl From<BatchConversionError> for tonic::Status {
+    fn from(value: BatchConversionError) -> Self {
+        tonic::Status::invalid_argument(value.to_string())
+    }
+}
 
 /// Data required for a transaction batch.
 #[derive(Clone, Debug)]
@@ -27,9 +49,9 @@ impl From<BatchInputs> for proto::store::BatchInputs {
 }
 
 impl TryFrom<proto::store::BatchInputs> for BatchInputs {
-    type Error = ConversionError;
+    type Error = BatchConversionError;
 
-    fn try_from(response: proto::store::BatchInputs) -> Result<Self, ConversionError> {
+    fn try_from(response: proto::store::BatchInputs) -> Result<Self, BatchConversionError> {
         let result = Self {
             batch_reference_block_header: response
                 .batch_reference_block_header
@@ -38,11 +60,13 @@ impl TryFrom<proto::store::BatchInputs> for BatchInputs {
             note_proofs: response
                 .note_proofs
                 .iter()
-                .map(<(NoteId, NoteInclusionProof)>::try_from)
-                .collect::<Result<_, ConversionError>>()?,
+                .map(|p| {
+                    <(NoteId, NoteInclusionProof)>::try_from(p).map_err(BatchConversionError::from)
+                })
+                .collect::<Result<_, BatchConversionError>>()?,
             partial_block_chain: PartialBlockchain::read_from_bytes(&response.partial_block_chain)
                 .map_err(|source| {
-                    ConversionError::deserialization_error("PartialBlockchain", source)
+                    ProtoConversionError::deserialization_error("PartialBlockchain", source)
                 })?,
         };
 
