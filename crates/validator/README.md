@@ -54,22 +54,6 @@ sequenceDiagram
     Store->>Store: Proven block
 ```
 
-## Current Status
-
-> [!WARNING]
-> The validator is currently a **work in progress** and under active development. Many features described above are not yet fully implemented.
-
-### Implemented Features
-
-- ✅ Protobuf schema and gRPC server scaffolding.
-- ✅ Transaction submission handler.
-- ✅ Transaction re-execution logic.
-- ✅ Database schema and impl.
-- ✅ Block validation logic.
-- ✅ Block signing logic (AWS KMS and local).
-- ✅ Integration with RPC.
-- ✅ Integration with block producer consensus.
-
 ## API
 
 The validator exposes a gRPC API with the following endpoints:
