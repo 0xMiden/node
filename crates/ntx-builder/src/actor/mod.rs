@@ -306,10 +306,7 @@ impl AccountActor {
                             let tx_candidate = match self.select_candidate_from_db(
                                 account_id,
                                 chain_state,
-                            ).await {
-                                Ok(candidate) => candidate,
-                                Err(shutdown_reason) => return shutdown_reason,
-                            };
+                            ).await?;
 
                             if let Some(tx_candidate) = tx_candidate {
                                 self.execute_transactions(account_id, tx_candidate).await;
