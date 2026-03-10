@@ -166,7 +166,7 @@ async fn run(
 
         // Mark completed proofs as proven sequentially.
         // Find the lowest in-flight block.
-        let lowest_in_flight = inflight.first().map_or(next_to_schedule, |&first| first);
+        let lowest_in_flight = inflight.first().copied().unwrap_or(next_to_schedule);
         // Mark all sequentially proven blocks as completed.
         while latest_complete.child().as_u32() < lowest_in_flight.as_u32() {
             latest_complete = latest_complete.child();
