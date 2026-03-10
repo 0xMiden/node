@@ -19,9 +19,10 @@ use anyhow::Context;
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::Serializable;
 use miden_remote_prover_client::RemoteProverClientError;
+use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
-use tracing::{error, info, instrument};
+use tracing::{info, instrument};
 
 use crate::COMPONENT;
 use crate::blocks::BlockStore;
@@ -187,7 +188,7 @@ async fn run(
 /// DB, invoking the prover (with a timeout), and persisting the proof to disk.
 ///
 /// The caller is responsible for marking the block as proven in the DB.
-#[instrument(target = COMPONENT, name = "proof_scheduler.prove_and_save", skip_all, fields(%block_num))]
+#[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(%block_num), err)]
 async fn prove_and_save(
     db: &Db,
     block_prover: &BlockProver,
@@ -195,35 +196,29 @@ async fn prove_and_save(
     block_num: BlockNumber,
 ) -> anyhow::Result<BlockNumber> {
     const MAX_RETRIES: u32 = 10;
+
     for _ in 0..MAX_RETRIES {
-        // Prove block with timeout.
-        let proof = match tokio::time::timeout(
-            BLOCK_PROVE_TIMEOUT,
-            prove_block(db, block_prover, block_num),
-        )
-        .await
+        match tokio::time::timeout(BLOCK_PROVE_TIMEOUT, prove_block(db, block_prover, block_num))
+            .await
         {
-            Ok(Ok(proof)) => proof,
+            Ok(Ok(proof)) => {
+                save_block(block_store, block_num, &proof).await?;
+                return Ok(block_num);
+            },
             Ok(Err(ProveBlockError::Fatal(err))) => anyhow::bail!("Fatal error: {err}"),
-            Ok(Err(ProveBlockError::Transient(err))) => {
-                error!("Transient error proving block {block_num}: {err}");
-                continue;
+            Ok(Err(ProveBlockError::Transient(_))) | Err(_) => {
+                // Errors are logged via the span.
             },
-            Err(_elapsed) => {
-                error!("Timed out proving block {block_num}");
-                continue;
-            },
-        };
-
-        // Save proof to the block store.
-        block_store.save_proof(block_num, &proof.to_bytes()).await?;
-
-        return Ok(block_num);
+        }
     }
+
     anyhow::bail!("maximum retries ({MAX_RETRIES}) exceeded");
 }
 
 /// Proves a single block by loading inputs from the DB and invoking the block prover.
+///
+/// Records `block_commitment` on `parent_span` once the block header is available.
+#[instrument(target = COMPONENT, name = "prove_block.prove", skip_all, fields(%block_num), err)]
 async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
@@ -245,15 +240,28 @@ async fn prove_block(
     Ok(proof)
 }
 
+/// Saves a block proof to the block store.
+#[instrument(target = COMPONENT, name = "prove_block.save", skip_all, fields(%block_num), err)]
+async fn save_block(
+    block_store: &BlockStore,
+    block_num: BlockNumber,
+    proof: &BlockProof,
+) -> anyhow::Result<()> {
+    block_store.save_proof(block_num, &proof.to_bytes()).await?;
+    Ok(())
+}
+
 // PROVE BLOCK ERROR
 // ================================================================================================
 
 /// Errors that can occur during block proving.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum ProveBlockError {
     /// An irrecoverable error that should cause node shutdown.
-    Fatal(ProofSchedulerError),
+    #[error("fatal error")]
+    Fatal(#[source] ProofSchedulerError),
     /// A transient error (DB read, prover failure). The outer loop will retry.
+    #[error("transient error: {0}")]
     Transient(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
