@@ -321,7 +321,7 @@ async fn setup_increment_task(
         .await?
         .unwrap_or(wallet_account_file.account.clone());
 
-    let AuthSecretKey::Falcon512Rpo(secret_key) = wallet_account_file
+    let AuthSecretKey::Falcon512Poseidon2(secret_key) = wallet_account_file
         .auth_secret_keys
         .first()
         .expect("wallet account file should have one auth secret key")
@@ -821,7 +821,7 @@ async fn create_and_submit_network_note(
     rng: &mut ChaCha20Rng,
 ) -> Result<(String, AccountHeader, BlockNumber)> {
     // Create authenticator for transaction signing
-    let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Rpo(secret_key.clone())]);
+    let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key.clone())]);
 
     let account_interface = AccountInterface::from_account(wallet_account);
 

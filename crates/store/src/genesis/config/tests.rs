@@ -99,7 +99,7 @@ fn parsing_account_from_file() -> TestResult {
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
     let test_account = create_basic_wallet(
@@ -156,7 +156,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
     let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
-    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Rpo);
+    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let faucet_component =
         BasicFungibleFaucet::new(TokenSymbol::new("MIDEN").unwrap(), 6, Felt::new(1_000_000_000))?;
@@ -219,7 +219,7 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
     let regular_account = create_basic_wallet(

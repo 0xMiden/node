@@ -566,7 +566,7 @@ fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Accou
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(Word::default()),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()

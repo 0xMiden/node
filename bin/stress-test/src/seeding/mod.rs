@@ -327,7 +327,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(storage_mode)
-        .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Rpo))
+        .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet)
         .build()
         .unwrap()
@@ -347,7 +347,7 @@ fn create_faucet() -> Account {
         .with_component(BasicFungibleFaucet::new(token_symbol, 2, Felt::new(u64::MAX)).unwrap())
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build()
         .unwrap()

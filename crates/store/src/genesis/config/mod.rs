@@ -222,7 +222,7 @@ impl GenesisConfig {
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
             let auth = AuthMethod::SingleSig {
-                approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+                approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
             };
             let init_seed: [u8; 32] = rng.random();
 
@@ -431,7 +431,7 @@ impl FungibleFaucetConfig {
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
         let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-        let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Rpo);
+        let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
         let init_seed: [u8; 32] = rng.random();
 
         let max_supply = Felt::try_from(max_supply)
@@ -536,7 +536,7 @@ impl AccountSecrets {
                 .get(&account_id)
                 .ok_or(GenesisConfigError::MissingGenesisAccount { account_id })?;
             let account_file =
-                AccountFile::new(account.clone(), vec![AuthSecretKey::Falcon512Rpo(secret_key)]);
+                AccountFile::new(account.clone(), vec![AuthSecretKey::Falcon512Poseidon2(secret_key)]);
             Ok(AccountFileWithName { name, account_file })
         })
     }

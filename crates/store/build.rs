@@ -11,7 +11,7 @@ use miden_agglayer::{
 };
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountCode, AccountFile, AccountStorageMode, AccountType};
-use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RpoRandomCoin;
 use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
@@ -59,7 +59,7 @@ fn generate_agglayer_sample_accounts() {
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
         AuthMethod::SingleSig {
-            approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -69,7 +69,7 @@ fn generate_agglayer_sample_accounts() {
     let ger_manager = create_basic_wallet(
         [5u8; 32],
         AuthMethod::SingleSig {
-            approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,

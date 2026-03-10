@@ -278,7 +278,7 @@ pub async fn generate_mock_transaction() -> anyhow::Result<TransactionInputs> {
 
     // Create an account with basic authentication
     let account = mock_chain_builder
-        .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Rpo })
+        .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Poseidon2 })
         .context("Failed to add wallet to mock chain")?;
 
     // Create a fungible asset
