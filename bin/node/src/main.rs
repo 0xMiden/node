@@ -17,6 +17,7 @@ pub struct Cli {
     pub command: Command,
 }
 
+#[expect(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum Command {
     /// Commands related to the node's store component.

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::mem::size_of;
 use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::path::PathBuf;
 
@@ -6,9 +7,10 @@ use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
+use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -38,6 +40,13 @@ use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
 use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
+
+const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
+    2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
+
+fn default_storage_map_entries_limit() -> usize {
+    MAX_RESPONSE_PAYLOAD_BYTES / STORAGE_MAP_VALUE_PER_ROW_BYTES
+}
 
 mod migrations;
 mod schema_hash;
@@ -590,11 +599,104 @@ impl Db {
         &self,
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
+        entries_limit: Option<usize>,
     ) -> Result<StorageMapValuesPage> {
+        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
+
         self.transact("select storage map sync values", move |conn| {
-            models::queries::select_account_storage_map_values(conn, account_id, block_range)
+            models::queries::select_account_storage_map_values_paged(
+                conn,
+                account_id,
+                block_range,
+                entries_limit,
+            )
         })
         .await
+    }
+
+    /// Reconstructs storage map details from the database for a specific slot at a block.
+    ///
+    /// Used as fallback when `InnerForest` cache misses (historical or evicted queries).
+    /// Rebuilds all entries by querying the DB and filtering to the specific slot.
+    ///
+    /// Returns:
+    ///     - `::LimitExceeded` when too many entries are present
+    ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
+    pub(crate) async fn reconstruct_storage_map_from_db(
+        &self,
+        account_id: AccountId,
+        slot_name: miden_protocol::account::StorageSlotName,
+        block_num: BlockNumber,
+        entries_limit: Option<usize>,
+    ) -> Result<miden_node_proto::domain::account::AccountStorageMapDetails> {
+        use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
+        use miden_protocol::EMPTY_WORD;
+
+        // TODO this remains expensive with a large history until we implement pruning for DB
+        // columns
+        let mut values = Vec::new();
+        let mut block_range_start = BlockNumber::GENESIS;
+        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
+
+        let mut page = self
+            .select_storage_map_sync_values(
+                account_id,
+                block_range_start..=block_num,
+                Some(entries_limit),
+            )
+            .await?;
+
+        values.extend(page.values);
+        let mut last_block_included = page.last_block_included;
+
+        loop {
+            if page.last_block_included == block_num || page.last_block_included < block_range_start
+            {
+                break;
+            }
+
+            block_range_start = page.last_block_included.child();
+            page = self
+                .select_storage_map_sync_values(
+                    account_id,
+                    block_range_start..=block_num,
+                    Some(entries_limit),
+                )
+                .await?;
+
+            if page.last_block_included <= last_block_included {
+                return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+            }
+
+            last_block_included = page.last_block_included;
+            values.extend(page.values);
+        }
+
+        if page.last_block_included != block_num {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+
+        // Filter to the specific slot and collect latest values per key
+        let mut latest_values = BTreeMap::<StorageMapKey, Word>::new();
+        for value in values {
+            if value.slot_name == slot_name {
+                let raw_key = value.key;
+                latest_values.insert(raw_key, value.value);
+            }
+        }
+
+        // Remove EMPTY_WORD entries (deletions)
+        latest_values.retain(|_, v| *v != EMPTY_WORD);
+
+        if latest_values.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+
+        let entries = Vec::from_iter(latest_values.into_iter());
+        Ok(AccountStorageMapDetails {
+            slot_name,
+            entries: StorageMapEntries::AllEntries(entries),
+        })
     }
 
     /// Emits size metrics for each table in the database, and the entire database.
