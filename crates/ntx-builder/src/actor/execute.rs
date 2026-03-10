@@ -251,15 +251,13 @@ impl NtxContext {
         .await
         {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
-                if !failed.is_empty() {
-                    for failed_note in &failed {
-                        tracing::info!(
-                            note_id = %failed_note.note.id(),
-                            nullifier = %failed_note.note.nullifier(),
-                            err = %failed_note.error,
-                            "note failed consumability check",
-                        );
-                    }
+                for failed_note in &failed {
+                    tracing::info!(
+                        note_id = %failed_note.note.id(),
+                        nullifier = %failed_note.note.nullifier(),
+                        err = %failed_note.error,
+                        "note failed consumability check",
+                    );
                 }
 
                 // Map successful notes to input notes.
