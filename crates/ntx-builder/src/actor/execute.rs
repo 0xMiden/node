@@ -253,7 +253,7 @@ impl NtxContext {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
                 if !failed.is_empty() {
                     for failed_note in &failed {
-                        tracing::trace!(
+                        tracing::info!(
                             note_id = %failed_note.note.id(),
                             nullifier = %failed_note.note.nullifier(),
                             err = %failed_note.error,
