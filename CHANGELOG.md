@@ -11,7 +11,6 @@
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
-- Modified `TransactionHeader` serialization to allow converting back into the native type after serialization ([#1759](https://github.com/0xMiden/node/issues/1759)).
 - Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
 
 ### Changes
@@ -28,6 +27,7 @@
  - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/node/pull/1662)).
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/node/pull/1688)).
 - [BREAKING] Renamed `NoteRoot` protobuf message used in `GetNoteScriptByRoot` gRPC endpoints into `NoteScriptRoot` ([#1722](https://github.com/0xMiden/node/pull/1722)).
+- [BREAKING] Modified `TransactionHeader` serialization to allow converting back into the native type after serialization ([#1759](https://github.com/0xMiden/node/issues/1759)).
 
 ### Fixes
 
