@@ -194,12 +194,8 @@ async fn prove_and_save(
     block_store: &BlockStore,
     block_num: BlockNumber,
 ) -> anyhow::Result<BlockNumber> {
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        if attempts > 10 {
-            anyhow::bail!("Bailed after max attempts")
-        }
+    const MAX_RETRIES: u32 = 10;
+    for _ in 0..MAX_RETRIES {
         // Prove block with timeout.
         let proof = match tokio::time::timeout(
             BLOCK_PROVE_TIMEOUT,
@@ -224,6 +220,7 @@ async fn prove_and_save(
 
         return Ok(block_num);
     }
+    anyhow::bail!("maximum retries ({MAX_RETRIES}) exceeded");
 }
 
 /// Proves a single block by loading inputs from the DB and invoking the block prover.
