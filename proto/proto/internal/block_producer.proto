@@ -35,11 +35,8 @@ service Api {
 
     // Subscribe to mempool events.
     //
-    // The request will be rejected if the caller and the mempool disagree on the current chain tip.
-    // This prevents potential desync issues. The caller can resolve this by resync'ing its chain state.
-    //
-    // The event stream will contain all events after the chain tip. This includes all currently inflight
-    // events that have not yet been committed to the chain.
+    // The event stream will contain all currently inflight events that have not yet been committed
+    // to the chain, followed by future events as they occur.
     //
     // Currently only a single active subscription is supported. Subscription requests will cancel the active
     // subscription, if any.
@@ -50,12 +47,7 @@ service Api {
 // ================================================================================================
 
 // Request to subscribe to mempool events.
-message MempoolSubscriptionRequest {
-    // The caller's current chain height.
-    //
-    // Request will be rejected if this does not match the mempool's current view.
-    fixed32 chain_tip = 1;
-}
+message MempoolSubscriptionRequest {}
 
 // Event from the mempool.
 message MempoolEvent {

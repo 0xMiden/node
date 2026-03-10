@@ -303,8 +303,15 @@ impl NetworkTransactionBuilder {
     }
 
     /// Updates the chain tip and prunes old blocks from the MMR.
+    ///
+    /// Skips the update if the block has already been applied. This can happen if a block is
+    /// committed between subscribing to the mempool and fetching the initial chain state.
     async fn update_chain_tip(&mut self, tip: BlockHeader) {
         let mut chain_state = self.chain_state.write().await;
+
+        if tip.block_num() <= chain_state.chain_tip_header.block_num() {
+            return;
+        }
 
         // Update MMR which lags by one block.
         let mmr_tip = chain_state.chain_tip_header.clone();

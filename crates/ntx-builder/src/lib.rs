@@ -218,29 +218,19 @@ impl NtxBuilderConfig {
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
 
-        let (chain_tip_header, chain_mmr, mempool_events) = loop {
-            let (chain_tip_header, chain_mmr) = store
-                .get_latest_blockchain_data_with_retry()
-                .await?
-                .context("store should contain a latest block")?;
+        // Subscribe to mempool first, then fetch chain state. This ordering ensures we
+        // don't miss any blocks committed between the two operations: any block committed
+        // after subscription will arrive as a BlockCommitted event in the stream.
+        let mempool_subscription = block_producer
+            .subscribe_to_mempool_with_retry()
+            .await
+            .context("failed to subscribe to mempool events")?;
+        let mempool_events: MempoolEventStream = Box::pin(mempool_subscription.into_stream());
 
-            match block_producer
-                .subscribe_to_mempool_with_retry(chain_tip_header.block_num())
-                .await
-            {
-                Ok(subscription) => {
-                    let stream: MempoolEventStream = Box::pin(subscription.into_stream());
-                    break (chain_tip_header, chain_mmr, stream);
-                },
-                Err(status) if status.code() == tonic::Code::InvalidArgument => {
-                    tracing::warn!(
-                        err = %status,
-                        "mempool subscription failed due to chain tip desync, retrying"
-                    );
-                },
-                Err(err) => return Err(err).context("failed to subscribe to mempool events"),
-            }
-        };
+        let (chain_tip_header, chain_mmr) = store
+            .get_latest_blockchain_data_with_retry()
+            .await?
+            .context("store should contain a latest block")?;
 
         // Store the chain tip in the DB.
         db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
