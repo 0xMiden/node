@@ -151,7 +151,7 @@ async fn run(
             // Proving task completed.
             result = join_set.join_next() => {
                 let block_num = result?;
-                info!(target: COMPONENT, %block_num, "Block proof completed");
+                info!(target=COMPONENT, block.number=%block_num, "Block proof completed");
                 inflight.remove(&block_num);
             },
 
@@ -174,7 +174,7 @@ async fn run(
             db.mark_block_proven(latest_complete)
                 .await
                 .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
-            info!(target: COMPONENT, block_num = %latest_complete, "Block marked as proven");
+            info!(target=COMPONENT, block.number=%latest_complete, "Block marked as proven");
         }
     }
 }
