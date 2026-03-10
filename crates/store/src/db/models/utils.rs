@@ -1,6 +1,6 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use miden_protocol::note::Nullifier;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::DatabaseError;
 

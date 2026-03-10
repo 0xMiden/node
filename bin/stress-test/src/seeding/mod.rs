@@ -46,7 +46,7 @@ use miden_protocol::transaction::{
     ProvenTransactionBuilder,
     TransactionHeader,
 };
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::BasicFungibleFaucet;

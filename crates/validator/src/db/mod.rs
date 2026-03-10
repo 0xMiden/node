@@ -9,7 +9,7 @@ use diesel::dsl::exists;
 use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db};
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tracing::instrument;
 
 use crate::COMPONENT;

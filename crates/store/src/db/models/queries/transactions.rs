@@ -21,7 +21,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
 use crate::COMPONENT;

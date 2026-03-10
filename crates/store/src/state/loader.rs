@@ -12,7 +12,6 @@ use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
-use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbStorage};
 use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
@@ -75,6 +74,10 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
         LargeSmtError::Storage(err) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
         },
+        LargeSmtError::RootMismatch { expected, actual } => {
+            StateInitializationError::RootMismatch { expected, actual }
+        },
+        LargeSmtError::StorageNotEmpty => StateInitializationError::StorageNotEmpty,
     }
 }
 

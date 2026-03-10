@@ -20,7 +20,7 @@ use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteAttachment;
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
 use thiserror::Error;
 

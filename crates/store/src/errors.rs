@@ -136,6 +136,15 @@ pub enum StateInitializationError {
     PublicAccountMissingDetails(AccountId),
     #[error("failed to convert account to delta: {0}")]
     AccountToDeltaConversionFailed(String),
+    #[error("root mismatch: expected {expected:?}, got {actual:?}")]
+    RootMismatch {
+        /// The expected root hash.
+        expected: Word,
+        /// The actual reconstructed root hash.
+        actual: Word,
+    },
+    #[error("storage is not empty")]
+    StorageNotEmpty,
 }
 
 // ENDPOINT ERRORS

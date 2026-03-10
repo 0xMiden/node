@@ -26,7 +26,7 @@ use miden_protocol::crypto::merkle::smt::{
 };
 use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_protocol::errors::{AssetError, StorageMapError};
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 use tracing::instrument;

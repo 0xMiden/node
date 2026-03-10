@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miden_crypto::Map;
 use miden_crypto::merkle::NodeIndex;
 use miden_crypto::merkle::smt::{InnerNode, SmtLeaf, Subtree};
+use miden_crypto::utils::{Deserializable, Serializable};
 use rocksdb::{
     BlockBasedOptions,
     Cache,

@@ -28,7 +28,7 @@ use miden_protocol::note::{
     NoteType,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
@@ -821,7 +821,8 @@ async fn create_and_submit_network_note(
     rng: &mut ChaCha20Rng,
 ) -> Result<(String, AccountHeader, BlockNumber)> {
     // Create authenticator for transaction signing
-    let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key.clone())]);
+    let authenticator =
+        BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key.clone())]);
 
     let account_interface = AccountInterface::from_account(wallet_account);
 

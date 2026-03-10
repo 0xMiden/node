@@ -23,7 +23,7 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
 

@@ -74,7 +74,7 @@ trait ProveRequest {
 
     #[instrument(target=COMPONENT, skip_all, err)]
     fn decode_request(request: proto::ProofRequest) -> Result<Self::Input, tonic::Status> {
-        use miden_protocol::utils::Deserializable;
+        use miden_protocol::utils::serde::Deserializable;
 
         Self::Input::read_from_bytes(&request.payload).map_err(|e| {
             tonic::Status::invalid_argument(e.as_report_context("failed to decode request"))
@@ -83,7 +83,7 @@ trait ProveRequest {
 
     #[instrument(target=COMPONENT, skip_all)]
     fn encode_response(output: Self::Output) -> proto::Proof {
-        use miden_protocol::utils::Serializable;
+        use miden_protocol::utils::serde::Serializable;
 
         proto::Proof { payload: output.to_bytes() }
     }

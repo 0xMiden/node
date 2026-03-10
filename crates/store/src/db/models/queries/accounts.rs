@@ -36,7 +36,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 
 use crate::COMPONENT;
@@ -297,7 +297,7 @@ pub(crate) fn select_account_commitments_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<AccountCommitmentsPage, DatabaseError> {
-    use miden_protocol::utils::Serializable;
+    use miden_protocol::utils::serde::Serializable;
 
     // Fetch one extra to determine if there are more results
     #[expect(clippy::cast_possible_wrap)]
@@ -373,7 +373,7 @@ pub(crate) fn select_public_account_ids_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
-    use miden_protocol::utils::Serializable;
+    use miden_protocol::utils::serde::Serializable;
 
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;

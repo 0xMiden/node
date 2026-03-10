@@ -4,7 +4,7 @@ use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, Sqlite
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
 use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, FieldElement, Word};
 
 use crate::db::models::conv::{SqlTypeConvert, raw_sql_to_nonce};
