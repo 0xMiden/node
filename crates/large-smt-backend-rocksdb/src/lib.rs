@@ -39,13 +39,12 @@ pub use miden_protocol::crypto::merkle::smt::{
     SmtLeafError,
     SmtProof,
     SmtStorage,
-    StorageError,
     StorageUpdateParts,
     StorageUpdates,
     Subtree,
     SubtreeError,
-    SubtreeUpdate,
 };
+
 // Also re-export commonly used types for convenience
 pub use miden_protocol::{
     EMPTY_WORD,

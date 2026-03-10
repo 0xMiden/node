@@ -130,7 +130,7 @@ async fn fetch_counter_value(
         .try_into()
         .context("failed to convert slot value to word")?;
 
-    let value = slot_value.as_elements().last().expect("Word has 4 elements").as_int();
+    let value = slot_value.as_elements().last().expect("Word has 4 elements").as_canonical_u64();
 
     Ok(Some(value))
 }

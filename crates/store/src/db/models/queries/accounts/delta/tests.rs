@@ -227,7 +227,7 @@ fn optimized_delta_matches_full_account_method() {
     assert!(!partial_delta.is_full_state(), "Delta should be partial, not full state");
 
     // Construct the expected final account by applying the delta
-    let expected_nonce = Felt::new(full_account_before.nonce().as_int() + nonce_delta.as_int());
+    let expected_nonce = Felt::new(full_account_before.nonce().as_canonical_u64() + nonce_delta.as_canonical_u64());
     let expected_code_commitment = full_account_before.code().commitment();
 
     let mut expected_account = full_account_before.clone();

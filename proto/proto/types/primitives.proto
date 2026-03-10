@@ -5,8 +5,10 @@ package primitives;
 // ================================================================================================
 
 message Asset {
-    // Asset represented as a word.
-    primitives.Digest asset = 1;
+    // Asset key.
+    primitives.Digest key = 1;
+    // Asset value.
+    primitives.Digest value = 2;
 }
 
 // SMT (Sparse Merkle Tree)

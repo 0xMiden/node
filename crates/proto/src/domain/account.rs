@@ -298,7 +298,7 @@ impl From<AccountHeader> for proto::account::AccountHeader {
             vault_root: Some(header.vault_root().into()),
             storage_commitment: Some(header.storage_commitment().into()),
             code_commitment: Some(header.code_commitment().into()),
-            nonce: header.nonce().as_int(),
+            nonce: header.nonce().as_canonical_u64(),
         }
     }
 }
@@ -375,11 +375,18 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         } else {
             let parsed_assets =
                 Result::<Vec<_>, ConversionError>::from_iter(assets.into_iter().map(|asset| {
-                    let asset = asset
-                        .asset
-                        .ok_or(proto::primitives::Asset::missing_field(stringify!(asset)))?;
-                    let asset = Word::try_from(asset)?;
-                    Asset::try_from(asset).map_err(ConversionError::AssetError)
+                    let key = asset
+                        .key
+                        .ok_or(proto::primitives::Asset::missing_field(stringify!(key)))?;
+                    let asset_key = Word::try_from(key)?;
+
+                    let value = asset
+                        .value
+                        .ok_or(proto::primitives::Asset::missing_field(stringify!(value)))?;
+
+                    let asset_value = Word::try_from(value)?;
+
+                    Asset::from_key_value_words(asset_key, asset_value).map_err(ConversionError::AssetError)
                 }))?;
             Ok(Self::Assets(parsed_assets))
         }
@@ -396,7 +403,8 @@ impl From<AccountVaultDetails> for proto::rpc::AccountVaultDetails {
             AccountVaultDetails::Assets(assets) => Self {
                 too_many_assets: false,
                 assets: Vec::from_iter(assets.into_iter().map(|asset| proto::primitives::Asset {
-                    asset: Some(proto::primitives::Digest::from(Word::from(asset))),
+                    key: Some(proto::primitives::Digest::from(asset.to_key_word())),
+                    value: Some(proto::primitives::Digest::from(asset.to_value_word())),
                 })),
             },
         }

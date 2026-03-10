@@ -6,7 +6,6 @@ use std::sync::Arc;
 use miden_crypto::Map;
 use miden_crypto::merkle::NodeIndex;
 use miden_crypto::merkle::smt::{InnerNode, SmtLeaf, Subtree};
-use miden_crypto::utils::{Deserializable, Serializable};
 use rocksdb::{
     BlockBasedOptions,
     Cache,
@@ -21,7 +20,7 @@ use rocksdb::{
     ReadOptions,
     WriteBatch,
 };
-use winter_utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::{SmtStorage, StorageError, StorageUpdateParts, StorageUpdates, SubtreeUpdate};
 use crate::helpers::{insert_into_leaf, map_rocksdb_err, remove_from_leaf};

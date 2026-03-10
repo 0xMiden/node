@@ -106,10 +106,10 @@ impl From<&[u64; 4]> for proto::primitives::Digest {
 impl From<[Felt; 4]> for proto::primitives::Digest {
     fn from(value: [Felt; 4]) -> Self {
         Self {
-            d0: value[0].as_int(),
-            d1: value[1].as_int(),
-            d2: value[2].as_int(),
-            d3: value[3].as_int(),
+            d0: value[0].as_canonical_u64(),
+            d1: value[1].as_canonical_u64(),
+            d2: value[2].as_canonical_u64(),
+            d3: value[3].as_canonical_u64(),
         }
     }
 }
@@ -123,10 +123,10 @@ impl From<&[Felt; 4]> for proto::primitives::Digest {
 impl From<Word> for proto::primitives::Digest {
     fn from(value: Word) -> Self {
         Self {
-            d0: value[0].as_int(),
-            d1: value[1].as_int(),
-            d2: value[2].as_int(),
-            d3: value[3].as_int(),
+            d0: value[0].as_canonical_u64(),
+            d1: value[1].as_canonical_u64(),
+            d2: value[2].as_canonical_u64(),
+            d3: value[3].as_canonical_u64(),
         }
     }
 }

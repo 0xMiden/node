@@ -1153,8 +1153,8 @@ fn prepare_partial_account_update(
     // Apply nonce delta.
     let new_nonce_value = state_headers
         .nonce
-        .as_int()
-        .checked_add(delta.nonce_delta().as_int())
+        .as_canonical_u64()
+        .checked_add(delta.nonce_delta().as_canonical_u64())
         .ok_or_else(|| {
             DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
         })?;

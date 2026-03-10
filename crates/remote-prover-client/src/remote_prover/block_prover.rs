@@ -6,7 +6,7 @@ use core::time::Duration;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof, ProposedBlock, ProvenBlock};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use tokio::sync::Mutex;
 
 use super::generated::api_client::ApiClient;
