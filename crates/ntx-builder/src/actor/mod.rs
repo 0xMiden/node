@@ -370,7 +370,7 @@ impl AccountActor {
         let notes = tx_candidate.notes.clone();
         let account_id = tx_candidate.account.id();
         let note_ids: Vec<_> = notes.iter().map(|n| n.to_inner().as_note().id()).collect();
-        tracing::info!(
+        tracing::trace!(
             %account_id,
             ?note_ids,
             num_notes = notes.len(),
@@ -386,7 +386,7 @@ impl AccountActor {
             },
             // Execution completed with some failed notes.
             Ok((tx_id, failed, scripts_to_cache)) => {
-                tracing::info!(
+                tracing::trace!(
                     %account_id,
                     %tx_id,
                     num_failed = failed.len(),
