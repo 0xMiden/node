@@ -233,6 +233,15 @@ impl NtxContext {
         .await
         {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
+                for failed_note in &failed {
+                    tracing::info!(
+                        note_id = %failed_note.note.id(),
+                        nullifier = %failed_note.note.nullifier(),
+                        err = %failed_note.error,
+                        "note failed consumability check",
+                    );
+                }
+
                 // Map successful notes to input notes.
                 let successful = InputNotes::from_unauthenticated_notes(successful)
                     .map_err(NtxError::InputNotes)?;

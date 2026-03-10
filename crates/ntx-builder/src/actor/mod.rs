@@ -296,6 +296,15 @@ impl AccountActor {
         );
 
         let notes = tx_candidate.notes.clone();
+        let account_id = tx_candidate.account.id();
+        let note_ids: Vec<_> = notes.iter().map(|n| n.to_inner().id()).collect();
+        tracing::info!(
+            %account_id,
+            ?note_ids,
+            num_notes = notes.len(),
+            "executing network transaction",
+        );
+
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
             // Execution completed without failed notes.
@@ -304,13 +313,24 @@ impl AccountActor {
             },
             // Execution completed with some failed notes.
             Ok((tx_id, failed)) => {
+                tracing::info!(
+                    %account_id,
+                    %tx_id,
+                    num_failed = failed.len(),
+                    "network transaction executed with some failed notes",
+                );
                 let notes = failed.into_iter().map(|note| note.note).collect::<Vec<_>>();
                 state.notes_failed(notes.as_slice(), block_num);
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
             Err(err) => {
-                tracing::error!(err = err.as_report(), "network transaction failed");
+                tracing::error!(
+                    %account_id,
+                    ?note_ids,
+                    err = err.as_report(),
+                    "network transaction failed",
+                );
                 self.mode = ActorMode::NoViableNotes;
                 let notes =
                     notes.into_iter().map(|note| note.into_inner().into()).collect::<Vec<_>>();
