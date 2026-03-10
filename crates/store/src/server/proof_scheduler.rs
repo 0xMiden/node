@@ -15,11 +15,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::Serializable;
 use miden_remote_prover_client::RemoteProverClientError;
 use tokio::sync::watch;
-use tokio::task::{JoinError, JoinHandle, JoinSet};
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{error, info, instrument};
 
 use crate::COMPONENT;
@@ -62,11 +63,16 @@ impl ProofTaskJoinSet {
     }
 
     /// Returns the result of the next completed task, or pends forever if the set is empty.
-    async fn join_next(&mut self) -> Result<anyhow::Result<BlockNumber>, JoinError> {
+    async fn join_next(&mut self) -> anyhow::Result<BlockNumber> {
         if self.0.is_empty() {
             std::future::pending().await
         } else {
-            self.0.join_next().await.expect("join set is not empty")
+            self.0
+                .join_next()
+                .await
+                .expect("join set is not empty")
+                .context("proving task panicked")
+                .flatten()
         }
     }
 }
@@ -142,17 +148,10 @@ async fn run(
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
             // Proving task completed.
-            join_result = join_set.join_next() => {
-                match join_result {
-                    Ok(Ok(block_num)) => {
-                        info!(target: COMPONENT, %block_num, "Block proof completed");
-                        inflight.remove(&block_num);
-                    },
-                    Ok(Err(err)) => return Err(err),
-                    Err(join_err) => {
-                        anyhow::bail!("Proof task panicked: {join_err}")
-                    },
-                }
+            result = join_set.join_next() => {
+                let block_num = result?;
+                info!(target: COMPONENT, %block_num, "Block proof completed");
+                inflight.remove(&block_num);
             },
 
             // New chain tip received.
