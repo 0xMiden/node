@@ -39,19 +39,30 @@ pub const DEFAULT_MAX_CONCURRENT_PROOFS: usize = 8;
 
 /// A wrapper around [`JoinSet`] whose `join_next` returns [`std::future::pending`] when empty
 /// instead of `None`, making it safe to use directly in `tokio::select!` without a special case.
-struct PendingJoinSet<T>(JoinSet<T>);
+struct ProofTaskJoinSet(JoinSet<anyhow::Result<BlockNumber>>);
 
-impl<T: Send + 'static> PendingJoinSet<T> {
+impl ProofTaskJoinSet {
     fn new() -> Self {
         Self(JoinSet::new())
     }
 
-    fn spawn(&mut self, task: impl std::future::Future<Output = T> + Send + 'static) {
-        self.0.spawn(task);
+    fn spawn(
+        &mut self,
+        db: &Arc<Db>,
+        block_prover: &Arc<BlockProver>,
+        block_store: &Arc<BlockStore>,
+        block_num: BlockNumber,
+    ) {
+        let db = Arc::clone(db);
+        let block_prover = Arc::clone(block_prover);
+        let block_store = Arc::clone(block_store);
+        self.0.spawn(
+            async move { prove_and_save(&db, &block_prover, &block_store, block_num).await },
+        );
     }
 
     /// Returns the result of the next completed task, or pends forever if the set is empty.
-    async fn join_next(&mut self) -> Result<T, JoinError> {
+    async fn join_next(&mut self) -> Result<anyhow::Result<BlockNumber>, JoinError> {
         if self.0.is_empty() {
             std::future::pending().await
         } else {
@@ -110,7 +121,7 @@ async fn run(
     // The current chain tip as observed from the watch channel.
     let mut chain_tip = *chain_tip_rx.borrow_and_update();
     // In-flight proving tasks.
-    let mut join_set: PendingJoinSet<anyhow::Result<BlockNumber>> = PendingJoinSet::new();
+    let mut join_set = ProofTaskJoinSet::new();
     // Block numbers currently being proven.
     let mut inflight: BTreeSet<BlockNumber> = BTreeSet::new();
     // The next block number to schedule for proving.
@@ -124,12 +135,7 @@ async fn run(
             let scheduled = next_to_schedule;
             inflight.insert(scheduled);
 
-            let db = Arc::clone(&db);
-            let block_prover = Arc::clone(&block_prover);
-            let block_store = Arc::clone(&block_store);
-            join_set.spawn(async move {
-                prove_and_save(&db, &block_prover, &block_store, scheduled).await
-            });
+            join_set.spawn(&db, &block_prover, &block_store, scheduled);
             next_to_schedule = scheduled.child();
         }
 
