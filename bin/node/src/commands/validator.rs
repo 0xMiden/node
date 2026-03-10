@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::{Validator, ValidatorSigner};
@@ -183,7 +184,7 @@ pub async fn bootstrap_genesis(
 
     // Create directories if they do not already exist.
     for directory in [accounts_directory, data_directory] {
-        crate::commands::store::ensure_empty_directory(directory)?;
+        ensure_empty_directory(directory)?;
     }
 
     // Bootstrap with KMS key or local key.

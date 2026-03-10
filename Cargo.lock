@@ -3227,6 +3227,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "fs-err",
  "governor",
  "http 1.4.0",
  "http-body-util",
