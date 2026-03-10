@@ -2690,17 +2690,16 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "miden-agglayer"
-version = "0.14.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e492a6044cf8875a64d7eec130d260f2eda1c783795261f00d5d52837ed027bd"
+version = "0.14.0-alpha.2"
+source = "git+https://github.com/0xMiden/protocol?branch=agglayer#ecb6359a6b60680c6737b3a7236f48bb681a21b6"
 dependencies = [
  "fs-err",
  "miden-assembly 0.20.6",
  "miden-core 0.20.6",
  "miden-core-lib 0.20.6",
  "miden-crypto 0.19.8",
- "miden-protocol 0.14.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "miden-standards 0.14.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "miden-protocol 0.14.0-alpha.2",
+ "miden-standards 0.14.0-alpha.2",
  "miden-utils-sync 0.20.6",
  "primitive-types",
  "regex",
@@ -2814,7 +2813,7 @@ name = "miden-block-prover"
 version = "0.14.0-alpha.1"
 source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
 dependencies = [
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "thiserror 2.0.18",
 ]
 
@@ -2907,7 +2906,7 @@ dependencies = [
  "glob",
  "hkdf",
  "k256",
- "miden-crypto-derive 0.19.6",
+ "miden-crypto-derive 0.19.8",
  "num",
  "num-complex",
  "rand",
@@ -2975,9 +2974,9 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto-derive"
-version = "0.19.6"
+version = "0.19.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3550b5656b791fec59c0b6089b4d0368db746a34749ccd47e59afb01aa877e9e"
+checksum = "06f2e7a7ac7d01e03a7340224722e75494826fe6b61a3796b77fbb044d018287"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -3061,7 +3060,7 @@ version = "0.14.0-alpha.2"
 dependencies = [
  "miden-crypto 0.22.4",
  "miden-node-rocksdb-cxx-linkage-fix",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "rayon",
  "rocksdb",
  "winter-utils",
@@ -3145,8 +3144,8 @@ dependencies = [
  "humantime",
  "miden-node-proto",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
+ "miden-standards 0.14.0-alpha.1",
  "miden-testing",
  "miden-tx",
  "rand",
@@ -3177,7 +3176,7 @@ dependencies = [
  "miden-node-store",
  "miden-node-utils",
  "miden-node-validator",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "tokio",
  "url",
 ]
@@ -3196,9 +3195,9 @@ dependencies = [
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-node-validator",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-remote-prover-client",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-standards 0.14.0-alpha.1",
  "miden-tx",
  "miden-tx-batch-prover",
  "pretty_assertions",
@@ -3226,7 +3225,7 @@ dependencies = [
  "deadpool-diesel",
  "deadpool-sync",
  "diesel",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -3253,9 +3252,9 @@ dependencies = [
  "miden-node-proto",
  "miden-node-test-macro",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-remote-prover-client",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-standards 0.14.0-alpha.1",
  "miden-tx",
  "rand_chacha",
  "rstest",
@@ -3282,8 +3281,8 @@ dependencies = [
  "miden-node-grpc-error-macro",
  "miden-node-proto-build",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
+ "miden-standards 0.14.0-alpha.1",
  "miette",
  "proptest",
  "prost",
@@ -3322,8 +3321,8 @@ dependencies = [
  "miden-node-proto-build",
  "miden-node-store",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
+ "miden-standards 0.14.0-alpha.1",
  "miden-tx",
  "reqwest",
  "rstest",
@@ -3367,9 +3366,9 @@ dependencies = [
  "miden-node-proto-build",
  "miden-node-test-macro",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-remote-prover-client",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-standards 0.14.0-alpha.1",
  "pretty_assertions",
  "rand",
  "rand_chacha",
@@ -3400,8 +3399,8 @@ dependencies = [
  "miden-node-proto",
  "miden-node-store",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
+ "miden-standards 0.14.0-alpha.1",
  "rand",
  "rayon",
  "tokio",
@@ -3430,7 +3429,7 @@ dependencies = [
  "humantime",
  "itertools 0.14.0",
  "lru",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -3462,7 +3461,7 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-tx",
  "thiserror 2.0.18",
  "tokio",
@@ -3515,35 +3514,6 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "0.14.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a88effeac994eb55b8dc4f93fbfd71a5d916dfaba1099896e27a0ee42c488c1"
-dependencies = [
- "bech32",
- "fs-err",
- "getrandom 0.3.4",
- "miden-assembly 0.20.6",
- "miden-assembly-syntax 0.20.6",
- "miden-core 0.20.6",
- "miden-core-lib 0.20.6",
- "miden-crypto 0.19.8",
- "miden-mast-package 0.20.6",
- "miden-processor 0.20.6",
- "miden-protocol-macros 0.14.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "miden-utils-sync 0.20.6",
- "miden-verifier 0.20.6",
- "rand",
- "rand_chacha",
- "rand_xoshiro",
- "regex",
- "semver 1.0.27",
- "thiserror 2.0.18",
- "walkdir",
- "winter-rand-utils",
-]
-
-[[package]]
-name = "miden-protocol"
-version = "0.14.0-alpha.1"
 source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
 dependencies = [
  "bech32",
@@ -3556,7 +3526,7 @@ dependencies = [
  "miden-crypto 0.22.4",
  "miden-mast-package 0.21.2",
  "miden-processor 0.21.2",
- "miden-protocol-macros 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol-macros 0.14.0-alpha.1",
  "miden-utils-sync 0.21.2",
  "miden-verifier 0.21.2",
  "rand",
@@ -3571,10 +3541,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-protocol"
+version = "0.14.0-alpha.2"
+source = "git+https://github.com/0xMiden/protocol?branch=agglayer#ecb6359a6b60680c6737b3a7236f48bb681a21b6"
+dependencies = [
+ "bech32",
+ "fs-err",
+ "getrandom 0.3.4",
+ "miden-assembly 0.20.6",
+ "miden-assembly-syntax 0.20.6",
+ "miden-core 0.20.6",
+ "miden-core-lib 0.20.6",
+ "miden-crypto 0.19.8",
+ "miden-mast-package 0.20.6",
+ "miden-processor 0.20.6",
+ "miden-protocol-macros 0.14.0-alpha.2",
+ "miden-utils-sync 0.20.6",
+ "miden-verifier 0.20.6",
+ "rand",
+ "rand_chacha",
+ "rand_xoshiro",
+ "regex",
+ "semver 1.0.27",
+ "thiserror 2.0.18",
+ "walkdir",
+ "winter-rand-utils",
+]
+
+[[package]]
 name = "miden-protocol-macros"
 version = "0.14.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb28b730005e5f8b08d615ea9216f8cab77b3a7439fa54d5e39d2ec43ef53a3"
+source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3583,8 +3580,8 @@ dependencies = [
 
 [[package]]
 name = "miden-protocol-macros"
-version = "0.14.0-alpha.1"
-source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
+version = "0.14.0-alpha.2"
+source = "git+https://github.com/0xMiden/protocol?branch=agglayer#ecb6359a6b60680c6737b3a7236f48bb681a21b6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3624,8 +3621,8 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-utils",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
+ "miden-standards 0.14.0-alpha.1",
  "miden-testing",
  "miden-tx",
  "miden-tx-batch-prover",
@@ -3653,7 +3650,7 @@ dependencies = [
  "fs-err",
  "getrandom 0.4.1",
  "miden-node-proto-build",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-tx",
  "miette",
  "prost",
@@ -3679,23 +3676,6 @@ dependencies = [
 [[package]]
 name = "miden-standards"
 version = "0.14.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cef036bbfec29acba92751a13d05844bbcf080140201097b419c9ad1927e367"
-dependencies = [
- "fs-err",
- "miden-assembly 0.20.6",
- "miden-core 0.20.6",
- "miden-core-lib 0.20.6",
- "miden-processor 0.20.6",
- "miden-protocol 0.14.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "regex",
- "thiserror 2.0.18",
- "walkdir",
-]
-
-[[package]]
-name = "miden-standards"
-version = "0.14.0-alpha.1"
 source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
 dependencies = [
  "fs-err",
@@ -3703,8 +3683,24 @@ dependencies = [
  "miden-core 0.21.2",
  "miden-core-lib 0.21.2",
  "miden-processor 0.21.2",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "rand",
+ "regex",
+ "thiserror 2.0.18",
+ "walkdir",
+]
+
+[[package]]
+name = "miden-standards"
+version = "0.14.0-alpha.2"
+source = "git+https://github.com/0xMiden/protocol?branch=agglayer#ecb6359a6b60680c6737b3a7236f48bb681a21b6"
+dependencies = [
+ "fs-err",
+ "miden-assembly 0.20.6",
+ "miden-core 0.20.6",
+ "miden-core-lib 0.20.6",
+ "miden-processor 0.20.6",
+ "miden-protocol 0.14.0-alpha.2",
  "regex",
  "thiserror 2.0.18",
  "walkdir",
@@ -3722,8 +3718,8 @@ dependencies = [
  "miden-core-lib 0.21.2",
  "miden-crypto 0.22.4",
  "miden-processor 0.21.2",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
+ "miden-standards 0.14.0-alpha.1",
  "miden-tx",
  "miden-tx-batch-prover",
  "rand",
@@ -3737,9 +3733,9 @@ version = "0.14.0-alpha.1"
 source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
 dependencies = [
  "miden-processor 0.21.2",
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-prover",
- "miden-standards 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-standards 0.14.0-alpha.1",
  "miden-verifier 0.21.2",
  "thiserror 2.0.18",
 ]
@@ -3749,7 +3745,7 @@ name = "miden-tx-batch-prover"
 version = "0.14.0-alpha.1"
 source = "git+https://github.com/0xMiden/protocol?branch=next#af46e09e01faac65e0ec31ac8c48d5175733a1d8"
 dependencies = [
- "miden-protocol 0.14.0-alpha.1 (git+https://github.com/0xMiden/protocol?branch=next)",
+ "miden-protocol 0.14.0-alpha.1",
  "miden-tx",
 ]
 
