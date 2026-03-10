@@ -34,8 +34,8 @@ pub enum ValidatorCommand {
     /// and writes the signed block and account secret files to disk.
     Bootstrap {
         /// Directory in which to write the genesis block file.
-        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
-        data_directory: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        genesis_block_directory: PathBuf,
         /// Directory to write the account secret files (.mac) to.
         #[arg(long, value_name = "DIR")]
         accounts_directory: PathBuf,
@@ -99,13 +99,13 @@ impl ValidatorCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         match self {
             Self::Bootstrap {
-                data_directory,
+                genesis_block_directory,
                 accounts_directory,
                 genesis_config_file,
                 validator_key,
             } => {
                 bootstrap_genesis(
-                    &data_directory,
+                    &genesis_block_directory,
                     &accounts_directory,
                     genesis_config_file.as_ref(),
                     validator_key,
@@ -167,7 +167,7 @@ impl ValidatorCommand {
 ///
 /// This is extracted as a free function so it can be reused by the bundled bootstrap command.
 pub async fn bootstrap_genesis(
-    data_directory: &Path,
+    genesis_block_directory: &Path,
     accounts_directory: &Path,
     genesis_config: Option<&PathBuf>,
     validator_key: ValidatorKey,
@@ -183,7 +183,7 @@ pub async fn bootstrap_genesis(
         .unwrap_or_default();
 
     // Create directories if they do not already exist.
-    for directory in [accounts_directory, data_directory] {
+    for directory in [accounts_directory, genesis_block_directory] {
         ensure_empty_directory(directory)?;
     }
 
@@ -191,10 +191,12 @@ pub async fn bootstrap_genesis(
     let signer = validator_key.into_signer().await?;
     match signer {
         ValidatorSigner::Kms(signer) => {
-            build_and_write_genesis(config, signer, accounts_directory, data_directory).await
+            build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
+                .await
         },
         ValidatorSigner::Local(signer) => {
-            build_and_write_genesis(config, signer, accounts_directory, data_directory).await
+            build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
+                .await
         },
     }
 }
@@ -205,7 +207,7 @@ async fn build_and_write_genesis(
     config: GenesisConfig,
     signer: impl BlockSigner,
     accounts_directory: &Path,
-    data_directory: &Path,
+    genesis_block_directory: &Path,
 ) -> anyhow::Result<()> {
     // Build genesis state with the provided signer.
     let (genesis_state, secrets) = config.into_state(signer)?;
@@ -229,7 +231,7 @@ async fn build_and_write_genesis(
 
     // Serialize and write the genesis block to disk.
     let block_bytes = genesis_block.inner().to_bytes();
-    let genesis_block_path = data_directory.join(GENESIS_BLOCK_FILENAME);
+    let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILENAME);
     fs_err::write(&genesis_block_path, block_bytes).with_context(|| {
         format!("failed to write genesis block to {}", genesis_block_path.display())
     })?;
