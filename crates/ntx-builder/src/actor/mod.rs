@@ -277,8 +277,10 @@ impl AccountActor {
                                 .db
                                 .transaction_exists(awaited_id)
                                 .await
-                                .map_err(|err| {
+                                .inspect_err(|err| {
                                     tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check transaction status");
+                                })
+                                .map_err(|err| {
                                     ActorShutdownReason::DbError(account_id, err)
                                 })?;
                             if exists {
