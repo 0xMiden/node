@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::ValidatorSigner;
@@ -16,12 +16,10 @@ use super::{
     ENV_STORE_RPC_URL,
 };
 use crate::commands::{
-    DEFAULT_TIMEOUT,
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ValidatorKey,
-    duration_to_human_readable_string,
 };
 
 #[expect(clippy::large_enum_variant, reason = "single use enum")]
@@ -80,17 +78,6 @@ pub enum StoreCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        ///
-        /// This may occur if the server is overloaded or due to an internal bug.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_timeout: Duration,
-
         /// Maximum number of concurrent block proofs to be scheduled.
         #[arg(
             long = "max-concurrent-proofs",
@@ -98,6 +85,8 @@ pub enum StoreCommand {
             value_name = "NUM"
         )]
         max_concurrent_proofs: usize,
+        #[command(flatten)]
+        grpc_options: GrpcOptionsInternal,
     },
 }
 
@@ -126,7 +115,7 @@ impl StoreCommand {
                 block_prover_url,
                 data_directory,
                 enable_otel: _,
-                grpc_timeout,
+                grpc_options,
                 max_concurrent_proofs,
             } => {
                 Self::start(
@@ -135,7 +124,7 @@ impl StoreCommand {
                     block_producer_url,
                     block_prover_url,
                     data_directory,
-                    grpc_timeout,
+                    grpc_options,
                     max_concurrent_proofs,
                 )
                 .await
@@ -157,7 +146,7 @@ impl StoreCommand {
         block_producer_url: Url,
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
-        grpc_timeout: Duration,
+        grpc_options: GrpcOptionsInternal,
         max_concurrent_proofs: usize,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
@@ -187,7 +176,7 @@ impl StoreCommand {
             ntx_builder_listener,
             block_producer_listener,
             data_directory,
-            grpc_timeout,
+            grpc_options,
             max_concurrent_proofs,
         }
         .serve()
