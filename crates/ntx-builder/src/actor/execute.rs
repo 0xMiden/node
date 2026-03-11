@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated::{self as proto};
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
