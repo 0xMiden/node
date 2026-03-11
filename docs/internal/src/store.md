@@ -27,7 +27,7 @@ bits vary by depth (8.0–12.0) and memtables are 128 MiB per CF. See `RocksDbSt
 full fixed configuration.
 
 Runtime-tuneable parameters (`--{account,nullifier}_tree.rocksdb.{max_cache_size,max_open_fds}`)
-are documented in the [operator usage guide](../../../external/src/operator/usage.md).
+are documented in the operator usage guide (`docs/external/src/operator/usage.md`).
 
 ## Architecture
 
