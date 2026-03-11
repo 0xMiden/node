@@ -23,7 +23,6 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::formatting::format_array;
-use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{AccountId, StorageMapWitness, StorageSlotName};
@@ -224,9 +223,8 @@ impl State {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
         let header = block.header();
-        let body = block.body();
 
-        let tx_commitment = body.transactions().commitment();
+        let tx_commitment = block.body().transactions().commitment();
 
         if header.tx_commitment() != tx_commitment {
             return Err(InvalidBlockError::InvalidBlockTxCommitment {
@@ -258,7 +256,7 @@ impl State {
             return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
         }
 
-        let block_bytes = block.to_bytes();
+        let block_data = block.to_bytes();
 
         // Save the block to the block store. In a case of a rolled-back DB transaction, the
         // in-memory state will be unchanged, but the block might still be written into the
@@ -267,7 +265,7 @@ impl State {
         // the store.
         let store = Arc::clone(&self.block_store);
         let block_save_task = tokio::spawn(
-            async move { store.save_block(block_num, &block_bytes).await }.in_current_span(),
+            async move { store.save_block(block_num, &block_data).await }.in_current_span(),
         );
 
         // scope to read in-memory data, compute mutations required for updating account
@@ -283,7 +281,8 @@ impl State {
             let _span = info_span!(target: COMPONENT, "update_in_memory_structs").entered();
 
             // nullifiers can be produced only once
-            let duplicate_nullifiers: Vec<_> = body
+            let duplicate_nullifiers: Vec<_> = block
+                .body()
                 .created_nullifiers()
                 .iter()
                 .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
@@ -305,7 +304,11 @@ impl State {
             let nullifier_tree_update = inner
                 .nullifier_tree
                 .compute_mutations(
-                    body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
+                    block
+                        .body()
+                        .created_nullifiers()
+                        .iter()
+                        .map(|nullifier| (*nullifier, block_num)),
                 )
                 .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
@@ -322,7 +325,9 @@ impl State {
             let account_tree_update = inner
                 .account_tree
                 .compute_mutations(
-                    body.updated_accounts()
+                    block
+                        .body()
+                        .updated_accounts()
                         .iter()
                         .map(|update| (update.account_id(), update.final_state_commitment())),
                 )
@@ -350,13 +355,14 @@ impl State {
             )
         };
 
-        // Build note tree
-        let note_tree = body.compute_block_note_tree();
+        // build note tree
+        let note_tree = block.body().compute_block_note_tree();
         if note_tree.root() != header.note_root() {
             return Err(InvalidBlockError::NewBlockInvalidNoteRoot.into());
         }
 
-        let notes = body
+        let notes = block
+            .body()
             .output_notes()
             .map(|(note_index, note)| {
                 let (details, nullifier) = match note {
@@ -395,12 +401,12 @@ impl State {
         // Extract public account updates with deltas before block is moved into async task.
         // Private accounts are filtered out since they don't expose their state changes.
         let account_deltas =
-            Vec::from_iter(body.updated_accounts().iter().filter_map(
-                |update| match update.details() {
+            Vec::from_iter(block.body().updated_accounts().iter().filter_map(|update| {
+                match update.details() {
                     AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
                     AccountUpdateDetails::Private => None,
-                },
-            ));
+                }
+            }));
 
         // The DB and in-memory state updates need to be synchronized and are partially
         // overlapping. Namely, the DB transaction only proceeds after this task acquires the
@@ -465,8 +471,7 @@ impl State {
         .in_current_span()
         .await?;
 
-        let mut forest = self.forest.write().await;
-        forest.apply_block_updates(block_num, account_deltas)?;
+        self.forest.write().await.apply_block_updates(block_num, account_deltas)?;
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 
@@ -1050,8 +1055,7 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
-    #[allow(clippy::too_many_lines)]
+    /// All-entries queries (`SlotData::All`) use the forest to return all entries.
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,
@@ -1102,73 +1106,29 @@ impl State {
 
         let mut storage_map_details =
             Vec::<AccountStorageMapDetails>::with_capacity(storage_requests.len());
-        let mut map_keys_requests = Vec::new();
-        let mut all_entries_requests = Vec::new();
-        let mut storage_request_slots = Vec::with_capacity(storage_requests.len());
 
-        for (index, StorageMapRequest { slot_name, slot_data }) in
-            storage_requests.into_iter().enumerate()
-        {
-            storage_request_slots.push(slot_name.clone());
-            match slot_data {
-                SlotData::MapKeys(keys) => {
-                    map_keys_requests.push((index, slot_name, keys));
-                },
-                SlotData::All => {
-                    all_entries_requests.push((index, slot_name));
-                },
-            }
-        }
+        // Use forest for storage map queries
+        let forest_guard = self.forest.read().await;
 
-        let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
-
-        if !map_keys_requests.is_empty() {
-            let forest_guard = self.forest.read().await;
-            for (index, slot_name, keys) in map_keys_requests {
-                let details = forest_guard
-                    .get_storage_map_details_for_keys(
-                        account_id,
-                        slot_name.clone(),
-                        block_num,
-                        &keys,
-                    )
+        for StorageMapRequest { slot_name, slot_data } in storage_requests {
+            let details = match &slot_data {
+                SlotData::MapKeys(keys) => forest_guard
+                    .open_storage_map(account_id, slot_name.clone(), block_num, keys)
                     .ok_or_else(|| DatabaseError::StorageRootNotFound {
                         account_id,
                         slot_name: slot_name.to_string(),
                         block_num,
                     })?
-                    .map_err(DatabaseError::MerkleError)?;
-                storage_map_details_by_index[index] = Some(details);
-            }
-        }
+                    .map_err(DatabaseError::MerkleError)?,
+                SlotData::All => forest_guard
+                    .storage_map_entries(account_id, slot_name.clone(), block_num)
+                    .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                        account_id,
+                        slot_name: slot_name.to_string(),
+                        block_num,
+                    })?,
+            };
 
-        // TODO parallelize the read requests
-        for (index, slot_name) in all_entries_requests {
-            let details = self
-                .db
-                .reconstruct_storage_map_from_db(
-                    account_id,
-                    slot_name.clone(),
-                    block_num,
-                    Some(
-                        // TODO unify this with
-                        // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                        // and accumulated the limits
-                        <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                    ),
-                )
-                .await?;
-            storage_map_details_by_index[index] = Some(details);
-        }
-
-        for (details, slot_name) in
-            storage_map_details_by_index.into_iter().zip(storage_request_slots)
-        {
-            let details = details.ok_or_else(|| DatabaseError::StorageRootNotFound {
-                account_id,
-                slot_name: slot_name.to_string(),
-                block_num,
-            })?;
             storage_map_details.push(details);
         }
 
@@ -1189,7 +1149,7 @@ impl State {
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<StorageMapValuesPage, DatabaseError> {
-        self.db.select_storage_map_sync_values(account_id, block_range, None).await
+        self.db.select_storage_map_sync_values(account_id, block_range).await
     }
 
     /// Loads a block from the block store. Return `Ok(None)` if the block is not found.
