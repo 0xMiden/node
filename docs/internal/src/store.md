@@ -24,10 +24,9 @@ depth), `metadata` (root/counts), `depth24` (cached depth-24 hashes for fast sta
 Compaction parallelism and background jobs are set to `rayon::current_num_threads()` automatically.
 WAL sync per write is disabled for throughput; a 512 MiB WAL cap bounds recovery time. Bloom filter
 bits vary by depth (8.0–12.0) and memtables are 128 MiB per CF. See `RocksDbStorage::open` for the
-full fixed configuration.
+full fixed configuration. Runtime-tuneable parameters are documented in the
+[operator usage guide](https://github.com/0xMiden/node/blob/next/docs/external/src/operator/usage.md#rocksdb-tuning).
 
-Runtime-tuneable parameters (`--{account,nullifier}_tree.rocksdb.{max_cache_size,max_open_fds}`)
-are documented in the operator usage guide (`docs/external/src/operator/usage.md`).
 
 ## Architecture
 
