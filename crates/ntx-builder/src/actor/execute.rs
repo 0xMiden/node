@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated::{self as proto};
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -250,6 +251,15 @@ impl NtxContext {
         .await
         {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
+                for failed_note in &failed {
+                    tracing::info!(
+                        note.id = %failed_note.note.id(),
+                        nullifier = %failed_note.note.nullifier(),
+                        err = %failed_note.error.as_report(),
+                        "note failed consumability check",
+                    );
+                }
+
                 // Map successful notes to input notes.
                 let successful = InputNotes::from_unauthenticated_notes(successful)
                     .map_err(NtxError::InputNotes)?;

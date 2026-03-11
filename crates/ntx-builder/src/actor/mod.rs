@@ -371,9 +371,24 @@ impl AccountActor {
         );
 
         let notes = tx_candidate.notes.clone();
+        let account_id = tx_candidate.account.id();
+        let note_ids: Vec<_> = notes.iter().map(|n| n.to_inner().as_note().id()).collect();
+        tracing::info!(
+            %account_id,
+            ?note_ids,
+            num_notes = notes.len(),
+            "executing network transaction",
+        );
+
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
             Ok((tx_id, failed, scripts_to_cache)) => {
+                tracing::info!(
+                    %account_id,
+                    %tx_id,
+                    num_failed = failed.len(),
+                    "network transaction executed with some failed notes",
+                );
                 self.cache_note_scripts(scripts_to_cache).await;
                 if !failed.is_empty() {
                     let nullifiers: Vec<_> =
@@ -384,7 +399,12 @@ impl AccountActor {
             },
             // Transaction execution failed.
             Err(err) => {
-                tracing::error!(err = err.as_report(), "network transaction failed");
+                tracing::error!(
+                    %account_id,
+                    ?note_ids,
+                    err = err.as_report(),
+                    "network transaction failed",
+                );
                 self.mode = ActorMode::NoViableNotes;
                 let nullifiers: Vec<_> = notes.iter().map(InflightNetworkNote::nullifier).collect();
                 self.mark_notes_failed(&nullifiers, block_num).await;
