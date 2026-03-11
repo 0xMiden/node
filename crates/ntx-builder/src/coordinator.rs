@@ -214,7 +214,7 @@ impl Coordinator {
                 ActorShutdownReason::DbError(account_id, err) => {
                     let count = self.crash_counts.entry(account_id).or_insert(0);
                     *count += 1;
-                    tracing::error!(account_id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
+                    tracing::error!(account.id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
                     self.actor_registry.remove(&account_id);
                     Ok(None)
                 },
