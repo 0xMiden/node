@@ -27,8 +27,8 @@ use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 use tonic::Status;
 
+use crate::account_state_forest::{AccountStateForestError, WitnessError};
 use crate::db::models::conv::DatabaseTypeConversionError;
-use crate::inner_forest::{InnerForestError, WitnessError};
 
 // DATABASE ERRORS
 // =================================================================================================
@@ -119,8 +119,8 @@ pub enum StateInitializationError {
     BlockStoreLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
     DatabaseLoadError(#[source] DatabaseError),
-    #[error("inner forest error")]
-    InnerForestError(#[from] InnerForestError),
+    #[error("account state forest error")]
+    AccountStateForestError(#[from] AccountStateForestError),
     #[error(
         "{tree_name} SMT root ({tree_root:?}) does not match expected root from block {block_num} \
          ({block_root:?}). Delete the tree storage directories and restart the node to rebuild \
@@ -183,8 +183,8 @@ pub enum ApplyBlockError {
     TokioJoinError(#[from] tokio::task::JoinError),
     #[error("invalid block error")]
     InvalidBlockError(#[from] InvalidBlockError),
-    #[error("inner forest error")]
-    InnerForestError(#[from] InnerForestError),
+    #[error("account state forest error")]
+    AccountStateForestError(#[from] AccountStateForestError),
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------

@@ -41,7 +41,7 @@ mod tests;
 // ================================================================================================
 
 #[derive(Debug, Error)]
-pub enum InnerForestError {
+pub enum AccountStateForestError {
     #[error(transparent)]
     Asset(#[from] AssetError),
     #[error(transparent)]
@@ -60,17 +60,17 @@ pub enum WitnessError {
     AssetError(#[from] AssetError),
 }
 
-// INNER FOREST
+// ACCOUNT STATE FOREST
 // ================================================================================================
 
 /// Container for forest-related state that needs to be updated atomically.
-pub(crate) struct InnerForest {
+pub(crate) struct AccountStateForest {
     /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
     forest: LargeSmtForest<ForestInMemoryBackend>,
 }
 
-impl InnerForest {
+impl AccountStateForest {
     pub(crate) fn new() -> Self {
         Self { forest: Self::create_forest() }
     }
@@ -311,7 +311,7 @@ impl InnerForest {
         &mut self,
         block_num: BlockNumber,
         account_updates: impl IntoIterator<Item = AccountDelta>,
-    ) -> Result<(), InnerForestError> {
+    ) -> Result<(), AccountStateForestError> {
         for delta in account_updates {
             self.update_account(block_num, &delta)?;
 
@@ -345,7 +345,7 @@ impl InnerForest {
         &mut self,
         block_num: BlockNumber,
         delta: &AccountDelta,
-    ) -> Result<(), InnerForestError> {
+    ) -> Result<(), AccountStateForestError> {
         let account_id = delta.id();
         let is_full_state = delta.is_full_state();
 
@@ -383,7 +383,7 @@ impl InnerForest {
         block_num: BlockNumber,
         account_id: AccountId,
         vault_delta: &AccountVaultDelta,
-    ) -> Result<(), InnerForestError> {
+    ) -> Result<(), AccountStateForestError> {
         let prev_root = self.get_latest_vault_root(account_id);
         let lineage = Self::vault_lineage_id(account_id);
         assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
@@ -523,7 +523,7 @@ impl InnerForest {
         block_num: BlockNumber,
         account_id: AccountId,
         vault_delta: &AccountVaultDelta,
-    ) -> Result<(), InnerForestError> {
+    ) -> Result<(), AccountStateForestError> {
         assert!(!vault_delta.is_empty(), "expected the delta not to be empty");
 
         // get the previous vault root; the root could be for an empty or non-empty SMT

@@ -73,11 +73,11 @@ use rand::Rng;
 use tempfile::tempdir;
 
 use super::{AccountInfo, NoteRecord, NullifierInfo};
+use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
-use crate::inner_forest::HISTORICAL_BLOCK_RETENTION;
 
 fn create_db() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").expect("In memory sqlite always works");
@@ -2638,13 +2638,13 @@ fn test_prune_history() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_matches_db_storage_map_roots_across_updates() {
+fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
     use miden_protocol::crypto::merkle::smt::Smt;
 
-    use crate::inner_forest::InnerForest;
+    use crate::account_state_forest::AccountStateForest;
 
     /// Reconstructs storage map root from DB entries at a specific block.
     fn reconstruct_storage_map_root_from_db(
@@ -2680,7 +2680,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
                 if value == EMPTY_WORD {
                     None
                 } else {
-                    // Keys are stored unhashed in DB, match InnerForest behavior
+                    // Keys are stored unhashed in DB, match AccountStateForest behavior
                     Some((key, value))
                 }
             })
@@ -2701,7 +2701,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
     }
 
     let mut conn = create_db();
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     let block1 = BlockNumber::from(1);
@@ -2752,7 +2752,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
 
     assert_eq!(
         forest_root_1, db_root_1,
-        "Storage map root at block 1 should match between InnerForest and DB"
+        "Storage map root at block 1 should match between AccountStateForest and DB"
     );
 
     // Block 2: Delete storage map entry (set to EMPTY_WORD) and delete storage value
@@ -2782,7 +2782,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
 
     assert_eq!(
         forest_root_2, db_root_2,
-        "Storage map root at block 2 should match between InnerForest and DB"
+        "Storage map root at block 2 should match between AccountStateForest and DB"
     );
 
     // Block 3: Re-add same value as block 1 and add different map entry
@@ -2812,7 +2812,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
 
     assert_eq!(
         forest_root_3, db_root_3,
-        "Storage map root at block 3 should match between InnerForest and DB"
+        "Storage map root at block 3 should match between AccountStateForest and DB"
     );
 
     // Verify we can query historical roots
@@ -2832,7 +2832,7 @@ fn inner_forest_matches_db_storage_map_roots_across_updates() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_shared_roots_not_deleted_prematurely() {
+fn account_state_forest_shared_roots_not_deleted_prematurely() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
@@ -2841,9 +2841,9 @@ fn inner_forest_shared_roots_not_deleted_prematurely() {
         ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
     };
 
-    use crate::inner_forest::InnerForest;
+    use crate::account_state_forest::AccountStateForest;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account1 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let account2 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
     let account3 = AccountId::try_from(ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE).unwrap();
@@ -2989,14 +2989,14 @@ fn inner_forest_shared_roots_not_deleted_prematurely() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
+fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    use crate::inner_forest::{HISTORICAL_BLOCK_RETENTION, InnerForest};
+    use crate::account_state_forest::{AccountStateForest, HISTORICAL_BLOCK_RETENTION};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
 
@@ -3110,10 +3110,10 @@ fn inner_forest_retains_latest_after_100_blocks_and_pruning() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_preserves_most_recent_vault_only() {
-    use crate::inner_forest::InnerForest;
+fn account_state_forest_preserves_most_recent_vault_only() {
+    use crate::account_state_forest::AccountStateForest;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
 
@@ -3223,14 +3223,14 @@ fn db_roundtrip_transactions() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_preserves_most_recent_storage_map_only() {
+fn account_state_forest_preserves_most_recent_storage_map_only() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    use crate::inner_forest::InnerForest;
+    use crate::account_state_forest::AccountStateForest;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     let slot_map = StorageSlotName::mock(1);
@@ -3285,14 +3285,14 @@ fn inner_forest_preserves_most_recent_storage_map_only() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_preserves_most_recent_storage_value_slot() {
+fn account_state_forest_preserves_most_recent_storage_value_slot() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::delta::StorageSlotDelta;
 
-    use crate::inner_forest::InnerForest;
+    use crate::account_state_forest::AccountStateForest;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     let slot_value = StorageSlotName::mock(1);
@@ -3310,11 +3310,11 @@ fn inner_forest_preserves_most_recent_storage_value_slot() {
 
     forest.update_account(block_1, &delta_1).unwrap();
 
-    // Note: Value slots don't have roots in InnerForest - they're just part of the
-    // account storage header. The InnerForest only tracks map slots.
+    // Note: Value slots don't have roots in AccountStateForest - they're just part of the
+    // account storage header. The AccountStateForest only tracks map slots.
     // So there's nothing to verify for value slots in the forest.
 
-    // This test documents that value slots are NOT tracked in InnerForest
+    // This test documents that value slots are NOT tracked in AccountStateForest
     // (they don't need to be, since their digest is 1:1 with the value)
 
     // Advance 100 blocks without any updates
@@ -3330,20 +3330,20 @@ fn inner_forest_preserves_most_recent_storage_value_slot() {
     let storage_root = forest.get_storage_map_root(account_id, &slot_value, block_1);
     assert!(
         storage_root.is_none(),
-        "Value slots don't have storage map roots in InnerForest"
+        "Value slots don't have storage map roots in AccountStateForest"
     );
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn inner_forest_preserves_mixed_slots_independently() {
+fn account_state_forest_preserves_mixed_slots_independently() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    use crate::inner_forest::InnerForest;
+    use crate::account_state_forest::AccountStateForest;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
 
