@@ -108,17 +108,17 @@ pub struct Coordinator {
     /// Tracks the number of crashes per account actor.
     ///
     /// When an actor shuts down due to a DB error, its crash count is incremented. Once
-    /// the count reaches `max_actor_crashes`, the account is blacklisted and no new actor
+    /// the count reaches `max_actor_crashes`, the account is deactivated and no new actor
     /// will be spawned for it.
     crash_counts: HashMap<NetworkAccountId, usize>,
 
-    /// Maximum number of crashes an account actor is allowed before being blacklisted.
+    /// Maximum number of crashes an account actor is allowed before being deactivated.
     max_actor_crashes: usize,
 }
 
 impl Coordinator {
     /// Creates a new coordinator with the specified maximum number of inflight transactions
-    /// and the crash threshold for account blacklisting.
+    /// and the crash threshold for account deactivation.
     pub fn new(max_inflight_transactions: usize, max_actor_crashes: usize, db: Db) -> Self {
         Self {
             actor_registry: HashMap::new(),
@@ -139,13 +139,13 @@ impl Coordinator {
     pub fn spawn_actor(&mut self, origin: AccountOrigin, actor_context: &AccountActorContext) {
         let account_id = origin.id();
 
-        // Skip spawning if the account has been blacklisted due to repeated crashes.
+        // Skip spawning if the account has been deactivated due to repeated crashes.
         if let Some(&count) = self.crash_counts.get(&account_id) {
             if count >= self.max_actor_crashes {
                 tracing::warn!(
                     %account_id,
                     crash_count = count,
-                    "Account blacklisted due to repeated crashes, skipping actor spawn"
+                    "Account deactivated due to repeated crashes, skipping actor spawn"
                 );
                 return;
             }
@@ -372,7 +372,7 @@ mod tests {
     /// Creates a minimal `AccountActorContext` suitable for unit tests.
     ///
     /// The URLs are fake and actors spawned with this context will fail on their first gRPC call,
-    /// but this is sufficient for testing coordinator logic (registry, blacklisting, etc.).
+    /// but this is sufficient for testing coordinator logic (registry, deactivation, etc.).
     fn test_actor_context(db: &Db) -> AccountActorContext {
         use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
 
@@ -435,11 +435,11 @@ mod tests {
         assert_eq!(inactive_targets[0], inactive_id);
     }
 
-    // BLACKLIST TESTS
+    // DEACTIVATED ACCOUNTS
     // ============================================================================================
 
     #[tokio::test]
-    async fn spawn_actor_skips_blacklisted_account() {
+    async fn spawn_actor_skips_deactivated_account() {
         let (db, _dir) = Db::test_setup().await;
         let max_crashes = 3;
         let mut coordinator = Coordinator::new(4, max_crashes, db.clone());
@@ -454,7 +454,7 @@ mod tests {
 
         assert!(
             !coordinator.actor_registry.contains_key(&account_id),
-            "Blacklisted account should not have an actor in the registry"
+            "Deactivated account should not have an actor in the registry"
         );
     }
 

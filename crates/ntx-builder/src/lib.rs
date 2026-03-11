@@ -59,7 +59,7 @@ const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
 /// Default duration after which an idle network account actor will deactivate.
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-/// Default maximum number of crashes an account actor is allowed before being blacklisted.
+/// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACTOR_CRASHES: usize = 10;
 
 // CONFIGURATION
@@ -109,7 +109,7 @@ pub struct NtxBuilderConfig {
     /// A deactivated account will reactivate if targeted with new notes.
     pub idle_timeout: Duration,
 
-    /// Maximum number of crashes an account actor is allowed before being blacklisted.
+    /// Maximum number of crashes an account actor is allowed before being deactivated.
     ///
     /// Once an actor for a given account exceeds this crash count, no new actor will be
     /// spawned for that account. This prevents resource exhaustion from repeatedly failing
@@ -214,7 +214,7 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the maximum number of crashes before an account actor is blacklisted.
+    /// Sets the maximum number of crashes before an account actor is deactivated.
     #[must_use]
     pub fn with_max_actor_crashes(mut self, max: usize) -> Self {
         self.max_actor_crashes = max;

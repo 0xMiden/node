@@ -52,7 +52,7 @@ Deactivated actors are re-spawned when new notes targeting their account are det
 coordinator (via the `send_targeted` path).
 
 If an actor repeatedly crashes (shuts down due to a database error), its crash count is tracked by
-the coordinator. Once the count reaches the configurable threshold, the account is **blacklisted**
+the coordinator. Once the count reaches the configurable threshold, the account is **deactivated**
 and no new actor will be spawned for it. This prevents resource exhaustion from a persistently
 failing account. The threshold is configurable via the `--ntx-builder.max-actor-crashes` CLI
 argument (default: 10).

@@ -33,6 +33,7 @@
 - Removed `chain_tip` requirement from mempool subscription request ([#1771](https://github.com/0xMiden/node/pull/1771)).
 - Moved bootstrap procedure to `miden-node validator bootstrap` command ([#1764](https://github.com/0xMiden/node/pull/1764)).
 - NTX Builder now blacklists network accounts whose actors crash repeatedly (configurable via `--ntx-builder.max-actor-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
+- NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-actor-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
 
 
 ### Fixes

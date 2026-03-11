@@ -59,6 +59,6 @@ idle (no notes to consume) for a configurable duration are automatically deactiv
 re-activated when new notes arrive. The idle timeout can be tuned with the `--ntx-builder.idle-timeout` CLI
 argument (default: 5 minutes).
 
-Accounts whose actors crash repeatedly (due to database errors) are automatically blacklisted after a configurable
+Accounts whose actors crash repeatedly (due to database errors) are automatically deactivated after a configurable
 number of failures, preventing resource exhaustion. The threshold can be set with
 `--ntx-builder.max-actor-crashes` (default: 10).

@@ -184,7 +184,7 @@ pub struct NtxBuilderConfig {
     )]
     pub idle_timeout: Duration,
 
-    /// Maximum number of crashes before an account actor is blacklisted.
+    /// Maximum number of crashes before an account actor is deactivated.
     ///
     /// Once an actor for a given account exceeds this crash count, no new actor will be
     /// spawned for that account.
