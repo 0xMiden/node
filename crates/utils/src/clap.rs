@@ -1,7 +1,12 @@
 //! Public module for share clap pieces to reduce duplication
 
 use std::num::{NonZeroU32, NonZeroU64};
+#[cfg(feature = "rocksdb")]
+use std::path::Path;
 use std::time::Duration;
+
+#[cfg(feature = "rocksdb")]
+use miden_large_smt_backend_rocksdb::RocksDbConfig;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -130,5 +135,139 @@ impl GrpcOptionsExternal {
             replenish_n_per_second_per_ip: NonZeroU64::new(100_000).unwrap(),
             max_concurrent_connections: u64::MAX,
         }
+    }
+}
+
+/// Collection of per usage storage backend configurations.
+///
+/// Note: Currently only contains `rocksdb` related configuration.
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct StorageOptions {
+    #[cfg(feature = "rocksdb")]
+    #[clap(flatten)]
+    pub account_tree: AccountTreeRocksDbOptions,
+    #[cfg(feature = "rocksdb")]
+    #[clap(flatten)]
+    pub nullifier_tree: NullifierTreeRocksDbOptions,
+}
+
+impl Default for StorageOptions {
+    fn default() -> Self {
+        Self {
+            account_tree: RocksDbOptions::default().into(),
+            nullifier_tree: RocksDbOptions::default().into(),
+        }
+    }
+}
+
+impl StorageOptions {
+    /// Benchmark setup.
+    ///
+    /// These values were determined during development of `LargeSmt`
+    pub fn bench() -> Self {
+        let account_tree = AccountTreeRocksDbOptions {
+            max_open_fds: 512,
+            cache_size_in_bytes: 2 << 30,
+        };
+        let nullifier_tree = NullifierTreeRocksDbOptions {
+            max_open_fds: 512,
+            cache_size_in_bytes: 2 << 30,
+        };
+        Self { account_tree, nullifier_tree }
+    }
+}
+
+/// Per usage options for rocksdb configuration
+#[cfg(feature = "rocksdb")]
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct NullifierTreeRocksDbOptions {
+    #[arg(
+        long = "nullifier_tree.rocksdb.max_open_fds",
+        default_value_t = 64,
+        value_name = "NULLIFIER_TREE__ROCKSDB__MAX_OPEN_FDS"
+    )]
+    pub max_open_fds: i32,
+    #[arg(
+        long = "nullifier_tree.rocksdb.max_cache_size",
+        default_value_t = 2 * 1024 * 1024 * 1024,
+        value_name = "NULLIFIER_TREE__ROCKSDB__CACHE_SIZE"
+    )]
+    pub cache_size_in_bytes: usize,
+}
+
+/// Per usage options for rocksdb configuration
+#[cfg(feature = "rocksdb")]
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct AccountTreeRocksDbOptions {
+    #[arg(
+        long = "account_tree.rocksdb.max_open_fds",
+        default_value_t = 64,
+        value_name = "ACCOUNT_TREE__ROCKSDB__MAX_OPEN_FDS"
+    )]
+    pub max_open_fds: i32,
+    #[arg(
+        long = "account_tree.rocksdb.max_cache_size",
+        default_value_t = 2<<30,
+        value_name = "ACCOUNT_TREE__ROCKSDB__CACHE_SIZE"
+    )]
+    pub cache_size_in_bytes: usize,
+}
+
+/// General confiration options for rocksdb.
+#[cfg(feature = "rocksdb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RocksDbOptions {
+    pub max_open_fds: i32,
+    pub cache_size_in_bytes: usize,
+}
+
+#[cfg(feature = "rocksdb")]
+impl Default for RocksDbOptions {
+    fn default() -> Self {
+        Self {
+            max_open_fds: 512,
+            cache_size_in_bytes: 2 << 30,
+        }
+    }
+}
+
+#[cfg(feature = "rocksdb")]
+impl From<AccountTreeRocksDbOptions> for RocksDbOptions {
+    fn from(value: AccountTreeRocksDbOptions) -> Self {
+        let AccountTreeRocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
+    }
+}
+
+#[cfg(feature = "rocksdb")]
+impl From<NullifierTreeRocksDbOptions> for RocksDbOptions {
+    fn from(value: NullifierTreeRocksDbOptions) -> Self {
+        let NullifierTreeRocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
+    }
+}
+
+#[cfg(feature = "rocksdb")]
+impl From<RocksDbOptions> for AccountTreeRocksDbOptions {
+    fn from(value: RocksDbOptions) -> Self {
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
+    }
+}
+
+#[cfg(feature = "rocksdb")]
+impl From<RocksDbOptions> for NullifierTreeRocksDbOptions {
+    fn from(value: RocksDbOptions) -> Self {
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
+    }
+}
+
+#[cfg(feature = "rocksdb")]
+impl RocksDbOptions {
+    pub fn with_path(self, path: &Path) -> RocksDbConfig {
+        RocksDbConfig::new(path)
+            .with_cache_size(self.cache_size_in_bytes)
+            .with_max_open_files(self.max_open_fds)
     }
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::ValidatorSigner;
@@ -80,6 +80,9 @@ pub enum StoreCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
@@ -109,6 +112,7 @@ impl StoreCommand {
                 data_directory,
                 enable_otel: _,
                 grpc_options,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -117,6 +121,7 @@ impl StoreCommand {
                     block_prover_url,
                     data_directory,
                     grpc_options,
+                    storage_options,
                 )
                 .await
             },
@@ -138,6 +143,7 @@ impl StoreCommand {
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
@@ -167,6 +173,7 @@ impl StoreCommand {
             block_producer_listener,
             data_directory,
             grpc_options,
+            storage_options,
         }
         .serve()
         .await

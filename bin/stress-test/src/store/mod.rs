@@ -490,7 +490,7 @@ struct SyncChainMmrRun {
 pub async fn load_state(data_directory: &Path) {
     let start = Instant::now();
     let (termination_ask, _) = tokio::sync::mpsc::channel(1);
-    let _state = State::load(data_directory, termination_ask).await.unwrap();
+    let _state = State::load(data_directory, Default::default(), termination_ask).await.unwrap();
     let elapsed = start.elapsed();
 
     // Get database path and run SQL commands to count records

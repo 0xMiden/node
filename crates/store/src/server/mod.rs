@@ -10,7 +10,7 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -41,6 +41,7 @@ pub struct Store {
     /// URL for the Block Prover client. Uses local prover if `None`.
     pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
+    pub storage_options: StorageOptions,
     pub grpc_options: GrpcOptionsInternal,
 }
 
@@ -98,7 +99,7 @@ impl Store {
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
         let state = Arc::new(
-            State::load(&self.data_directory, termination_ask)
+            State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?,
         );
