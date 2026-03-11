@@ -1129,7 +1129,7 @@ fn count_account_codes(conn: &mut SqliteConnection) -> usize {
         SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
             .get_result::<i64>(conn)
             .expect("Failed to count account_codes");
-    val as u64 as usize
+    usize::try_from(u64::try_from(val).unwrap()).unwrap()
 }
 
 /// Returns whether a specific code commitment exists in `account_codes`.
@@ -1188,42 +1188,6 @@ fn build_account_with_code(push_value: u32) -> Account {
         ))
         .build_existing()
         .unwrap()
-}
-
-/// Prune test 1: after an account is deleted (no more `is_latest` row exists within the retention
-/// window), its code entry must be pruned once the retention window has elapsed.
-#[test]
-fn test_prune_account_code_after_account_deleted() {
-    let mut conn = setup_test_db();
-
-    // Block 0: create the account (inserts code A).
-    let block_0 = BlockNumber::from(0u32);
-    // block beyond the retention window
-    let block_prunable = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 1);
-    insert_block_header(&mut conn, block_0);
-    insert_block_header(&mut conn, block_prunable);
-
-    let account = build_account_with_code(1);
-    let _account_id = account.id();
-    let code_commitment = account.code().commitment();
-
-    upsert_accounts(&mut conn, &[make_full_state_update(&account)], block_0)
-        .expect("initial upsert failed");
-
-    assert_eq!(count_account_codes(&mut conn), 1, "code should be present after creation");
-    assert!(account_code_exists(&mut conn, code_commitment), "code A must exist");
-
-    // Simulate "deletion": mark all accounts rows as non-latest so that there is no account row
-    // within the retention window.  We achieve this by advancing the chain past the window without
-    // any further upsert for this account.
-    let (_, _, codes_deleted) =
-        prune_history(&mut conn, block_prunable).expect("prune_history failed");
-
-    assert_eq!(
-        codes_deleted, 1,
-        "code A must be pruned once account is outside retention window"
-    );
-    assert!(!account_code_exists(&mut conn, code_commitment), "code A must no longer exist");
 }
 
 /// Prune test 2: when an account's code changes, the old code must be pruned after the retention

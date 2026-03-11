@@ -1548,7 +1548,7 @@ fn prune_account_storage_map_values(
 ///     SELECT DISTINCT code_commitment
 ///     FROM accounts
 ///     WHERE code_commitment IS NOT NULL
-///       AND block_num >= ?1
+///       AND (block_num >= ?1 OR is_latest = 1)
 /// )
 /// ```
 #[tracing::instrument(
@@ -1569,7 +1569,7 @@ fn prune_account_codes(
              SELECT DISTINCT code_commitment \
              FROM accounts \
              WHERE code_commitment IS NOT NULL \
-               AND block_num >= ?1 \
+               AND (block_num >= ?1 OR is_latest = 1 ) \
          )",
     )
     .bind::<BigInt, _>(cutoff_block)
