@@ -16,8 +16,8 @@ workspace = true
 
 [features]
 # Enables utility functions for testing traces created by some other crate's stack.
-testing = ["miden-protocol/testing"]
 rocksdb = ["dep:miden-large-smt-backend-rocksdb"]
+testing = ["miden-protocol/testing"]
 
 [dependencies]
 anyhow                = { workspace = true }
@@ -47,7 +47,7 @@ tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
 
 # RocksDbConfig is needed due to orphan rules
-miden-large-smt-backend-rocksdb = { workspace = true, optional = true }
+miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 
 [dev-dependencies]
 thiserror = { workspace = true }
