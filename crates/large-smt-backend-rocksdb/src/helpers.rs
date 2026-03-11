@@ -2,7 +2,7 @@ use miden_crypto::merkle::smt::{MAX_LEAF_ENTRIES, SmtLeaf, SmtLeafError};
 use miden_crypto::word::LexicographicWord;
 use rocksdb::Error as RocksDbError;
 
-use crate::{StorageError, Word};
+use crate::Word;
 
 pub(crate) fn map_rocksdb_err(err: RocksDbError) -> StorageError {
     StorageError::Backend(Box::new(err))

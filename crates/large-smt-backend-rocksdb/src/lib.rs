@@ -45,6 +45,9 @@ pub use miden_protocol::crypto::merkle::smt::{
     SubtreeError,
 };
 
+// Re-export from miden-crypto
+pub use miden_crypto::merkle::smt::{StorageError, SubtreeUpdate};
+
 // Also re-export commonly used types for convenience
 pub use miden_protocol::{
     EMPTY_WORD,
