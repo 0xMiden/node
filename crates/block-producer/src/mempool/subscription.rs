@@ -83,13 +83,7 @@ impl SubscriptionProvider {
         let network_notes = tx
             .output_notes()
             .filter_map(|note| match note {
-                // We check first to avoid cloning non-network notes.
-                OutputNote::Full(inner) => inner.is_network_note().then_some(
-                    inner
-                        .clone()
-                        .into_account_target_network_note()
-                        .expect("we just checked that this is a network note"),
-                ),
+                OutputNote::Full(inner) => inner.clone().into_account_target_network_note().ok(),
                 _ => None,
             })
             .collect();
