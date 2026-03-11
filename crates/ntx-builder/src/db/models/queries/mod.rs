@@ -12,7 +12,7 @@ use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::utils::Serializable;
 
-use crate::actor::account_effect::NetworkAccountEffect;
+use super::account_effect::NetworkAccountEffect;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 

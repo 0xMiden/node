@@ -8,9 +8,9 @@ use miden_protocol::note::{Note, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::utils::{Deserializable, Serializable};
 
-use crate::actor::inflight_note::InflightNetworkNote;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
+use crate::inflight_note::InflightNetworkNote;
 
 // MODELS
 // ================================================================================================
