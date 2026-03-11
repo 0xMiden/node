@@ -138,6 +138,63 @@ You can inspect the service file with `systemctl cat miden-node` or alternativel
 our repository in the `packaging` folder. For the bootstrapping process be sure to specify the data-directory as
 expected by the systemd file.
 
+## RocksDB tuning
+
+The store component uses [RocksDB](https://rocksdb.org/) to persist the account and nullifier trees. Two
+independent RocksDB instances are opened — one per tree — and each can be tuned independently via CLI flags or the
+corresponding environment variables.
+
+### Tuneable parameters
+
+| Flag | Env variable | Default | Description |
+|---|---|---|---|
+| `--account_tree.rocksdb.max_open_fds` | `ACCOUNT_TREE__ROCKSDB__MAX_OPEN_FDS` | `64` | Maximum number of file descriptors the account-tree RocksDB instance may keep open simultaneously. |
+| `--account_tree.rocksdb.max_cache_size` | `ACCOUNT_TREE__ROCKSDB__CACHE_SIZE` | `2147483648` (2 GiB) | Size in bytes of the shared LRU block cache used by all column families in the account-tree instance. |
+| `--nullifier_tree.rocksdb.max_open_fds` | `NULLIFIER_TREE__ROCKSDB__MAX_OPEN_FDS` | `64` | Maximum number of file descriptors the nullifier-tree RocksDB instance may keep open simultaneously. |
+| `--nullifier_tree.rocksdb.max_cache_size` | `NULLIFIER_TREE__ROCKSDB__CACHE_SIZE` | `2147483648` (2 GiB) | Size in bytes of the shared LRU block cache used by all column families in the nullifier-tree instance. |
+
+### Host-specific guidance
+
+**Block cache** (`max_cache_size`): The block cache is the single most impactful knob. Set it as large as the host
+can comfortably spare. A node that has recently restarted needs to warm the cache before reaching peak read
+throughput, so prefer larger values on production machines. A combined allocation of **4–8 GiB** (2–4 GiB per tree)
+is a reasonable starting point for a machine with 16+ GiB of RAM.
+
+**Open file descriptors** (`max_open_fds`): RocksDB keeps SST files open for fast random access. The default of `64`
+is intentionally conservative to stay well within typical OS `ulimit` values. On a dedicated server where the OS
+limit has been raised (e.g., `ulimit -n 65536`), increasing this to `512` or higher can reduce latency spikes
+caused by re-opening files during compaction.
+
+**Compaction parallelism and background jobs**: These are automatically set to the number of CPU cores detected at
+startup (via `rayon::current_num_threads()`) and are currently not configurable at runtime. Ensure the node process
+is not pinned to a small CPU set if you want compaction to keep up with write throughput.
+
+**WAL**: Writes skip the per-write `fsync` (`set_sync(false)`) for throughput. A 512 MiB WAL cap is applied
+globally. A hard node crash between flushes may require replaying the WAL on next startup, which RocksDB handles
+automatically.
+
+### Example: high-memory production host
+
+```sh
+miden-node bundled start \
+  --data-directory data \
+  --rpc.url http://0.0.0.0:57291 \
+  --account_tree.rocksdb.max_cache_size 4294967296 \
+  --account_tree.rocksdb.max_open_fds 512 \
+  --nullifier_tree.rocksdb.max_cache_size 4294967296 \
+  --nullifier_tree.rocksdb.max_open_fds 512
+```
+
+Or equivalently via environment variables:
+
+```sh
+export ACCOUNT_TREE__ROCKSDB__CACHE_SIZE=4294967296
+export ACCOUNT_TREE__ROCKSDB__MAX_OPEN_FDS=512
+export NULLIFIER_TREE__ROCKSDB__CACHE_SIZE=4294967296
+export NULLIFIER_TREE__ROCKSDB__MAX_OPEN_FDS=512
+miden-node bundled start --data-directory data --rpc.url http://0.0.0.0:57291
+```
+
 ## Environment variables
 
 Most configuration options can also be configured using environment variables as an alternative to providing the values
