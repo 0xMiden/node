@@ -77,6 +77,13 @@ impl Db {
             .await
     }
 
+    /// Returns `true` when an inflight account row exists with the given transaction ID.
+    pub async fn transaction_exists(&self, tx_id: TransactionId) -> Result<bool> {
+        self.inner
+            .query("transaction_exists", move |conn| queries::transaction_exists(conn, &tx_id))
+            .await
+    }
+
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
@@ -123,12 +130,14 @@ impl Db {
     }
 
     /// Handles a `BlockCommitted` mempool event by committing transaction effects.
+    ///
+    /// Returns the list of affected account IDs that should be notified.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,
         block_num: BlockNumber,
         header: BlockHeader,
-    ) -> Result<()> {
+    ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_block_committed", move |conn| {
                 queries::commit_block(conn, &txs, block_num, &header)
@@ -138,7 +147,7 @@ impl Db {
 
     /// Handles a `TransactionsReverted` mempool event by undoing transaction effects.
     ///
-    /// Returns the list of account IDs whose creation was reverted.
+    /// Returns all affected account IDs that should be notified.
     pub async fn handle_transactions_reverted(
         &self,
         tx_ids: Vec<TransactionId>,
