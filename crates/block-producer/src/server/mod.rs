@@ -414,7 +414,7 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn mempool_subscription(
         &self,
-        _request: tonic::Request<proto::block_producer::MempoolSubscriptionRequest>,
+        _request: tonic::Request<()>,
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
         let subscription = self.mempool.lock().await.lock().await.subscribe();
         let subscription = ReceiverStream::new(subscription);

@@ -88,8 +88,7 @@ impl BlockProducerClient {
     async fn subscribe_to_mempool(
         &self,
     ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
-        let request = proto::block_producer::MempoolSubscriptionRequest {};
-        let stream = self.client.clone().mempool_subscription(request).await?;
+        let stream = self.client.clone().mempool_subscription(()).await?;
 
         let stream = stream
             .into_inner()

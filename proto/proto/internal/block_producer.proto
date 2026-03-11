@@ -40,7 +40,7 @@ service Api {
     //
     // Currently only a single active subscription is supported. Subscription requests will cancel
     // the active subscription, if any.
-    rpc MempoolSubscription(MempoolSubscriptionRequest) returns (stream MempoolEvent) {}
+    rpc MempoolSubscription(google.protobuf.Empty) returns (stream MempoolEvent) {}
 }
 
 // MEMPOOL SUBSCRIPTION
