@@ -1125,29 +1125,35 @@ fn test_select_account_vault_at_block_with_deletion() {
 fn count_account_codes(conn: &mut SqliteConnection) -> usize {
     use schema::account_codes;
 
-    SelectDsl::select(account_codes::table, account_codes::code_commitment)
-        .load::<Vec<u8>>(conn)
-        .expect("Failed to count account_codes")
-        .len()
+    let val =
+        SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
+            .get_result::<i64>(conn)
+            .expect("Failed to count account_codes");
+    val as u64 as usize
 }
 
 /// Returns whether a specific code commitment exists in `account_codes`.
 fn account_code_exists(conn: &mut SqliteConnection, code_commitment: Word) -> bool {
     use schema::account_codes;
 
-    SelectDsl::select(account_codes::table, account_codes::code_commitment)
-        .filter(account_codes::code_commitment.eq(code_commitment.to_bytes()))
-        .load::<Vec<u8>>(conn)
-        .expect("Failed to query account_codes")
-        .len()
-        == 1
+    let n =
+        SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
+            .filter(account_codes::code_commitment.eq(code_commitment.to_bytes()))
+            .get_result::<i64>(conn)
+            .expect("Failed to query account_codes");
+
+    n == 1
 }
 
 /// Creates a full-state [`BlockAccountUpdate`] for the given account.
 fn make_full_state_update(account: &Account) -> BlockAccountUpdate {
     let delta = AccountDelta::try_from(account.clone()).unwrap();
     assert!(delta.is_full_state(), "expected full-state delta");
-    BlockAccountUpdate::new(account.id(), account.to_commitment(), AccountUpdateDetails::Delta(delta))
+    BlockAccountUpdate::new(
+        account.id(),
+        account.to_commitment(),
+        AccountUpdateDetails::Delta(delta),
+    )
 }
 
 /// Builds a public account using a fixed account ID seed but a different component code.
@@ -1213,7 +1219,10 @@ fn test_prune_account_code_after_account_deleted() {
     let (_, _, codes_deleted) =
         prune_history(&mut conn, block_prunable).expect("prune_history failed");
 
-    assert_eq!(codes_deleted, 1, "code A must be pruned once account is outside retention window");
+    assert_eq!(
+        codes_deleted, 1,
+        "code A must be pruned once account is outside retention window"
+    );
     assert!(!account_code_exists(&mut conn, code_commitment), "code A must no longer exist");
 }
 
@@ -1268,11 +1277,11 @@ fn test_prune_account_code_retains_latest_after_code_change() {
 
     // Only code A was dropped; code B is still referenced by the latest accounts row.
     assert_eq!(codes_deleted, 1, "exactly one code (A) must be pruned");
+    assert!(!account_code_exists(&mut conn, code_commitment_a), "old code A must be pruned");
     assert!(
-        !account_code_exists(&mut conn, code_commitment_a),
-        "old code A must be pruned"
+        account_code_exists(&mut conn, code_commitment_b),
+        "current code B must be retained"
     );
-    assert!(account_code_exists(&mut conn, code_commitment_b), "current code B must be retained");
 
     // Confirm the latest account row still points to code B.
     let (latest_header, _) =
