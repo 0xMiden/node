@@ -1,18 +1,11 @@
-use std::time::Duration;
-
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
 use super::{ENV_BLOCK_PRODUCER_URL, ENV_STORE_BLOCK_PRODUCER_URL};
-use crate::commands::{
-    BlockProducerConfig,
-    DEFAULT_TIMEOUT,
-    ENV_ENABLE_OTEL,
-    ENV_VALIDATOR_BLOCK_PRODUCER_URL,
-    duration_to_human_readable_string,
-};
+use crate::commands::{BlockProducerConfig, ENV_ENABLE_OTEL, ENV_VALIDATOR_BLOCK_PRODUCER_URL};
 
 #[derive(clap::Subcommand)]
 pub enum BlockProducerCommand {
@@ -40,16 +33,8 @@ pub enum BlockProducerCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        ///
-        /// This may occur if the server is overloaded or due to an internal bug.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_timeout: Duration,
+        #[clap(flatten)]
+        grpc_options: GrpcOptionsInternal,
     },
 }
 
@@ -61,7 +46,7 @@ impl BlockProducerCommand {
             validator_url,
             block_producer,
             enable_otel: _,
-            grpc_timeout,
+            grpc_options,
         } = self;
 
         let block_producer_address =
@@ -90,7 +75,7 @@ impl BlockProducerCommand {
             block_interval: block_producer.block_interval,
             max_txs_per_batch: block_producer.max_txs_per_batch,
             max_batches_per_block: block_producer.max_batches_per_block,
-            grpc_timeout,
+            grpc_options,
             mempool_tx_capacity: block_producer.mempool_tx_capacity,
         }
         .serve()
@@ -131,7 +116,7 @@ mod tests {
                 mempool_tx_capacity: NonZeroUsize::new(1000).unwrap(),
             },
             enable_otel: false,
-            grpc_timeout: Duration::from_secs(10),
+            grpc_options: GrpcOptionsInternal::default(),
         };
         let result = cmd.handle().await;
         assert!(result.is_err());
@@ -156,7 +141,7 @@ mod tests {
                 mempool_tx_capacity: NonZeroUsize::new(1000).unwrap(),
             },
             enable_otel: false,
-            grpc_timeout: Duration::from_secs(10),
+            grpc_options: GrpcOptionsInternal::default(),
         };
         let result = cmd.handle().await;
         assert!(result.is_err());

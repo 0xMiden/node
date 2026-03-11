@@ -44,9 +44,6 @@ const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
 /// Default channel capacity for account loading from the store.
 const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
-/// Default channel size for actor event channels.
-const DEFAULT_ACTOR_CHANNEL_SIZE: usize = 100;
-
 /// Default maximum number of attempts to execute a failing note before dropping it.
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 
@@ -95,9 +92,6 @@ pub struct NtxBuilderConfig {
     /// Channel capacity for loading accounts from the store during startup.
     pub account_channel_capacity: usize,
 
-    /// Channel size for each actor's event channel.
-    pub actor_channel_size: usize,
-
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -120,7 +114,6 @@ impl NtxBuilderConfig {
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
-            actor_channel_size: DEFAULT_ACTOR_CHANNEL_SIZE,
             database_filepath,
         }
     }
@@ -186,13 +179,6 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the actor event channel size.
-    #[must_use]
-    pub fn with_actor_channel_size(mut self, size: usize) -> Self {
-        self.actor_channel_size = size;
-        self
-    }
-
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -212,8 +198,7 @@ impl NtxBuilderConfig {
         db.purge_inflight().await.context("failed to purge inflight state")?;
 
         let script_cache = LruCache::new(self.script_cache_size);
-        let coordinator =
-            Coordinator::new(self.max_concurrent_txs, self.actor_channel_size, db.clone());
+        let coordinator = Coordinator::new(self.max_concurrent_txs, db.clone());
 
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
@@ -249,7 +234,7 @@ impl NtxBuilderConfig {
 
         let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
 
-        let (notification_tx, notification_rx) = mpsc::channel(1);
+        let (request_tx, actor_request_rx) = mpsc::channel(1);
 
         let actor_context = AccountActorContext {
             block_producer_url: self.block_producer_url.clone(),
@@ -261,7 +246,7 @@ impl NtxBuilderConfig {
             max_notes_per_tx: self.max_notes_per_tx,
             max_note_attempts: self.max_note_attempts,
             db: db.clone(),
-            notification_tx,
+            request_tx,
         };
 
         Ok(NetworkTransactionBuilder::new(
@@ -272,7 +257,7 @@ impl NtxBuilderConfig {
             chain_state,
             actor_context,
             mempool_events,
-            notification_rx,
+            actor_request_rx,
         ))
     }
 }
