@@ -109,11 +109,9 @@ pub struct NtxBuilderConfig {
     /// A deactivated account will reactivate if targeted with new notes.
     pub idle_timeout: Duration,
 
-    /// Maximum number of crashes an account actor is allowed before being deactivated.
+    /// Maximum number of crashes before an account deactivated.
     ///
-    /// Once an actor for a given account exceeds this crash count, no new actor will be
-    /// spawned for that account. This prevents resource exhaustion from repeatedly failing
-    /// actors.
+    /// Once this limit is reached, no new transactions will be created for this account.
     pub max_actor_crashes: usize,
 
     /// Path to the SQLite database file used for persistent state.

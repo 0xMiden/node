@@ -184,10 +184,9 @@ pub struct NtxBuilderConfig {
     )]
     pub idle_timeout: Duration,
 
-    /// Maximum number of crashes before an account actor is deactivated.
+    /// Maximum number of crashes before an account deactivated.
     ///
-    /// Once an actor for a given account exceeds this crash count, no new actor will be
-    /// spawned for that account.
+    /// Once this limit is reached, no new transactions will be created for this account.
     #[arg(long = "ntx-builder.max-actor-crashes", default_value_t = 10, value_name = "NUM")]
     pub max_actor_crashes: usize,
 
