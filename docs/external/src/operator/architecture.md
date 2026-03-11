@@ -61,4 +61,4 @@ argument (default: 5 minutes).
 
 Accounts whose actors crash repeatedly (due to database errors) are automatically deactivated after a configurable
 number of failures, preventing resource exhaustion. The threshold can be set with
-`--ntx-builder.max-actor-crashes` (default: 10).
+`--ntx-builder.max-account-crashes` (default: 10).

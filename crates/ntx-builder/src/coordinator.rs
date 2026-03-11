@@ -108,25 +108,25 @@ pub struct Coordinator {
     /// Tracks the number of crashes per account actor.
     ///
     /// When an actor shuts down due to a DB error, its crash count is incremented. Once
-    /// the count reaches `max_actor_crashes`, the account is deactivated and no new actor
+    /// the count reaches `max_account_crashes`, the account is deactivated and no new actor
     /// will be spawned for it.
     crash_counts: HashMap<NetworkAccountId, usize>,
 
     /// Maximum number of crashes an account actor is allowed before being deactivated.
-    max_actor_crashes: usize,
+    max_account_crashes: usize,
 }
 
 impl Coordinator {
     /// Creates a new coordinator with the specified maximum number of inflight transactions
     /// and the crash threshold for account deactivation.
-    pub fn new(max_inflight_transactions: usize, max_actor_crashes: usize, db: Db) -> Self {
+    pub fn new(max_inflight_transactions: usize, max_account_crashes: usize, db: Db) -> Self {
         Self {
             actor_registry: HashMap::new(),
             actor_join_set: JoinSet::new(),
             semaphore: Arc::new(Semaphore::new(max_inflight_transactions)),
             db,
             crash_counts: HashMap::new(),
-            max_actor_crashes,
+            max_account_crashes,
         }
     }
 
@@ -141,7 +141,7 @@ impl Coordinator {
 
         // Skip spawning if the account has been deactivated due to repeated crashes.
         if let Some(&count) = self.crash_counts.get(&account_id) {
-            if count >= self.max_actor_crashes {
+            if count >= self.max_account_crashes {
                 tracing::warn!(
                     %account_id,
                     crash_count = count,

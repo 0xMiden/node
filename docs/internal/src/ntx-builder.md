@@ -54,7 +54,7 @@ coordinator (via the `send_targeted` path).
 If an actor repeatedly crashes (shuts down due to a database error), its crash count is tracked by
 the coordinator. Once the count reaches the configurable threshold, the account is **deactivated**
 and no new actor will be spawned for it. This prevents resource exhaustion from a persistently
-failing account. The threshold is configurable via the `--ntx-builder.max-actor-crashes` CLI
+failing account. The threshold is configurable via the `--ntx-builder.max-account-crashes` CLI
 argument (default: 10).
 
 The block-producer remains blissfully unaware of network transactions. From its perspective a
