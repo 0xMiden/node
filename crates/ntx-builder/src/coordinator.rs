@@ -346,56 +346,24 @@ impl Coordinator {
 }
 
 #[cfg(test)]
+impl Coordinator {
+    /// Creates a coordinator with default settings backed by a temp DB.
+    pub async fn test() -> (Self, tempfile::TempDir) {
+        let (db, dir) = Db::test_setup().await;
+        (Self::new(4, 10, db), dir)
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
     use std::sync::Arc;
-    use std::time::Duration;
 
     use miden_node_proto::domain::mempool::MempoolEvent;
-    use miden_node_utils::lru_cache::LruCache;
-    use tokio::sync::{RwLock, mpsc};
-    use url::Url;
 
     use super::*;
     use crate::actor::{AccountActorContext, AccountOrigin};
-    use crate::chain_state::ChainState;
-    use crate::clients::StoreClient;
     use crate::db::Db;
     use crate::test_utils::*;
-
-    /// Creates a coordinator with default settings backed by a temp DB.
-    async fn test_coordinator() -> (Coordinator, tempfile::TempDir) {
-        let (db, dir) = Db::test_setup().await;
-        (Coordinator::new(4, 10, db), dir)
-    }
-
-    /// Creates a minimal `AccountActorContext` suitable for unit tests.
-    ///
-    /// The URLs are fake and actors spawned with this context will fail on their first gRPC call,
-    /// but this is sufficient for testing coordinator logic (registry, deactivation, etc.).
-    fn test_actor_context(db: &Db) -> AccountActorContext {
-        use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
-
-        let url = Url::parse("http://127.0.0.1:1").unwrap();
-        let block_header = mock_block_header(0_u32.into());
-        let chain_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
-        let chain_state = Arc::new(RwLock::new(ChainState::new(block_header, chain_mmr)));
-        let (request_tx, _request_rx) = mpsc::channel(1);
-
-        AccountActorContext {
-            block_producer_url: url.clone(),
-            validator_url: url.clone(),
-            tx_prover_url: None,
-            chain_state,
-            store: StoreClient::new(url),
-            script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
-            max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
-            max_note_attempts: 1,
-            idle_timeout: Duration::from_secs(60),
-            db: db.clone(),
-            request_tx,
-        }
-    }
 
     /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
     fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
@@ -411,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_targeted_returns_inactive_targets() {
-        let (mut coordinator, _dir) = test_coordinator().await;
+        let (mut coordinator, _dir) = Coordinator::test().await;
 
         let active_id = mock_network_account_id();
         let inactive_id = mock_network_account_id_seeded(42);
@@ -443,7 +411,7 @@ mod tests {
         let (db, _dir) = Db::test_setup().await;
         let max_crashes = 3;
         let mut coordinator = Coordinator::new(4, max_crashes, db.clone());
-        let actor_context = test_actor_context(&db);
+        let actor_context = AccountActorContext::test(&db);
 
         let account_id = mock_network_account_id();
 
@@ -463,7 +431,7 @@ mod tests {
         let (db, _dir) = Db::test_setup().await;
         let max_crashes = 3;
         let mut coordinator = Coordinator::new(4, max_crashes, db.clone());
-        let actor_context = test_actor_context(&db);
+        let actor_context = AccountActorContext::test(&db);
 
         let account_id = mock_network_account_id();
 

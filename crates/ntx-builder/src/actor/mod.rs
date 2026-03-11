@@ -98,6 +98,43 @@ pub struct AccountActorContext {
     pub request_tx: mpsc::Sender<ActorRequest>,
 }
 
+#[cfg(test)]
+impl AccountActorContext {
+    /// Creates a minimal `AccountActorContext` suitable for unit tests.
+    ///
+    /// The URLs are fake and actors spawned with this context will fail on their first gRPC call,
+    /// but this is sufficient for testing coordinator logic (registry, deactivation, etc.).
+    pub fn test(db: &crate::db::Db) -> Self {
+        use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
+        use tokio::sync::RwLock;
+        use url::Url;
+
+        use crate::chain_state::ChainState;
+        use crate::clients::StoreClient;
+        use crate::test_utils::mock_block_header;
+
+        let url = Url::parse("http://127.0.0.1:1").unwrap();
+        let block_header = mock_block_header(0_u32.into());
+        let chain_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
+        let chain_state = Arc::new(RwLock::new(ChainState::new(block_header, chain_mmr)));
+        let (request_tx, _request_rx) = mpsc::channel(1);
+
+        Self {
+            block_producer_url: url.clone(),
+            validator_url: url.clone(),
+            tx_prover_url: None,
+            chain_state,
+            store: StoreClient::new(url),
+            script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
+            max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
+            max_note_attempts: 1,
+            idle_timeout: Duration::from_secs(60),
+            db: db.clone(),
+            request_tx,
+        }
+    }
+}
+
 // ACCOUNT ORIGIN
 // ================================================================================================
 
