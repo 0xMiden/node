@@ -616,7 +616,7 @@ impl Db {
 
     /// Reconstructs storage map details from the database for a specific slot at a block.
     ///
-    /// Used as fallback when `InnerForest` cache misses (historical or evicted queries).
+    /// Used as fallback when `AccountStateForest` cache misses (historical or evicted queries).
     /// Rebuilds all entries by querying the DB and filtering to the specific slot.
     ///
     /// Returns:
