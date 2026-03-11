@@ -1,13 +1,13 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -46,10 +46,10 @@ pub type ValidatedTransactions = LruCache<TransactionId, TransactionHeader>;
 pub struct Validator<S> {
     /// The address of the validator component.
     pub address: SocketAddr,
-    /// Server-side timeout for an individual gRPC request.
+    /// gRPC server options for internal services (timeouts, connection caps).
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub grpc_options: GrpcOptionsInternal,
 
     /// The signer used to sign blocks.
     pub signer: S,
@@ -85,7 +85,7 @@ impl<S: BlockSigner + Send + Sync + 'static> Validator<S> {
         tonic::transport::Server::builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            .timeout(self.grpc_timeout)
+            .timeout(self.grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(ValidatorServer::new(self.signer)))
             .add_service(reflection_service)
             .add_service(reflection_service_alpha)

@@ -1,13 +1,15 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
-use miden_node_proto::clients::{Builder, RpcClient};
+use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
+use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -40,11 +42,13 @@ use url::Url;
 
 use crate::Rpc;
 
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[tokio::test]
 async fn rpc_server_accepts_requests_without_accept_header() {
     // Start the RPC.
-    let (_, rpc_addr, store_addr) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_listener).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client = {
@@ -68,10 +72,44 @@ async fn rpc_server_accepts_requests_without_accept_header() {
 }
 
 #[tokio::test]
+async fn rpc_rate_limits_per_ip() {
+    let grpc_options = GrpcOptionsExternal {
+        burst_size: NonZeroU32::new(8).unwrap(),
+        replenish_n_per_second_per_ip: NonZeroU64::new(1).unwrap(),
+        ..GrpcOptionsExternal::test()
+    };
+    let (_, rpc_addr, store_listener) = start_rpc_with_options(grpc_options).await;
+    let (store_runtime, data_directory, _genesis) = start_store(store_listener).await;
+
+    let url = rpc_addr.to_string();
+    let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
+    let mut rpc_client = connect_rpc(url.clone(), Some(IpAddr::V4(Ipv4Addr::LOCALHOST))).await;
+
+    let mut results = Vec::new();
+    let mut last_error = None;
+    for _ in 0..256 {
+        let result = send_request(&mut rpc_client).await;
+        if let Err(err) = &result {
+            last_error = Some(err.code());
+        }
+        results.push(result);
+    }
+
+    assert!(results.iter().any(std::result::Result::is_ok));
+    assert!(
+        last_error.is_some_and(|code| code == tonic::Code::ResourceExhausted),
+        "expected rate limit error but got: {last_error:?}"
+    );
+
+    shutdown_store(store_runtime).await;
+    drop(data_directory);
+}
+
+#[tokio::test]
 async fn rpc_server_accepts_requests_with_accept_header() {
     // Start the RPC.
-    let (mut rpc_client, _, store_addr) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+    let (mut rpc_client, _, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_listener).await;
 
     // Send any request to the RPC.
     let response = send_request(&mut rpc_client).await;
@@ -87,8 +125,8 @@ async fn rpc_server_accepts_requests_with_accept_header() {
 async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
     for version in ["1.9.0", "0.8.1", "0.8.0", "0.999.0", "99.0.0"] {
         // Start the RPC.
-        let (_, rpc_addr, store_addr) = start_rpc().await;
-        let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+        let (_, rpc_addr, store_listener) = start_rpc().await;
+        let (store_runtime, _data_directory, _genesis) = start_store(store_listener).await;
 
         // Recreate the RPC client with an invalid version.
         let url = rpc_addr.to_string();
@@ -123,14 +161,15 @@ async fn rpc_startup_is_robust_to_network_failures() {
     // connect to each other on startup and that they reconnect after the store is restarted.
 
     // Start the RPC.
-    let (mut rpc_client, _, store_addr) = start_rpc().await;
+    let (mut rpc_client, _, store_listener) = start_rpc().await;
+    let store_addr = store_listener.local_addr().expect("store listener should expose address");
 
     // Test: requests against RPC api should fail immediately
     let response = send_request(&mut rpc_client).await;
     assert!(response.is_err());
 
     // Start the store.
-    let (store_runtime, data_directory, _genesis) = start_store(store_addr).await;
+    let (store_runtime, data_directory, _genesis) = start_store(store_listener).await;
 
     // Test: send request against RPC api and should succeed
     let response = send_request(&mut rpc_client).await;
@@ -153,8 +192,8 @@ async fn rpc_startup_is_robust_to_network_failures() {
 #[tokio::test]
 async fn rpc_server_has_web_support() {
     // Start server
-    let (_, rpc_addr, store_addr) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_listener).await;
 
     // Send a status request
     let client = reqwest::Client::new();
@@ -196,8 +235,8 @@ async fn rpc_server_has_web_support() {
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     // Start the RPC.
-    let (_, rpc_addr, store_addr) = start_rpc().await;
-    let (store_runtime, _data_directory, genesis) = start_store(store_addr).await;
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, genesis) = start_store(store_listener).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -282,8 +321,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 #[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
     // Start the RPC.
-    let (_, rpc_addr, store_addr) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_listener).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -363,14 +402,29 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
+async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
+    let mut endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
+        .expect("Url type always results in valid endpoint")
+        .timeout(REQUEST_TIMEOUT);
+    if let Some(local_address) = local_address {
+        endpoint = endpoint.local_address(Some(local_address));
+    }
+    let channel = endpoint.connect().await.expect("Failed to build channel");
+    let interceptor = Interceptor::default();
+    RpcClient::with_interceptor(channel, interceptor)
+}
+
 /// Binds a socket on an available port, runs the RPC server on it, and
 /// returns a client to talk to the server, along with the socket address.
-async fn start_rpc() -> (RpcClient, std::net::SocketAddr, std::net::SocketAddr) {
-    let store_addr = {
-        let store_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-        store_listener.local_addr().expect("store should get a local address")
-    };
+async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
+    start_rpc_with_options(GrpcOptionsExternal::test()).await
+}
+
+async fn start_rpc_with_options(
+    grpc_options: GrpcOptionsExternal,
+) -> (RpcClient, std::net::SocketAddr, TcpListener) {
+    let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
+    let store_addr = store_listener.local_addr().expect("store should get a local address");
     let block_producer_addr = {
         let block_producer_listener =
             TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind block-producer");
@@ -394,7 +448,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, std::net::SocketAddr) 
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_options,
         }
         .serve()
         .await
@@ -403,20 +457,12 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, std::net::SocketAddr) 
     let url = rpc_addr.to_string();
     // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
-    let rpc_client: RpcClient = Builder::new(url)
-        .without_tls()
-        .with_timeout(Duration::from_secs(10))
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect::<RpcClient>()
-        .await
-        .expect("Failed to build client");
+    let rpc_client = connect_rpc(url, None).await;
 
-    (rpc_client, rpc_addr, store_addr)
+    (rpc_client, rpc_addr, store_listener)
 }
 
-async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
+async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word) {
     // Start the store.
     let data_directory = tempfile::tempdir().expect("tempdir should be created");
 
@@ -425,7 +471,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
     let (genesis_state, _) = config.into_state(signer).unwrap();
     Store::bootstrap(genesis_state.clone(), data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
-    let rpc_listener = TcpListener::bind(store_addr).await.expect("store should bind a port");
+    let rpc_listener = store_listener;
     let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind store ntx-builder gRPC endpoint");
@@ -442,7 +488,7 @@ async fn start_store(store_addr: SocketAddr) -> (Runtime, TempDir, Word) {
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_options: GrpcOptionsInternal::test(),
         }
         .serve()
         .await
@@ -482,7 +528,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(10),
+            grpc_options: GrpcOptionsInternal::test(),
         }
         .serve()
         .await
@@ -494,8 +540,8 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
 #[tokio::test]
 async fn get_limits_endpoint() {
     // Start the RPC and store
-    let (mut rpc_client, _rpc_addr, store_addr) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis) = start_store(store_addr).await;
+    let (mut rpc_client, _rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, _genesis) = start_store(store_listener).await;
 
     // Call the get_limits endpoint
     let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");

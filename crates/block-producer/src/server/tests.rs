@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use miden_air::{ExecutionProof, HashFunction};
@@ -5,6 +6,7 @@ use miden_node_proto::generated::{
     self as proto, block_producer::api_client as block_producer_client,
 };
 use miden_node_store::{GenesisState, Store};
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_protocol::{
     Digest,
     account::{AccountId, AccountIdVersion, AccountStorageMode, AccountType},
@@ -55,6 +57,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             block_interval: Duration::from_millis(500),
             max_txs_per_batch: SERVER_MAX_TXS_PER_BATCH,
             max_batches_per_block: SERVER_MAX_BATCHES_PER_BLOCK,
+            grpc_options,
         }
         .serve()
         .await
@@ -94,7 +97,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
                 ntx_builder_listener,
                 block_producer_listener,
                 data_directory: dir,
-                grpc_timeout: std::time::Duration::from_secs(30),
+                grpc_options: GrpcOptionsInternal::bench(),
             }
             .serve()
             .await
@@ -160,7 +163,7 @@ async fn restart_store(
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: std::time::Duration::from_secs(30),
+            grpc_options: GrpcOptionsInternal::bench(),
         }
         .serve()
         .await

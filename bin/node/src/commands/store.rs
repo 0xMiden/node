@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_store::Store;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
@@ -16,12 +16,10 @@ use super::{
     ENV_STORE_RPC_URL,
 };
 use crate::commands::{
-    DEFAULT_TIMEOUT,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_INSECURE_SECRET_KEY,
     INSECURE_VALIDATOR_KEY_HEX,
-    duration_to_human_readable_string,
 };
 
 #[allow(clippy::large_enum_variant, reason = "single use enum")]
@@ -83,16 +81,8 @@ pub enum StoreCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        ///
-        /// This may occur if the server is overloaded or due to an internal bug.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_timeout: Duration,
+        #[command(flatten)]
+        grpc_options: GrpcOptionsInternal,
     },
 }
 
@@ -117,14 +107,14 @@ impl StoreCommand {
                 block_producer_url,
                 data_directory,
                 enable_otel: _,
-                grpc_timeout,
+                grpc_options,
             } => {
                 Self::start(
                     rpc_url,
                     ntx_builder_url,
                     block_producer_url,
                     data_directory,
-                    grpc_timeout,
+                    grpc_options,
                 )
                 .await
             },
@@ -144,7 +134,7 @@ impl StoreCommand {
         ntx_builder_url: Url,
         block_producer_url: Url,
         data_directory: PathBuf,
-        grpc_timeout: Duration,
+        grpc_options: GrpcOptionsInternal,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
@@ -172,7 +162,7 @@ impl StoreCommand {
             ntx_builder_listener,
             block_producer_listener,
             data_directory,
-            grpc_timeout,
+            grpc_options,
         }
         .serve()
         .await
