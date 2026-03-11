@@ -85,6 +85,7 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
         let header: Option<miden_protocol::note::NoteHeader> =
             value.header.map(TryInto::try_into).transpose()?;
 
+        // TODO: https://github.com/0xMiden/node/issues/1783
         // InputNoteCommitment has private fields, so we reconstruct it via
         // serialization roundtrip using its Serializable/Deserializable impls.
         let mut bytes = Vec::new();
