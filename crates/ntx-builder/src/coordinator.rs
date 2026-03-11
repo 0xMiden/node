@@ -143,7 +143,7 @@ impl Coordinator {
         if let Some(&count) = self.crash_counts.get(&account_id) {
             if count >= self.max_account_crashes {
                 tracing::warn!(
-                    %account_id,
+                    account.id = %account_id,
                     crash_count = count,
                     "Account deactivated due to repeated crashes, skipping actor spawn"
                 );
