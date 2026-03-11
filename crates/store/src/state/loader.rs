@@ -27,10 +27,10 @@ use tracing::info;
 use tracing::instrument;
 
 use crate::COMPONENT;
+use crate::account_state_forest::AccountStateForest;
 use crate::db::Db;
 use crate::db::models::queries::BlockHeaderCommitment;
 use crate::errors::{DatabaseError, StateInitializationError};
-use crate::inner_forest::InnerForest;
 
 // CONSTANTS
 // ================================================================================================
@@ -346,10 +346,10 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
-) -> Result<InnerForest, StateInitializationError> {
+) -> Result<AccountStateForest, StateInitializationError> {
     use miden_protocol::account::delta::AccountDelta;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let mut cursor = None;
 
     loop {
