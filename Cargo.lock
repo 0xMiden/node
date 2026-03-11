@@ -2804,8 +2804,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto"
 version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b8fc3ec2033d3e17a40611f3ab7c20b0578ccf5e6ddcc9a1df9f26599e6ebdd"
+source = "git+https://github.com/0xMiden/crypto?branch=version%2F0.22.x#dfce24b13e46a599e6d3b5789e9ad929b7e69b30"
 dependencies = [
  "blake3",
  "cc",
@@ -2853,8 +2852,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto-derive"
 version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "207828f24e358b4e1e0641c37802816b8730816ff92ddb4d271ef3a00f8696bb"
+source = "git+https://github.com/0xMiden/crypto?branch=version%2F0.22.x#dfce24b13e46a599e6d3b5789e9ad929b7e69b30"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -2881,8 +2879,7 @@ dependencies = [
 [[package]]
 name = "miden-field"
 version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f821a07c16cfa6e500d5a56d05c11523984e3cd562cfc80ef657e4264d708067"
+source = "git+https://github.com/0xMiden/crypto?branch=version%2F0.22.x#dfce24b13e46a599e6d3b5789e9ad929b7e69b30"
 dependencies = [
  "miden-serde-utils",
  "num-bigint",
@@ -3439,8 +3436,7 @@ dependencies = [
 [[package]]
 name = "miden-serde-utils"
 version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fe74c2e7d8a8b8758e067de10665816928222c1d0561d95c12ac4bcaefc2a2a"
+source = "git+https://github.com/0xMiden/crypto?branch=version%2F0.22.x#dfce24b13e46a599e6d3b5789e9ad929b7e69b30"
 dependencies = [
  "p3-field",
  "p3-goldilocks",
@@ -4552,7 +4548,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac6c3320f9abac597dcbc668774ef006702672474aad53c6d596b62e487b40b1"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -4574,7 +4570,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.114",

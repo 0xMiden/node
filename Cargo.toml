@@ -141,6 +141,11 @@ needless_for_each            = "allow" # Context dependent if that's useful.
 should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
 
+# TODO: Remove this patch once miden-crypto 0.22.5 is released.
+# Fixes missing re-exports of StorageError and SubtreeUpdate from miden_crypto::merkle::smt.
+[patch.crates-io]
+miden-crypto = { branch = "version/0.22.x", git = "https://github.com/0xMiden/crypto" }
+
 # Configure `cargo-typos`
 [workspace.metadata.typos]
 files.extend-exclude = ["*.svg"] # Ignore SVG files.
