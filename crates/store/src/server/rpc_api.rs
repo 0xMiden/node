@@ -405,41 +405,12 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncTransactionsError::from)?;
 
-        // Collect all note IDs from all transactions to make a single query
-        let all_notes_ids = transaction_records_db
-            .iter()
-            .flat_map(|tx| tx.output_notes.iter())
-            .copied()
-            .collect::<Vec<_>>();
-
-        // Retrieve all note data in a single query
-        let all_note_records = self
-            .state
-            .get_notes_by_id(all_notes_ids)
-            .await
-            .map_err(SyncTransactionsError::from)?;
-
-        // Create a map from note ID to note record for efficient lookup
-        let note_map: std::collections::HashMap<_, _> = all_note_records
+        // Convert database TransactionRecords directly to proto TransactionRecords.
+        // All data needed for the proto TransactionHeader is stored in the transactions table.
+        let transactions: Vec<_> = transaction_records_db
             .into_iter()
-            .map(|note_record| (note_record.note_id, note_record))
+            .map(crate::db::TransactionRecord::into_proto)
             .collect();
-
-        // Convert database TransactionRecord to proto TransactionRecord
-        let mut transactions = Vec::with_capacity(transaction_records_db.len());
-
-        for tx_header in transaction_records_db {
-            // Get note records for this transaction's output notes
-            let note_records: Vec<_> = tx_header
-                .output_notes
-                .iter()
-                .filter_map(|note_id| note_map.get(&note_id.as_word()).cloned())
-                .collect();
-
-            // Convert to proto using the helper method
-            let proto_record = tx_header.into_proto_with_note_records(note_records);
-            transactions.push(proto_record);
-        }
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
