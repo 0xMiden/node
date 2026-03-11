@@ -12,7 +12,7 @@ use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
 use miden_testing::{Auth, MockChainBuilder};
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx::utils::serde::{Deserializable, Serializable};
 use miden_tx::{LocalTransactionProver, TransactionVerifier};
 use miden_tx_batch_prover::LocalBatchProver;
 use serial_test::serial;
@@ -64,7 +64,9 @@ impl ProofRequest {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
         let account = mock_chain_builder
-            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Rpo })
+            .add_existing_wallet(Auth::BasicAuth {
+                auth_scheme: AuthScheme::Falcon512Poseidon2,
+            })
             .unwrap();
 
         let fungible_asset_1: Asset =
@@ -96,7 +98,9 @@ impl ProofRequest {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
         let account = mock_chain_builder
-            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Rpo })
+            .add_existing_wallet(Auth::BasicAuth {
+                auth_scheme: AuthScheme::Falcon512Poseidon2,
+            })
             .unwrap();
 
         let fungible_asset_1: Asset =
@@ -123,7 +127,9 @@ impl ProofRequest {
 
         let tx = Box::pin(tx.execute()).await.unwrap();
         let tx = tokio::task::block_in_place(|| {
-            LocalTransactionProver::default().prove(tx.tx_inputs().clone()).unwrap()
+            tokio::runtime::Handle::current()
+                .block_on(LocalTransactionProver::default().prove(tx.tx_inputs().clone()))
+                .unwrap()
         });
 
         ProposedBatch::new(

@@ -26,8 +26,10 @@ extern crate alloc;
 mod helpers;
 #[expect(clippy::doc_markdown, clippy::inline_always)]
 mod rocksdb;
-// Re-export from miden-protocol.
-pub use miden_protocol::crypto::merkle::smt::{
+// Re-export from miden-crypto's merkle::smt module.
+// NOTE: StorageError and SubtreeUpdate were missing from the re-exports in miden-crypto 0.22.4
+// (fixed on miden-crypto main in commit c6b23f0). We import directly from miden-crypto here.
+pub use miden_crypto::merkle::smt::{
     InnerNode,
     LargeSmt,
     LargeSmtError,

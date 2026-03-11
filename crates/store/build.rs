@@ -11,7 +11,7 @@ use miden_agglayer::{
 };
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountCode, AccountFile, AccountStorageMode, AccountType};
-use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RpoRandomCoin;
 use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
@@ -59,7 +59,7 @@ fn generate_agglayer_sample_accounts() {
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
         AuthMethod::SingleSig {
-            approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -69,7 +69,7 @@ fn generate_agglayer_sample_accounts() {
     let ger_manager = create_basic_wallet(
         [5u8; 32],
         AuthMethod::SingleSig {
-            approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -139,17 +139,17 @@ fn generate_agglayer_sample_accounts() {
         .expect("Failed to write agglayer_faucet_usdc.mac");
 }
 
-/// Strips source location decorators from an account's code MAST forest.
+/// Clears debug info from an account's code MAST forest.
 ///
 /// This is necessary because the MAST forest embeds absolute file paths from the Cargo build
-/// directory, which include a hash that differs between `cargo check` and `cargo build`. Stripping
-/// decorators ensures the serialized `.mac` files are identical regardless of which cargo command
+/// directory, which include a hash that differs between `cargo check` and `cargo build`. Clearing
+/// debug info ensures the serialized `.mac` files are identical regardless of which cargo command
 /// is used (CI or local builds or tests).
 fn strip_code_decorators(account: Account) -> Account {
     let (id, vault, storage, code, nonce, seed) = account.into_parts();
 
     let mut mast = code.mast();
-    Arc::make_mut(&mut mast).strip_decorators();
+    Arc::make_mut(&mut mast).clear_debug_info();
     let code = AccountCode::from_parts(mast, code.procedures().to_vec());
 
     Account::new_unchecked(id, vault, storage, code, nonce, seed)

@@ -1,7 +1,7 @@
 use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::errors::{ConversionError, MissingFieldHelper};
 use crate::generated as proto;

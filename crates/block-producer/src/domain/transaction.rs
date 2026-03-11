@@ -93,7 +93,7 @@ impl AuthenticatedTransaction {
         self.inner
             .output_notes()
             .iter()
-            .map(miden_protocol::transaction::OutputNote::commitment)
+            .map(miden_protocol::transaction::OutputNote::to_commitment)
     }
 
     pub fn output_notes(&self) -> impl Iterator<Item = &OutputNote> + '_ {

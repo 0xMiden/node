@@ -30,8 +30,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
-use miden_protocol::transaction::{ProvenTransaction, ProvenTransactionBuilder};
-use miden_protocol::utils::Serializable;
+use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
 use tempfile::TempDir;
@@ -74,19 +74,25 @@ fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransa
         AccountStorageMode::Public,
     );
 
-    ProvenTransactionBuilder::new(
+    let account_update = TxAccountUpdate::new(
         account_id,
         [8; 32].try_into().unwrap(),
         account.to_commitment(),
         delta.to_commitment(),
+        AccountUpdateDetails::Delta(delta.clone()),
+    )
+    .unwrap();
+
+    ProvenTransaction::new(
+        account_update,
+        std::iter::empty::<miden_protocol::transaction::InputNoteCommitment>(),
+        std::iter::empty::<miden_protocol::transaction::OutputNote>(),
         0.into(),
         Word::default(),
         test_fee(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .account_update_details(AccountUpdateDetails::Delta(delta.clone()))
-    .build()
     .unwrap()
 }
 

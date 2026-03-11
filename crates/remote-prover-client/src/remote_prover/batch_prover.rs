@@ -10,7 +10,7 @@ use miden_protocol::transaction::{
     TransactionHeader,
     TransactionId,
 };
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use tokio::sync::Mutex;
 
 use super::generated::api_client::ApiClient;
@@ -110,7 +110,7 @@ impl RemoteBatchProver {
         &self,
         proposed_batch: ProposedBatch,
     ) -> Result<ProvenBatch, RemoteProverClientError> {
-        use miden_protocol::utils::Serializable;
+        use miden_protocol::utils::serde::Serializable;
         self.connect().await?;
 
         let mut client = self

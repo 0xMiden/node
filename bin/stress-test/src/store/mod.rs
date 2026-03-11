@@ -8,7 +8,7 @@ use miden_node_store::state::State;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteDetails, NoteTag};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use rand::Rng;
 use rand::seq::SliceRandom;
 use tokio::fs;

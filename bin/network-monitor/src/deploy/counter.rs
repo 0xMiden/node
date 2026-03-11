@@ -16,7 +16,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::utils::sync::LazyLock;
-use miden_protocol::{Felt, FieldElement, Word};
+use miden_protocol::{Felt, Word};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::testing::account_component::IncrNonceAuthComponent;
 use tracing::instrument;
@@ -54,7 +54,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     let component_code =
         CodeBuilder::default().compile_component_code("counter::program", script)?;
 
-    let metadata = AccountComponentMetadata::new("counter::program").with_supports_all_types();
+    let metadata = AccountComponentMetadata::new("counter::program", AccountType::all());
     let account_code =
         AccountComponent::new(component_code, vec![counter_slot, owner_id_slot], metadata)?;
 

@@ -7,7 +7,7 @@ use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx::utils::serde::{Deserializable, Serializable};
 
 // SERIALIZATION (domain → DB)
 // ================================================================================================

@@ -35,7 +35,7 @@ use miden_protocol::transaction::{
 use miden_protocol::vm::FutureMaybeSend;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
-use miden_tx::utils::Serializable;
+use miden_tx::utils::serde::Serializable;
 use miden_tx::{
     DataStore,
     DataStoreError,
@@ -74,6 +74,7 @@ pub enum NtxError {
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
     #[error("the ntx task panicked")]
+    #[expect(dead_code)]
     Panic(#[source] JoinError),
 }
 
@@ -302,11 +303,9 @@ impl NtxContext {
         if let Some(remote) = &self.prover {
             remote.prove(tx_inputs).await
         } else {
-            // Only perform tx inptus clone for local proving.
+            // Only perform tx inputs clone for local proving.
             let tx_inputs = tx_inputs.clone();
-            tokio::task::spawn_blocking(move || LocalTransactionProver::default().prove(tx_inputs))
-                .await
-                .map_err(NtxError::Panic)?
+            LocalTransactionProver::default().prove(tx_inputs).await
         }
         .map_err(NtxError::Proving)
     }

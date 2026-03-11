@@ -42,8 +42,8 @@ impl StoreApi {
 
         Ok(Response::new(proto::rpc::BlockHeaderByNumberResponse {
             block_header: block_header.map(Into::into),
-            chain_length: mmr_proof.as_ref().map(|p| p.forest.num_leaves() as u32),
-            mmr_path: mmr_proof.map(|p| Into::into(&p.merkle_path)),
+            chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
+            mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),
         }))
     }
 

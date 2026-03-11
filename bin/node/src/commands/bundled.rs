@@ -9,7 +9,7 @@ use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use url::Url;

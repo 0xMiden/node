@@ -6,7 +6,7 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx::utils::serde::{Deserializable, Serializable};
 
 use crate::db::models::conv as conversions;
 use crate::db::schema;

@@ -32,7 +32,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::{MastForest, Word};
 use miden_tx::auth::BasicAuthenticator;
-use miden_tx::utils::Serializable;
+use miden_tx::utils::serde::Serializable;
 use miden_tx::{
     DataStore,
     DataStoreError,
@@ -203,7 +203,7 @@ pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) ->
 
     let prover = LocalTransactionProver::default();
 
-    let proven_tx = prover.prove(executed_tx).context("Failed to prove transaction")?;
+    let proven_tx = prover.prove(executed_tx).await.context("Failed to prove transaction")?;
 
     let request = ProvenTransaction {
         transaction: proven_tx.to_bytes(),

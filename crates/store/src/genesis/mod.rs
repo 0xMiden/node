@@ -2,7 +2,7 @@ use miden_node_utils::signer::BlockSigner;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{Account, AccountDelta};
-use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockBody,
@@ -89,7 +89,10 @@ impl<S: BlockSigner> GenesisState<S> {
 
         // Convert account updates to SMT entries using account_id_to_smt_key
         let smt_entries = accounts.iter().map(|update| {
-            (account_id_to_smt_key(update.account_id()), update.final_state_commitment())
+            (
+                AccountIdKey::from(update.account_id()).as_word(),
+                update.final_state_commitment(),
+            )
         });
 
         // Create LargeSmt with MemoryStorage

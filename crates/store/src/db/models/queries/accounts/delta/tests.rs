@@ -35,7 +35,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
 };
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
@@ -142,8 +142,7 @@ fn optimized_delta_matches_full_account_method() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -153,7 +152,7 @@ fn optimized_delta_matches_full_account_method() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -227,7 +226,8 @@ fn optimized_delta_matches_full_account_method() {
     assert!(!partial_delta.is_full_state(), "Delta should be partial, not full state");
 
     // Construct the expected final account by applying the delta
-    let expected_nonce = Felt::new(full_account_before.nonce().as_int() + nonce_delta.as_int());
+    let expected_nonce =
+        Felt::new(full_account_before.nonce().as_canonical_u64() + nonce_delta.as_canonical_u64());
     let expected_code_commitment = full_account_before.code().commitment();
 
     let mut expected_account = full_account_before.clone();
@@ -336,8 +336,7 @@ fn optimized_delta_updates_non_empty_vault() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -347,7 +346,7 @@ fn optimized_delta_updates_non_empty_vault() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .with_assets([initial_asset])
         .build_existing()
@@ -461,8 +460,7 @@ fn optimized_delta_updates_storage_map_header() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -472,7 +470,7 @@ fn optimized_delta_updates_storage_map_header() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -635,8 +633,7 @@ fn upsert_full_state_delta() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -646,7 +643,7 @@ fn upsert_full_state_delta() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();

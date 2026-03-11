@@ -11,6 +11,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::block::BlockNumber;
 use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
@@ -51,7 +52,9 @@ fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
 /// Creates a unique `TransactionId` from a seed value.
 fn mock_tx_id(seed: u64) -> TransactionId {
     let w = |n: u64| Word::try_from([n, 0, 0, 0]).unwrap();
-    TransactionId::new(w(seed), w(seed + 1), w(seed + 2), w(seed + 3))
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let fee = miden_protocol::asset::FungibleAsset::new(faucet_id, 0).unwrap();
+    TransactionId::new(w(seed), w(seed + 1), w(seed + 2), w(seed + 3), fee)
 }
 
 /// Creates a `SingleTargetNetworkNote` targeting the given network account.
@@ -551,12 +554,9 @@ fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Accou
         .compile_component_code("test::interface", "pub proc test_proc push.1.2 add end")
         .unwrap();
 
-    let component = AccountComponent::new(
-        component_code,
-        vec![],
-        AccountComponentMetadata::mock("test").with_supports_all_types(),
-    )
-    .unwrap();
+    let component =
+        AccountComponent::new(component_code, vec![], AccountComponentMetadata::mock("test"))
+            .unwrap();
 
     AccountBuilder::new([0u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -564,7 +564,7 @@ fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Accou
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(Word::default()),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()

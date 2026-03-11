@@ -27,7 +27,7 @@ use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::AccountInputs;
 use miden_standards::note::AccountTargetNetworkNote;
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_tx::utils::serde::{Deserializable, Serializable};
 use thiserror::Error;
 use tracing::{info, instrument};
 use url::Url;

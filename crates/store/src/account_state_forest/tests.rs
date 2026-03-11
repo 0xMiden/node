@@ -1,14 +1,14 @@
 use assert_matches::assert_matches;
 use miden_node_proto::domain::account::StorageMapEntries;
+use miden_protocol::Felt;
 use miden_protocol::account::{AccountCode, StorageMapKey};
-use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
-use miden_protocol::{Felt, FieldElement};
 
 use super::*;
 
@@ -66,8 +66,7 @@ fn empty_smt_root_is_recognized() {
 #[test]
 fn account_state_forest_basic_initialization() {
     let forest = AccountStateForest::new();
-    assert_eq!(forest.forest.lineage_count(), 0);
-    assert_eq!(forest.forest.tree_count(), 0);
+    assert_eq!(forest.lineage_versions.len(), 0);
 }
 
 #[test]
@@ -85,7 +84,7 @@ fn update_account_with_empty_deltas() {
     forest.update_account(block_num, &delta).unwrap();
 
     assert!(forest.get_vault_root(account_id, block_num).is_none());
-    assert_eq!(forest.forest.lineage_count(), 0);
+    assert_eq!(forest.lineage_versions.len(), 0);
 }
 
 // VAULT TESTS
@@ -191,11 +190,11 @@ fn forest_versions_are_continuous_for_sequential_updates() {
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block_num, &delta).unwrap();
 
-        let vault_tree = forest.tree_id_for_vault_root(account_id, block_num);
-        let storage_tree = forest.tree_id_for_root(account_id, &slot_name, block_num);
+        let vault_root = forest.tree_id_for_vault_root(account_id, block_num).unwrap();
+        let storage_root = forest.tree_id_for_root(account_id, &slot_name, block_num).unwrap();
 
-        assert_matches!(forest.forest.open(vault_tree, asset_key), Ok(_));
-        assert_matches!(forest.forest.open(storage_tree, storage_key), Ok(_));
+        assert_matches!(forest.forest.open(vault_root, asset_key), Ok(_));
+        assert_matches!(forest.forest.open(storage_root, storage_key), Ok(_));
     }
 }
 
@@ -279,7 +278,7 @@ fn witness_queries_work_with_sparse_lineage_updates() {
     assert_matches!(
         forest
             .forest
-            .open(forest.tree_id_for_vault_root(account_id, block_3), asset_key.into()),
+            .open(forest.tree_id_for_vault_root(account_id, block_3).unwrap(), asset_key.into(),),
         Ok(_)
     );
     assert_ne!(vault_root_at_3, AccountStateForest::empty_smt_root());
@@ -324,7 +323,7 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     let asset_amount = u64::from(HISTORICAL_BLOCK_RETENTION);
     let amount_increment = asset_amount / u64::from(HISTORICAL_BLOCK_RETENTION);
     let asset = dummy_fungible_asset(faucet_id, asset_amount);
-    let asset_key = AssetVaultKey::new_unchecked(asset.vault_key().into());
+    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
@@ -455,15 +454,15 @@ fn test_storage_map_removals() {
     let delta_2 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_2);
     forest.update_account(block_2, &delta_2).unwrap();
 
-    let tree = forest.tree_id_for_root(account_id, &slot_name, block_2);
+    let root = forest.tree_id_for_root(account_id, &slot_name, block_2).unwrap();
 
     let key_2_hash = key_2.hash().into();
     let key_1_hash = key_1.hash().into();
 
-    let proof_key_2 = forest.forest.open(tree, key_2_hash).unwrap();
+    let proof_key_2 = forest.forest.open(root, key_2_hash).unwrap();
     assert_eq!(proof_key_2.get(&key_2_hash), Some(value_2));
 
-    let proof_key_1 = forest.forest.open(tree, key_1_hash).unwrap();
+    let proof_key_1 = forest.forest.open(root, key_1_hash).unwrap();
     assert_eq!(proof_key_1.get(&key_1_hash), Some(EMPTY_WORD));
 }
 
@@ -545,7 +544,7 @@ fn storage_map_empty_entries_query() {
     let account_component = AccountComponent::new(
         component_code,
         component_storage,
-        AccountComponentMetadata::new("test").with_supports_all_types(),
+        AccountComponentMetadata::new("test", AccountType::all()),
     )
     .unwrap();
 
@@ -555,7 +554,7 @@ fn storage_map_empty_entries_query() {
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -700,14 +699,19 @@ fn prune_removes_smt_roots_from_forest() {
     assert!(forest.get_storage_map_root(account_id, &slot_name, retained_block).is_some());
 
     let asset_key: Word = FungibleAsset::new(faucet_id, 0).unwrap().vault_key().into();
-    let retained_tree = forest.tree_id_for_vault_root(account_id, retained_block);
-    let pruned_tree = forest.tree_id_for_vault_root(account_id, pruned_block);
-    assert_matches!(forest.forest.open(retained_tree, asset_key), Ok(_));
-    assert_matches!(forest.forest.open(pruned_tree, asset_key), Err(_));
+    let retained_root = forest.tree_id_for_vault_root(account_id, retained_block).unwrap();
+    let pruned_root = forest.tree_id_for_vault_root(account_id, pruned_block);
+    assert_matches!(forest.forest.open(retained_root, asset_key), Ok(_));
+    // Pruned root may not exist
+    if let Some(root) = pruned_root {
+        assert_matches!(forest.forest.open(root, asset_key), Err(_));
+    }
 
     let storage_key = StorageMapKey::new(Word::from([1u32, 0, 0, 0])).hash().into();
-    let storage_tree = forest.tree_id_for_root(account_id, &slot_name, pruned_block);
-    assert_matches!(forest.forest.open(storage_tree, storage_key), Err(_));
+    let storage_root = forest.tree_id_for_root(account_id, &slot_name, pruned_block);
+    if let Some(root) = storage_root {
+        assert_matches!(forest.forest.open(root, storage_key), Err(_));
+    }
 }
 
 #[test]
@@ -729,7 +733,7 @@ fn prune_respects_retention_boundary() {
     let total_roots_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
 
     assert_eq!(total_roots_removed, 0);
-    assert_eq!(forest.forest.tree_count(), 11);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 11);
 }
 
 #[test]
@@ -759,13 +763,13 @@ fn prune_roots_removes_old_entries() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 22);
 
     let total_roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
     assert_eq!(total_roots_removed, 0);
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 22);
 }
 
 #[test]
@@ -790,7 +794,7 @@ fn prune_handles_multiple_accounts() {
         forest.update_account(block_num, &delta2).unwrap();
     }
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 22);
 
     let total_roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
@@ -798,7 +802,7 @@ fn prune_handles_multiple_accounts() {
     assert_eq!(total_roots_removed, 0);
     assert!(total_roots_removed <= expected_removed_per_account * 2);
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 22);
 }
 
 #[test]
@@ -827,14 +831,14 @@ fn prune_handles_multiple_slots() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 22);
 
     let chain_tip = BlockNumber::from(TEST_CHAIN_LENGTH);
     let total_roots_removed = forest.prune(chain_tip);
 
     assert_eq!(total_roots_removed, 0);
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.lineage_versions.values().map(Vec::len).sum::<usize>(), 22);
 }
 
 #[test]
@@ -953,7 +957,7 @@ fn shared_vault_root_retained_when_one_account_changes() {
     let block_1 = BlockNumber::GENESIS.child();
     let initial_amount = 1000u64;
     let asset = dummy_fungible_asset(faucet_id, initial_amount);
-    let asset_key = AssetVaultKey::new_unchecked(asset.vault_key().into());
+    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();

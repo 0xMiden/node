@@ -6,7 +6,7 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
 use crate::commands::{
