@@ -227,29 +227,19 @@ impl NtxBuilderConfig {
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
 
-        let (chain_tip_header, chain_mmr, mempool_events) = loop {
-            let (chain_tip_header, chain_mmr) = store
-                .get_latest_blockchain_data_with_retry()
-                .await?
-                .context("store should contain a latest block")?;
+        // Subscribe to mempool first to ensure we don't miss any events. The subscription
+        // replays all inflight transactions, so the subscriber's state is fully reconstructed.
+        let subscription = block_producer
+            .subscribe_to_mempool_with_retry()
+            .await
+            .map_err(|err| anyhow::anyhow!(err))
+            .context("failed to subscribe to mempool events")?;
+        let mempool_events: MempoolEventStream = Box::pin(subscription.into_stream());
 
-            match block_producer
-                .subscribe_to_mempool_with_retry(chain_tip_header.block_num())
-                .await
-            {
-                Ok(subscription) => {
-                    let stream: MempoolEventStream = Box::pin(subscription.into_stream());
-                    break (chain_tip_header, chain_mmr, stream);
-                },
-                Err(status) if status.code() == tonic::Code::InvalidArgument => {
-                    tracing::warn!(
-                        err = %status,
-                        "mempool subscription failed due to chain tip desync, retrying"
-                    );
-                },
-                Err(err) => return Err(err).context("failed to subscribe to mempool events"),
-            }
-        };
+        let (chain_tip_header, chain_mmr) = store
+            .get_latest_blockchain_data_with_retry()
+            .await?
+            .context("store should contain a latest block")?;
 
         // Store the chain tip in the DB.
         db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
