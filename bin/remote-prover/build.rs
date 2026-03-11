@@ -7,8 +7,6 @@ use tonic_prost_build::FileDescriptorSet;
 
 /// Generates Rust protobuf bindings.
 fn main() -> miette::Result<()> {
-    miden_node_rocksdb_cxx_linkage_fix::configure();
-
     let dst_dir = build_rs::input::out_dir().join("generated");
 
     // Remove all existing files.
