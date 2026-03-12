@@ -12,7 +12,6 @@ use miden_node_proto_build::{
 };
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
-use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -24,8 +23,9 @@ use url::Url;
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::ApplyBlockError;
+use crate::genesis::GenesisBlock;
 use crate::state::State;
-use crate::{BlockProver, COMPONENT, GenesisState};
+use crate::{BlockProver, COMPONENT};
 
 mod api;
 mod block_producer;
@@ -52,15 +52,7 @@ impl Store {
         skip_all,
         err,
     )]
-    pub async fn bootstrap<S: BlockSigner>(
-        genesis: GenesisState<S>,
-        data_directory: &Path,
-    ) -> anyhow::Result<()> {
-        let genesis = genesis
-            .into_block()
-            .await
-            .context("failed to convert genesis configuration into the genesis block")?;
-
+    pub fn bootstrap(genesis: &GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(data_directory.to_path_buf()).with_context(|| {
                 format!("failed to load data directory at {}", data_directory.display())
@@ -69,14 +61,14 @@ impl Store {
 
         let block_store = data_directory.block_store_dir();
         let block_store =
-            BlockStore::bootstrap(block_store.clone(), &genesis).with_context(|| {
+            BlockStore::bootstrap(block_store.clone(), genesis).with_context(|| {
                 format!("failed to bootstrap block store at {}", block_store.display())
             })?;
         tracing::info!(target=COMPONENT, path=%block_store.display(), "Block store created");
 
         // Create the genesis block and insert it into the database.
         let database_filepath = data_directory.database_path();
-        Db::bootstrap(database_filepath.clone(), &genesis).with_context(|| {
+        Db::bootstrap(database_filepath.clone(), genesis).with_context(|| {
             format!("failed to bootstrap database at {}", database_filepath.display())
         })?;
         tracing::info!(target=COMPONENT, path=%database_filepath.display(), "Database created");
