@@ -23,7 +23,7 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
 
 use crate::COMPONENT;
 use crate::blocks::BlockStore;
@@ -206,9 +206,12 @@ async fn prove_and_save(
                 save_block(block_store, block_num, &proof).await?;
                 return Ok(block_num);
             },
-            Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error: {err}")?,
-            Ok(Err(ProveBlockError::Transient(_))) | Err(_) => {
-                // Errors are logged via the span.
+            Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
+            Ok(Err(ProveBlockError::Transient(err))) => {
+                error!(target: COMPONENT, %block_num, err = ?err, "transient error proving block, retrying");
+            },
+            Err(elapsed) => {
+                error!(target: COMPONENT, %block_num, %elapsed, "block proving timed out, retrying");
             },
         }
     }
