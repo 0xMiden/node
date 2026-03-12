@@ -104,7 +104,8 @@ async fn main() {
             num_accounts,
             public_accounts_percentage,
         } => {
-            seed_store(data_directory, num_accounts, public_accounts_percentage).await;
+            let seed: u64 = rand::random();
+            seed_store(data_directory, num_accounts, public_accounts_percentage, seed).await;
         },
         Command::BenchmarkStore {
             endpoint,

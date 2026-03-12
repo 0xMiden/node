@@ -79,12 +79,18 @@ pub const ACCOUNTS_FILENAME: &str = "accounts.txt";
 // ================================================================================================
 
 /// Seeds the store with a given number of accounts.
+///
+/// All randomness is derived from the provided `seed`, making runs fully reproducible.
 pub async fn seed_store(
     data_directory: PathBuf,
     num_accounts: usize,
     public_accounts_percentage: u8,
+    seed: u64,
 ) {
     let start = Instant::now();
+
+    // Derive all randomness from a single master RNG seeded by the user-provided seed.
+    let mut master_rng = StdRng::seed_from_u64(seed);
 
     // Recreate the data directory (it should be empty for store bootstrapping).
     //
@@ -93,10 +99,11 @@ pub async fn seed_store(
     fs_err::create_dir_all(&data_directory).expect("created data directory");
 
     // generate the faucet account and the genesis state
-    let faucet = create_faucet();
+    let faucet_coin_seed: [u64; 4] = master_rng.random();
+    let faucet = create_faucet(faucet_coin_seed);
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
-    let signer = EcdsaSecretKey::new();
-    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer);
+    let genesis_signer = EcdsaSecretKey::with_rng(&mut master_rng);
+    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, genesis_signer);
     let genesis_block = genesis_state
         .clone()
         .into_block()
@@ -107,6 +114,10 @@ pub async fn seed_store(
     // start the store
     let (_, store_url) = start_store(data_directory.clone()).await;
     let store_client = StoreClient::new(store_url);
+
+    // Derive remaining seeds from the master RNG.
+    let account_coin_seed: [u64; 4] = master_rng.random();
+    let block_signer = EcdsaSecretKey::with_rng(&mut master_rng);
 
     // start generating blocks
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
@@ -121,6 +132,8 @@ pub async fn seed_store(
         &store_client,
         data_directory,
         accounts_filepath,
+        account_coin_seed,
+        &block_signer,
     )
     .await;
 
@@ -140,6 +153,8 @@ async fn generate_blocks(
     store_client: &StoreClient,
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
+    coin_seed: [u64; 4],
+    block_signer: &EcdsaSecretKey,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
     // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx
@@ -163,7 +178,6 @@ async fn generate_blocks(
     let total_blocks = (num_accounts / consumes_per_block) + 1;
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
-    let coin_seed: [u64; 4] = rand::rng().random();
     let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
@@ -222,7 +236,8 @@ async fn generate_blocks(
         let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
 
         // update blocks
-        prev_block_header = apply_block(batches, block_inputs, store_client, &mut metrics).await;
+        prev_block_header =
+            apply_block(batches, block_inputs, store_client, block_signer, &mut metrics).await;
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
             current_anchor_header = prev_block_header.clone();
         }
@@ -256,12 +271,13 @@ async fn apply_block(
     batches: Vec<ProvenBatch>,
     block_inputs: BlockInputs,
     store_client: &StoreClient,
+    signer: &EcdsaSecretKey,
     metrics: &mut SeedingMetrics,
 ) -> BlockHeader {
     let proposed_block = ProposedBlock::new(block_inputs, batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
     let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
-    let signature = EcdsaSecretKey::new().sign(header.commitment());
+    let signature = signer.sign(header.commitment());
     // SAFETY: The header, body, and signature are known to correspond to each other.
     let signed_block = SignedBlock::new_unchecked(header, body, signature);
     let ordered_batches = proposed_block.batches().clone();
@@ -346,8 +362,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
 }
 
 /// Creates a new faucet account.
-fn create_faucet() -> Account {
-    let coin_seed: [u64; 4] = rand::rng().random();
+fn create_faucet(coin_seed: [u64; 4]) -> Account {
     let mut rng = RpoRandomCoin::new(coin_seed.map(Felt::new).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed = [0_u8; 32];
