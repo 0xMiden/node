@@ -132,9 +132,9 @@ The above would set the general level to `warn`, and the `block-producer` and `r
 The OpenTelemetry trace exporter is enabled by adding the `--enable-otel` flag to each component's start command:
 
 ```sh
-miden-node store start --enable-otel <...>
-miden-node block-producer start --enable-otel <...>
-miden-node rpc start --enable-otel <...>
+miden-node store start --enable-otel
+miden-node block-producer start --enable-otel
+miden-node rpc start --enable-otel
 ```
 
 The exporter can be configured using environment variables as specified in the official
@@ -155,7 +155,7 @@ This is based off Honeycomb's OpenTelemetry
 ```sh
 OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io:443 \
 OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=your-api-key" \
-miden-node store start --enable-otel <...>
+miden-node store start --enable-otel
 ```
 
 ### Honeycomb queries, triggers and board examples
