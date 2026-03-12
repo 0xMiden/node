@@ -176,23 +176,27 @@ async fn generate_blocks(
         let mut block_txs = Vec::with_capacity(BATCHES_PER_BLOCK * TRANSACTIONS_PER_BATCH);
 
         // create public accounts and notes that mint assets for these accounts
+        // Use separate index offsets for public and private accounts to avoid ID prefix
+        // collisions (different storage modes can produce the same prefix in v0.14).
+        let pub_offset = i * (num_public_accounts + num_private_accounts);
         let (pub_accounts, pub_notes) = create_accounts_and_notes(
             num_public_accounts,
             AccountStorageMode::Public,
             &key_pair,
             &rng,
             faucet.id(),
-            i,
+            pub_offset,
         );
 
         // create private accounts and notes that mint assets for these accounts
+        let priv_offset = pub_offset + num_public_accounts;
         let (priv_accounts, priv_notes) = create_accounts_and_notes(
             num_private_accounts,
             AccountStorageMode::Private,
             &key_pair,
             &rng,
             faucet.id(),
-            i,
+            priv_offset,
         );
 
         let notes = [pub_notes, priv_notes].concat();
@@ -291,14 +295,14 @@ fn create_accounts_and_notes(
     key_pair: &SecretKey,
     rng: &Arc<Mutex<RpoRandomCoin>>,
     faucet_id: AccountId,
-    block_num: usize,
+    index_offset: usize,
 ) -> (Vec<Account>, Vec<Note>) {
     (0..num_accounts)
         .into_par_iter()
         .map(|account_index| {
             let account = create_account(
                 key_pair.public_key(),
-                ((block_num * num_accounts) + account_index) as u64,
+                (index_offset + account_index) as u64,
                 storage_mode,
             );
             let note = {
