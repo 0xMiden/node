@@ -122,7 +122,7 @@ impl ValidatorCommand {
             } => {
                 let address = url
                     .to_socket()
-                    .context("Failed to extract socket address from validator URL")?;
+                    .context("failed to extract socket address from validator URL")?;
 
                 // Run validator with KMS key backend if key id provided.
                 if let Some(kms_key_id) = kms_key_id {
