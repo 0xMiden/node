@@ -44,8 +44,6 @@ const METADATA_CF: &str = "metadata";
 /// rebuilding.
 const DEPTH_24_CF: &str = "depth24";
 
-/// The key used in the `METADATA_CF` column family to store the SMT's root hash.
-const ROOT_KEY: &[u8] = b"smt_root";
 /// The key used in the `METADATA_CF` column family to store the total count of non-empty leaves.
 const LEAF_COUNT_KEY: &[u8] = b"leaf_count";
 /// The key used in the `METADATA_CF` column family to store the total count of key-value entries.
@@ -260,43 +258,6 @@ impl RocksDbStorage {
     fn subtree_cf(&self, index: NodeIndex) -> &rocksdb::ColumnFamily {
         let name = cf_for_depth(index.depth());
         self.cf_handle(name).expect("CF handle missing")
-    }
-
-    /// Retrieves the SMT root hash from the `METADATA_CF` column family.
-    ///
-    /// Note: In miden-crypto 0.22+, `get_root` is no longer part of the `SmtStorage` trait.
-    /// The root is managed in-memory by `LargeSmt`. This method is retained for backward
-    /// compatibility and direct database inspection.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the metadata column family is missing or a RocksDB error
-    ///   occurs.
-    /// - `StorageError::DeserializationError`: If the retrieved root hash bytes cannot be
-    ///   deserialized.
-    pub fn get_root(&self) -> Result<Option<Word>, StorageError> {
-        let cf = self.cf_handle(METADATA_CF)?;
-        match self.db.get_cf(cf, ROOT_KEY).map_err(map_rocksdb_err)? {
-            Some(bytes) => {
-                let digest = Word::read_from_bytes(&bytes)?;
-                Ok(Some(digest))
-            },
-            None => Ok(None),
-        }
-    }
-
-    /// Stores the SMT root hash in the `METADATA_CF` column family.
-    ///
-    /// Note: In miden-crypto 0.22+, `set_root` is no longer part of the `SmtStorage` trait.
-    /// The root is managed in-memory by `LargeSmt`. This method is retained for backward
-    /// compatibility and direct database operations.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the metadata column family is missing or a RocksDB error
-    ///   occurs.
-    pub fn set_root(&self, root: Word) -> Result<(), StorageError> {
-        let cf = self.cf_handle(METADATA_CF)?;
-        self.db.put_cf(cf, ROOT_KEY, root.to_bytes()).map_err(map_rocksdb_err)?;
-        Ok(())
     }
 }
 

@@ -1354,21 +1354,21 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
     )];
 
+    let fee = test_fee();
     TransactionHeader::new_unchecked(
         TransactionId::new(
             initial_state_commitment,
             final_account_commitment,
             input_notes_commitment,
             output_notes_commitment,
-            FungibleAsset::new(AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap(), 0)
-                .unwrap(),
+            fee,
         ),
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
-        test_fee(),
+        fee,
     )
 }
 
@@ -1895,8 +1895,7 @@ fn serialization_symmetry_core_types() {
         num_to_word(2),
         num_to_word(3),
         num_to_word(4),
-        FungibleAsset::new(AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap(), 0)
-            .unwrap(),
+        test_fee(),
     );
     let bytes = tx_id.to_bytes();
     let restored = TransactionId::read_from_bytes(&bytes).unwrap();

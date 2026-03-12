@@ -85,8 +85,8 @@ fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransa
 
     ProvenTransaction::new(
         account_update,
-        std::iter::empty::<miden_protocol::transaction::InputNoteCommitment>(),
-        std::iter::empty::<miden_protocol::transaction::OutputNote>(),
+        Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
+        Vec::<miden_protocol::transaction::OutputNote>::new(),
         0.into(),
         Word::default(),
         test_fee(),

@@ -51,7 +51,6 @@ use miden_tx::{
     TransactionProverError,
 };
 use tokio::sync::Mutex;
-use tokio::task::JoinError;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
@@ -73,9 +72,6 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
-    #[error("the ntx task panicked")]
-    #[expect(dead_code)]
-    Panic(#[source] JoinError),
 }
 
 type NtxResult<T> = Result<T, NtxError>;
