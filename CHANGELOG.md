@@ -4,6 +4,7 @@
 
 - Private notes with the network note attachment are no longer incorrectly considered as network notes (#[#1736](https://github.com/0xMiden/node/pull/1736)).
 - Fixed network monitor looping on stale wallet nonce after node restarts by re-syncing wallet state from RPC after repeated failures ([#1748](https://github.com/0xMiden/node/pull/1748)).
+- Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 
 ## v0.13.7 (2026-02-25)
 
