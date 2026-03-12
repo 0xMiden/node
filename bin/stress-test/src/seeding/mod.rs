@@ -9,7 +9,7 @@ use miden_node_block_producer::store::StoreClient;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_store::{DataDirectory, GenesisState, Store};
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -555,6 +555,7 @@ pub async fn start_store(
             block_producer_listener,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::bench(),
+            storage_options: StorageOptions::bench(),
         }
         .serve()
         .await
