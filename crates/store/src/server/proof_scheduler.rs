@@ -206,7 +206,7 @@ async fn prove_and_save(
                 save_block(block_store, block_num, &proof).await?;
                 return Ok(block_num);
             },
-            Ok(Err(ProveBlockError::Fatal(err))) => anyhow::bail!("Fatal error: {err}"),
+            Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error: {err}")?,
             Ok(Err(ProveBlockError::Transient(_))) | Err(_) => {
                 // Errors are logged via the span.
             },
