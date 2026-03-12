@@ -431,6 +431,7 @@ pub enum StorageMapEntries {
     /// Specific entries with their SMT proofs for client-side verification.
     /// Used when specific keys are requested from the storage map.
     /// Each entry pairs the original raw key with its SMT proof.
+    /// TODO: replace `Word` with `StorageMapKey` once main branch is updated to `0.14.0`
     EntriesWithProofs(Vec<(Word, SmtProof)>),
 }
 
