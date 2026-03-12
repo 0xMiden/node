@@ -6,6 +6,7 @@ use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::keccak::Keccak256;
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
+use spki::der::Decode;
 
 // KMS SIGNER ERROR
 // ================================================================================================
@@ -70,9 +71,13 @@ impl KmsSigner {
         let pub_key_output = client.get_public_key().key_id(key_id.clone()).send().await?;
         let spki_der = pub_key_output.public_key().ok_or(KmsSignerError::EmptyBlob)?.as_ref();
 
-        // Extract the raw SEC1 public key bytes from the SPKI DER encoding and decode as a
-        // Miden public key.
-        let sec1_bytes = extract_sec1_from_spki_der(spki_der)?;
+        // Parse the SPKI DER to extract the raw SEC1 public key bytes.
+        let spki = spki::SubjectPublicKeyInfoRef::from_der(spki_der)
+            .map_err(|e| DeserializationError::InvalidValue(e.to_string()))?;
+        let sec1_bytes = spki
+            .subject_public_key
+            .as_bytes()
+            .ok_or_else(|| DeserializationError::InvalidValue("Invalid SPKI BIT STRING".into()))?;
         let pub_key = PublicKey::read_from_bytes(sec1_bytes)?;
         Ok(Self { key_id, pub_key, client })
     }
@@ -103,13 +108,13 @@ impl BlockSigner for KmsSigner {
             .map_err(Box::from)
             .map_err(KmsSignerError::KmsServiceError)?;
 
-        // Decode DER-encoded signature.
+        // Decode DER-encoded ECDSA signature into r||s bytes.
         let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
-        // Recovery id is not used by verify(pk), so 0 is fine.
-        let recovery_id = 0;
-        let sig_bytes = parse_der_ecdsa_signature(sig_der.as_ref())
+        let k256_sig = k256::ecdsa::Signature::from_der(sig_der.as_ref())
+            .map_err(|e| DeserializationError::InvalidValue(e.to_string()))
             .map_err(KmsSignerError::SignatureFormatError)?;
-        let sig = Signature::from_sec1_bytes_and_recovery_id(sig_bytes, recovery_id)
+        // Recovery id is not used by verify(pk), so 0 is fine.
+        let sig = Signature::from_sec1_bytes_and_recovery_id(k256_sig.to_bytes().into(), 0)
             .map_err(KmsSignerError::SignatureFormatError)?;
 
         // Check the returned signature.
@@ -122,139 +127,5 @@ impl BlockSigner for KmsSigner {
 
     fn public_key(&self) -> PublicKey {
         self.pub_key.clone()
-    }
-}
-
-// HELPERS
-// ================================================================================================
-
-/// Extracts the raw SEC1 public key bytes from a DER-encoded `SubjectPublicKeyInfo` (SPKI)
-/// structure.
-///
-/// SPKI DER layout:
-///   SEQUENCE {
-///     SEQUENCE { algorithm OID, parameters }
-///     BIT STRING { 0x00 (unused bits), <SEC1 point bytes> }
-///   }
-fn extract_sec1_from_spki_der(der: &[u8]) -> Result<&[u8], DeserializationError> {
-    // Skip the outer SEQUENCE tag + length.
-    let rest = skip_der_tag_and_length(der, 0x30)?;
-    // Skip the inner SEQUENCE (algorithm identifier) tag + length + content.
-    let rest = skip_der_tlv(rest, 0x30)?;
-    // Parse the BIT STRING.
-    let content = read_der_content(rest, 0x03)?;
-    // The first byte of BIT STRING content is the "unused bits" count (must be 0 for keys).
-    if content.is_empty() || content[0] != 0 {
-        return Err(DeserializationError::InvalidValue(
-            "Invalid SPKI BIT STRING padding".to_string(),
-        ));
-    }
-    Ok(&content[1..])
-}
-
-/// Parses a DER-encoded ECDSA signature (ASN.1: SEQUENCE { INTEGER r, INTEGER s }) into a
-/// 64-byte r||s array.
-fn parse_der_ecdsa_signature(der: &[u8]) -> Result<[u8; 64], DeserializationError> {
-    let rest = skip_der_tag_and_length(der, 0x30)?;
-    let (r_bytes, rest) = read_der_integer(rest)?;
-    let (s_bytes, _) = read_der_integer(rest)?;
-
-    let mut out = [0u8; 64];
-    copy_integer_to_fixed(r_bytes, &mut out[..32])?;
-    copy_integer_to_fixed(s_bytes, &mut out[32..])?;
-    Ok(out)
-}
-
-/// Copies a variable-length big-endian integer into a fixed-size buffer, right-aligned.
-/// Strips leading zero padding if present.
-fn copy_integer_to_fixed(src: &[u8], dst: &mut [u8]) -> Result<(), DeserializationError> {
-    // Strip leading zeros.
-    let src = match src.iter().position(|&b| b != 0) {
-        Some(pos) => &src[pos..],
-        None => &[0],
-    };
-    if src.len() > dst.len() {
-        return Err(DeserializationError::InvalidValue(
-            "DER integer too large for target".to_string(),
-        ));
-    }
-    let offset = dst.len() - src.len();
-    dst[offset..].copy_from_slice(src);
-    Ok(())
-}
-
-/// Skips a DER tag byte and its length field, returning the content slice.
-fn skip_der_tag_and_length(data: &[u8], expected_tag: u8) -> Result<&[u8], DeserializationError> {
-    if data.is_empty() || data[0] != expected_tag {
-        return Err(DeserializationError::InvalidValue(format!(
-            "Expected DER tag 0x{expected_tag:02x}, got 0x{:02x}",
-            data.first().copied().unwrap_or(0)
-        )));
-    }
-    let (_, rest) = read_der_length(&data[1..])?;
-    Ok(rest)
-}
-
-/// Skips an entire DER TLV (tag + length + value), returning the remaining data after it.
-fn skip_der_tlv(data: &[u8], expected_tag: u8) -> Result<&[u8], DeserializationError> {
-    if data.is_empty() || data[0] != expected_tag {
-        return Err(DeserializationError::InvalidValue(format!(
-            "Expected DER tag 0x{expected_tag:02x}, got 0x{:02x}",
-            data.first().copied().unwrap_or(0)
-        )));
-    }
-    let (len, rest) = read_der_length(&data[1..])?;
-    if rest.len() < len {
-        return Err(DeserializationError::InvalidValue("DER content truncated".to_string()));
-    }
-    Ok(&rest[len..])
-}
-
-/// Reads a DER element's content bytes given its expected tag.
-fn read_der_content(data: &[u8], expected_tag: u8) -> Result<&[u8], DeserializationError> {
-    if data.is_empty() || data[0] != expected_tag {
-        return Err(DeserializationError::InvalidValue(format!(
-            "Expected DER tag 0x{expected_tag:02x}, got 0x{:02x}",
-            data.first().copied().unwrap_or(0)
-        )));
-    }
-    let (len, rest) = read_der_length(&data[1..])?;
-    if rest.len() < len {
-        return Err(DeserializationError::InvalidValue("DER content truncated".to_string()));
-    }
-    Ok(&rest[..len])
-}
-
-/// Reads a DER INTEGER element, returning (value bytes, remaining data).
-fn read_der_integer(data: &[u8]) -> Result<(&[u8], &[u8]), DeserializationError> {
-    if data.is_empty() || data[0] != 0x02 {
-        return Err(DeserializationError::InvalidValue("Expected DER INTEGER tag".to_string()));
-    }
-    let (len, rest) = read_der_length(&data[1..])?;
-    if rest.len() < len {
-        return Err(DeserializationError::InvalidValue("DER INTEGER truncated".to_string()));
-    }
-    Ok((&rest[..len], &rest[len..]))
-}
-
-/// Reads a DER length field, returning (length value, remaining data after length).
-fn read_der_length(data: &[u8]) -> Result<(usize, &[u8]), DeserializationError> {
-    if data.is_empty() {
-        return Err(DeserializationError::InvalidValue("DER length missing".to_string()));
-    }
-    if data[0] < 0x80 {
-        Ok((data[0] as usize, &data[1..]))
-    } else {
-        let num_bytes = (data[0] & 0x7f) as usize;
-        if num_bytes == 0 || num_bytes > 4 || data.len() < 1 + num_bytes {
-            return Err(DeserializationError::InvalidValue(
-                "Invalid DER length encoding".to_string(),
-            ));
-        }
-        let mut len = 0usize;
-        for &b in &data[1..=num_bytes] {
-            len = (len << 8) | b as usize;
-        }
-        Ok((len, &data[1 + num_bytes..]))
     }
 }
