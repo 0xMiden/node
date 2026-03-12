@@ -1,4 +1,4 @@
-//! RocksDB storage backend specific CLI argument parsing and types.
+//! `RocksDB` storage backend specific CLI argument parsing and types.
 
 use std::path::Path;
 
