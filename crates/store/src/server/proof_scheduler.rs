@@ -11,7 +11,6 @@
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
-use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,8 +83,8 @@ impl ProofTaskJoinSet {
 
 /// Spawns the proof scheduler as a background tokio task.
 ///
-/// The scheduler uses `chain_tip_rx` to learn about newly committed blocks and
-/// `latest_proven_block` as the starting point for sequential proof tracking.
+/// The scheduler uses `chain_tip_rx` to learn about newly committed blocks and queries the DB
+/// for unproven blocks to prove.
 ///
 /// Returns a [`JoinHandle`] that resolves when the scheduler encounters a fatal error or
 /// completes unexpectedly.
@@ -94,23 +93,18 @@ pub fn spawn(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
-    latest_proven_block: BlockNumber,
     max_concurrent_proofs: NonZeroUsize,
 ) -> JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(run(
-        db,
-        block_prover,
-        block_store,
-        chain_tip_rx,
-        latest_proven_block,
-        max_concurrent_proofs,
-    ))
+    tokio::spawn(run(db, block_prover, block_store, chain_tip_rx, max_concurrent_proofs))
 }
 
 /// Main loop of the proof scheduler.
 ///
 /// Maintains a pool of concurrent proving jobs via [`JoinSet`], fills them up to
-/// `max_concurrent_proofs`, and drains completed results in block-number order.
+/// `max_concurrent_proofs`, and drains completed results.
+///
+/// Unproven blocks are discovered by querying the database each iteration, so the scheduler is
+/// stateless with respect to which blocks need proving.
 ///
 /// Returns `Err` on irrecoverable errors (missing/corrupt proving inputs, DB write failures).
 /// Transient errors are retried internally.
@@ -119,32 +113,32 @@ async fn run(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
-    latest_proven_block: BlockNumber,
     max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
-    info!(target: COMPONENT, %latest_proven_block, "Proof scheduler started");
+    info!(target: COMPONENT, "Proof scheduler started");
 
-    // The latest block that has been sequentially marked as proven in the DB.
-    let mut latest_complete = latest_proven_block;
-    // The current chain tip as observed from the watch channel.
-    let mut chain_tip = *chain_tip_rx.borrow_and_update();
     // In-flight proving tasks.
     let mut join_set = ProofTaskJoinSet::new();
-    // Block numbers currently being proven.
-    let mut inflight: BTreeSet<BlockNumber> = BTreeSet::new();
-    // The next block number to schedule for proving.
-    let mut next_to_schedule = latest_complete.child();
+    // Number of blocks currently being proven.
+    let mut inflight_count: usize = 0;
+    // Highest block number that is inflight or has been proven. Used to avoid re-querying
+    // blocks we've already scheduled.
+    let mut highest_scheduled = BlockNumber::GENESIS;
 
     loop {
-        // Fill the job pool up to capacity from the next unscheduled blocks.
-        while inflight.len() < max_concurrent_proofs.into()
-            && next_to_schedule.as_u32() <= chain_tip.as_u32()
-        {
-            let scheduled = next_to_schedule;
-            inflight.insert(scheduled);
+        // Query the DB for unproven blocks beyond what we've already scheduled.
+        let capacity = max_concurrent_proofs.get() - inflight_count;
+        if capacity > 0 {
+            let unproven = db.select_unproven_blocks(highest_scheduled, capacity).await?;
 
-            join_set.spawn(&db, &block_prover, &block_store, scheduled);
-            next_to_schedule = scheduled.child();
+            inflight_count += unproven.len();
+            if let Some(&last) = unproven.last() {
+                highest_scheduled = last;
+            }
+
+            for block_num in unproven {
+                join_set.spawn(&db, &block_prover, &block_store, block_num);
+            }
         }
 
         // Wait for either a job to complete or the chain tip to advance.
@@ -152,30 +146,20 @@ async fn run(
             // Proving task completed.
             result = join_set.join_next() => {
                 let block_num = result?;
-                info!(target=COMPONENT, block.number=%block_num, "Block proof completed");
-                inflight.remove(&block_num);
+                inflight_count -= 1;
+
+                db.mark_block_proven(block_num).await?;
+
+                info!(target=COMPONENT, block.number=%block_num, "Block proven");
             },
 
-            // New chain tip received.
+            // New chain tip received — re-query for unproven blocks on next iteration.
             result = chain_tip_rx.changed() => {
                 if result.is_err() {
                     info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
                     return Ok(());
                 }
-                chain_tip = *chain_tip_rx.borrow();
             },
-        }
-
-        // Mark completed proofs as proven sequentially.
-        // Find the lowest in-flight block.
-        let lowest_in_flight = inflight.first().copied().unwrap_or(next_to_schedule);
-        // Mark all sequentially proven blocks as completed.
-        while latest_complete.child().as_u32() < lowest_in_flight.as_u32() {
-            latest_complete = latest_complete.child();
-            db.mark_block_proven(latest_complete)
-                .await
-                .map_err(ProofSchedulerError::MarkBlockProvenFailed)?;
-            info!(target=COMPONENT, block.number=%latest_complete, "Block marked as proven");
         }
     }
 }

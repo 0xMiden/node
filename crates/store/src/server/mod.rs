@@ -108,16 +108,9 @@ impl Store {
             Arc::new(BlockProver::local())
         };
 
-        // Initialize the chain tip watch channel and read the latest proven block from the DB.
+        // Initialize the chain tip watch channel.
         let chain_tip = state.latest_block_num().await;
         let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
-
-        let latest_proven_block = state
-            .db()
-            .select_latest_proven_block_num()
-            .await
-            .context("failed to read latest proven block number")?
-            .unwrap_or(miden_protocol::block::BlockNumber::GENESIS);
 
         // Spawn the proof scheduler as a background task. It will immediately pick up any
         // unproven blocks from previous runs and begin proving them.
@@ -126,7 +119,6 @@ impl Store {
             block_prover,
             state.block_store(),
             chain_tip_rx,
-            latest_proven_block,
             self.max_concurrent_proofs,
         );
 

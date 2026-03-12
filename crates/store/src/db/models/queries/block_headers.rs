@@ -296,6 +296,40 @@ pub(crate) fn mark_block_proven(
     Ok(count)
 }
 
+/// Select unproven block numbers greater than `after`, in ascending order, up to `limit`.
+///
+/// A block is unproven when its `proving_inputs` are non-NULL.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num
+/// FROM block_headers
+/// WHERE proving_inputs IS NOT NULL
+///   AND block_num > ?
+/// ORDER BY block_num ASC
+/// LIMIT ?
+/// ```
+pub(crate) fn select_unproven_blocks(
+    conn: &mut SqliteConnection,
+    after: BlockNumber,
+    limit: usize,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    let block_nums: Vec<i64> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
+            .filter(schema::block_headers::proving_inputs.is_not_null())
+            .filter(schema::block_headers::block_num.gt(after.to_raw_sql()))
+            .order(schema::block_headers::block_num.asc())
+            .limit(i64::try_from(limit).expect("unproven block number limit should fit in i64"))
+            .load(conn)?;
+
+    block_nums
+        .into_iter()
+        .map(BlockNumber::from_raw_sql)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 /// Select the highest block number that has been proven.
 ///
 /// A block is considered proven when its `proving_inputs` are `NULL`. This includes the genesis

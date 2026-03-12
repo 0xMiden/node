@@ -622,6 +622,19 @@ impl Db {
         .await
     }
 
+    /// Returns unproven block numbers greater than `after`, in ascending order, up to `limit`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_unproven_blocks(
+        &self,
+        after: BlockNumber,
+        limit: usize,
+    ) -> Result<Vec<BlockNumber>> {
+        self.transact("select unproven blocks", move |conn| {
+            models::queries::select_unproven_blocks(conn, after, limit)
+        })
+        .await
+    }
+
     /// Returns the highest block number that has been proven, or `None` if no blocks have been
     /// proven yet.
     ///
