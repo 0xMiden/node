@@ -3259,6 +3259,7 @@ dependencies = [
  "humantime",
  "itertools 0.14.0",
  "lru",
+ "miden-large-smt-backend-rocksdb",
  "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",
