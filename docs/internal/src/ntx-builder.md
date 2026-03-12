@@ -34,12 +34,22 @@ definitions of network accounts, notes and transactions mature.
 
 ## Implementation
 
-On startup the mempool loads all unconsumed network notes from the store. From there it monitors
-the mempool for events which would impact network account state. This communication takes the form
-of an event stream via gRPC.
+The NTB uses an actor-per-account model managed by a central `Coordinator`. On startup the
+coordinator syncs all known network accounts and their unconsumed notes from the store. It then
+monitors the mempool for events (via a gRPC event stream from the block-producer) which would
+impact network account state.
 
-The NTB periodically selects an arbitrary network account with available network notes and creates
-a network transaction for it.
+For each network account that has available notes, the coordinator spawns a dedicated
+`AccountActor`. Each actor runs in its own async task and is responsible for creating transactions
+that consume network notes targeting its account. Actors read their state from the database and
+re-evaluate whenever notified by the coordinator.
+
+Actors that have been idle (no available notes to consume) for longer than the **idle timeout**
+will be deactivated. The idle timeout is configurable via the `--ntx-builder.idle-timeout` CLI
+argument (default: 5 minutes).
+
+Deactivated actors are re-spawned when new notes targeting their account are detected by the
+coordinator (via the `send_targeted` path).
 
 The block-producer remains blissfully unaware of network transactions. From its perspective a
 network transaction is simply the same as any other.
