@@ -23,8 +23,9 @@ use url::Url;
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::ApplyBlockError;
+use crate::genesis::GenesisBlock;
 use crate::state::State;
-use crate::{BlockProver, COMPONENT, GenesisBlock};
+use crate::{BlockProver, COMPONENT};
 
 mod api;
 mod block_producer;

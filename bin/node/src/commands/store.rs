@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use miden_node_store::{GenesisBlock, Store};
+use miden_node_store::Store;
+use miden_node_store::genesis::GenesisBlock;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
