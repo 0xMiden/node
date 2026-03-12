@@ -189,7 +189,7 @@ async fn run(
 /// DB, invoking the prover (with a timeout), and persisting the proof to disk.
 ///
 /// The caller is responsible for marking the block as proven in the DB.
-#[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(%block_num), err)]
+#[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(block.number=block_num.as_u32()), err)]
 async fn prove_and_save(
     db: &Db,
     block_prover: &BlockProver,
@@ -219,7 +219,7 @@ async fn prove_and_save(
 /// Proves a single block by loading inputs from the DB and invoking the block prover.
 ///
 /// Records `block_commitment` on `parent_span` once the block header is available.
-#[instrument(target = COMPONENT, name = "prove_block.prove", skip_all, fields(%block_num), err)]
+#[instrument(target = COMPONENT, name = "prove_block.prove", skip_all, fields(block.number=block_num.as_u32()), err)]
 async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
@@ -242,7 +242,7 @@ async fn prove_block(
 }
 
 /// Saves a block proof to the block store.
-#[instrument(target = COMPONENT, name = "prove_block.save", skip_all, fields(%block_num), err)]
+#[instrument(target = COMPONENT, name = "prove_block.save", skip_all, fields(block.number=block_num.as_u32()), err)]
 async fn save_block(
     block_store: &BlockStore,
     block_num: BlockNumber,
