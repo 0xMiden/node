@@ -96,9 +96,12 @@ pub async fn seed_store(
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
     let signer = EcdsaSecretKey::new();
     let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer);
-    Store::bootstrap(genesis_state.clone(), &data_directory)
+    let genesis_block = genesis_state
+        .clone()
+        .into_block()
         .await
-        .expect("store should bootstrap");
+        .expect("genesis block should be created");
+    Store::bootstrap(&genesis_block, &data_directory).expect("store should bootstrap");
 
     // start the store
     let (_, store_url) = start_store(data_directory.clone()).await;

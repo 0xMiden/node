@@ -458,9 +458,12 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
     let config = GenesisConfig::default();
     let signer = SecretKey::new();
     let (genesis_state, _) = config.into_state(signer).unwrap();
-    Store::bootstrap(genesis_state.clone(), data_directory.path())
+    let genesis_block = genesis_state
+        .clone()
+        .into_block()
         .await
-        .expect("store should bootstrap");
+        .expect("genesis block should be created");
+    Store::bootstrap(&genesis_block, data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let store_addr =
         store_listener.local_addr().expect("store listener should get a local address");
