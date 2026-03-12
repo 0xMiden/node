@@ -191,9 +191,6 @@ pub(super) fn select_vault_balances_by_faucet_ids(
 
 /// Selects the latest vault assets for an account.
 ///
-/// Queries only the current vault state (`is_latest = true`) rather than historical entries,
-/// which is needed for reconstructing the current `AssetVault` before applying a delta.
-///
 /// # Raw SQL
 ///
 /// ```sql
