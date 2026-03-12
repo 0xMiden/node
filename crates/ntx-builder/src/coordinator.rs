@@ -1,17 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::actor::{AccountActor, AccountActorContext, AccountOrigin, ActorShutdownReason};
+use crate::actor::{AccountActor, AccountActorContext, AccountOrigin};
 use crate::db::Db;
 
 // WRITE EVENT RESULT
@@ -91,7 +89,7 @@ pub struct Coordinator {
     /// This join set allows the coordinator to wait for actor task completion and handle
     /// different shutdown scenarios. When an actor task completes (either successfully or
     /// due to an error), the corresponding entry is removed from the actor registry.
-    actor_join_set: JoinSet<ActorShutdownReason>,
+    actor_join_set: JoinSet<(NetworkAccountId, anyhow::Result<()>)>,
 
     /// Semaphore for controlling the maximum number of concurrent transactions across all network
     /// accounts.
@@ -167,10 +165,8 @@ impl Coordinator {
 
         // Run the actor. Actor reads state from DB on startup.
         let semaphore = self.semaphore.clone();
-        self.actor_join_set.spawn(Box::pin(async move {
-            // The actor loop runs indefinitely, it only exits via Err with a shutdown reason.
-            actor.run(semaphore).await.expect_err("actor loop runs indefinitely")
-        }));
+        self.actor_join_set
+            .spawn(Box::pin(async move { (account_id, actor.run(semaphore).await) }));
 
         self.actor_registry.insert(account_id, handle);
         tracing::info!(account_id = %account_id, "Created actor for account prefix");
@@ -189,7 +185,7 @@ impl Coordinator {
         }
     }
 
-    /// Waits for the next actor to complete and processes the shutdown reason.
+    /// Waits for the next actor to complete and handles the outcome.
     ///
     /// This method monitors the join set for actor task completion and handles
     /// different shutdown scenarios appropriately. It's designed to be called
@@ -198,45 +194,34 @@ impl Coordinator {
     /// If no actors are currently running, this method will wait indefinitely until
     /// new actors are spawned. This prevents busy-waiting when the coordinator is idle.
     ///
-    /// Returns `Some(account_id)` if a timed-out actor should be respawned (because a
-    /// notification arrived just as it timed out), or `None` otherwise.
+    /// Returns `Some(account_id)` if an actor should be respawned (because a
+    /// notification arrived just as it shut down), or `None` otherwise.
     pub async fn next(&mut self) -> anyhow::Result<Option<NetworkAccountId>> {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
-            Some(Ok(shutdown_reason)) => match shutdown_reason {
-                ActorShutdownReason::Cancelled(account_id) => {
-                    // Do not remove the actor from the registry, as it may be re-spawned.
-                    // The coordinator should always remove actors immediately after cancellation.
-                    tracing::info!(account_id = %account_id, "Account actor cancelled");
-                    Ok(None)
-                },
-                ActorShutdownReason::SemaphoreFailed(err) => Err(err).context("semaphore failed"),
-                ActorShutdownReason::DbError(account_id, err) => {
-                    let count = self.crash_counts.entry(account_id).or_insert(0);
-                    *count += 1;
-                    tracing::error!(account.id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
-                    self.actor_registry.remove(&account_id);
-                    Ok(None)
-                },
-                ActorShutdownReason::AccountRemoved(account_id) => {
-                    self.actor_registry.remove(&account_id);
-                    tracing::info!(account_id = %account_id, "Account actor shut down: account removed");
-                    Ok(None)
-                },
-                ActorShutdownReason::IdleTimeout(account_id) => {
-                    tracing::info!(account_id = %account_id, "Account actor shut down due to idle timeout");
+            Some(Ok((account_id, Ok(())))) => {
+                // Actor shut down intentionally (idle timeout, cancelled, account removed).
+                // Remove from registry and check if a notification arrived just as it shut
+                // down. If so, the caller should respawn it.
+                let should_respawn =
+                    self.actor_registry.remove(&account_id).is_some_and(|handle| {
+                        let notified = handle.notify.notified();
+                        tokio::pin!(notified);
+                        notified.enable()
+                    });
 
-                    // Remove the actor from the registry, but check if a notification arrived
-                    // just as the actor timed out. If so, the caller should respawn it.
-                    let should_respawn =
-                        self.actor_registry.remove(&account_id).is_some_and(|handle| {
-                            let notified = handle.notify.notified();
-                            tokio::pin!(notified);
-                            notified.enable()
-                        });
-
-                    Ok(should_respawn.then_some(account_id))
-                },
+                Ok(should_respawn.then_some(account_id))
+            },
+            Some(Ok((account_id, Err(err)))) => {
+                // Actor crashed. Increment crash counter.
+                let count = self.crash_counts.entry(account_id).or_insert(0);
+                *count += 1;
+                tracing::error!(
+                    account.id = %account_id,
+                    "Account actor crashed: {err:#}"
+                );
+                self.actor_registry.remove(&account_id);
+                Ok(None)
             },
             Some(Err(err)) => {
                 tracing::error!(err = %err, "actor task failed");
