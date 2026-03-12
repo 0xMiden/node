@@ -31,7 +31,8 @@ pub enum ValidatorCommand {
     /// Bootstraps the genesis block.
     ///
     /// Creates accounts from the genesis configuration, builds and signs the genesis block,
-    /// and writes the signed block and account secret files to disk.
+    /// and writes the signed block and account secret files to disk. Also initializes the
+    /// validator's database with the genesis block as the chain tip.
     Bootstrap {
         /// Directory in which to write the genesis block file.
         #[arg(long, value_name = "DIR")]
@@ -39,6 +40,9 @@ pub enum ValidatorCommand {
         /// Directory to write the account secret files (.mac) to.
         #[arg(long, value_name = "DIR")]
         accounts_directory: PathBuf,
+        /// Directory in which to store the validator's database.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
         /// Use the given configuration file to construct the genesis state from.
         #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
         genesis_config_file: Option<PathBuf>,
@@ -101,12 +105,14 @@ impl ValidatorCommand {
             Self::Bootstrap {
                 genesis_block_directory,
                 accounts_directory,
+                data_directory,
                 genesis_config_file,
                 validator_key,
             } => {
                 Self::bootstrap_genesis(
                     &genesis_block_directory,
                     &accounts_directory,
+                    &data_directory,
                     genesis_config_file.as_ref(),
                     validator_key,
                 )
@@ -169,6 +175,7 @@ impl ValidatorCommand {
     pub async fn bootstrap_genesis(
         genesis_block_directory: &Path,
         accounts_directory: &Path,
+        data_directory: &Path,
         genesis_config: Option<&PathBuf>,
         validator_key: ValidatorKey,
     ) -> anyhow::Result<()> {
@@ -191,24 +198,37 @@ impl ValidatorCommand {
         let signer = validator_key.into_signer().await?;
         match signer {
             ValidatorSigner::Kms(signer) => {
-                build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
-                    .await
+                build_and_write_genesis(
+                    config,
+                    signer,
+                    accounts_directory,
+                    genesis_block_directory,
+                    data_directory,
+                )
+                .await
             },
             ValidatorSigner::Local(signer) => {
-                build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
-                    .await
+                build_and_write_genesis(
+                    config,
+                    signer,
+                    accounts_directory,
+                    genesis_block_directory,
+                    data_directory,
+                )
+                .await
             },
         }
     }
 }
 
-/// Builds the genesis state, writes account secret files, signs the genesis block, and writes it
-/// to disk.
+/// Builds the genesis state, writes account secret files, signs the genesis block, writes it
+/// to disk, and initializes the validator's database with the genesis block as the chain tip.
 async fn build_and_write_genesis(
     config: GenesisConfig,
     signer: impl BlockSigner,
     accounts_directory: &Path,
     genesis_block_directory: &Path,
+    data_directory: &Path,
 ) -> anyhow::Result<()> {
     // Build genesis state with the provided signer.
     let (genesis_state, secrets) = config.into_state(signer)?;
@@ -234,6 +254,17 @@ async fn build_and_write_genesis(
     let block_bytes = genesis_block.inner().to_bytes();
     let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILENAME);
     fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
+
+    // Initialize the validator database and persist the genesis block header as the chain tip.
+    let (genesis_header, ..) = genesis_block.into_inner().into_parts();
+    let db = miden_node_validator::db::load(data_directory.join("validator.sqlite3"))
+        .await
+        .context("failed to initialize validator database during bootstrap")?;
+    db.transact("upsert_block_header", move |conn| {
+        miden_node_validator::db::upsert_block_header(conn, &genesis_header)
+    })
+    .await
+    .context("failed to persist genesis block header as chain tip")?;
 
     Ok(())
 }
