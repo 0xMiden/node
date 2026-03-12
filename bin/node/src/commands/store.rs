@@ -153,9 +153,7 @@ impl StoreCommand {
 /// Reads a genesis block from disk, validates it, and bootstraps the store.
 pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyhow::Result<()> {
     // Read and deserialize the genesis block file.
-    let bytes = fs_err::read(genesis_block_path).with_context(|| {
-        format!("failed to read genesis block from {}", genesis_block_path.display())
-    })?;
+    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
     let proven_block = ProvenBlock::read_from_bytes(&bytes)
         .context("failed to deserialize genesis block from file")?;
     let genesis_block =
