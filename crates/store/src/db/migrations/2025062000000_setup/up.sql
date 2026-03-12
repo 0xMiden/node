@@ -3,14 +3,13 @@ CREATE TABLE block_headers (
     block_header   BLOB    NOT NULL,
     signature      BLOB    NOT NULL,
     commitment     BLOB    NOT NULL,
-    proving_inputs BLOB,             -- Serialized BlockProofRequest needed for deferred proving. NULL for genesis block.
-    is_proven      BOOLEAN NOT NULL DEFAULT 0, -- Whether the block has been proven
+    proving_inputs BLOB,             -- Serialized BlockProofRequest needed for deferred proving. NULL if it has been proven or never proven (genesis block).
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );
 
-CREATE INDEX block_headers_proven_desc ON block_headers(block_num DESC) WHERE is_proven = 1;
+CREATE INDEX block_headers_proven_desc ON block_headers(block_num DESC) WHERE proving_inputs IS NULL;
 
 CREATE TABLE account_codes (
     code_commitment BLOB NOT NULL,

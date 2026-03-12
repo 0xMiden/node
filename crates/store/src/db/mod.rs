@@ -600,7 +600,7 @@ impl Db {
 
     /// Marks a previously committed block as proven.
     ///
-    /// Sets the `is_proven` flag to `true` for the given block number.
+    /// Clears the `proving_inputs` for the given block number.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn mark_block_proven(&self, block_num: BlockNumber) -> Result<()> {
         self.transact("mark block proven", move |conn| {

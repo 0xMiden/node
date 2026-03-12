@@ -270,9 +270,9 @@ pub(crate) fn select_block_proving_inputs(
         .map_err(Into::into)
 }
 
-/// Mark a committed block as proven.
+/// Mark a committed block as proven by clearing its proving inputs.
 ///
-/// Sets the `is_proven` flag to `true` for the row with the given `block_num`.
+/// Sets `proving_inputs` to `NULL` for the row with the given `block_num`.
 ///
 /// # Returns
 ///
@@ -291,21 +291,21 @@ pub(crate) fn mark_block_proven(
         schema::block_headers::table
             .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
     )
-    .set(schema::block_headers::is_proven.eq(true))
+    .set(schema::block_headers::proving_inputs.eq(None::<Vec<u8>>))
     .execute(conn)?;
     Ok(count)
 }
 
 /// Select the highest block number that has been proven.
 ///
-/// Returns `None` if no blocks have been proven yet (genesis is never proven).
+/// A block is considered proven when its `proving_inputs` are `NULL`.
 ///
 /// # Raw SQL
 ///
 /// ```sql
 /// SELECT block_num
 /// FROM block_headers
-/// WHERE is_proven = 1
+/// WHERE proving_inputs IS NULL
 /// ORDER BY block_num DESC
 /// LIMIT 1
 /// ```
@@ -314,7 +314,7 @@ pub(crate) fn select_latest_proven_block_num(
 ) -> Result<Option<BlockNumber>, DatabaseError> {
     let block_num: Option<i64> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
-            .filter(schema::block_headers::is_proven.eq(true))
+            .filter(schema::block_headers::proving_inputs.is_null())
             .order(schema::block_headers::block_num.desc())
             .first(conn)
             .optional()?;
