@@ -118,6 +118,17 @@ miden-node bundled start \
   --rpc.url http://0.0.0.0:57291
 ```
 
+### gRPC server limits and timeouts
+
+The RPC component enforces per-request timeouts, per-IP rate limits, and global concurrency caps. Configure these
+settings for bundled or standalone RPC with the following options:
+
+- `--grpc.timeout` (default `10s`): Maximum request duration before the server drops the request.
+- `--grpc.max_connection_age` (default `30m`): Maximum lifetime of a connection before the server closes it.
+- `--grpc.burst_size` (default `128`): Per-IP burst capacity before rate limiting kicks in.
+- `--grpc.replenish_per_sec` (default `16`): Per-IP request credits replenished per second.
+- `--grpc.max_global_connections` (default `1000`): Maximum concurrent gRPC connections across all clients.
+
 ## Systemd
 
 Our [Debian packages](./installation.md#debian-package) install a systemd service which operates the node in `bundled`
@@ -126,6 +137,30 @@ mode. You'll still need to run the [bootstrapping](#bootstrapping) process befor
 You can inspect the service file with `systemctl cat miden-node` or alternatively you can see it in
 our repository in the `packaging` folder. For the bootstrapping process be sure to specify the data-directory as
 expected by the systemd file.
+
+## RocksDB tuning
+
+The store uses RocksDB for the account and nullifier trees, one instance each. The two most impactful knobs per tree
+are exposed as CLI flags (also available as environment variables):
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--account_tree.rocksdb.max_cache_size` | 2 GiB | Shared LRU block cache. Increase on memory-rich hosts. |
+| `--account_tree.rocksdb.max_open_fds` | 64 | Raise to 512+ when `ulimit -n` allows. |
+| `--nullifier_tree.rocksdb.max_cache_size` | 2 GiB | Same as above for the nullifier tree. |
+| `--nullifier_tree.rocksdb.max_open_fds` | 64 | Same as above for the nullifier tree. |
+
+Compaction parallelism is set automatically to the number of available CPU cores.
+
+```sh
+miden-node bundled start \
+  --data-directory data \
+  --rpc.url http://0.0.0.0:57291 \
+  --account_tree.rocksdb.max_cache_size 4294967296 \
+  --account_tree.rocksdb.max_open_fds 512 \
+  --nullifier_tree.rocksdb.max_cache_size 4294967296 \
+  --nullifier_tree.rocksdb.max_open_fds 512
+```
 
 ## Environment variables
 

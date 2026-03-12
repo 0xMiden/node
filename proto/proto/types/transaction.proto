@@ -42,20 +42,38 @@ message TransactionSummary {
     account.AccountId account_id = 3;
 }
 
+// Represents a commitment to an input note of a transaction.
+//
+// For authenticated notes, only the nullifier is present.
+// For unauthenticated notes, the note header is also included.
+message InputNoteCommitment {
+    // The nullifier of the input note.
+    primitives.Digest nullifier = 1;
+
+    // The note header, present only for unauthenticated input notes.
+    optional note.NoteHeader header = 2;
+}
+
 // Represents a transaction header.
 message TransactionHeader {
+    // The unique identifier of the transaction.
+    TransactionId transaction_id = 1;
+
     // ID of the account against which the transaction was executed.
-    account.AccountId account_id = 1;
+    account.AccountId account_id = 2;
 
     // State commitment of the account before the transaction was executed.
-    primitives.Digest initial_state_commitment = 2;
+    primitives.Digest initial_state_commitment = 3;
 
     // State commitment of the account after the transaction was executed.
-    primitives.Digest final_state_commitment = 3;
+    primitives.Digest final_state_commitment = 4;
 
-    // Nullifiers of the input notes of the transaction.
-    repeated primitives.Digest nullifiers = 4;
+    // Input notes of the transaction.
+    repeated InputNoteCommitment input_notes = 5;
 
     // Output notes of the transaction.
-    repeated note.NoteSyncRecord output_notes = 5;
+    repeated note.NoteHeader output_notes = 6;
+
+    // The fee paid by the transaction.
+    primitives.Asset fee = 7;
 }

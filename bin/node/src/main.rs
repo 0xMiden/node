@@ -39,7 +39,7 @@ pub enum Command {
     ///
     /// This is the recommended way to run the node at the moment.
     #[command(subcommand)]
-    Bundled(commands::bundled::BundledCommand),
+    Bundled(Box<commands::bundled::BundledCommand>),
 }
 
 impl Command {

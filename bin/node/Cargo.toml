@@ -33,8 +33,5 @@ miden-protocol            = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 url                       = { workspace = true }
 
-[build-dependencies]
-miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
-
 [dev-dependencies]
 miden-node-utils = { features = ["tracing-forest"], workspace = true }
