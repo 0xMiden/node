@@ -131,9 +131,12 @@ async fn start_store(
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
-    Store::bootstrap(genesis_state.clone(), data_directory)
+    let genesis_block = genesis_state
+        .clone()
+        .into_block()
         .await
-        .expect("store should bootstrap");
+        .expect("genesis block should be created");
+    Store::bootstrap(&genesis_block, data_directory).expect("store should bootstrap");
 
     let dir = data_directory.to_path_buf();
     let rpc_listener =

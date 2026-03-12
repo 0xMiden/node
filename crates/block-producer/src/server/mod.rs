@@ -414,22 +414,9 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn mempool_subscription(
         &self,
-        request: tonic::Request<proto::block_producer::MempoolSubscriptionRequest>,
+        _request: tonic::Request<()>,
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
-        let chain_tip = BlockNumber::from(request.into_inner().chain_tip);
-
-        let subscription =
-            self.mempool
-                .lock()
-                .await
-                .lock()
-                .await
-                .subscribe(chain_tip)
-                .map_err(|mempool_tip| {
-                    tonic::Status::invalid_argument(format!(
-                        "Mempool's chain tip {mempool_tip} does not match request's {chain_tip}"
-                    ))
-                })?;
+        let subscription = self.mempool.lock().await.lock().await.subscribe();
         let subscription = ReceiverStream::new(subscription);
 
         Ok(tonic::Response::new(MempoolEventSubscription { inner: subscription }))
