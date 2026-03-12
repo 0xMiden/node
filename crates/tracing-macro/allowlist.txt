@@ -1,2 +1,3 @@
 account.id
 nullifier.id
+block.number

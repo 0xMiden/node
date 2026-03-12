@@ -1,8 +1,7 @@
-use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::punctuated::Punctuated;
-use syn::{Expr, Ident, ItemFn, LitStr, ReturnType, Token, parse_macro_input};
+use syn::{Expr, Ident, ItemFn, LitStr, ReturnType, Token};
 
 // #[instrument(COMPONENT: checked_name=%foo, x=%y, ret, report)]
 // #[instrument(COMPONENT: checked_name=%foo, x=%y, ret, err)]
@@ -15,8 +14,14 @@ struct Value {
 }
 
 /// An otel identifier, not _yet_ checked
-struct Name {
-    segments: Punctuated<Token![.], Ident>,
+pub(crate) struct Name {
+    segments: Punctuated<Ident, Token![.]>,
+}
+
+impl Name {
+    fn to_string(&self) -> String {
+        self.segments.iter().map(|ident| ident.to_string()).join(".")
+    }
 }
 
 /// An otel identifier, checked against the whitelist
@@ -70,7 +75,7 @@ struct InstrumentArgs {
     values: Punctuated<Element, Token![,]>,
 }
 
-pub fn instrument2(attr2: TokenStream2, item2: TokenStream2) -> TokenStream2 {
+pub fn instrument2(attr2: TokenStream2, item2: TokenStream2) -> syn::Result<TokenStream2> {
     let attr = syn::parse_macro_input!(attr2 as InstrumentArgs);
     let item = syn::parse_macro_input!(item2 as Item);
 
