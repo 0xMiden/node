@@ -4,6 +4,7 @@
 
 - Private notes with the network note attachment are no longer incorrectly considered as network notes (#[#1736](https://github.com/0xMiden/node/pull/1736)).
 - Fixed network monitor looping on stale wallet nonce after node restarts by re-syncing wallet state from RPC after repeated failures ([#1748](https://github.com/0xMiden/node/pull/1748)).
+- [BREAKING] Refactor proto storage map details so the retrieved entries contain the key related to the smt proof (#[#1790](https://github.com/0xMiden/node/pull/1790)).
 
 ## v0.13.7 (2026-02-25)
 
@@ -142,7 +143,7 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
-  - This presented as a database locked error and in rare cases a desync between the mempool and store. 
+  - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)
 

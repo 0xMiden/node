@@ -430,7 +430,8 @@ pub enum StorageMapEntries {
 
     /// Specific entries with their SMT proofs for client-side verification.
     /// Used when specific keys are requested from the storage map.
-    EntriesWithProofs(Vec<SmtProof>),
+    /// Each entry pairs the original raw key with its SMT proof.
+    EntriesWithProofs(Vec<(Word, SmtProof)>),
 }
 
 impl AccountStorageMapDetails {
@@ -482,12 +483,13 @@ impl AccountStorageMapDetails {
         }
     }
 
-    /// Creates storage map details from pre-computed SMT proofs.
+    /// Creates storage map details from pre-computed SMT proofs paired with their raw
+    /// (unhashed) keys.
     ///
     /// Use this when the caller has already obtained the proofs from an `SmtForest`.
     /// Returns `LimitExceeded` if too many proofs are provided.
-    pub fn from_proofs(slot_name: StorageSlotName, proofs: Vec<SmtProof>) -> Self {
-        if proofs.len() > Self::MAX_SMT_PROOF_ENTRIES {
+    pub fn from_proofs(slot_name: StorageSlotName, entries: Vec<(Word, SmtProof)>) -> Self {
+        if entries.len() > Self::MAX_SMT_PROOF_ENTRIES {
             Self {
                 slot_name,
                 entries: StorageMapEntries::LimitExceeded,
@@ -495,7 +497,7 @@ impl AccountStorageMapDetails {
         } else {
             Self {
                 slot_name,
-                entries: StorageMapEntries::EntriesWithProofs(proofs),
+                entries: StorageMapEntries::EntriesWithProofs(entries),
             }
         }
     }
@@ -562,16 +564,21 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     StorageMapEntries::AllEntries(entries)
                 },
                 Some(ProtoEntries::EntriesWithProofs(MapEntriesWithProofs { entries })) => {
-                    let proofs = entries
+                    let entries_with_proofs = entries
                         .into_iter()
                         .map(|entry| {
+                            let key: Word = entry
+                                .key
+                                .ok_or(StorageMapEntryWithProof::missing_field(stringify!(key)))?
+                                .try_into()?;
                             let smt_opening = entry.proof.ok_or(
                                 StorageMapEntryWithProof::missing_field(stringify!(proof)),
                             )?;
-                            SmtProof::try_from(smt_opening)
+                            let proof = SmtProof::try_from(smt_opening)?;
+                            Ok((key, proof))
                         })
                         .collect::<Result<Vec<_>, ConversionError>>()?;
-                    StorageMapEntries::EntriesWithProofs(proofs)
+                    StorageMapEntries::EntriesWithProofs(entries_with_proofs)
                 },
             }
         };
@@ -605,25 +612,23 @@ impl From<AccountStorageMapDetails>
                 };
                 (false, Some(ProtoEntries::AllEntries(all)))
             },
-            StorageMapEntries::EntriesWithProofs(proofs) => {
+            StorageMapEntries::EntriesWithProofs(entries) => {
                 use miden_protocol::crypto::merkle::smt::SmtLeaf;
 
                 let with_proofs = MapEntriesWithProofs {
-                    entries: Vec::from_iter(proofs.into_iter().map(|proof| {
-                        // Get key/value from the leaf before consuming the proof
-                        let (key, value) = match proof.leaf() {
-                            SmtLeaf::Empty(_) => {
-                                (miden_protocol::EMPTY_WORD, miden_protocol::EMPTY_WORD)
-                            },
-                            SmtLeaf::Single((k, v)) => (*k, *v),
+                    entries: Vec::from_iter(entries.into_iter().map(|(raw_key, proof)| {
+                        // Get value from the leaf before consuming the proof
+                        let value = match proof.leaf() {
+                            SmtLeaf::Empty(_) => miden_protocol::EMPTY_WORD,
+                            SmtLeaf::Single((_, v)) => *v,
                             SmtLeaf::Multiple(entries) => entries.iter().next().map_or(
-                                (miden_protocol::EMPTY_WORD, miden_protocol::EMPTY_WORD),
-                                |(k, v)| (*k, *v),
+                                miden_protocol::EMPTY_WORD,
+                                |(_, v)| *v,
                             ),
                         };
                         let smt_opening = proto::primitives::SmtOpening::from(proof);
                         proto::rpc::account_storage_details::account_storage_map_details::map_entries_with_proofs::StorageMapEntryWithProof {
-                            key: Some(key.into()),
+                            key: Some(raw_key.into()),
                             value: Some(value.into()),
                             proof: Some(smt_opening),
                         }

@@ -172,13 +172,13 @@ impl InnerForest {
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
         let root = self.get_storage_map_root(account_id, &slot_name, block_num)?;
 
-        // Collect SMT proofs for each key
-        let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
+        // Collect SMT proofs for each key, pairing with the original raw (unhashed) key
+        let entries = Result::from_iter(raw_keys.iter().map(|raw_key| {
             let key = StorageMap::hash_key(*raw_key);
-            self.forest.open(root, key)
+            self.forest.open(root, key).map(|proof| (*raw_key, proof))
         }));
 
-        Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
+        Some(entries.map(|entries| AccountStorageMapDetails::from_proofs(slot_name, entries)))
     }
 
     /// Returns all key-value entries for a specific account storage slot at or before a block.
