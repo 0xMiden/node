@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -43,7 +44,7 @@ pub struct Store {
     pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
     /// Maximum number of blocks being proven concurrently by the proof scheduler.
-    pub max_concurrent_proofs: usize,
+    pub max_concurrent_proofs: NonZeroUsize,
     pub storage_options: StorageOptions,
     pub grpc_options: GrpcOptionsInternal,
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -88,7 +89,7 @@ pub enum BundledCommand {
             default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
             value_name = "NUM"
         )]
-        max_concurrent_proofs: usize,
+        max_concurrent_proofs: NonZeroUsize,
 
         #[command(flatten)]
         grpc_options: GrpcOptionsExternal,
@@ -160,7 +161,7 @@ impl BundledCommand {
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
         grpc_options: GrpcOptionsExternal,
-        max_concurrent_proofs: usize,
+        max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created

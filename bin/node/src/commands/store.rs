@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -71,7 +72,7 @@ pub enum StoreCommand {
             default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
             value_name = "NUM"
         )]
-        max_concurrent_proofs: usize,
+        max_concurrent_proofs: NonZeroUsize,
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
 
@@ -130,7 +131,7 @@ impl StoreCommand {
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
-        max_concurrent_proofs: usize,
+        max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url

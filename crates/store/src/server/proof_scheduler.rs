@@ -12,6 +12,7 @@
 //!    returns the error to the caller for node shutdown.
 
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,7 +38,7 @@ use crate::server::block_prover_client::{BlockProver, StoreProverError};
 const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
 
 /// Default maximum number of blocks being proven concurrently.
-pub const DEFAULT_MAX_CONCURRENT_PROOFS: usize = 8;
+pub const DEFAULT_MAX_CONCURRENT_PROOFS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 /// A wrapper around [`JoinSet`] whose `join_next` returns [`std::future::pending`] when empty
 /// instead of `None`, making it safe to use directly in `tokio::select!` without a special case.
@@ -94,7 +95,7 @@ pub fn spawn(
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
     latest_proven_block: BlockNumber,
-    max_concurrent_proofs: usize,
+    max_concurrent_proofs: NonZeroUsize,
 ) -> JoinHandle<anyhow::Result<()>> {
     tokio::spawn(run(
         db,
@@ -119,7 +120,7 @@ async fn run(
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     latest_proven_block: BlockNumber,
-    max_concurrent_proofs: usize,
+    max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
     info!(target: COMPONENT, %latest_proven_block, "Proof scheduler started");
 
@@ -136,7 +137,7 @@ async fn run(
 
     loop {
         // Fill the job pool up to capacity from the next unscheduled blocks.
-        while inflight.len() < max_concurrent_proofs
+        while inflight.len() < max_concurrent_proofs.into()
             && next_to_schedule.as_u32() <= chain_tip.as_u32()
         {
             let scheduled = next_to_schedule;

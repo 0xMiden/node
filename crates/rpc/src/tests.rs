@@ -9,7 +9,6 @@ use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
-use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
 use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
