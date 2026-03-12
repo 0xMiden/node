@@ -54,7 +54,8 @@ use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::BasicFungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::note::P2idNote;
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSlice;
 use tokio::io::AsyncWriteExt;
@@ -329,11 +330,13 @@ fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RpoRandomCo
     .expect("note creation failed")
 }
 
-/// Creates a new private account with a given public key and anchor block. Generates the seed from
-/// the given index.
+/// Creates a new account with a given public key. Uses a seeded PRNG derived from the index to
+/// generate a high-entropy init seed, avoiding `AccountId` prefix collisions that can occur with
+/// low-entropy seeds.
 fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorageMode) -> Account {
-    let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
-    AccountBuilder::new(init_seed.try_into().unwrap())
+    let mut rng = StdRng::seed_from_u64(index);
+    let init_seed: [u8; 32] = rng.random();
+    AccountBuilder::new(init_seed)
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(storage_mode)
         .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
