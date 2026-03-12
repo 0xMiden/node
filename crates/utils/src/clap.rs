@@ -5,6 +5,7 @@ use std::time::Duration;
 
 #[cfg(feature = "rocksdb")]
 mod rocksdb;
+#[cfg(feature = "rocksdb")]
 pub use rocksdb::*;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
