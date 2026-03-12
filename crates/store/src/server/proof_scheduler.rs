@@ -103,8 +103,7 @@ pub fn spawn(
 /// Maintains a pool of concurrent proving jobs via [`JoinSet`], fills them up to
 /// `max_concurrent_proofs`, and drains completed results.
 ///
-/// Unproven blocks are discovered by querying the database each iteration, so the scheduler is
-/// stateless with respect to which blocks need proving.
+/// Unproven blocks are discovered by querying the database each iteration.
 ///
 /// Returns `Err` on irrecoverable errors (missing/corrupt proving inputs, DB write failures).
 /// Transient errors are retried internally.
@@ -145,12 +144,8 @@ async fn run(
         tokio::select! {
             // Proving task completed.
             result = join_set.join_next() => {
-                let block_num = result?;
                 inflight_count -= 1;
-
-                db.mark_block_proven(block_num).await?;
-
-                info!(target=COMPONENT, block.number=%block_num, "Block proven");
+                info!(target=COMPONENT, block.number=%result?, "Block proven");
             },
 
             // New chain tip received — re-query for unproven blocks on next iteration.
@@ -170,9 +165,8 @@ async fn run(
 /// Proves a single block, saves the proof to the block store, and returns the block number.
 ///
 /// This function encapsulates the full lifecycle of a single proof job: loading inputs from the
-/// DB, invoking the prover (with a timeout), and persisting the proof to disk.
-///
-/// The caller is responsible for marking the block as proven in the DB.
+/// DB, invoking the prover (with a timeout), and persisting the proof to disk, and marking the
+/// block as proven in the DB.
 #[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(block.number=block_num.as_u32()), err)]
 async fn prove_and_save(
     db: &Db,
@@ -188,6 +182,7 @@ async fn prove_and_save(
         {
             Ok(Ok(proof)) => {
                 save_block(block_store, block_num, &proof).await?;
+                db.mark_block_proven(block_num).await?;
                 return Ok(block_num);
             },
             Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
