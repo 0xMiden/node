@@ -36,6 +36,7 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, instrument};
 
+use crate::account_state_forest::{AccountStateForest, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -50,7 +51,6 @@ use crate::errors::{
     GetCurrentBlockchainDataError,
     StateInitializationError,
 };
-use crate::inner_forest::{InnerForest, WitnessError};
 use crate::{COMPONENT, DataDirectory};
 
 mod loader;
@@ -116,7 +116,7 @@ pub struct State {
     inner: RwLock<InnerState<TreeStorage>>,
 
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
-    forest: RwLock<InnerForest>,
+    forest: RwLock<AccountStateForest>,
 
     /// To allow readers to access the tree data while an update in being performed, and prevent
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.

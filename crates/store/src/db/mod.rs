@@ -11,18 +11,19 @@ use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
-use miden_protocol::asset::{Asset, AssetVaultKey};
+use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
+    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
     NoteScript,
     Nullifier,
 };
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 use miden_protocol::utils::{Deserializable, Serializable};
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
@@ -141,27 +142,26 @@ pub struct TransactionRecord {
     pub account_id: AccountId,
     pub initial_state_commitment: Word,
     pub final_state_commitment: Word,
-    pub nullifiers: Vec<Nullifier>, // Store nullifiers for input notes
-    pub output_notes: Vec<NoteId>,  // Store note IDs for output notes
+    pub input_notes: Vec<InputNoteCommitment>,
+    pub output_notes: Vec<NoteHeader>,
+    pub fee: FungibleAsset,
 }
 
 impl TransactionRecord {
-    /// Convert to proto `TransactionRecord`, but requires note sync records for output notes.
-    /// For `sync_transactions` RPC, we need to fetch note sync records separately since we only
-    /// store note IDs in the database.
-    pub fn into_proto_with_note_records(
-        self,
-        note_records: Vec<NoteRecord>,
-    ) -> proto::rpc::TransactionRecord {
-        let output_notes = Vec::from_iter(note_records.into_iter().map(Into::into));
-
+    /// Convert to proto `TransactionRecord`.
+    ///
+    /// The proto `TransactionHeader` is a 1:1 mapping of
+    /// `miden_protocol::transaction::TransactionHeader`.
+    pub fn into_proto(self) -> proto::rpc::TransactionRecord {
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {
+                transaction_id: Some(self.transaction_id.into()),
                 account_id: Some(self.account_id.into()),
                 initial_state_commitment: Some(self.initial_state_commitment.into()),
                 final_state_commitment: Some(self.final_state_commitment.into()),
-                nullifiers: self.nullifiers.into_iter().map(From::from).collect(),
-                output_notes,
+                input_notes: self.input_notes.into_iter().map(Into::into).collect(),
+                output_notes: self.output_notes.into_iter().map(Into::into).collect(),
+                fee: Some(Asset::from(self.fee).into()),
             }),
             block_num: self.block_num.as_u32(),
         }
@@ -657,7 +657,7 @@ impl Db {
 
     /// Reconstructs storage map details from the database for a specific slot at a block.
     ///
-    /// Used as fallback when `InnerForest` cache misses (historical or evicted queries).
+    /// Used as fallback when `AccountStateForest` cache misses (historical or evicted queries).
     /// Rebuilds all entries by querying the DB and filtering to the specific slot.
     ///
     /// Returns:

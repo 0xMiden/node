@@ -5,6 +5,7 @@ use miden_protocol::note::{
     Note,
     NoteAttachment,
     NoteDetails,
+    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
@@ -216,6 +217,35 @@ impl TryFrom<proto::note::Note> for Note {
 
         let (assets, recipient) = note_details.into_parts();
         Ok(Note::new(assets, metadata, recipient))
+    }
+}
+
+// NOTE HEADER
+// ================================================================================================
+
+impl From<NoteHeader> for proto::note::NoteHeader {
+    fn from(header: NoteHeader) -> Self {
+        Self {
+            note_id: Some((&header.id()).into()),
+            metadata: Some(header.into_metadata().into()),
+        }
+    }
+}
+
+impl TryFrom<proto::note::NoteHeader> for NoteHeader {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
+        let note_id_word: Word = value
+            .note_id
+            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(note_id)))?
+            .try_into()?;
+        let metadata: NoteMetadata = value
+            .metadata
+            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(metadata)))?
+            .try_into()?;
+
+        Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }
 }
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated::{self as proto};
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -54,10 +55,9 @@ use tokio::task::JoinError;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
-use crate::actor::account_state::TransactionCandidate;
-use crate::block_producer::BlockProducerClient;
+use crate::actor::candidate::TransactionCandidate;
+use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
-use crate::store::StoreClient;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NtxError {
@@ -251,6 +251,15 @@ impl NtxContext {
         .await
         {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
+                for failed_note in &failed {
+                    tracing::info!(
+                        note.id = %failed_note.note.id(),
+                        nullifier = %failed_note.note.nullifier(),
+                        err = %failed_note.error.as_report(),
+                        "note failed consumability check",
+                    );
+                }
+
                 // Map successful notes to input notes.
                 let successful = InputNotes::from_unauthenticated_notes(successful)
                     .map_err(NtxError::InputNotes)?;

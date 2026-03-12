@@ -4,6 +4,7 @@
 
 ### Enhancements
 
+- Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).
 - Validator now persists validated transactions ([#1614](https://github.com/0xMiden/node/pull/1614)).
@@ -28,6 +29,9 @@
  - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/node/pull/1662)).
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/node/pull/1688)).
 - [BREAKING] Renamed `NoteRoot` protobuf message used in `GetNoteScriptByRoot` gRPC endpoints into `NoteScriptRoot` ([#1722](https://github.com/0xMiden/node/pull/1722)).
+- [BREAKING] Modified `TransactionHeader` serialization to allow converting back into the native type after serialization ([#1759](https://github.com/0xMiden/node/issues/1759)).
+- Removed `chain_tip` requirement from mempool subscription request ([#1771](https://github.com/0xMiden/node/pull/1771)).
+- Moved bootstrap procedure to `miden-node validator bootstrap` command ([#1764](https://github.com/0xMiden/node/pull/1764)).
 
 ### Fixes
 
@@ -35,6 +39,7 @@
 - Fixed `bundled start` panicking due to duplicate `data_directory` clap argument name between `BundledCommand::Start` and `NtxBuilderConfig` ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
+- Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
 
 ## v0.13.7 (2026-02-25)
 

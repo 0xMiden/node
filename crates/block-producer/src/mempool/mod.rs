@@ -586,17 +586,9 @@ impl Mempool {
     /// Creates a subscription to [`MempoolEvent`] which will be emitted in the order they occur.
     ///
     /// Only emits events which occurred after the current committed block.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provided chain tip does not match the mempool's chain tip. This
-    /// prevents desync between the caller's view of the world and the mempool's event stream.
     #[instrument(target = COMPONENT, name = "mempool.subscribe", skip_all)]
-    pub fn subscribe(
-        &mut self,
-        chain_tip: BlockNumber,
-    ) -> Result<mpsc::Receiver<MempoolEvent>, BlockNumber> {
-        self.subscription.subscribe(chain_tip)
+    pub fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
+        self.subscription.subscribe()
     }
 
     // STATS & INSPECTION

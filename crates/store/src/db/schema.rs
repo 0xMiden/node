@@ -99,9 +99,10 @@ diesel::table! {
         block_num -> BigInt,
         initial_state_commitment -> Binary,
         final_state_commitment -> Binary,
-        nullifiers -> Binary,
+        input_notes -> Binary,
         output_notes -> Binary,
         size_in_bytes -> BigInt,
+        fee -> Binary,
     }
 }
 
