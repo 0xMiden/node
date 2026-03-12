@@ -104,7 +104,7 @@ impl ValidatorCommand {
                 genesis_config_file,
                 validator_key,
             } => {
-                bootstrap_genesis(
+                Self::bootstrap_genesis(
                     &genesis_block_directory,
                     &accounts_directory,
                     genesis_config_file.as_ref(),
@@ -161,43 +161,44 @@ impl ValidatorCommand {
             Self::Bootstrap { .. } => false,
         }
     }
-}
 
-/// Bootstraps the genesis block: creates accounts, signs the block, and writes artifacts to disk.
-///
-/// This is extracted as a free function so it can be reused by the bundled bootstrap command.
-pub async fn bootstrap_genesis(
-    genesis_block_directory: &Path,
-    accounts_directory: &Path,
-    genesis_config: Option<&PathBuf>,
-    validator_key: ValidatorKey,
-) -> anyhow::Result<()> {
-    // Parse genesis config (or default if not given).
-    let config = genesis_config
-        .map(|file_path| {
-            GenesisConfig::read_toml_file(file_path).with_context(|| {
-                format!("failed to parse genesis config from file {}", file_path.display())
+    /// Bootstraps the genesis block: creates accounts, signs the block, and writes artifacts to
+    /// disk.
+    ///
+    /// This is extracted as a free function so it can be reused by the bundled bootstrap command.
+    pub async fn bootstrap_genesis(
+        genesis_block_directory: &Path,
+        accounts_directory: &Path,
+        genesis_config: Option<&PathBuf>,
+        validator_key: ValidatorKey,
+    ) -> anyhow::Result<()> {
+        // Parse genesis config (or default if not given).
+        let config = genesis_config
+            .map(|file_path| {
+                GenesisConfig::read_toml_file(file_path).with_context(|| {
+                    format!("failed to parse genesis config from file {}", file_path.display())
+                })
             })
-        })
-        .transpose()?
-        .unwrap_or_default();
+            .transpose()?
+            .unwrap_or_default();
 
-    // Create directories if they do not already exist.
-    for directory in [accounts_directory, genesis_block_directory] {
-        ensure_empty_directory(directory)?;
-    }
+        // Create directories if they do not already exist.
+        for directory in [accounts_directory, genesis_block_directory] {
+            ensure_empty_directory(directory)?;
+        }
 
-    // Bootstrap with KMS key or local key.
-    let signer = validator_key.into_signer().await?;
-    match signer {
-        ValidatorSigner::Kms(signer) => {
-            build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
-                .await
-        },
-        ValidatorSigner::Local(signer) => {
-            build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
-                .await
-        },
+        // Bootstrap with KMS key or local key.
+        let signer = validator_key.into_signer().await?;
+        match signer {
+            ValidatorSigner::Kms(signer) => {
+                build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
+                    .await
+            },
+            ValidatorSigner::Local(signer) => {
+                build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory)
+                    .await
+            },
+        }
     }
 }
 

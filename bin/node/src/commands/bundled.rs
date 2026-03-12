@@ -97,7 +97,7 @@ impl BundledCommand {
                 validator_key,
             } => {
                 // Run validator bootstrap to create genesis block + account files.
-                crate::commands::validator::bootstrap_genesis(
+                crate::commands::validator::ValidatorCommand::bootstrap_genesis(
                     &data_directory,
                     &accounts_directory,
                     genesis_config_file.as_ref(),
