@@ -223,8 +223,8 @@ impl Store {
             result = proof_scheduler_task => {
                 match result {
                     Ok(Ok(())) => Err(anyhow::anyhow!("proof scheduler exited unexpectedly")),
-                    Ok(Err(err)) => Err(anyhow::anyhow!("proof scheduler fatal error").context(err)),
-                    Err(join_err) => Err(anyhow::anyhow!("proof scheduler panicked").context(join_err)),
+                    Ok(Err(err)) => Err(err.context("proof scheduler fatal error")),
+                    Err(join_err) => Err(join_err).context("proof scheduler panicked"),
                 }
             }
         }
