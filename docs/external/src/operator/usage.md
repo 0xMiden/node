@@ -4,10 +4,10 @@ sidebar_position: 4
 
 # Configuration and Usage
 
-As outlined in the [Architecture](./architecture) chapter, the node consists of several components which can be run
-separately or as a single bundled process. At present, the recommended way to operate a node is in bundled mode and is
-what this guide will focus on. Operating the components separately is very similar and should be relatively
-straight-forward to derive from these instructions.
+As outlined in the [Architecture](./architecture) chapter, the node consists of several components which are run
+as separate processes. The recommended way to operate a node locally is using `docker compose`, which starts each
+component in its own container and automatically bootstraps on first run. Operating the components without Docker
+is also straightforward using the individual CLI subcommands.
 
 This guide focuses on basic usage. To discover more advanced options we recommend exploring the various help menus
 which can be accessed by appending `--help` to any of the commands.
@@ -15,27 +15,19 @@ which can be accessed by appending `--help` to any of the commands.
 ## Bootstrapping
 
 The first step in starting a new Miden network is to initialize the genesis block data. This is a
-one-off operation using the `bootstrap` command and by default the genesis block will contain a single
-faucet account.
+two-step process: first the validator signs and creates the genesis block, then the store initializes
+its database from that block. By default the genesis block will contain a single faucet account.
 
 ```sh
-# Create a folder to store the node's data.
-mkdir data
+# Step 1: Validator bootstrap — create the signed genesis block and account files.
+miden-node validator bootstrap \
+  --genesis-block-directory genesis-data \
+  --accounts-directory accounts
 
-# Bootstrap the node.
-#
-# This creates the node's database and initializes it with the genesis data.
-#
-# The genesis block currently contains a single public faucet account. The
-# secret for this account is stored in the `<accounts-directory/account.mac>`
-# file. This file is not used by the node and should instead by used wherever
-# you intend to operate this faucet account.
-#
-# For example, you could operate a public faucet using our faucet reference
-# implementation whose operation is described in a later section.
-miden-node bundled bootstrap \
-  --data-directory data \
-  --accounts-directory .
+# Step 2: Store bootstrap — initialize the store database from the genesis block.
+miden-node store bootstrap \
+  --data-directory store-data \
+  --genesis-block genesis-data/genesis.dat
 ```
 
 You can also configure the account and asset data in the genesis block by passing in a toml configuration file.
@@ -44,9 +36,9 @@ transactions to achieve the desired state. Any account secrets will be written t
 the provided `--accounts-directory` path in the process.
 
 ```sh
-miden-node bundled bootstrap \
-  --data-directory data \
-  --accounts-directory . \
+miden-node validator bootstrap \
+  --genesis-block-directory genesis-data \
+  --accounts-directory accounts \
   --genesis-config-file genesis.toml
 ```
 
@@ -110,18 +102,74 @@ path = "eth_faucet.mac"
 
 ## Operation
 
-Start the node with the desired public gRPC server address.
+### Using docker compose
+
+Build the Docker image and start the node. Bootstrap happens automatically on first run:
 
 ```sh
-miden-node bundled start \
-  --data-directory data \
-  --rpc.url http://0.0.0.0:57291
+make docker-build-node
+make compose-genesis
+make compose-up
+```
+
+Follow logs:
+
+```sh
+make compose-logs
+```
+
+Stop the node:
+
+```sh
+make compose-down
+```
+
+Teardown and regenesis:
+
+```sh
+make compose-genesis
+```
+
+### Running components individually
+
+Each component can also be started as a standalone process. For example:
+
+```sh
+# Start the store
+miden-node store start \
+  --rpc.url http://0.0.0.0:50001 \
+  --ntx-builder.url http://0.0.0.0:50002 \
+  --block-producer.url http://0.0.0.0:50003 \
+  --data-directory store-data
+
+# Start the validator
+miden-node validator start http://0.0.0.0:50101 \
+  --data-directory validator-data
+
+# Start the block producer
+miden-node block-producer start http://0.0.0.0:50201 \
+  --store.url http://127.0.0.1:50003 \
+  --validator.url http://127.0.0.1:50101
+
+# Start the RPC server
+miden-node rpc start \
+  --url http://0.0.0.0:57291 \
+  --store.url http://127.0.0.1:50001 \
+  --block-producer.url http://127.0.0.1:50201 \
+  --validator.url http://127.0.0.1:50101
+
+# Start the network transaction builder
+miden-node ntx-builder start \
+  --store.url http://127.0.0.1:50002 \
+  --block-producer.url http://127.0.0.1:50201 \
+  --validator.url http://127.0.0.1:50101 \
+  --data-directory ntx-builder-data
 ```
 
 ### gRPC server limits and timeouts
 
 The RPC component enforces per-request timeouts, per-IP rate limits, and global concurrency caps. Configure these
-settings for bundled or standalone RPC with the following options:
+settings with the following options:
 
 - `--grpc.timeout` (default `10s`): Maximum request duration before the server drops the request.
 - `--grpc.max_connection_age` (default `30m`): Maximum lifetime of a connection before the server closes it.
@@ -129,19 +177,10 @@ settings for bundled or standalone RPC with the following options:
 - `--grpc.replenish_per_sec` (default `16`): Per-IP request credits replenished per second.
 - `--grpc.max_global_connections` (default `1000`): Maximum concurrent gRPC connections across all clients.
 
-## Systemd
-
-Our [Debian packages](./installation.md#debian-package) install a systemd service which operates the node in `bundled`
-mode. You'll still need to run the [bootstrapping](#bootstrapping) process before the node can be started.
-
-You can inspect the service file with `systemctl cat miden-node` or alternatively you can see it in
-our repository in the `packaging` folder. For the bootstrapping process be sure to specify the data-directory as
-expected by the systemd file.
-
 ## Environment variables
 
 Most configuration options can also be configured using environment variables as an alternative to providing the values
-via the command-line. This is useful for certain deployment options like `docker` or `systemd`, where they can be easier
+via the command-line. This is useful for certain deployment options like `docker`, where they can be easier
 to define or inject instead of changing the underlying command line options.
 
 These are especially convenient where multiple different configuration profiles are used. Write the environment

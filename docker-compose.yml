@@ -1,0 +1,104 @@
+services:
+  genesis:
+    image: miden-node-image
+    pull_policy: if_not_present
+    profiles:
+      - genesis
+    volumes:
+      - genesis-data:/genesis
+      - store-data:/store
+      - accounts:/accounts
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Bootstrapping validator (creating genesis block)..."
+        miden-node validator bootstrap \
+          --genesis-block-directory /genesis \
+          --accounts-directory /accounts
+        echo "Bootstrapping store..."
+        miden-node store bootstrap \
+          --data-directory /store \
+          --genesis-block /genesis/genesis.dat
+
+  store:
+    image: miden-node-image
+    pull_policy: if_not_present
+    volumes:
+      - store-data:/data
+    command:
+      - miden-node
+      - store
+      - start
+      - --rpc.url=http://0.0.0.0:50001
+      - --ntx-builder.url=http://0.0.0.0:50002
+      - --block-producer.url=http://0.0.0.0:50003
+      - --data-directory=/data
+    ports:
+      - "50001:50001"
+      - "50002:50002"
+      - "50003:50003"
+
+  validator:
+    image: miden-node-image
+    pull_policy: if_not_present
+    volumes:
+      - validator-data:/data
+    environment:
+      - MIDEN_NODE_ENABLE_OTEL=false
+    command:
+      - miden-node
+      - validator
+      - start
+      - http://0.0.0.0:50101
+      - --data-directory=/data
+    ports:
+      - "50101:50101"
+
+  block-producer:
+    image: miden-node-image
+    pull_policy: if_not_present
+    command:
+      - miden-node
+      - block-producer
+      - start
+      - http://0.0.0.0:50201
+      - --store.url=http://store:50003
+      - --validator.url=http://validator:50101
+    ports:
+      - "50201:50201"
+
+  rpc:
+    image: miden-node-image
+    pull_policy: if_not_present
+    command:
+      - miden-node
+      - rpc
+      - start
+      - --url=http://0.0.0.0:57291
+      - --store.url=http://store:50001
+      - --block-producer.url=http://block-producer:50201
+      - --validator.url=http://validator:50101
+    ports:
+      - "57291:57291"
+
+  ntx-builder:
+    image: miden-node-image
+    pull_policy: if_not_present
+    volumes:
+      - ntx-builder-data:/data
+    command:
+      - miden-node
+      - ntx-builder
+      - start
+      - --store.url=http://store:50002
+      - --block-producer.url=http://block-producer:50201
+      - --validator.url=http://validator:50101
+      - --data-directory=/data
+
+volumes:
+  genesis-data:
+  store-data:
+  validator-data:
+  ntx-builder-data:
+  accounts:

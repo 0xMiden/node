@@ -164,9 +164,7 @@ impl ValidatorCommand {
 
     /// Bootstraps the genesis block: creates accounts, signs the block, and writes artifacts to
     /// disk.
-    ///
-    /// This is extracted as a free function so it can be reused by the bundled bootstrap command.
-    pub async fn bootstrap_genesis(
+    async fn bootstrap_genesis(
         genesis_block_directory: &Path,
         accounts_directory: &Path,
         genesis_config: Option<&PathBuf>,

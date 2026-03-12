@@ -1,9 +1,6 @@
-use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Context;
 use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_BLOCK_INTERVAL,
@@ -14,11 +11,10 @@ use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
-use tokio::net::TcpListener;
 use url::Url;
 
 pub mod block_producer;
-pub mod bundled;
+pub mod ntx_builder;
 pub mod rpc;
 pub mod store;
 pub mod validator;
@@ -94,113 +90,6 @@ impl ValidatorKey {
             let signer = ValidatorSigner::new_local(signer);
             Ok(signer)
         }
-    }
-}
-
-/// Configuration for the Validator component when run in the bundled mode.
-#[derive(clap::Args)]
-pub struct BundledValidatorConfig {
-    /// Insecure, hex-encoded validator secret key for development and testing purposes.
-    /// Only used when the Validator URL argument is not set.
-    #[arg(
-        long = "validator.key",
-        env = ENV_VALIDATOR_KEY,
-        value_name = "VALIDATOR_KEY",
-        default_value = INSECURE_VALIDATOR_KEY_HEX
-    )]
-    validator_key: String,
-
-    /// The remote Validator's gRPC URL. If unset, will default to running a Validator
-    /// in-process. If set, the insecure key argument is ignored.
-    #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
-    validator_url: Option<Url>,
-}
-
-impl BundledValidatorConfig {
-    /// Converts the [`BundledValidatorConfig`] into a URL and an optional [`SocketAddr`].
-    ///
-    /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
-    ///
-    /// If `validator_url` is not set, it binds to a random port on localhost, creates a URL,
-    /// and returns the URL and the bound [`SocketAddr`].
-    async fn to_addresses(&self) -> anyhow::Result<(Url, Option<SocketAddr>)> {
-        if let Some(url) = &self.validator_url {
-            Ok((url.clone(), None))
-        } else {
-            let socket_addr = TcpListener::bind("127.0.0.1:0")
-                .await
-                .context("Failed to bind to validator gRPC endpoint")?
-                .local_addr()
-                .context("Failed to retrieve the validator's gRPC address")?;
-            let url = Url::parse(&format!("http://{socket_addr}"))
-                .context("Failed to parse Validator URL")?;
-            Ok((url, Some(socket_addr)))
-        }
-    }
-}
-
-/// Configuration for the Network Transaction Builder component.
-#[derive(clap::Args)]
-pub struct NtxBuilderConfig {
-    /// Disable spawning the network transaction builder.
-    #[arg(long = "no-ntx-builder", default_value_t = false)]
-    pub disabled: bool,
-
-    /// The remote transaction prover's gRPC url, used for the ntx builder. If unset,
-    /// will default to running a prover in-process which is expensive.
-    #[arg(long = "tx-prover.url", env = ENV_NTX_PROVER_URL, value_name = "URL")]
-    pub tx_prover_url: Option<Url>,
-
-    /// Interval at which to run the network transaction builder's ticker.
-    #[arg(
-        long = "ntx-builder.interval",
-        default_value = &duration_to_human_readable_string(DEFAULT_NTX_TICKER_INTERVAL),
-        value_parser = humantime::parse_duration,
-        value_name = "DURATION"
-    )]
-    pub ticker_interval: Duration,
-
-    /// Number of note scripts to cache locally.
-    ///
-    /// Note scripts not in cache must first be retrieved from the store.
-    #[arg(
-        long = "ntx-builder.script-cache-size",
-        env = ENV_NTX_SCRIPT_CACHE_SIZE,
-        value_name = "NUM",
-        default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
-    )]
-    pub script_cache_size: NonZeroUsize,
-
-    /// Directory for the ntx-builder's persistent database.
-    ///
-    /// If not set, defaults to the node's data directory.
-    #[arg(long = "ntx-builder.data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
-    pub ntx_data_directory: Option<PathBuf>,
-}
-
-impl NtxBuilderConfig {
-    /// Converts this CLI config into the ntx-builder's internal config.
-    ///
-    /// The `node_data_directory` is used as the default location for the ntx-builder's database
-    /// if `--ntx-builder.data-directory` is not explicitly set.
-    pub fn into_builder_config(
-        self,
-        store_url: Url,
-        block_producer_url: Url,
-        validator_url: Url,
-        node_data_directory: &Path,
-    ) -> miden_node_ntx_builder::NtxBuilderConfig {
-        let data_dir = self.ntx_data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
-        let database_filepath = data_dir.join("ntx-builder.sqlite3");
-
-        miden_node_ntx_builder::NtxBuilderConfig::new(
-            store_url,
-            block_producer_url,
-            validator_url,
-            database_filepath,
-        )
-        .with_tx_prover_url(self.tx_prover_url)
-        .with_script_cache_size(self.script_cache_size)
     }
 }
 

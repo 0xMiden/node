@@ -17,7 +17,6 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[expect(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum Command {
     /// Commands related to the node's store component.
@@ -32,15 +31,13 @@ pub enum Command {
     #[command(subcommand)]
     BlockProducer(commands::block_producer::BlockProducerCommand),
 
-    // Commands related to the node's validator component.
+    /// Commands related to the node's validator component.
     #[command(subcommand)]
     Validator(commands::validator::ValidatorCommand),
 
-    /// Commands relevant to running all components in the same process.
-    ///
-    /// This is the recommended way to run the node at the moment.
+    /// Commands related to the node's network transaction builder component.
     #[command(subcommand)]
-    Bundled(commands::bundled::BundledCommand),
+    NtxBuilder(commands::ntx_builder::NtxBuilderCommand),
 }
 
 impl Command {
@@ -53,7 +50,7 @@ impl Command {
             Command::Rpc(subcommand) => subcommand.is_open_telemetry_enabled(),
             Command::BlockProducer(subcommand) => subcommand.is_open_telemetry_enabled(),
             Command::Validator(subcommand) => subcommand.is_open_telemetry_enabled(),
-            Command::Bundled(subcommand) => subcommand.is_open_telemetry_enabled(),
+            Command::NtxBuilder(subcommand) => subcommand.is_open_telemetry_enabled(),
         } {
             OpenTelemetry::Enabled
         } else {
@@ -67,7 +64,7 @@ impl Command {
             Command::Store(store_command) => store_command.handle().await,
             Command::BlockProducer(block_producer_command) => block_producer_command.handle().await,
             Command::Validator(validator) => validator.handle().await,
-            Command::Bundled(node) => node.handle().await,
+            Command::NtxBuilder(ntx_builder) => ntx_builder.handle().await,
         }
     }
 }
