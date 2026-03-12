@@ -5,7 +5,7 @@ use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
-use miden_node_utils::clap::GrpcOptionsExternal;
+use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -92,6 +92,9 @@ pub enum BundledCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsExternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
@@ -130,6 +133,7 @@ impl BundledCommand {
                 enable_otel: _,
                 grpc_options,
                 max_concurrent_proofs,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -140,6 +144,7 @@ impl BundledCommand {
                     validator,
                     grpc_options,
                     max_concurrent_proofs,
+                    storage_options,
                 )
                 .await
             },
@@ -156,6 +161,7 @@ impl BundledCommand {
         validator: BundledValidatorConfig,
         grpc_options: GrpcOptionsExternal,
         max_concurrent_proofs: usize,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -214,6 +220,7 @@ impl BundledCommand {
                     block_prover_url,
                     grpc_options: grpc_options.into(),
                     max_concurrent_proofs,
+                    storage_options,
                 }
                 .serve()
                 .await

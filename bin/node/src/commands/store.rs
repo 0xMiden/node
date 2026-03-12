@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
 use miden_protocol::block::ProvenBlock;
@@ -74,6 +74,9 @@ pub enum StoreCommand {
         max_concurrent_proofs: usize,
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
@@ -94,6 +97,7 @@ impl StoreCommand {
                 enable_otel: _,
                 grpc_options,
                 max_concurrent_proofs,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -103,6 +107,7 @@ impl StoreCommand {
                     data_directory,
                     grpc_options,
                     max_concurrent_proofs,
+                    storage_options,
                 )
                 .await
             },
@@ -117,6 +122,7 @@ impl StoreCommand {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         ntx_builder_url: Url,
@@ -125,6 +131,7 @@ impl StoreCommand {
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         max_concurrent_proofs: usize,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
@@ -155,6 +162,7 @@ impl StoreCommand {
             data_directory,
             grpc_options,
             max_concurrent_proofs,
+            storage_options,
         }
         .serve()
         .await

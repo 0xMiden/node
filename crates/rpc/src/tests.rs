@@ -10,6 +10,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
+use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -481,6 +482,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::test(),
             max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
+            storage_options: StorageOptions::default(),
         }
         .serve()
         .await
@@ -524,6 +526,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::test(),
             max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
+            storage_options: StorageOptions::default(),
         }
         .serve()
         .await

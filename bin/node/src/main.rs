@@ -17,7 +17,6 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[expect(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum Command {
     /// Commands related to the node's store component.
@@ -40,7 +39,7 @@ pub enum Command {
     ///
     /// This is the recommended way to run the node at the moment.
     #[command(subcommand)]
-    Bundled(commands::bundled::BundledCommand),
+    Bundled(Box<commands::bundled::BundledCommand>),
 }
 
 impl Command {

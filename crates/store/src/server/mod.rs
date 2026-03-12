@@ -10,7 +10,7 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
@@ -44,6 +44,7 @@ pub struct Store {
     pub data_directory: PathBuf,
     /// Maximum number of blocks being proven concurrently by the proof scheduler.
     pub max_concurrent_proofs: usize,
+    pub storage_options: StorageOptions,
     pub grpc_options: GrpcOptionsInternal,
 }
 
@@ -94,7 +95,7 @@ impl Store {
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
         let state = Arc::new(
-            State::load(&self.data_directory, termination_ask)
+            State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?,
         );
