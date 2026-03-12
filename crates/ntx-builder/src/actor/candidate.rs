@@ -4,7 +4,7 @@ use miden_protocol::account::Account;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::PartialBlockchain;
 
-use crate::actor::inflight_note::InflightNetworkNote;
+use crate::inflight_note::InflightNetworkNote;
 
 // TRANSACTION CANDIDATE
 // ================================================================================================

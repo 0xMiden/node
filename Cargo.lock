@@ -2873,7 +2873,7 @@ dependencies = [
 
 [[package]]
 name = "miden-large-smt-backend-rocksdb"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "miden-crypto",
  "miden-node-rocksdb-cxx-linkage-fix",
@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "miden-network-monitor"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2967,7 +2967,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-block-producer"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-db"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "deadpool",
  "deadpool-diesel",
@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-grpc-error-macro"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -3044,7 +3044,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-ntx-builder"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "build-rs",
@@ -3074,7 +3074,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3099,7 +3099,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto-build"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "build-rs",
  "fs-err",
@@ -3110,11 +3110,11 @@ dependencies = [
 
 [[package]]
 name = "miden-node-rocksdb-cxx-linkage-fix"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 
 [[package]]
 name = "miden-node-rpc"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "futures",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-store"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3193,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-stress-test"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "clap",
  "fs-err",
@@ -3222,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-utils"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3254,7 +3254,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-validator"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -3355,7 +3355,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3392,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover-client"
-version = "0.14.0-alpha.1"
+version = "0.14.0-alpha.5"
 dependencies = [
  "build-rs",
  "fs-err",
@@ -4322,9 +4322,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.13"
+version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
+checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "aws-lc-rs",
  "bytes",

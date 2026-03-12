@@ -325,8 +325,7 @@ fn transactions_reverted_restores_consumed_notes() {
     assert!(consumed.is_some());
 
     // Revert the transaction.
-    let reverted = revert_transaction(conn, &[tx_id]).unwrap();
-    assert!(reverted.is_empty());
+    revert_transaction(conn, &[tx_id]).unwrap();
 
     // Note should be un-consumed.
     let consumed: Option<Vec<u8>> = schema::notes::table
@@ -372,10 +371,9 @@ fn transactions_reverted_reports_reverted_account_creations() {
     };
     diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
 
-    // Revert the transaction --- account creation should be reported.
-    let reverted = revert_transaction(conn, &[tx_id]).unwrap();
-    assert_eq!(reverted.len(), 1);
-    assert_eq!(reverted[0], account_id);
+    // Revert the transaction, account should be included in affected accounts.
+    let affected = revert_transaction(conn, &[tx_id]).unwrap();
+    assert!(affected.contains(&account_id));
 
     // Account should be gone.
     assert_eq!(count_accounts(conn), 0);
