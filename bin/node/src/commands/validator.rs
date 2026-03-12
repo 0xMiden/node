@@ -233,9 +233,7 @@ async fn build_and_write_genesis(
     // Serialize and write the genesis block to disk.
     let block_bytes = genesis_block.inner().to_bytes();
     let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILENAME);
-    fs_err::write(&genesis_block_path, block_bytes).with_context(|| {
-        format!("failed to write genesis block to {}", genesis_block_path.display())
-    })?;
+    fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
 
     Ok(())
 }
