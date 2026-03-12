@@ -1,6 +1,13 @@
-//! Procedural macro for tracing instrumentation with full error report context.
+//! Procedural macro for tracing without(?) papercuts
 //!
-//! This macro provides an `#[instrument]`-like attribute that uses `ErrorReport::as_report()`
+//! Provides `#[instrument]` in the spirit of `tracing::instrument`, `trace/debug/info/warn/error`
+//! in the spirit of `tracing::log`.
+//!
+//! There are however significant difference in argument parsing as well as interpretation.
+//!
+//! 1. `ErrorReport` is a first class citizens
+//! 2. `target=` is implicitly assumed if not provided by the user
+//! 3.
 //! to capture the full error chain in tracing spans, rather than just the `Display` output.
 //!
 //! **Note**: This crate should not be used directly. Use `miden-node-tracing` instead,
@@ -20,131 +27,40 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
-use syn::{ItemFn, ReturnType, parse_macro_input};
 
-/// Instruments a function with tracing, using full error reports for context.
-///
-/// This attribute macro wraps functions that return `Result<T, E>` and creates
-/// a tracing span. When the function returns an error, it records the full
-/// error chain using `ErrorReport::as_report()` instead of just `Display`.
-///
-/// This macro accepts all the same arguments as `tracing::instrument`, and
-/// delegates to it for span creation. The added functionality is enhanced
-/// error reporting when `err` is specified.
-///
-/// # Arguments
-///
-/// All arguments from `tracing::instrument` are supported:
-/// - `target = "..."` - Sets the tracing target
-/// - `level = "..."` - Sets the tracing level (default: "info")
-/// - `name = "..."` - Sets a custom span name (default: function name)
-/// - `err` - Record errors with full error chain (enhanced by this macro)
-/// - `ret` / `ret(level = "...")` - Record return values
-/// - `fields(key = value, ...)` - Add custom fields to the span
-/// - `root` - Create a root span
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use miden_node_tracing::instrument;
-///
-/// #[instrument_with_err_report(target = COMPONENT, skip_all, err)]
-/// pub async fn apply_block(&self, block: ProvenBlock) -> Result<(), ApplyBlockError> {
-///     // Function body...
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr2 = TokenStream2::from(attr.clone());
-    let input = parse_macro_input!(item as ItemFn);
-
-    // Check if 'err' is present in the attributes
-    let attr_str = attr2.to_string();
-    let has_err = attr_str.contains("err");
-
-    // Check if the function returns a Result
-    let returns_result = match &input.sig.output {
-        ReturnType::Default => false,
-        ReturnType::Type(_, ty) => {
-            let ty_str = quote! { #ty }.to_string();
-            ty_str.contains("Result")
-        },
-    };
-
-    if has_err && returns_result {
-        generate_with_error_reporting(&attr2, input).into()
-    } else {
-        // Just delegate to standard tracing::instrument
-        let ItemFn { attrs, vis, sig, block } = input;
-        quote! {
-            #(#attrs)*
-            #[::tracing::instrument(#attr2)]
-            #vis #sig
-            #block
-        }
-        .into()
-    }
-}
-
-fn generate_with_error_reporting(attr: &TokenStream2, input: ItemFn) -> TokenStream2 {
-    let ItemFn { attrs, vis, sig, block } = input;
-
-    // Remove 'err' from the attributes we pass to tracing::instrument
-    // since we handle error reporting ourselves
-    let tracing_attr = remove_err_from_attr(attr);
-
-    // Get the return type for type annotation
-    let result_type = match &sig.output {
-        ReturnType::Type(_, ty) => quote! { #ty },
-        ReturnType::Default => quote! { () },
-    };
-
-    // Use absolute paths via the miden_node_tracing crate
-    quote! {
-        #(#attrs)*
-        #[::tracing::instrument(#tracing_attr)]
-        #vis #sig
-        {
-            let __result: #result_type = #block;
-
-            if let ::core::result::Result::Err(ref __err) = __result {
-                // Use ErrorReport to get the full error chain
-                let __report = {
-                    use ::miden_node_tracing::ErrorReport as _;
-                    __err.as_report()
-                };
-
-                // Record the error event with the full report
-                ::miden_node_tracing::error!(error = %__report);
-
-                // Set OpenTelemetry span status if available
-                {
-                    use ::miden_node_tracing::OpenTelemetrySpanExt as _;
-                    ::miden_node_tracing::Span::current().set_error(__err as &dyn ::std::error::Error);
-                }
-            }
-
-            __result
-        }
-    }
-}
-
-fn remove_err_from_attr(attr: &TokenStream2) -> TokenStream2 {
-    // Simple string-based removal of 'err' from the attribute
-    // This handles both 'err' and 'err,' patterns
-    let attr_str = attr.to_string();
-
-    // Remove 'err,' or ', err' or 'err' patterns
-    let cleaned = attr_str
-        .replace(", err,", ",")
-        .replace(", err", "")
-        .replace("err,", "")
-        .replace("err", "");
-
-    // Parse the cleaned string back into tokens
-    cleaned.parse().unwrap_or_else(|_| attr.clone())
-}
+mod allowed;
+mod instrument;
+mod log;
 
 #[cfg(test)]
 mod tests;
+
+#[proc_macro_attribute]
+pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
+    instrument::instrument2(TokenStream2::from(attr), TokenStream2::from(item))
+}
+
+#[proc_macro]
+pub fn error(ts: TokenStream) -> TokenStream {
+    log::parse("error", ts.into()).into()
+}
+
+#[proc_macro]
+pub fn warn(ts: TokenStream) -> TokenStream {
+    log::parse("warn", ts.into()).into()
+}
+
+#[proc_macro]
+pub fn info(ts: TokenStream) -> TokenStream {
+    log::parse("info", ts.into()).into()
+}
+
+#[proc_macro]
+pub fn debug(ts: TokenStream) -> TokenStream {
+    log::parse("debug", ts.into()).into()
+}
+
+#[proc_macro]
+pub fn trace(ts: TokenStream) -> TokenStream {
+    log::parse("trace", ts.into()).into()
+}
