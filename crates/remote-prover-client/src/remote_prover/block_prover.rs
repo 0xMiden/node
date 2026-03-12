@@ -108,7 +108,6 @@ impl RemoteBlockProver {
         block_header: &BlockHeader,
         block_inputs: BlockInputs,
     ) -> Result<BlockProof, RemoteProverClientError> {
-        use miden_protocol::utils::serde::Serializable;
         self.connect().await?;
 
         let mut client = self

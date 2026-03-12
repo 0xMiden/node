@@ -107,7 +107,6 @@ impl RemoteTransactionProver {
         tx_inputs: &TransactionInputs,
     ) -> impl FutureMaybeSend<Result<ProvenTransaction, TransactionProverError>> {
         async move {
-            use miden_protocol::utils::serde::Serializable;
             self.connect().await.map_err(|err| {
                 TransactionProverError::other_with_source(
                     "failed to connect to the remote prover",

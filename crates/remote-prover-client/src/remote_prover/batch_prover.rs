@@ -110,7 +110,6 @@ impl RemoteBatchProver {
         &self,
         proposed_batch: ProposedBatch,
     ) -> Result<ProvenBatch, RemoteProverClientError> {
-        use miden_protocol::utils::serde::Serializable;
         self.connect().await?;
 
         let mut client = self

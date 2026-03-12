@@ -19,7 +19,12 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::batch::ProvenBatch;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::{OutputNote, ProvenTransaction, TxAccountUpdate};
+use miden_protocol::transaction::{
+    OutputNote,
+    ProvenTransaction,
+    PublicOutputNote,
+    TxAccountUpdate,
+};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
@@ -505,8 +510,6 @@ impl api_server::Api for RpcService {
 fn strip_output_note_decorators<'a>(
     notes: impl Iterator<Item = &'a OutputNote> + 'a,
 ) -> impl Iterator<Item = OutputNote> + 'a {
-    use miden_protocol::transaction::PublicOutputNote;
-
     notes.map(|note| match note {
         OutputNote::Public(public_note) => {
             // Reconstruct via PublicOutputNote::new which calls minify_script() internally.
