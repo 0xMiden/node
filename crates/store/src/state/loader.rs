@@ -329,7 +329,7 @@ impl StorageLoader for RocksDbStorage {
 /// Loads an SMT from persistent storage.
 #[cfg(feature = "rocksdb")]
 pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializationError> {
-    LargeSmt::new(storage).map_err(account_tree_large_smt_error_to_init_error)
+    LargeSmt::load(storage).map_err(account_tree_large_smt_error_to_init_error)
 }
 
 // TREE LOADING FUNCTIONS

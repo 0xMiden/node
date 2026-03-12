@@ -98,20 +98,20 @@ impl AccountStateForest {
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
-        _block_num: BlockNumber,
+        block_num: BlockNumber,
     ) -> Option<Word> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.latest_root(lineage)
+        self.get_root_at_block(lineage, block_num)
     }
 
     #[cfg(test)]
     fn tree_id_for_vault_root(
         &self,
         account_id: AccountId,
-        _block_num: BlockNumber,
+        block_num: BlockNumber,
     ) -> Option<Word> {
         let lineage = Self::vault_lineage_id(account_id);
-        self.latest_root(lineage)
+        self.get_root_at_block(lineage, block_num)
     }
 
     fn storage_lineage_id(account_id: AccountId, slot_name: &StorageSlotName) -> LineageId {
@@ -646,12 +646,20 @@ impl AccountStateForest {
         let mut roots_to_prune = Vec::new();
 
         for versions in self.lineage_versions.values_mut() {
-            // Keep only versions after the cutoff. We need at least one version (the latest
-            // at or before cutoff) to serve as the base state.
-            let split_idx =
-                versions.partition_point(|(v, _)| *v < cutoff_version).saturating_sub(1);
-            if split_idx > 0 {
-                let removed: Vec<_> = versions.drain(..split_idx).collect();
+            // Remove all versions strictly before the cutoff, but always keep at least one
+            // version (the latest at or before cutoff) so the lineage's current state is
+            // preserved.
+            let split_idx = versions.partition_point(|(v, _)| *v < cutoff_version);
+
+            // If all versions are before the cutoff, keep the last one as the current state.
+            let drain_end = if split_idx >= versions.len() {
+                split_idx.saturating_sub(1)
+            } else {
+                split_idx
+            };
+
+            if drain_end > 0 {
+                let removed: Vec<_> = versions.drain(..drain_end).collect();
                 for (_, root) in &removed {
                     roots_to_prune.push(*root);
                 }
@@ -659,8 +667,17 @@ impl AccountStateForest {
             }
         }
 
-        // Remove old roots from the SmtForest to free memory.
-        self.forest.pop_smts(roots_to_prune);
+        // Collect all roots still in use across all lineages.
+        let active_roots: BTreeSet<Word> = self
+            .lineage_versions
+            .values()
+            .flat_map(|versions| versions.iter().map(|(_, root)| *root))
+            .collect();
+
+        // Only pop roots that are no longer referenced by any lineage.
+        let orphaned_roots: Vec<Word> =
+            roots_to_prune.into_iter().filter(|r| !active_roots.contains(r)).collect();
+        self.forest.pop_smts(orphaned_roots);
 
         pruned_count
     }

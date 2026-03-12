@@ -2974,8 +2974,10 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     forest.update_account(block53, &delta1_update).unwrap();
 
     // Prune at block 53
+    // cutoff = 53 - 50 = 3: each of the 3 lineages has one version < 3 that gets removed
+    // (account1 v=1, account2 v=2, account3 v=2), since each also has a newer version.
     let total_roots_removed = forest.prune(block53);
-    assert_eq!(total_roots_removed, 0);
+    assert_eq!(total_roots_removed, 3);
 
     // Account2 and Account3 should still be accessible at their recent blocks
     let account1_root = forest.get_storage_map_root(account1, &slot_name, block53).unwrap();
@@ -3095,9 +3097,11 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     forest.update_account(block_51, &delta_51).unwrap();
 
     // Prune again at block 100
+    // cutoff = 50: both vault and storage lineages have v=1 (< 50) and v=51, so v=1 is pruned
+    // from each lineage, totaling 2 version entries removed.
     let total_roots_removed = forest.prune(block_100);
 
-    assert_eq!(total_roots_removed, 0);
+    assert_eq!(total_roots_removed, 2);
 
     let vault_root_at_51 = forest
         .get_vault_root(account_id, block_51)
@@ -3119,8 +3123,9 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         "Witness must verify against storage root"
     );
 
+    // After pruning, the v=1 entry was removed so querying at block_1 returns None.
     let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
-    assert!(vault_root_at_1.is_some());
+    assert!(vault_root_at_1.is_none(), "Block 1 vault entry was pruned");
 }
 
 #[test]
@@ -3426,10 +3431,10 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     // Vault: block 1 is most recent, should NOT be pruned
     // Map A: block 1 is old (block 51 is newer), SHOULD be pruned
     // Map B: block 1 is most recent, should NOT be pruned
-    assert_eq!(
-        total_roots_removed, 0,
-        "Vault root from block 1 should NOT be pruned (most recent)"
-    );
+    // Vault: block 1 is the only version, kept (all versions before cutoff case).
+    // Map A: has v=1 and v=51; v=1 < cutoff=50, so 1 version entry removed.
+    // Map B: block 1 is the only version, kept.
+    assert_eq!(total_roots_removed, 1, "Only map_a's block 1 version entry should be pruned");
 
     // Verify vault is still accessible
     let vault_root_at_1 =
@@ -3454,7 +3459,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
         "Map B should still be from block 1 (most recent)"
     );
 
-    // Verify map_a block 1 is no longer accessible
+    // Verify map_a block 1 is no longer accessible (it was pruned)
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
-    assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
+    assert!(map_a_root_at_1.is_none(), "Map A block 1 should be pruned");
 }
