@@ -298,7 +298,8 @@ pub(crate) fn mark_block_proven(
 
 /// Select the highest block number that has been proven.
 ///
-/// A block is considered proven when its `proving_inputs` are `NULL`.
+/// A block is considered proven when its `proving_inputs` are `NULL`. This includes the genesis
+/// block, which is not technically proven, but treated as such.
 ///
 /// # Raw SQL
 ///
