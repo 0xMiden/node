@@ -25,6 +25,12 @@ pub struct NullifierTreeRocksDbOptions {
     pub cache_size_in_bytes: usize,
 }
 
+impl Default for NullifierTreeRocksDbOptions {
+    fn default() -> Self {
+        RocksDbOptions::default().into()
+    }
+}
+
 /// Per usage options for rocksdb configuration
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct AccountTreeRocksDbOptions {
@@ -40,6 +46,12 @@ pub struct AccountTreeRocksDbOptions {
         value_name = "ACCOUNT_TREE__ROCKSDB__CACHE_SIZE"
     )]
     pub cache_size_in_bytes: usize,
+}
+
+impl Default for AccountTreeRocksDbOptions {
+    fn default() -> Self {
+        RocksDbOptions::default().into()
+    }
 }
 
 /// General confiration options for rocksdb.

@@ -141,7 +141,7 @@ impl BundledCommand {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         block_prover_url: Option<Url>,

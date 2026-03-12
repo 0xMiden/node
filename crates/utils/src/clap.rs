@@ -141,7 +141,7 @@ impl GrpcOptionsExternal {
 /// Collection of per usage storage backend configurations.
 ///
 /// Note: Currently only contains `rocksdb` related configuration.
-#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+#[derive(clap::Args, Clone, Debug, Default, PartialEq, Eq)]
 pub struct StorageOptions {
     #[cfg(feature = "rocksdb")]
     #[clap(flatten)]
@@ -149,17 +149,6 @@ pub struct StorageOptions {
     #[cfg(feature = "rocksdb")]
     #[clap(flatten)]
     pub nullifier_tree: NullifierTreeRocksDbOptions,
-}
-
-impl Default for StorageOptions {
-    fn default() -> Self {
-        Self {
-            #[cfg(feature = "rocksdb")]
-            account_tree: RocksDbOptions::default().into(),
-            #[cfg(feature = "rocksdb")]
-            nullifier_tree: RocksDbOptions::default().into(),
-        }
-    }
 }
 
 impl StorageOptions {

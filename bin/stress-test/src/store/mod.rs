@@ -5,6 +5,7 @@ use futures::{StreamExt, stream};
 use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
+use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteDetails, NoteTag};
@@ -490,7 +491,9 @@ struct SyncChainMmrRun {
 pub async fn load_state(data_directory: &Path) {
     let start = Instant::now();
     let (termination_ask, _) = tokio::sync::mpsc::channel(1);
-    let _state = State::load(data_directory, Default::default(), termination_ask).await.unwrap();
+    let _state = State::load(data_directory, StorageOptions::default(), termination_ask)
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
 
     // Get database path and run SQL commands to count records
