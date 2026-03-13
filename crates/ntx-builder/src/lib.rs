@@ -22,6 +22,7 @@ mod clients;
 mod coordinator;
 pub(crate) mod db;
 pub(crate) mod inflight_note;
+pub mod server;
 
 #[cfg(test)]
 pub(crate) mod test_utils;

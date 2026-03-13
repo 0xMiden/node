@@ -32,6 +32,7 @@ pub struct Rpc {
     pub store_url: Url,
     pub block_producer_url: Option<Url>,
     pub validator_url: Url,
+    pub ntx_builder_url: Option<Url>,
     pub grpc_options: GrpcOptionsExternal,
 }
 
@@ -45,6 +46,7 @@ impl Rpc {
             self.store_url.clone(),
             self.block_producer_url.clone(),
             self.validator_url,
+            self.ntx_builder_url.clone(),
         );
 
         let genesis = api

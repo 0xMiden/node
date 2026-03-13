@@ -53,3 +53,14 @@ coordinator (via the `send_targeted` path).
 
 The block-producer remains blissfully unaware of network transactions. From its perspective a
 network transaction is simply the same as any other.
+
+## gRPC Server
+
+The NTB exposes an internal gRPC server for querying its state. The RPC component proxies public
+requests to this server. In bundled mode the server is started automatically on a random port and
+wired to the RPC; in distributed mode operators must pass the NTB's address to the RPC via
+`--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`).
+
+Currently the only endpoint is `GetNoteError(note_id)` which returns the latest execution error
+for a given network note, along with the attempt count and the block number of the last attempt.
+This is useful for debugging notes that fail to be consumed.
