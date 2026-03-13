@@ -184,6 +184,16 @@ pub struct NtxBuilderConfig {
     )]
     pub idle_timeout: Duration,
 
+    /// Maximum number of crashes before an account deactivated.
+    ///
+    /// Once this limit is reached, no new transactions will be created for this account.
+    #[arg(
+        long = "ntx-builder.max-account-crashes",
+        default_value_t = 10,
+        value_name = "NUM"
+    )]
+    pub max_account_crashes: usize,
+
     /// Directory for the ntx-builder's persistent database.
     ///
     /// If not set, defaults to the node's data directory.
@@ -215,6 +225,7 @@ impl NtxBuilderConfig {
         .with_tx_prover_url(self.tx_prover_url)
         .with_script_cache_size(self.script_cache_size)
         .with_idle_timeout(self.idle_timeout)
+        .with_max_account_crashes(self.max_account_crashes)
     }
 }
 

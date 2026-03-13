@@ -57,6 +57,7 @@ use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta,
+    select_latest_vault_assets,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
@@ -1071,7 +1072,6 @@ fn prepare_partial_account_update(
     update: &BlockAccountUpdate,
     account_id: AccountId,
     delta: &miden_protocol::account::delta::AccountDelta,
-    block_num: BlockNumber,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     // Build the minimal account state needed for partial delta application.
     // Only load the storage map entries and vault balances that will receive updates.
@@ -1141,9 +1141,7 @@ fn prepare_partial_account_update(
 
     // --- Update the vault root by constructing the asset vault from DB.
     let new_vault_root = {
-        let (_last_block, assets) =
-            select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
-        let assets: Vec<Asset> = assets.into_iter().filter_map(|entry| entry.asset).collect();
+        let assets = select_latest_vault_assets(conn, account_id)?;
         let mut vault = AssetVault::new(&assets)?;
         vault.apply_delta(delta.vault())?;
         vault.root()
@@ -1243,7 +1241,7 @@ pub(crate) fn upsert_accounts(
 
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                prepare_partial_account_update(conn, update, account_id, delta, block_num)?
+                prepare_partial_account_update(conn, update, account_id, delta)?
             },
         };
 

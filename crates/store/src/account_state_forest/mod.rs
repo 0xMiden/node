@@ -600,7 +600,7 @@ impl AccountStateForest {
         slot_name: &StorageSlotName,
     ) -> Word {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.forest.latest_root(lineage).map_or_else(Self::empty_smt_root, |root| root)
+        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
     }
 
     /// Updates the forest with storage map changes from a delta.
