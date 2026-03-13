@@ -34,6 +34,10 @@ services:
       - --ntx-builder.url=http://0.0.0.0:50002
       - --block-producer.url=http://0.0.0.0:50003
       - --data-directory=/data
+      - --account_tree.rocksdb.max_cache_size=4294967296
+      - --account_tree.rocksdb.max_open_fds=512
+      - --nullifier_tree.rocksdb.max_cache_size=4294967296
+      - --nullifier_tree.rocksdb.max_open_fds=512
     ports:
       - "50001:50001"
       - "50002:50002"
