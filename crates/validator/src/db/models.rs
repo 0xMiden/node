@@ -1,6 +1,6 @@
 use diesel::prelude::*;
 use miden_node_db::SqlTypeConvert;
-use miden_tx::utils::Serializable;
+use miden_tx::utils::serde::Serializable;
 
 use crate::db::schema;
 use crate::tx_validation::ValidatedTransaction;

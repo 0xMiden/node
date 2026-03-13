@@ -23,9 +23,9 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
-use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey as RpoSecretKey;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, FieldElement, ONE};
+use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
@@ -222,7 +222,7 @@ impl GenesisConfig {
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
             let auth = AuthMethod::SingleSig {
-                approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+                approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
             };
             let init_seed: [u8; 32] = rng.random();
 
@@ -311,7 +311,7 @@ impl GenesisConfig {
 
             // sanity check the total issuance against
             let basic = BasicFungibleFaucet::try_from(&faucet_account)?;
-            let max_supply = basic.max_supply().inner();
+            let max_supply = basic.max_supply().as_canonical_u64();
             if max_supply < total_issuance {
                 return Err(GenesisConfigError::MaxIssuanceExceeded {
                     max_supply,
@@ -431,7 +431,8 @@ impl FungibleFaucetConfig {
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
         let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
-        let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Rpo);
+        let auth =
+            AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
         let init_seed: [u8; 32] = rng.random();
 
         let max_supply = Felt::try_from(max_supply)
@@ -535,8 +536,10 @@ impl AccountSecrets {
             let account = account_lut
                 .get(&account_id)
                 .ok_or(GenesisConfigError::MissingGenesisAccount { account_id })?;
-            let account_file =
-                AccountFile::new(account.clone(), vec![AuthSecretKey::Falcon512Rpo(secret_key)]);
+            let account_file = AccountFile::new(
+                account.clone(),
+                vec![AuthSecretKey::Falcon512Poseidon2(secret_key)],
+            );
             Ok(AccountFileWithName { name, account_file })
         })
     }

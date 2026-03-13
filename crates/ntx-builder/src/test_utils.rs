@@ -32,8 +32,12 @@ pub fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
 
 /// Creates a unique `TransactionId` from a seed value.
 pub fn mock_tx_id(seed: u64) -> TransactionId {
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
+
     let w = |n: u64| Word::try_from([n, 0, 0, 0]).unwrap();
-    TransactionId::new(w(seed), w(seed + 1), w(seed + 2), w(seed + 3))
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let fee = miden_protocol::asset::FungibleAsset::new(faucet_id, 0).unwrap();
+    TransactionId::new(w(seed), w(seed + 1), w(seed + 2), w(seed + 3), fee)
 }
 
 /// Creates a `AccountTargetNetworkNote` targeting the given network account.

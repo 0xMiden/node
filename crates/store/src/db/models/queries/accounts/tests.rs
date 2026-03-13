@@ -40,8 +40,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::{Deserializable, Serializable};
-use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
@@ -154,8 +154,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -165,7 +164,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -218,8 +217,7 @@ fn create_account_with_map_storage(
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -229,7 +227,7 @@ fn create_account_with_map_storage(
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()
@@ -474,8 +472,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     let component_2 = AccountComponent::new(
         account_component_code,
         component_storage_modified,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -485,7 +482,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         .with_component(component_2)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -574,8 +571,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -585,7 +581,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -644,8 +640,7 @@ fn test_upsert_accounts_with_empty_storage() {
     let component = AccountComponent::new(
         account_component_code,
         vec![],
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -655,7 +650,7 @@ fn test_upsert_accounts_with_empty_storage() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -781,8 +776,7 @@ fn test_select_latest_account_storage_multiple_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -792,7 +786,7 @@ fn test_select_latest_account_storage_multiple_slots() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -883,8 +877,11 @@ fn test_select_latest_account_storage_slot_updates() {
 #[test]
 fn test_select_account_vault_at_block_historical_with_updates() {
     use assert_matches::assert_matches;
-    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
-    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
+    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    };
 
     let mut conn = setup_test_db();
     let (account, _) = create_test_account_with_storage();
@@ -915,13 +912,8 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     }
 
     // Insert vault asset at block 1: vault_key_1 = 1000 tokens
-    let vault_key_1 = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(1),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
     let asset_v1 = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
+    let vault_key_1 = asset_v1.vault_key();
 
     insert_account_vault_asset(&mut conn, account_id, block_1, vault_key_1, Some(asset_v1))
         .expect("insert vault asset failed");
@@ -931,14 +923,10 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_1, Some(asset_v2))
         .expect("insert vault asset update failed");
 
-    // Add a second vault_key at block 2
-    let vault_key_2 = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(2),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
-    let asset_key2 = Asset::Fungible(FungibleAsset::new(faucet_id, 500).unwrap());
+    // Add a second vault_key at block 2 (different faucet for different vault key)
+    let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let asset_key2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 500).unwrap());
+    let vault_key_2 = asset_key2.vault_key();
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_2, Some(asset_key2))
         .expect("insert second vault asset failed");
 
@@ -1017,12 +1005,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
             .expect("upsert_accounts failed");
     }
 
-    let vault_key = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(3),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
+    let vault_key = AssetVaultKey::new_fungible(faucet_id).unwrap();
 
     for (index, block) in blocks.iter().enumerate() {
         let amount = 1u64 << index;
@@ -1049,7 +1032,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
 #[test]
 fn test_select_account_vault_at_block_with_deletion() {
     use assert_matches::assert_matches;
-    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
+    use miden_protocol::asset::FungibleAsset;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
 
     let mut conn = setup_test_db();
@@ -1081,13 +1064,8 @@ fn test_select_account_vault_at_block_with_deletion() {
     }
 
     // Insert vault asset at block 1
-    let vault_key = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(1),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
+    let vault_key = asset.vault_key();
 
     insert_account_vault_asset(&mut conn, account_id, block_1, vault_key, Some(asset))
         .expect("insert vault asset failed");

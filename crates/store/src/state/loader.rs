@@ -16,13 +16,13 @@ use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::RocksDbStorage;
 use miden_node_utils::clap::RocksDbOptions;
-use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
 #[cfg(not(feature = "rocksdb"))]
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
-use miden_protocol::{Felt, FieldElement, Word};
+use miden_protocol::{Felt, Word};
 #[cfg(feature = "rocksdb")]
 use tracing::info;
 use tracing::instrument;
@@ -75,6 +75,14 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
         },
         LargeSmtError::Storage(err) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
+        },
+        LargeSmtError::RootMismatch { expected, actual } => {
+            StateInitializationError::AccountTreeIoError(format!(
+                "root mismatch: expected {expected:?}, got {actual:?}"
+            ))
+        },
+        LargeSmtError::StorageNotEmpty => {
+            StateInitializationError::AccountTreeIoError("storage is not empty".to_string())
         },
     }
 }
@@ -158,7 +166,7 @@ impl StorageLoader for MemoryStorage {
             let entries = page
                 .commitments
                 .into_iter()
-                .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
+                .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
 
             let mutations = smt
                 .compute_mutations(entries)
@@ -268,7 +276,7 @@ impl StorageLoader for RocksDbStorage {
             let entries = page
                 .commitments
                 .into_iter()
-                .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
+                .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
 
             let mutations = smt
                 .compute_mutations(entries)
@@ -338,7 +346,7 @@ impl StorageLoader for RocksDbStorage {
 /// Loads an SMT from persistent storage.
 #[cfg(feature = "rocksdb")]
 pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializationError> {
-    LargeSmt::new(storage).map_err(account_tree_large_smt_error_to_init_error)
+    LargeSmt::load(storage).map_err(account_tree_large_smt_error_to_init_error)
 }
 
 // TREE LOADING FUNCTIONS

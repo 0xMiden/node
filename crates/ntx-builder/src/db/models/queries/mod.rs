@@ -10,7 +10,7 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
-use miden_tx::utils::Serializable;
+use miden_tx::utils::serde::Serializable;
 
 use super::account_effect::NetworkAccountEffect;
 use crate::db::models::conv as conversions;

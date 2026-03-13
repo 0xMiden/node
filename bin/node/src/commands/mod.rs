@@ -13,7 +13,7 @@ use miden_node_block_producer::{
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use url::Url;
 

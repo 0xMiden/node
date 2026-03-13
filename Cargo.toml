@@ -31,7 +31,7 @@ license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/node"
 rust-version = "1.91"
-version      = "0.14.0-alpha.5"
+version      = "0.14.0-beta.1"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
@@ -46,35 +46,33 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "=0.14.0-alpha.5" }
-miden-node-block-producer       = { path = "crates/block-producer", version = "=0.14.0-alpha.5" }
-miden-node-db                   = { path = "crates/db", version = "=0.14.0-alpha.5" }
-miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "=0.14.0-alpha.5" }
-miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "=0.14.0-alpha.5" }
-miden-node-proto                = { path = "crates/proto", version = "=0.14.0-alpha.5" }
-miden-node-proto-build          = { path = "proto", version = "=0.14.0-alpha.5" }
-miden-node-rpc                  = { path = "crates/rpc", version = "=0.14.0-alpha.5" }
-miden-node-store                = { path = "crates/store", version = "=0.14.0-alpha.5" }
+miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "=0.14.0-beta.1" }
+miden-node-block-producer       = { path = "crates/block-producer", version = "=0.14.0-beta.1" }
+miden-node-db                   = { path = "crates/db", version = "=0.14.0-beta.1" }
+miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "=0.14.0-beta.1" }
+miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "=0.14.0-beta.1" }
+miden-node-proto                = { path = "crates/proto", version = "=0.14.0-beta.1" }
+miden-node-proto-build          = { path = "proto", version = "=0.14.0-beta.1" }
+miden-node-rpc                  = { path = "crates/rpc", version = "=0.14.0-beta.1" }
+miden-node-store                = { path = "crates/store", version = "=0.14.0-beta.1" }
 miden-node-test-macro           = { path = "crates/test-macro" }
-miden-node-utils                = { path = "crates/utils", version = "=0.14.0-alpha.5" }
-miden-node-validator            = { path = "crates/validator", version = "=0.14.0-alpha.5" }
-miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "=0.14.0-alpha.5" }
+miden-node-utils                = { path = "crates/utils", version = "=0.14.0-beta.1" }
+miden-node-validator            = { path = "crates/validator", version = "=0.14.0-beta.1" }
+miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "=0.14.0-beta.1" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
-miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "=0.14.0-alpha.5" }
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "=0.14.0-beta.1" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
-miden-block-prover    = { version = "=0.14.0-alpha.1" }
-miden-protocol        = { default-features = false, version = "=0.14.0-alpha.1" }
-miden-standards       = { version = "=0.14.0-alpha.1" }
-miden-testing         = { version = "=0.14.0-alpha.1" }
-miden-tx              = { default-features = false, version = "=0.14.0-alpha.1" }
-miden-tx-batch-prover = { version = "=0.14.0-alpha.1" }
+miden-block-prover    = { version = "=0.14.0-beta.1" }
+miden-protocol        = { default-features = false, version = "=0.14.0-beta.1" }
+miden-standards       = { version = "=0.14.0-beta.1" }
+miden-testing         = { version = "=0.14.0-beta.1" }
+miden-tx              = { default-features = false, version = "=0.14.0-beta.1" }
+miden-tx-batch-prover = { version = "=0.14.0-beta.1" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
-miden-air = { features = ["std", "testing"], version = "0.20" }
-
-miden-crypto = { version = "0.19.7" }
+miden-crypto = { version = "0.22" }
 
 # External dependencies
 anyhow            = { version = "1.0" }
@@ -146,3 +144,6 @@ should_panic_without_expect  = "allow" # We don't care about the specific panic 
 # Configure `cargo-typos`
 [workspace.metadata.typos]
 files.extend-exclude = ["*.svg"] # Ignore SVG files.
+
+[patch.crates-io]
+miden-protocol = { branch = "igamigo-fix-partial-smt", git = "https://github.com/0xMiden/protocol" }

@@ -14,7 +14,7 @@ use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::transaction::TransactionInputs;
 use miden_testing::{Auth, MockChainBuilder};
-use miden_tx::utils::Serializable;
+use miden_tx::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -278,7 +278,9 @@ pub async fn generate_mock_transaction() -> anyhow::Result<TransactionInputs> {
 
     // Create an account with basic authentication
     let account = mock_chain_builder
-        .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Rpo })
+        .add_existing_wallet(Auth::BasicAuth {
+            auth_scheme: AuthScheme::Falcon512Poseidon2,
+        })
         .context("Failed to add wallet to mock chain")?;
 
     // Create a fungible asset

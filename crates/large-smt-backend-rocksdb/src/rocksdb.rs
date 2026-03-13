@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miden_crypto::Map;
 use miden_crypto::merkle::NodeIndex;
 use miden_crypto::merkle::smt::{InnerNode, SmtLeaf, Subtree};
+use miden_crypto::utils::{Deserializable, Serializable};
 use rocksdb::{
     BlockBasedOptions,
     Cache,
@@ -20,7 +21,6 @@ use rocksdb::{
     ReadOptions,
     WriteBatch,
 };
-use winter_utils::{Deserializable, Serializable};
 
 use super::{SmtStorage, StorageError, StorageUpdateParts, StorageUpdates, SubtreeUpdate};
 use crate::helpers::{insert_into_leaf, map_rocksdb_err, remove_from_leaf};
@@ -44,8 +44,6 @@ const METADATA_CF: &str = "metadata";
 /// rebuilding.
 const DEPTH_24_CF: &str = "depth24";
 
-/// The key used in the `METADATA_CF` column family to store the SMT's root hash.
-const ROOT_KEY: &[u8] = b"smt_root";
 /// The key used in the `METADATA_CF` column family to store the total count of non-empty leaves.
 const LEAF_COUNT_KEY: &[u8] = b"leaf_count";
 /// The key used in the `METADATA_CF` column family to store the total count of key-value entries.
@@ -264,35 +262,6 @@ impl RocksDbStorage {
 }
 
 impl SmtStorage for RocksDbStorage {
-    /// Retrieves the SMT root hash from the `METADATA_CF` column family.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the metadata column family is missing or a RocksDB error
-    ///   occurs.
-    /// - `StorageError::DeserializationError`: If the retrieved root hash bytes cannot be
-    ///   deserialized.
-    fn get_root(&self) -> Result<Option<Word>, StorageError> {
-        let cf = self.cf_handle(METADATA_CF)?;
-        match self.db.get_cf(cf, ROOT_KEY).map_err(map_rocksdb_err)? {
-            Some(bytes) => {
-                let digest = Word::read_from_bytes(&bytes)?;
-                Ok(Some(digest))
-            },
-            None => Ok(None),
-        }
-    }
-
-    /// Stores the SMT root hash in the `METADATA_CF` column family.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the metadata column family is missing or a RocksDB error
-    ///   occurs.
-    fn set_root(&self, root: Word) -> Result<(), StorageError> {
-        let cf = self.cf_handle(METADATA_CF)?;
-        self.db.put_cf(cf, ROOT_KEY, root.to_bytes()).map_err(map_rocksdb_err)?;
-        Ok(())
-    }
-
     /// Retrieves the total count of non-empty leaves from the `METADATA_CF` column family.
     /// Returns 0 if the count is not found.
     ///
@@ -355,7 +324,7 @@ impl SmtStorage for RocksDbStorage {
     /// - `StorageError::DeserializationError`: If existing leaf data is corrupt.
     #[expect(clippy::single_match_else)]
     fn insert_value(
-        &self,
+        &mut self,
         index: u64,
         key: Word,
         value: Word,
@@ -428,7 +397,7 @@ impl SmtStorage for RocksDbStorage {
     /// # Errors
     /// - `StorageError::Backend`: If column families are missing or a RocksDB error occurs.
     /// - `StorageError::DeserializationError`: If existing leaf data is corrupt.
-    fn remove_value(&self, index: u64, key: Word) -> Result<Option<Word>, StorageError> {
+    fn remove_value(&mut self, index: u64, key: Word) -> Result<Option<Word>, StorageError> {
         let Some(mut leaf) = self.get_leaf(index)? else {
             return Ok(None);
         };
@@ -488,7 +457,7 @@ impl SmtStorage for RocksDbStorage {
     ///
     /// # Errors
     /// - `StorageError::Backend`: If column families are missing or a RocksDB error occurs.
-    fn set_leaves(&self, leaves: Map<u64, SmtLeaf>) -> Result<(), StorageError> {
+    fn set_leaves(&mut self, leaves: Map<u64, SmtLeaf>) -> Result<(), StorageError> {
         let cf = self.cf_handle(LEAVES_CF)?;
         let leaf_count: usize = leaves.len();
         let entry_count: usize = leaves.values().map(|leaf| leaf.entries().len()).sum();
@@ -519,7 +488,7 @@ impl SmtStorage for RocksDbStorage {
     /// - `StorageError::Backend`: If the leaves column family is missing or a RocksDB error occurs.
     /// - `StorageError::DeserializationError`: If the retrieved (to be returned) leaf data is
     ///   corrupt.
-    fn remove_leaf(&self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
+    fn remove_leaf(&mut self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
         let key = Self::index_db_key(index);
         let cf = self.cf_handle(LEAVES_CF)?;
         let old_bytes = self.db.get_cf(cf, key).map_err(map_rocksdb_err)?;
@@ -676,7 +645,7 @@ impl SmtStorage for RocksDbStorage {
     /// # Errors
     /// - Returns `StorageError` if column family lookup, serialization, or the write operation
     ///   fails.
-    fn set_subtree(&self, subtree: &Subtree) -> Result<(), StorageError> {
+    fn set_subtree(&mut self, subtree: &Subtree) -> Result<(), StorageError> {
         let subtrees_cf = self.subtree_cf(subtree.root_index());
         let mut batch = WriteBatch::default();
 
@@ -714,7 +683,7 @@ impl SmtStorage for RocksDbStorage {
     ///
     /// # Errors
     /// - Returns `StorageError::Backend` if any column family lookup or RocksDB write fails.
-    fn set_subtrees(&self, subtrees: Vec<Subtree>) -> Result<(), StorageError> {
+    fn set_subtrees(&mut self, subtrees: Vec<Subtree>) -> Result<(), StorageError> {
         let depth24_cf = self.cf_handle(DEPTH_24_CF)?;
         let mut batch = WriteBatch::default();
 
@@ -741,7 +710,7 @@ impl SmtStorage for RocksDbStorage {
     /// # Errors
     /// - `StorageError::Backend`: If the subtrees column family is missing or a RocksDB error
     ///   occurs.
-    fn remove_subtree(&self, index: NodeIndex) -> Result<(), StorageError> {
+    fn remove_subtree(&mut self, index: NodeIndex) -> Result<(), StorageError> {
         let subtrees_cf = self.subtree_cf(index);
         let mut batch = WriteBatch::default();
 
@@ -790,7 +759,7 @@ impl SmtStorage for RocksDbStorage {
     /// - `StorageError::Backend`: If `index.depth() < IN_MEMORY_DEPTH`, or if RocksDB errors occur.
     /// - `StorageError::Value`: If existing Subtree data is corrupt.
     fn set_inner_node(
-        &self,
+        &mut self,
         index: NodeIndex,
         node: InnerNode,
     ) -> Result<Option<InnerNode>, StorageError> {
@@ -818,7 +787,7 @@ impl SmtStorage for RocksDbStorage {
     /// # Errors
     /// - `StorageError::Backend`: If `index.depth() < IN_MEMORY_DEPTH`, or if RocksDB errors occur.
     /// - `StorageError::Value`: If existing Subtree data is corrupt.
-    fn remove_inner_node(&self, index: NodeIndex) -> Result<Option<InnerNode>, StorageError> {
+    fn remove_inner_node(&mut self, index: NodeIndex) -> Result<Option<InnerNode>, StorageError> {
         if index.depth() < IN_MEMORY_DEPTH {
             return Err(StorageError::Unsupported(
                 "Cannot remove inner node from upper part of the tree".into(),
@@ -856,7 +825,7 @@ impl SmtStorage for RocksDbStorage {
     ///
     /// # Errors
     /// - `StorageError::Backend`: If any column family is missing or a RocksDB write error occurs.
-    fn apply(&self, updates: StorageUpdates) -> Result<(), StorageError> {
+    fn apply(&mut self, updates: StorageUpdates) -> Result<(), StorageError> {
         use rayon::prelude::*;
 
         let mut batch = WriteBatch::default();
@@ -868,7 +837,6 @@ impl SmtStorage for RocksDbStorage {
         let StorageUpdateParts {
             leaf_updates,
             subtree_updates,
-            new_root,
             leaf_count_delta,
             entry_count_delta,
         } = updates.into_parts();
@@ -942,8 +910,6 @@ impl SmtStorage for RocksDbStorage {
             batch.put_cf(metadata_cf, LEAF_COUNT_KEY, new_leaf_count.to_be_bytes());
             batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, new_entry_count.to_be_bytes());
         }
-
-        batch.put_cf(metadata_cf, ROOT_KEY, new_root.to_bytes());
 
         let mut write_opts = rocksdb::WriteOptions::default();
         // Disable immediate WAL sync to disk for better performance

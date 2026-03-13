@@ -14,7 +14,7 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tracing::{debug, info, instrument};
 use url::Url;
 

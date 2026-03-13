@@ -119,7 +119,7 @@ pub enum AddTransactionError {
     },
 
     #[error("transaction deserialization failed")]
-    TransactionDeserializationFailed(#[source] miden_protocol::utils::DeserializationError),
+    TransactionDeserializationFailed(#[source] miden_protocol::utils::serde::DeserializationError),
 
     #[error(
         "transaction expired at block height {expired_at} but the block height limit was {limit}"
@@ -167,7 +167,7 @@ impl From<VerifyTxError> for AddTransactionError {
 #[grpc(internal)]
 pub enum SubmitProvenBatchError {
     #[error("batch deserialization failed")]
-    Deserialization(#[source] miden_protocol::utils::DeserializationError),
+    Deserialization(#[source] miden_protocol::utils::serde::DeserializationError),
 }
 
 // Batch building errors

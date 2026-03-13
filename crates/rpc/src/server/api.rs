@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -19,8 +19,12 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::batch::ProvenBatch;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{Note, NoteRecipient, NoteScript};
-use miden_protocol::transaction::{OutputNote, ProvenTransaction, ProvenTransactionBuilder};
+use miden_protocol::transaction::{
+    OutputNote,
+    ProvenTransaction,
+    PublicOutputNote,
+    TxAccountUpdate,
+};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
@@ -337,23 +341,27 @@ impl api_server::Api for RpcService {
         })?;
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
-        let mut builder = ProvenTransactionBuilder::new(
+        let account_update = TxAccountUpdate::new(
             tx.account_id(),
             tx.account_update().initial_state_commitment(),
             tx.account_update().final_state_commitment(),
             tx.account_update().account_delta_commitment(),
+            tx.account_update().details().clone(),
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let stripped_outputs = strip_output_note_decorators(tx.output_notes().iter());
+        let rebuilt_tx = ProvenTransaction::new(
+            account_update,
+            tx.input_notes().iter().cloned(),
+            stripped_outputs,
             tx.ref_block_num(),
             tx.ref_block_commitment(),
             tx.fee(),
             tx.expiration_block_num(),
             tx.proof().clone(),
         )
-        .account_update_details(tx.account_update().details().clone())
-        .add_input_notes(tx.input_notes().iter().cloned());
-
-        let stripped_outputs = strip_output_note_decorators(tx.output_notes().iter());
-        builder = builder.add_output_notes(stripped_outputs);
-        let rebuilt_tx = builder.build().map_err(|e| Status::invalid_argument(e.to_string()))?;
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let mut request = request;
         request.transaction = rebuilt_tx.to_bytes();
 
@@ -492,23 +500,24 @@ impl api_server::Api for RpcService {
 // HELPERS
 // ================================================================================================
 
-/// Strips decorators from full output notes' scripts.
+/// Strips decorators from public output notes' scripts.
 ///
 /// This removes MAST decorators from note scripts before forwarding to the block producer,
 /// as decorators are not needed for transaction processing.
+///
+/// Note: `PublicOutputNote::new()` already calls `note.minify_script()` internally, so
+/// reconstructing the public note through it handles decorator stripping automatically.
 fn strip_output_note_decorators<'a>(
     notes: impl Iterator<Item = &'a OutputNote> + 'a,
 ) -> impl Iterator<Item = OutputNote> + 'a {
     notes.map(|note| match note {
-        OutputNote::Full(note) => {
-            let mut mast = note.script().mast().clone();
-            Arc::make_mut(&mut mast).strip_decorators();
-            let script = NoteScript::from_parts(mast, note.script().entrypoint());
-            let recipient = NoteRecipient::new(note.serial_num(), script, note.storage().clone());
-            let new_note = Note::new(note.assets().clone(), note.metadata().clone(), recipient);
-            OutputNote::Full(new_note)
+        OutputNote::Public(public_note) => {
+            // Reconstruct via PublicOutputNote::new which calls minify_script() internally.
+            let rebuilt = PublicOutputNote::new(public_note.as_note().clone())
+                .expect("rebuilding an already-valid public output note should not fail");
+            OutputNote::Public(rebuilt)
         },
-        other => other.clone(),
+        OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
 }
 
