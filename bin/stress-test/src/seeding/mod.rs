@@ -93,7 +93,7 @@ pub async fn seed_store(
     let faucet = create_faucet();
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
     let signer = EcdsaSecretKey::new();
-    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer);
+    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer.clone());
     let genesis_block = genesis_state
         .clone()
         .into_block()
@@ -118,6 +118,7 @@ pub async fn seed_store(
         &store_client,
         data_directory,
         accounts_filepath,
+        &signer,
     )
     .await;
 
@@ -129,6 +130,7 @@ pub async fn seed_store(
 ///
 /// The first transaction in each batch sends assets from the faucet to 255 accounts.
 /// The rest of the transactions consume the notes created by the faucet in the previous block.
+#[expect(clippy::too_many_arguments)]
 async fn generate_blocks(
     num_accounts: usize,
     public_accounts_percentage: u8,
@@ -137,6 +139,7 @@ async fn generate_blocks(
     store_client: &StoreClient,
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
+    signer: &EcdsaSecretKey,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
     // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx
@@ -215,7 +218,8 @@ async fn generate_blocks(
         let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
 
         // update blocks
-        prev_block_header = apply_block(batches, block_inputs, store_client, &mut metrics).await;
+        prev_block_header =
+            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
             current_anchor_header = prev_block_header.clone();
         }
@@ -250,11 +254,12 @@ async fn apply_block(
     block_inputs: BlockInputs,
     store_client: &StoreClient,
     metrics: &mut SeedingMetrics,
+    signer: &EcdsaSecretKey,
 ) -> BlockHeader {
     let proposed_block = ProposedBlock::new(block_inputs, batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
     let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
-    let signature = EcdsaSecretKey::new().sign(header.commitment());
+    let signature = signer.sign(header.commitment());
     // SAFETY: The header, body, and signature are known to correspond to each other.
     let signed_block = SignedBlock::new_unchecked(header, body, signature);
     let ordered_batches = proposed_block.batches().clone();
@@ -555,6 +560,7 @@ pub async fn start_store(
             block_producer_listener,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::bench(),
+            max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             storage_options: StorageOptions::bench(),
         }
         .serve()

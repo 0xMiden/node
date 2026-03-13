@@ -63,10 +63,7 @@ impl BlockStore {
         Ok(Self { store_dir })
     }
 
-    pub async fn load_block(
-        &self,
-        block_num: BlockNumber,
-    ) -> Result<Option<Vec<u8>>, std::io::Error> {
+    pub async fn load_block(&self, block_num: BlockNumber) -> std::io::Result<Option<Vec<u8>>> {
         match tokio::fs::read(self.block_path(block_num)).await {
             Ok(data) => Ok(Some(data)),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -81,11 +78,7 @@ impl BlockStore {
         err,
         fields(block_size = data.len())
     )]
-    pub async fn save_block(
-        &self,
-        block_num: BlockNumber,
-        data: &[u8],
-    ) -> Result<(), std::io::Error> {
+    pub async fn save_block(&self, block_num: BlockNumber, data: &[u8]) -> std::io::Result<()> {
         let (epoch_path, block_path) = self.epoch_block_path(block_num)?;
         if !epoch_path.exists() {
             tokio::fs::create_dir_all(epoch_path).await?;
@@ -94,17 +87,41 @@ impl BlockStore {
         tokio::fs::write(block_path, data).await
     }
 
-    pub fn save_block_blocking(
-        &self,
-        block_num: BlockNumber,
-        data: &[u8],
-    ) -> Result<(), std::io::Error> {
+    pub fn save_block_blocking(&self, block_num: BlockNumber, data: &[u8]) -> std::io::Result<()> {
         let (epoch_path, block_path) = self.epoch_block_path(block_num)?;
         if !epoch_path.exists() {
             fs_err::create_dir_all(epoch_path)?;
         }
 
         fs_err::write(block_path, data)
+    }
+
+    // PROOF STORAGE
+    // --------------------------------------------------------------------------------------------
+
+    #[expect(dead_code)]
+    pub async fn load_proof(&self, block_num: BlockNumber) -> std::io::Result<Option<Vec<u8>>> {
+        match tokio::fs::read(self.proof_path(block_num)).await {
+            Ok(data) => Ok(Some(data)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    #[instrument(
+        target = COMPONENT,
+        name = "store.block_store.save_proof",
+        skip(self, data),
+        err,
+        fields(proof_size = data.len())
+    )]
+    pub async fn save_proof(&self, block_num: BlockNumber, data: &[u8]) -> std::io::Result<()> {
+        let (epoch_path, proof_path) = self.epoch_proof_path(block_num)?;
+        if !epoch_path.exists() {
+            tokio::fs::create_dir_all(epoch_path).await?;
+        }
+
+        tokio::fs::write(proof_path, data).await
     }
 
     // HELPER FUNCTIONS
@@ -117,14 +134,25 @@ impl BlockStore {
         epoch_dir.join(format!("block_{block_num:08x}.dat"))
     }
 
-    fn epoch_block_path(
-        &self,
-        block_num: BlockNumber,
-    ) -> Result<(PathBuf, PathBuf), std::io::Error> {
+    fn proof_path(&self, block_num: BlockNumber) -> PathBuf {
+        let block_num = block_num.as_u32();
+        let epoch = block_num >> 16;
+        let epoch_dir = self.store_dir.join(format!("{epoch:04x}"));
+        epoch_dir.join(format!("proof_{block_num:08x}.dat"))
+    }
+
+    fn epoch_block_path(&self, block_num: BlockNumber) -> std::io::Result<(PathBuf, PathBuf)> {
         let block_path = self.block_path(block_num);
         let epoch_path = block_path.parent().ok_or(std::io::Error::from(ErrorKind::NotFound))?;
 
         Ok((epoch_path.to_path_buf(), block_path))
+    }
+
+    fn epoch_proof_path(&self, block_num: BlockNumber) -> std::io::Result<(PathBuf, PathBuf)> {
+        let proof_path = self.proof_path(block_num);
+        let epoch_path = proof_path.parent().ok_or(std::io::Error::from(ErrorKind::NotFound))?;
+
+        Ok((epoch_path.to_path_buf(), proof_path))
     }
 
     pub fn display(&self) -> std::path::Display<'_> {

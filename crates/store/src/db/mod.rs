@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::generated as proto;
+use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -279,12 +279,15 @@ impl Db {
         conn.transaction(move |conn| {
             models::queries::apply_block(
                 conn,
-                genesis.header(),
-                genesis.signature(),
-                &[],
-                &[],
-                genesis.body().updated_accounts(),
-                genesis.body().transactions(),
+                models::queries::ApplyBlockData {
+                    block_header: genesis.header(),
+                    signature: genesis.signature(),
+                    notes: &[],
+                    nullifiers: &[],
+                    accounts: genesis.body().updated_accounts(),
+                    transactions: genesis.body().transactions(),
+                    proving_inputs: None, // Genesis block is never proven.
+                },
             )
         })
         .context("failed to insert genesis block")?;
@@ -564,16 +567,20 @@ impl Db {
         acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
+        proving_inputs: Option<BlockProofRequest>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(
                 conn,
-                signed_block.header(),
-                signed_block.signature(),
-                &notes,
-                signed_block.body().created_nullifiers(),
-                signed_block.body().updated_accounts(),
-                signed_block.body().transactions(),
+                models::queries::ApplyBlockData {
+                    block_header: signed_block.header(),
+                    signature: signed_block.signature(),
+                    notes: &notes,
+                    nullifiers: signed_block.body().created_nullifiers(),
+                    accounts: signed_block.body().updated_accounts(),
+                    transactions: signed_block.body().transactions(),
+                    proving_inputs,
+                },
             )?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
@@ -587,6 +594,55 @@ impl Db {
             acquire_done.blocking_recv()?;
 
             Ok(())
+        })
+        .await
+    }
+
+    /// Marks a previously committed block as proven.
+    ///
+    /// Clears the `proving_inputs` for the given block number.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn mark_block_proven(&self, block_num: BlockNumber) -> Result<()> {
+        self.transact("mark block proven", move |conn| {
+            models::queries::mark_block_proven(conn, block_num)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Returns the proving inputs for a given block number, if stored.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_block_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<BlockProofRequest>> {
+        self.transact("select block proving inputs", move |conn| {
+            models::queries::select_block_proving_inputs(conn, block_num)
+        })
+        .await
+    }
+
+    /// Returns unproven block numbers greater than `after`, in ascending order, up to `limit`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_unproven_blocks(
+        &self,
+        after: BlockNumber,
+        limit: usize,
+    ) -> Result<Vec<BlockNumber>> {
+        self.transact("select unproven blocks", move |conn| {
+            models::queries::select_unproven_blocks(conn, after, limit)
+        })
+        .await
+    }
+
+    /// Returns the highest block number that has been proven, or `None` if no blocks have been
+    /// proven yet.
+    ///
+    /// This includes the genesis block, which is not technically proven, but treated as such.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_latest_proven_block_num(&self) -> Result<Option<BlockNumber>> {
+        self.transact("select latest proven block num", |conn| {
+            models::queries::select_latest_proven_block_num(conn)
         })
         .await
     }

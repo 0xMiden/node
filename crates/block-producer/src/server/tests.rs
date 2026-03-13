@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use miden_node_proto::generated::block_producer::api_client as block_producer_client;
-use miden_node_store::{GenesisState, Store};
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, GenesisState, Store};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee_params;
 use miden_node_validator::{Validator, ValidatorSigner};
@@ -159,6 +159,7 @@ async fn start_store(
             block_prover_url: None,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::bench(),
+            max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             storage_options: StorageOptions::bench(),
         }
         .serve()

@@ -1,8 +1,9 @@
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use miden_node_store::Store;
 use miden_node_store::genesis::GenesisBlock;
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
@@ -65,6 +66,13 @@ pub enum StoreCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
+        /// Maximum number of concurrent block proofs to be scheduled.
+        #[arg(
+            long = "max-concurrent-proofs",
+            default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
+            value_name = "NUM"
+        )]
+        max_concurrent_proofs: NonZeroUsize,
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
 
@@ -89,6 +97,7 @@ impl StoreCommand {
                 data_directory,
                 enable_otel: _,
                 grpc_options,
+                max_concurrent_proofs,
                 storage_options,
             } => {
                 Self::start(
@@ -98,6 +107,7 @@ impl StoreCommand {
                     block_prover_url,
                     data_directory,
                     grpc_options,
+                    max_concurrent_proofs,
                     storage_options,
                 )
                 .await
@@ -113,6 +123,7 @@ impl StoreCommand {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         ntx_builder_url: Url,
@@ -120,6 +131,7 @@ impl StoreCommand {
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
+        max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
@@ -150,6 +162,7 @@ impl StoreCommand {
             block_producer_listener,
             data_directory,
             grpc_options,
+            max_concurrent_proofs,
             storage_options,
         }
         .serve()
