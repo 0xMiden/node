@@ -58,3 +58,7 @@ Internally, the builder spawns a dedicated actor for each network account that h
 idle (no notes to consume) for a configurable duration are automatically deactivated to conserve resources, and are
 re-activated when new notes arrive. The idle timeout can be tuned with the `--ntx-builder.idle-timeout` CLI
 argument (default: 5 minutes).
+
+The builder also exposes an internal gRPC server that the RPC component uses to proxy debugging endpoints such as
+`GetNoteError`. In bundled mode this is wired automatically; in distributed mode operators must set
+`--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`) on the RPC component.

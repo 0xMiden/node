@@ -24,7 +24,6 @@ use url::Url;
 use crate::chain_state::ChainState;
 use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
-use crate::inflight_note::InflightNetworkNote;
 
 // ACTOR REQUESTS
 // ================================================================================================
@@ -36,7 +35,7 @@ pub enum ActorRequest {
     /// the oneshot channel, preventing race conditions where the actor could re-select the same
     /// notes before the failure is persisted.
     NotesFailed {
-        nullifiers: Vec<Nullifier>,
+        failed_notes: Vec<(Nullifier, String)>,
         block_num: BlockNumber,
         ack_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -411,23 +410,66 @@ impl AccountActor {
                 );
                 self.cache_note_scripts(scripts_to_cache).await;
                 if !failed.is_empty() {
-                    let nullifiers: Vec<_> =
-                        failed.into_iter().map(|note| note.note.nullifier()).collect();
-                    self.mark_notes_failed(&nullifiers, block_num).await;
+                    let failed_notes: Vec<_> = failed
+                        .into_iter()
+                        .map(|f| {
+                            let error_msg = f.error.as_report();
+                            tracing::info!(
+                                note.id = %f.note.id(),
+                                nullifier = %f.note.nullifier(),
+                                err = %error_msg,
+                                "note failed: consumability check",
+                            );
+                            (f.note.nullifier(), error_msg)
+                        })
+                        .collect();
+                    self.mark_notes_failed(&failed_notes, block_num).await;
                 }
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
             Err(err) => {
+                let error_msg = err.as_report();
                 tracing::error!(
                     %account_id,
                     ?note_ids,
-                    err = err.as_report(),
+                    err = %error_msg,
                     "network transaction failed",
                 );
                 self.mode = ActorMode::NoViableNotes;
-                let nullifiers: Vec<_> = notes.iter().map(InflightNetworkNote::nullifier).collect();
-                self.mark_notes_failed(&nullifiers, block_num).await;
+
+                // For `AllNotesFailed`, use the per-note errors which contain the
+                // specific reason each note failed (e.g. consumability check details).
+                let failed_notes: Vec<_> =
+                    if let execute::NtxError::AllNotesFailed(per_note) = err {
+                        per_note
+                            .into_iter()
+                            .map(|f| {
+                                let note_error = f.error.as_report();
+                                tracing::info!(
+                                    note.id = %f.note.id(),
+                                    nullifier = %f.note.nullifier(),
+                                    err = %note_error,
+                                    "note failed: consumability check",
+                                );
+                                (f.note.nullifier(), note_error)
+                            })
+                            .collect()
+                    } else {
+                        notes
+                            .iter()
+                            .map(|note| {
+                                tracing::info!(
+                                    note.id = %note.to_inner().as_note().id(),
+                                    nullifier = %note.nullifier(),
+                                    err = %error_msg,
+                                    "note failed: transaction execution error",
+                                );
+                                (note.nullifier(), error_msg.clone())
+                            })
+                            .collect()
+                    };
+                self.mark_notes_failed(&failed_notes, block_num).await;
             },
         }
     }
@@ -449,12 +491,16 @@ impl AccountActor {
     /// Sends a request to the coordinator to mark notes as failed and waits for the DB write to
     /// complete. This prevents a race condition where the actor could re-select the same notes
     /// before the failure counts are updated in the database.
-    async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
+    async fn mark_notes_failed(
+        &self,
+        failed_notes: &[(Nullifier, String)],
+        block_num: BlockNumber,
+    ) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         if self
             .request_tx
             .send(ActorRequest::NotesFailed {
-                nullifiers: nullifiers.to_vec(),
+                failed_notes: failed_notes.to_vec(),
                 block_num,
                 ack_tx,
             })
