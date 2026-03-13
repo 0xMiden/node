@@ -59,6 +59,9 @@ const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
 /// Default duration after which an idle network account actor will deactivate.
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
+/// Default maximum number of crashes an account actor is allowed before being deactivated.
+const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
+
 // CONFIGURATION
 // =================================================================================================
 
@@ -106,6 +109,11 @@ pub struct NtxBuilderConfig {
     /// A deactivated account will reactivate if targeted with new notes.
     pub idle_timeout: Duration,
 
+    /// Maximum number of crashes before an account deactivated.
+    ///
+    /// Once this limit is reached, no new transactions will be created for this account.
+    pub max_account_crashes: usize,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -129,6 +137,7 @@ impl NtxBuilderConfig {
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             database_filepath,
         }
     }
@@ -203,6 +212,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the maximum number of crashes before an account actor is deactivated.
+    #[must_use]
+    pub fn with_max_account_crashes(mut self, max: usize) -> Self {
+        self.max_account_crashes = max;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -222,7 +238,8 @@ impl NtxBuilderConfig {
         db.purge_inflight().await.context("failed to purge inflight state")?;
 
         let script_cache = LruCache::new(self.script_cache_size);
-        let coordinator = Coordinator::new(self.max_concurrent_txs, db.clone());
+        let coordinator =
+            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
 
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
