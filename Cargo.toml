@@ -147,3 +147,4 @@ files.extend-exclude = ["*.svg"] # Ignore SVG files.
 
 [patch.crates-io]
 miden-crypto = { branch = "mmagician-0.22.6", git = "https://github.com/0xMiden/crypto" }
+miden-protocol = { branch = "igamigo-fix-partial-smt", git = "https://github.com/0xMiden/protocol" }

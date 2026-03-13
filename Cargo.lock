@@ -3322,8 +3322,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "0.14.0-beta.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64b41308a7d7c031a571f4ee7bfb1a0a25f6e2a1fe4378fe8d4c0bfd5fe4cf56"
+source = "git+https://github.com/0xMiden/protocol?branch=igamigo-fix-partial-smt#ff82cb7e28d0de39bf8ca8daa2350b7516b0e7d9"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3352,8 +3351,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol-macros"
 version = "0.14.0-beta.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d4626a7e06401a2eae244d4b480ff9fd3518c1f3d839781919e9fb6c635fe33"
+source = "git+https://github.com/0xMiden/protocol?branch=igamigo-fix-partial-smt#ff82cb7e28d0de39bf8ca8daa2350b7516b0e7d9"
 dependencies = [
  "proc-macro2",
  "quote",
