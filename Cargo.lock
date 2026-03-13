@@ -2803,9 +2803,8 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e66531081b0cee8b83d5eacc4e557b36b94de9ba844c69f0266b97fc815a4f80"
+version = "0.22.6"
+source = "git+https://github.com/0xMiden/crypto?branch=mmagician-0.22.6#90a323480b008af7ef656a31e509d3955358c273"
 dependencies = [
  "blake3",
  "cc",
@@ -2852,9 +2851,8 @@ dependencies = [
 
 [[package]]
 name = "miden-crypto-derive"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a799510573ae17ddaf33edf0043a5ba9dda69d344869ff9e223fe7240560b437"
+version = "0.22.6"
+source = "git+https://github.com/0xMiden/crypto?branch=mmagician-0.22.6#90a323480b008af7ef656a31e509d3955358c273"
 dependencies = [
  "quote",
  "syn 2.0.114",
@@ -2880,9 +2878,8 @@ dependencies = [
 
 [[package]]
 name = "miden-field"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfb022648eff894a7e26a3ae1f24f799c7159d9effcabda3f99402d53d66fdb0"
+version = "0.22.6"
+source = "git+https://github.com/0xMiden/crypto?branch=mmagician-0.22.6#90a323480b008af7ef656a31e509d3955358c273"
 dependencies = [
  "miden-serde-utils",
  "num-bigint",
@@ -3288,14 +3285,12 @@ dependencies = [
  "build-rs",
  "diesel",
  "diesel_migrations",
- "k256",
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",
- "spki",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -3442,9 +3437,8 @@ dependencies = [
 
 [[package]]
 name = "miden-serde-utils"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a536748c9e0348f9c5e88b19c2e993f196303a55fdabbde0eab1f6fd40830f4a"
+version = "0.22.6"
+source = "git+https://github.com/0xMiden/crypto?branch=mmagician-0.22.6#90a323480b008af7ef656a31e509d3955358c273"
 dependencies = [
  "p3-field",
  "p3-goldilocks",
