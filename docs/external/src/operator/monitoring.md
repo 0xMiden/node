@@ -118,7 +118,7 @@ The available log levels are `trace`, `debug`, `info` (default), `warn`, `error`
 export RUST_LOG=debug
 ```
 
-The verbosity can also be specified by component (when running them as a single process):
+The verbosity can also be specified by component:
 
 ```sh
 export RUST_LOG=warn,block-producer=debug,rpc=error
@@ -129,10 +129,12 @@ The above would set the general level to `warn`, and the `block-producer` and `r
 
 ## Configuration
 
-The OpenTelemetry trace exporter is enabled by adding the `--enable-otel` flag to the node's start command:
+The OpenTelemetry trace exporter is enabled by adding the `--enable-otel` flag to each component's start command:
 
 ```sh
-miden-node bundled start --enable-otel
+miden-node store start --enable-otel
+miden-node block-producer start --enable-otel
+miden-node rpc start --enable-otel
 ```
 
 The exporter can be configured using environment variables as specified in the official
@@ -153,7 +155,7 @@ This is based off Honeycomb's OpenTelemetry
 ```sh
 OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io:443 \
 OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=your-api-key" \
-miden-node bundled start --enable-otel
+miden-node store start --enable-otel
 ```
 
 ### Honeycomb queries, triggers and board examples

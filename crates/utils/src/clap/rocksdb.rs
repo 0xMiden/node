@@ -12,12 +12,14 @@ pub(crate) const BENCH_ROCKSDB_MAX_OPEN_FDS: i32 = 512;
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct NullifierTreeRocksDbOptions {
     #[arg(
+        id = "nullifier_tree.rocksdb.max_open_fds",
         long = "nullifier_tree.rocksdb.max_open_fds",
         default_value_t = DEFAULT_ROCKSDB_MAX_OPEN_FDS,
         value_name = "NULLIFIER_TREE__ROCKSDB__MAX_OPEN_FDS"
     )]
     pub max_open_fds: i32,
     #[arg(
+        id = "nullifier_tree.rocksdb.max_cache_size",
         long = "nullifier_tree.rocksdb.max_cache_size",
         default_value_t = DEFAULT_ROCKSDB_CACHE_SIZE,
         value_name = "NULLIFIER_TREE__ROCKSDB__CACHE_SIZE"
@@ -35,12 +37,14 @@ impl Default for NullifierTreeRocksDbOptions {
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct AccountTreeRocksDbOptions {
     #[arg(
+        id = "account_tree.rocksdb.max_open_fds",
         long = "account_tree.rocksdb.max_open_fds",
         default_value_t = DEFAULT_ROCKSDB_MAX_OPEN_FDS,
         value_name = "ACCOUNT_TREE__ROCKSDB__MAX_OPEN_FDS"
     )]
     pub max_open_fds: i32,
     #[arg(
+        id = "account_tree.rocksdb.max_cache_size",
         long = "account_tree.rocksdb.max_cache_size",
         default_value_t = DEFAULT_ROCKSDB_CACHE_SIZE,
         value_name = "ACCOUNT_TREE__ROCKSDB__CACHE_SIZE"
