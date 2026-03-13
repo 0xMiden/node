@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+#[cfg(feature = "rocksdb")]
+use std::path::Path;
 
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
@@ -60,22 +62,34 @@ pub enum WitnessError {
     AssetError(#[from] AssetError),
 }
 
+#[cfg(feature = "rocksdb")]
+type LargeForest = LargeSmtForest<ForestPersistentBackend>;
+#[cfg(not(feature = "rocksdb"))]
+type LargeForest = LargeSmtForest<ForestInMemoryBackend>;
+
 // ACCOUNT STATE FOREST
 // ================================================================================================
 
 /// Container for forest-related state that needs to be updated atomically.
-pub(crate) struct AccountStateForest {
+pub(crate) struct AccountStateForest<F> {
     /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
-    forest: LargeSmtForest<ForestInMemoryBackend>,
+    forest: LargeForest,
 }
 
 impl AccountStateForest {
-    pub(crate) fn new() -> Self {
-        Self { forest: Self::create_forest() }
+    pub(crate) fn new(xxx: &Path) -> Self {
+        Self { forest: Self::create_forest(xxx) }
     }
 
-    fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
+    #[cfg(feature = "rocksdb")]
+    fn create_forest(path: &Path) -> LargeForest {
+        let backend = miden_large_forest_backend_rocksdb::PersistentBackend::load(path);
+        LargeSmtForest::new(backend).expect("in-memory backend should initialize")
+    }
+
+    #[cfg(not(feature = "rocksdb"))]
+    fn create_forest() -> LargeForest {
         let backend = ForestInMemoryBackend::new();
         LargeSmtForest::new(backend).expect("in-memory backend should initialize")
     }

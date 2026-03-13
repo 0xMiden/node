@@ -1,5 +1,6 @@
 [package]
-name = "large-forest-backend-rocksdb"
+name = "miden-large-forest-backend-rocksdb"
+description            = "Large-scale Sparse Merkle Tree Forest backed by pluggable storage - RocksDB backend"
 authors.workspace = true
 edition.workspace = true
 exclude.workspace = true
@@ -10,7 +11,16 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
-[dependencies]
-
 [lints]
 workspace = true
+
+[dependencies]
+miden-crypto   = { features = ["concurrent", "std"], workspace = true }
+miden-protocol = { features = ["std"], workspace = true }
+rayon          = { version = "1.10" }
+rocksdb        = { default-features = false, features = ["bindgen-runtime", "lz4"], version = "0.24" }
+winter-utils   = { version = "0.13" }
+miden-serde-utils = { workspace = true }
+
+[build-dependencies]
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }

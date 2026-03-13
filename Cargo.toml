@@ -6,7 +6,8 @@ members = [
   "bin/stress-test",
   "crates/block-producer",
   "crates/db",
-  "crates/grpc-error-macro", "crates/large-forest-backend-rocksdb",
+  "crates/grpc-error-macro",
+  "crates/large-forest-backend-rocksdb",
   "crates/large-smt-backend-rocksdb",
   "crates/ntx-builder",
   "crates/proto",
@@ -46,7 +47,8 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "=0.14.0-alpha.5" }
+miden-large-smt-backend-rocksdb= { path = "crates/large-smt-backend-rocksdb", version = "=0.14.0-alpha.5" }
+miden-large-forest-backend-rocksdb= { path = "crates/large-forest-backend-rocksdb", version = "=0.14.0-alpha.5" }
 miden-node-block-producer       = { path = "crates/block-producer", version = "=0.14.0-alpha.5" }
 miden-node-db                   = { path = "crates/db", version = "=0.14.0-alpha.5" }
 miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "=0.14.0-alpha.5" }

@@ -363,10 +363,11 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
+    xxx: &Path,
 ) -> Result<AccountStateForest, StateInitializationError> {
     use miden_protocol::account::delta::AccountDelta;
 
-    let mut forest = AccountStateForest::new();
+    let mut forest = AccountStateForest::new(xxx);
     let mut cursor = None;
 
     loop {

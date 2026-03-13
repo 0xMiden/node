@@ -2481,10 +2481,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "large-forest-backend-rocksdb"
-version = "0.14.0-alpha.5"
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2876,6 +2872,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-large-forest-backend-rocksdb"
+version = "0.14.0-alpha.5"
+dependencies = [
+ "miden-crypto",
+ "miden-node-rocksdb-cxx-linkage-fix",
+ "miden-protocol",
+ "rayon",
+ "rocksdb",
+ "winter-utils",
+]
+
+[[package]]
 name = "miden-large-smt-backend-rocksdb"
 version = "0.14.0-alpha.5"
 dependencies = [
@@ -3168,6 +3176,7 @@ dependencies = [
  "miden-agglayer",
  "miden-block-prover",
  "miden-crypto",
+ "miden-large-forest-backend-rocksdb",
  "miden-large-smt-backend-rocksdb",
  "miden-node-db",
  "miden-node-proto",

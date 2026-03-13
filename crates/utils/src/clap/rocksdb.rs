@@ -109,3 +109,38 @@ impl RocksDbOptions {
             .with_max_open_files(self.max_open_fds)
     }
 }
+
+// -- FOREST ----------------------------------------------
+
+/// Per usage options for rocksdb configuration
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct AccountStateForestRocksDbOptions {
+    #[arg(
+        id = "nullifier_tree_rocksdb_max_open_fds",
+        long = "nullifier_tree.rocksdb.max_open_fds",
+        default_value_t = DEFAULT_ROCKSDB_MAX_OPEN_FDS,
+        value_name = "NULLIFIER_TREE__ROCKSDB__MAX_OPEN_FDS"
+    )]
+    pub max_open_fds: i32,
+    #[arg(
+        id = "nullifier_tree_rocksdb_max_cache_size",
+        long = "nullifier_tree.rocksdb.max_cache_size",
+        default_value_t = DEFAULT_ROCKSDB_CACHE_SIZE,
+        value_name = "NULLIFIER_TREE__ROCKSDB__CACHE_SIZE"
+    )]
+    pub cache_size_in_bytes: usize,
+    // FIXME TODO add more options here
+}
+
+impl Default for AccountStateForestRocksDbOptions {
+    fn default() -> Self {
+        RocksDbOptions::default().into()
+    }
+}
+
+impl From<RocksDbOptions> for AccountStateForestRocksDbOptions {
+    fn from(value: RocksDbOptions) -> Self {
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
+    }
+}
