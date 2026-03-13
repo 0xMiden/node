@@ -33,6 +33,8 @@
 - [BREAKING] Modified `TransactionHeader` serialization to allow converting back into the native type after serialization ([#1759](https://github.com/0xMiden/node/issues/1759)).
 - Removed `chain_tip` requirement from mempool subscription request ([#1771](https://github.com/0xMiden/node/pull/1771)).
 - Moved bootstrap procedure to `miden-node validator bootstrap` command ([#1764](https://github.com/0xMiden/node/pull/1764)).
+- NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-account-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
+
 
 ### Fixes
 
