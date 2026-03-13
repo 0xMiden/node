@@ -6,7 +6,7 @@ members = [
   "bin/stress-test",
   "crates/block-producer",
   "crates/db",
-  "crates/grpc-error-macro",
+  "crates/grpc-error-macro", "crates/large-forest-backend-rocksdb",
   "crates/large-smt-backend-rocksdb",
   "crates/ntx-builder",
   "crates/proto",
