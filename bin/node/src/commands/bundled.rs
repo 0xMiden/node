@@ -5,7 +5,7 @@ use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
-use miden_node_utils::clap::GrpcOptionsExternal;
+use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -84,6 +84,9 @@ pub enum BundledCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsExternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
@@ -121,6 +124,7 @@ impl BundledCommand {
                 validator,
                 enable_otel: _,
                 grpc_options,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -130,13 +134,14 @@ impl BundledCommand {
                     ntx_builder,
                     validator,
                     grpc_options,
+                    storage_options,
                 )
                 .await
             },
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         block_prover_url: Option<Url>,
@@ -145,6 +150,7 @@ impl BundledCommand {
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
         grpc_options: GrpcOptionsExternal,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -202,6 +208,7 @@ impl BundledCommand {
                     data_directory: data_directory_clone,
                     block_prover_url,
                     grpc_options: grpc_options.into(),
+                    storage_options,
                 }
                 .serve()
                 .await

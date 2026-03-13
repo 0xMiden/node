@@ -65,6 +65,13 @@ impl ActorHandle {
 /// - Controls transaction concurrency across all network accounts using a semaphore.
 /// - Prevents resource exhaustion by limiting simultaneous transaction processing.
 ///
+/// ## Actor Lifecycle
+/// - Actors that have been idle for longer than the idle timeout deactivate themselves.
+/// - When an actor deactivates, the coordinator checks if a notification arrived just as the actor
+///   timed out. If so, the actor is respawned immediately.
+/// - Deactivated actors are re-spawned when [`Coordinator::send_targeted`] detects notes targeting
+///   an account without an active actor.
+///
 /// The coordinator operates in an event-driven manner:
 /// 1. Network accounts are registered and actors spawned as needed.
 /// 2. Mempool events are written to DB, then actors are notified.
@@ -165,7 +172,10 @@ impl Coordinator {
     ///
     /// If no actors are currently running, this method will wait indefinitely until
     /// new actors are spawned. This prevents busy-waiting when the coordinator is idle.
-    pub async fn next(&mut self) -> anyhow::Result<()> {
+    ///
+    /// Returns `Some(account_id)` if a timed-out actor should be respawned (because a
+    /// notification arrived just as it timed out), or `None` otherwise.
+    pub async fn next(&mut self) -> anyhow::Result<Option<NetworkAccountId>> {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok(shutdown_reason)) => match shutdown_reason {
@@ -173,23 +183,37 @@ impl Coordinator {
                     // Do not remove the actor from the registry, as it may be re-spawned.
                     // The coordinator should always remove actors immediately after cancellation.
                     tracing::info!(account_id = %account_id, "Account actor cancelled");
-                    Ok(())
+                    Ok(None)
                 },
                 ActorShutdownReason::SemaphoreFailed(err) => Err(err).context("semaphore failed"),
                 ActorShutdownReason::DbError(account_id, err) => {
-                    self.actor_registry.remove(&account_id);
                     tracing::error!(account_id = %account_id, err = err.as_report(), "Account actor shut down due to DB error");
-                    Ok(())
+                    self.actor_registry.remove(&account_id);
+                    Ok(None)
                 },
                 ActorShutdownReason::AccountRemoved(account_id) => {
                     self.actor_registry.remove(&account_id);
                     tracing::info!(account_id = %account_id, "Account actor shut down: account removed");
-                    Ok(())
+                    Ok(None)
+                },
+                ActorShutdownReason::IdleTimeout(account_id) => {
+                    tracing::info!(account_id = %account_id, "Account actor shut down due to idle timeout");
+
+                    // Remove the actor from the registry, but check if a notification arrived
+                    // just as the actor timed out. If so, the caller should respawn it.
+                    let should_respawn =
+                        self.actor_registry.remove(&account_id).is_some_and(|handle| {
+                            let notified = handle.notify.notified();
+                            tokio::pin!(notified);
+                            notified.enable()
+                        });
+
+                    Ok(should_respawn.then_some(account_id))
                 },
             },
             Some(Err(err)) => {
                 tracing::error!(err = %err, "actor task failed");
-                Ok(())
+                Ok(None)
             },
             None => {
                 // There are no actors to wait for. Wait indefinitely until actors are spawned.
@@ -203,8 +227,14 @@ impl Coordinator {
     /// Only actors that are currently active are notified. Since event effects are already
     /// persisted in the DB by `write_event()`, actors that spawn later read their state from the
     /// DB and do not need predating events.
-    pub fn send_targeted(&self, event: &MempoolEvent) {
+    ///
+    /// Returns account IDs of note targets that do not have active actors (e.g. previously
+    /// deactivated due to sterility). The caller can use this to re-activate actors for those
+    /// accounts.
+    pub fn send_targeted(&self, event: &MempoolEvent) -> Vec<NetworkAccountId> {
         let mut target_account_ids = HashSet::new();
+        let mut inactive_targets = Vec::new();
+
         if let MempoolEvent::TransactionAdded { network_notes, account_delta, .. } = event {
             // We need to inform the account if it was updated. This lets it know that its own
             // transaction has been applied, and in the future also resolves race conditions with
@@ -228,6 +258,8 @@ impl Coordinator {
 
                 if self.actor_registry.contains_key(&account) {
                     target_account_ids.insert(account);
+                } else {
+                    inactive_targets.push(account);
                 }
             }
         }
@@ -237,6 +269,8 @@ impl Coordinator {
                 handle.notify.notify_one();
             }
         }
+
+        inactive_targets
     }
 
     /// Writes mempool event effects to the database.
@@ -281,5 +315,58 @@ impl Coordinator {
                 Ok(WriteEventResult { accounts_to_notify: affected_accounts })
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_proto::domain::mempool::MempoolEvent;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::test_utils::*;
+
+    /// Creates a coordinator with default settings backed by a temp DB.
+    async fn test_coordinator() -> (Coordinator, tempfile::TempDir) {
+        let (db, dir) = Db::test_setup().await;
+        (Coordinator::new(4, db), dir)
+    }
+
+    /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
+    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
+        let notify = Arc::new(Notify::new());
+        let cancel_token = CancellationToken::new();
+        coordinator
+            .actor_registry
+            .insert(account_id, ActorHandle::new(notify, cancel_token));
+    }
+
+    // SEND TARGETED TESTS
+    // ============================================================================================
+
+    #[tokio::test]
+    async fn send_targeted_returns_inactive_targets() {
+        let (mut coordinator, _dir) = test_coordinator().await;
+
+        let active_id = mock_network_account_id();
+        let inactive_id = mock_network_account_id_seeded(42);
+
+        // Only register the active account.
+        register_dummy_actor(&mut coordinator, active_id);
+
+        let note_active = mock_single_target_note(active_id, 10);
+        let note_inactive = mock_single_target_note(inactive_id, 20);
+
+        let event = MempoolEvent::TransactionAdded {
+            id: mock_tx_id(1),
+            nullifiers: vec![],
+            network_notes: vec![note_active, note_inactive],
+            account_delta: None,
+        };
+
+        let inactive_targets = coordinator.send_targeted(&event);
+
+        assert_eq!(inactive_targets.len(), 1);
+        assert_eq!(inactive_targets[0], inactive_id);
     }
 }
