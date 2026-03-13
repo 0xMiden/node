@@ -201,7 +201,7 @@ are exposed as CLI flags (also available as environment variables):
 Compaction parallelism is set automatically to the number of available CPU cores.
 
 ```sh
-miden-node <component> start \
+miden-node store start \
   --data-directory data \
   --rpc.url http://0.0.0.0:57291 \
   --account_tree.rocksdb.max_cache_size 4294967296 \

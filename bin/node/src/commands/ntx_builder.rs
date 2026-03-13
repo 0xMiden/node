@@ -7,6 +7,7 @@ use miden_node_utils::clap::duration_to_human_readable_string;
 use url::Url;
 
 use super::{
+    DEFAULT_NTX_IDLE_TIMEOUT,
     DEFAULT_NTX_SCRIPT_CACHE_SIZE,
     DEFAULT_NTX_TICKER_INTERVAL,
     ENV_BLOCK_PRODUCER_URL,
@@ -59,6 +60,18 @@ pub enum NtxBuilderCommand {
         )]
         script_cache_size: NonZeroUsize,
 
+        /// Duration after which an idle network account will deactivate.
+        ///
+        /// An account is considered idle once it has no viable notes to consume.
+        /// A deactivated account will reactivate if targeted with new notes.
+        #[arg(
+            long = "idle-timeout",
+            default_value = &duration_to_human_readable_string(DEFAULT_NTX_IDLE_TIMEOUT),
+            value_parser = humantime::parse_duration,
+            value_name = "DURATION"
+        )]
+        idle_timeout: Duration,
+
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
@@ -81,6 +94,7 @@ impl NtxBuilderCommand {
             tx_prover_url,
             ticker_interval: _,
             script_cache_size,
+            idle_timeout,
             data_directory,
             enable_otel: _,
         } = self;
@@ -94,7 +108,8 @@ impl NtxBuilderCommand {
             database_filepath,
         )
         .with_tx_prover_url(tx_prover_url)
-        .with_script_cache_size(script_cache_size);
+        .with_script_cache_size(script_cache_size)
+        .with_idle_timeout(idle_timeout);
 
         config
             .build()
