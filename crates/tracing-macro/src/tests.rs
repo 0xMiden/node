@@ -8,6 +8,28 @@ fn warn2(ts: TokenStream2) -> syn::Result<TokenStream2> {
     log::parse("warn", ts)
 }
 
+fn error2(ts: TokenStream2) -> syn::Result<TokenStream2> {
+    log::parse("error", ts)
+}
+
+fn info2(ts: TokenStream2) -> syn::Result<TokenStream2> {
+    log::parse("info", ts)
+}
+
+fn debug2(ts: TokenStream2) -> syn::Result<TokenStream2> {
+    log::parse("debug", ts)
+}
+
+fn trace2(ts: TokenStream2) -> syn::Result<TokenStream2> {
+    log::parse("trace", ts)
+}
+
+/// A function whose return type *contains* the word "Result" but is not `Result`.
+/// The old string-contains check would incorrectly accept this.
+fn item_fake_result_fn() -> TokenStream2 {
+    quote! { fn foo() -> NotAResult { NotAResult } }
+}
+
 // ── item fixtures ─────────────────────────────────────────────────────────────
 
 /// Plain function, does not return a Result.
@@ -139,6 +161,13 @@ fn instrument_unlisted_field_eq_value_fails() {
 fn instrument_allowlisted_field_display_value_succeeds() {
     // #[instrument(rpc: account.id = %bar)]  –  account.id allowlisted, % modifier  →  ok
     let result = instrument2(quote! { rpc: account.id = %bar }, item_bare_fn());
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn instrument_allowlisted_field_debug_explicit_value_succeeds() {
+    // #[instrument(rpc: account.id = ?bar)]  –  account.id allowlisted, ? modifier  →  ok
+    let result = instrument2(quote! { rpc: account.id = ?bar }, item_bare_fn());
     assert!(result.is_ok(), "{result:?}");
 }
 
@@ -322,4 +351,58 @@ fn warn_component_nullifier_field_succeeds() {
     // warn!(rpc: nullifier.id = %id, "msg")  –  nullifier.id allowlisted  →  ok
     let result = warn2(quote! { rpc: nullifier.id = %id, "msg" });
     assert!(result.is_ok(), "{result:?}");
+}
+
+// ── returns_result false-positive regression ──────────────────────────────────
+
+#[test]
+fn instrument_report_on_fake_result_fn_fails() {
+    // `NotAResult` contains "Result" as a substring → the string-contains check
+    // would incorrectly accept this, but the typed check must reject it.
+    let result = instrument2(quote! { rpc: report }, item_fake_result_fn());
+    assert!(result.is_err(), "expected error: report requires Result return, got {result:?}");
+}
+
+#[test]
+fn instrument_err_on_fake_result_fn_fails() {
+    // Same false-positive gate for `err`.
+    let result = instrument2(quote! { rpc: err }, item_fake_result_fn());
+    assert!(result.is_err(), "expected error: err requires Result return, got {result:?}");
+}
+
+// ── per-level log dispatch regression ─────────────────────────────────────────
+
+/// Checks that a log expansion contains the expected level identifier.
+fn assert_level(result: syn::Result<TokenStream2>, expected_level: &str) {
+    let ts = result.expect("expansion should succeed");
+    let s = ts.to_string();
+    assert!(
+        s.contains(expected_level),
+        "expected level `{expected_level}` in output, got: {s}"
+    );
+}
+
+#[test]
+fn error_level_dispatch() {
+    assert_level(error2(quote! { "msg" }), "error");
+}
+
+#[test]
+fn warn_level_dispatch() {
+    assert_level(warn2(quote! { "msg" }), "warn");
+}
+
+#[test]
+fn info_level_dispatch() {
+    assert_level(info2(quote! { "msg" }), "info");
+}
+
+#[test]
+fn debug_level_dispatch() {
+    assert_level(debug2(quote! { "msg" }), "debug");
+}
+
+#[test]
+fn trace_level_dispatch() {
+    assert_level(trace2(quote! { "msg" }), "trace");
 }

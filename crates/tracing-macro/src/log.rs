@@ -3,17 +3,17 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, LitStr, Token};
 
-use crate::instrument::Name;
+use crate::instrument::{CheckedName, ComponentName, Name};
 
 // ── LogField ─────────────────────────────────────────────────────────────────
 
 /// A single `dotted-name = [% | ?] expr` structured field in a log event.
 ///
 /// Both the `%` (Display) and `?` (Debug) value modifiers are accepted, matching
-/// `tracing`'s own syntax.  The field name is validated against the OTel allowlist.
+/// `tracing`'s own syntax.  The field name is validated against the OTel allowlist
+/// at parse time via [`Name::check`].
 struct LogField {
-    name: Name,
-    _eq: Token![=],
+    name: CheckedName,
     /// Raw tokens for the value, including the optional `%`/`?` prefix.  We
     /// preserve these verbatim so `tracing` can interpret them itself.
     value_tokens: TokenStream2,
@@ -21,7 +21,8 @@ struct LogField {
 
 impl Parse for LogField {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let name: Name = input.parse()?;
+        let raw: Name = input.parse()?;
+        let name = raw.check()?;
         let _eq: Token![=] = input.parse()?;
 
         // Collect the optional modifier (`%` or `?`) plus the value expression as
@@ -37,7 +38,7 @@ impl Parse for LogField {
         let expr: Expr = input.parse()?;
         value_tokens.extend(quote! { #expr });
 
-        Ok(LogField { name, _eq, value_tokens })
+        Ok(LogField { name, value_tokens })
     }
 }
 
@@ -58,33 +59,15 @@ impl Parse for LogField {
 ///
 /// The `COMPONENT:` prefix maps to `target: "component"` in the emitted
 /// `tracing::<level>!` call.  Field names are validated against the OTel
-/// allowlist.  The trailing message (if any) is forwarded verbatim.
+/// allowlist at parse time.  The trailing message (if any) is forwarded verbatim.
 struct LogArgs {
     /// Optional component prefix; emitted as `target: "…"` in the tracing call.
     component: Option<ComponentName>,
-    /// Validated, allowlisted structured fields.
+    /// Structured fields, allowlist-validated at parse time.
     fields: Vec<LogField>,
     /// Remaining tokens after the last field – the message string and any format
     /// arguments, forwarded verbatim to `tracing`.
     message_tokens: TokenStream2,
-}
-
-enum ComponentName {
-    Literal(LitStr),
-    Ident(Ident),
-}
-
-impl ComponentName {
-    fn to_target_tokens(&self) -> TokenStream2 {
-        match self {
-            ComponentName::Literal(lit) => quote! { target: #lit, },
-            ComponentName::Ident(ident) => {
-                let s = ident.to_string();
-                let lit = LitStr::new(&s, ident.span());
-                quote! { target: #lit, }
-            },
-        }
-    }
 }
 
 impl Parse for LogArgs {
@@ -154,20 +137,6 @@ impl Parse for LogArgs {
     }
 }
 
-// ── allowlist check ───────────────────────────────────────────────────────────
-
-fn check_allowlist(name: &Name) -> syn::Result<()> {
-    crate::allowed::check(name).map_err(|suggestions| {
-        let dotted = name.to_dotted_string();
-        let hint = if suggestions.is_empty() {
-            String::new()
-        } else {
-            format!(" – did you mean: {}?", suggestions.join(", "))
-        };
-        syn::Error::new(name.span(), format!("`{dotted}` is not in the OTel allowlist{hint}"))
-    })
-}
-
 // ── public entry point ────────────────────────────────────────────────────────
 
 /// Parses and validates a log-macro call, then expands it to
@@ -178,23 +147,17 @@ fn check_allowlist(name: &Name) -> syn::Result<()> {
 pub(crate) fn parse(level: &'static str, ts: TokenStream2) -> syn::Result<TokenStream2> {
     let args: LogArgs = syn::parse2(ts)?;
 
-    // Validate every field name against the OTel allowlist.
-    for field in &args.fields {
-        check_allowlist(&field.name)?;
-    }
-
     let level_ident = syn::Ident::new(level, proc_macro2::Span::call_site());
 
     // Build the target fragment (present only when a component was given).
-    let target_tok = args.component.as_ref().map(ComponentName::to_target_tokens);
+    let target_tok = args.component.as_ref().map(ComponentName::to_event_target_tokens);
 
     // Build the field fragments: `"dotted.name" = [%|?] expr`.
     let field_toks: Vec<TokenStream2> = args
         .fields
         .iter()
         .map(|f| {
-            let name_str = f.name.to_dotted_string();
-            let name_lit = LitStr::new(&name_str, f.name.span());
+            let name_lit = LitStr::new(&f.name.dotted, f.name.span);
             let val = &f.value_tokens;
             quote! { #name_lit = #val }
         })

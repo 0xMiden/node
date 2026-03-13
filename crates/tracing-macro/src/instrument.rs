@@ -3,7 +3,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, ItemFn, LitStr, ReturnType, Token};
+use syn::{Expr, Ident, ItemFn, LitStr, PathSegment, ReturnType, Token, Type};
 
 // ── Name ──────────────────────────────────────────────────────────────────────
 
@@ -25,6 +25,25 @@ impl Name {
     pub(crate) fn span(&self) -> Span {
         self.segments.span()
     }
+
+    /// Validates this name against the OTel allowlist and, on success, returns a
+    /// [`CheckedName`] that carries the pre-computed dotted string and span.
+    ///
+    /// On failure, emits a [`syn::Error`] anchored at the name's span. If the
+    /// fuzzy-search backend finds close matches they are included as suggestions.
+    pub(crate) fn check(self) -> syn::Result<CheckedName> {
+        let dotted = self.to_dotted_string();
+        let span = self.span();
+        crate::allowed::check(&dotted).map_err(|suggestions| {
+            let hint = if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!(" – did you mean: {}?", suggestions.join(", "))
+            };
+            syn::Error::new(span, format!("`{dotted}` is not in the OTel allowlist{hint}"))
+        })?;
+        Ok(CheckedName { dotted, span })
+    }
 }
 
 impl Parse for Name {
@@ -39,13 +58,27 @@ impl Parse for Name {
     }
 }
 
+// ── CheckedName ───────────────────────────────────────────────────────────────
+
+/// A field name that has been validated against the OTel allowlist.
+///
+/// The only way to construct a `CheckedName` is via [`Name::check`], ensuring
+/// that unchecked names can never reach codegen.
+pub(crate) struct CheckedName {
+    /// Pre-computed dotted representation (e.g. `"account.id"`).
+    pub(crate) dotted: String,
+    /// Span of the original [`Name`] token, forwarded for error reporting.
+    pub(crate) span: Span,
+}
+
 // ── Value ─────────────────────────────────────────────────────────────────────
 
-/// The right-hand side of a field assignment: an optional `%` Display modifier
+/// The right-hand side of a field assignment: an optional format modifier
 /// followed by an arbitrary expression.
 ///
 /// - `= expr`  → Debug format (`{:?}`)
 /// - `= %expr` → Display format (`{}`)
+/// - `= ?expr` → Debug format (`{:?}`), explicit
 struct Value {
     display_modifier: Option<Token![%]>,
     expr: Expr,
@@ -53,7 +86,16 @@ struct Value {
 
 impl Parse for Value {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let display_modifier = input.parse::<Token![%]>().ok();
+        // Consume `%` (Display) or `?` (Debug-explicit). Both are accepted for
+        // consistency with `tracing`'s own field syntax; only `%` affects the
+        // generated token (Debug is the default and needs no modifier token).
+        let display_modifier = if input.peek(Token![%]) {
+            Some(input.parse::<Token![%]>()?)
+        } else {
+            // Consume and discard `?` so the following expr parses cleanly.
+            input.parse::<Token![?]>().ok();
+            None
+        };
         let expr = input.parse::<Expr>()?;
         Ok(Value { display_modifier, expr })
     }
@@ -63,21 +105,20 @@ impl Parse for Value {
 
 /// A single `dotted-name = [%] expr` pair inside the attribute list.
 ///
-/// The `name` is validated against the OTel allowlist before code is emitted.
+/// The `name` has been validated against the OTel allowlist at parse time.
 /// Both `account.id = id` (Debug) and `account.id = %id` (Display) are accepted.
 struct Field {
-    name: Name,
-    _eq: Token![=],
+    name: CheckedName,
     value: Value,
 }
 
 impl Parse for Field {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        Ok(Field {
-            name: input.parse()?,
-            _eq: input.parse()?,
-            value: input.parse()?,
-        })
+        let raw: Name = input.parse()?;
+        let name = raw.check()?;
+        let _eq: Token![=] = input.parse()?;
+        let value: Value = input.parse()?;
+        Ok(Field { name, value })
     }
 }
 
@@ -130,13 +171,44 @@ impl Parse for Element {
 
 /// The optional component prefix before the `:` separator.
 ///
+/// Used by both `#[instrument(…)]` and the log macros (`warn!`, `error!`, …),
+/// but with different token syntax in the emitted output:
+/// - span attributes use `=`  (e.g. `target = "rpc"`)
+/// - tracing events use `:`  (e.g. `target: "rpc"`)
+///
 /// ```text
-/// #[instrument(RPC: …)]          → Ident("rpc")   → target = RPC
-/// #[instrument("my-rpc": …)]     → Literal("my-rpc") → target = "my-rpc"
+/// #[instrument(rpc: …)]          → Ident("rpc")   → target = "rpc"
+/// #[instrument("my-rpc": …)]     → Literal → target = "my-rpc"
 /// ```
-enum ComponentName {
+pub(crate) enum ComponentName {
     Literal(LitStr),
     Ident(Ident),
+}
+
+impl ComponentName {
+    /// Emits `target = "…",` for use in `#[tracing::instrument(…)]`.
+    pub(crate) fn to_span_target_tokens(&self) -> TokenStream2 {
+        match self {
+            ComponentName::Literal(lit) => quote! { target = #lit, },
+            ComponentName::Ident(ident) => {
+                let s = ident.to_string();
+                let lit = LitStr::new(&s, ident.span());
+                quote! { target = #lit, }
+            },
+        }
+    }
+
+    /// Emits `target: "…",` for use in `tracing::<level>!(…)` event macros.
+    pub(crate) fn to_event_target_tokens(&self) -> TokenStream2 {
+        match self {
+            ComponentName::Literal(lit) => quote! { target: #lit, },
+            ComponentName::Ident(ident) => {
+                let s = ident.to_string();
+                let lit = LitStr::new(&s, ident.span());
+                quote! { target: #lit, }
+            },
+        }
+    }
 }
 
 // ── InstrumentArgs ────────────────────────────────────────────────────────────
@@ -192,58 +264,33 @@ impl Parse for InstrumentArgs {
     }
 }
 
-// ── Returns-Result helper ─────────────────────────────────────────────────────
+// ── Result-return detection ───────────────────────────────────────────────────
 
-/// Returns `true` if the function's return type token stream contains the word
-/// `Result`. Syntactic check only without any type resolution!
-fn returns_result(item: &ItemFn) -> bool {
-    match &item.sig.output {
-        ReturnType::Default => false,
-        ReturnType::Type(_, ty) => {
-            let s = quote! { #ty }.to_string();
-            s.contains("Result") // TODO be more accurate here what we support
-        },
-    }
-}
-
-// ── allowlist check ───────────────────────────────────────────────────────────
-
-/// Validates `name` against the OTel field allowlist (`allowlist.txt`).
+/// Returns `true` when the function's outermost return type is `Result<…>`.
 ///
-/// On failure, emits a [`syn::Error`] anchored at the name's span.  If the
-/// fuzzy-search backend finds close matches in the allowlist they are included in
-/// the error message as suggestions.
-fn check_allowlist(name: &Name) -> syn::Result<()> {
-    crate::allowed::check(name).map_err(|suggestions| {
-        let dotted = name.to_dotted_string();
-        let hint = if suggestions.is_empty() {
-            String::new()
-        } else {
-            format!(" – did you mean: {}?", suggestions.join(", "))
-        };
-        syn::Error::new(
-            name.span(),
-            format!("`{dotted}` is not in the open telemetry allowlist: {hint}"),
-        )
-    })
+/// The check inspects the AST directly: it succeeds only when the return type
+/// is a [`Type::Path`] whose last segment is literally named `Result`.  This
+/// avoids the false positive produced by a plain string-contains search (e.g.
+/// a type named `NotAResult` would previously pass).
+fn has_result_return_type(item: &ItemFn) -> bool {
+    let ty = match &item.sig.output {
+        ReturnType::Default => return false,
+        ReturnType::Type(_, ty) => ty.as_ref(),
+    };
+
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+
+    type_path
+        .path
+        .segments
+        .last()
+        .map(|PathSegment { ident, .. }| ident == "Result")
+        .unwrap_or(false)
 }
 
 // ── codegen helpers ───────────────────────────────────────────────────────────
-
-/// Converts the optional component into a `target = "…",` token fragment for
-/// insertion into `#[tracing::instrument(…)]`.  Returns `None` when no component
-/// was specified so that `tracing` falls back to the default (module path).
-fn component_target(component: &Option<ComponentName>) -> Option<TokenStream2> {
-    match component {
-        Some(ComponentName::Literal(lit)) => Some(quote! { target = #lit, }),
-        Some(ComponentName::Ident(ident)) => {
-            let s = ident.to_string();
-            let lit = LitStr::new(&s, ident.span());
-            Some(quote! { target = #lit, })
-        },
-        None => None,
-    }
-}
 
 /// Converts the collected `Field` entries into a `fields(…),` token fragment.
 ///
@@ -256,8 +303,7 @@ fn fields_tokens(fields: &[&Field]) -> TokenStream2 {
     }
     let mut parts = Vec::new();
     for f in fields {
-        let name_str = f.name.to_dotted_string();
-        let name_lit = LitStr::new(&name_str, f.name.span());
+        let name_lit = LitStr::new(&f.name.dotted, f.name.span);
         let expr = &f.value.expr;
         if f.value.display_modifier.is_some() {
             parts.push(quote! { #name_lit = %#expr });
@@ -323,7 +369,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         });
     }
 
-    let args: InstrumentArgs = syn::parse2(attr.clone())?;
+    let args: InstrumentArgs = syn::parse2(attr)?;
     let func: ItemFn = syn::parse2(item)?;
 
     // ── collect element kinds ──────────────────────────────────────────────────
@@ -354,30 +400,18 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
     }
 
     // err / report require a Result return type.
-    if (has_err || has_report) && !returns_result(&func) {
+    if (has_err || has_report) && !has_result_return_type(&func) {
         return Err(syn::Error::new(
             func.sig.ident.span(),
             "`err` / `report` requires the function to return `Result`",
         ));
     }
 
-    // ret alone is valid on any fn; ret + report still needs Result (already covered
-    // by the check above when has_report is true).
-    if has_ret && has_report && !returns_result(&func) {
-        return Err(syn::Error::new(
-            func.sig.ident.span(),
-            "`ret` + `report` requires the function to return `Result`",
-        ));
-    }
-
-    // Validate every field name against the allowlist.
-    for f in &fields {
-        check_allowlist(&f.name)?;
-    }
+    // Field names were already validated inside Field::parse via Name::check.
 
     // ── code generation ───────────────────────────────────────────────────────
 
-    let target_tokens = component_target(&args.component);
+    let target_tokens = args.component.as_ref().map(ComponentName::to_span_target_tokens);
     let fields_tok = fields_tokens(&fields);
 
     // When explicit fields are present, skip all implicit fn arguments to avoid
