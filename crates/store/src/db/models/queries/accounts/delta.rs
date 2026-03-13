@@ -210,9 +210,13 @@ pub(super) fn select_latest_vault_assets(
             .filter(vault::is_latest.eq(true))
             .load(conn)?;
 
-    Result::from_iter(entries.into_iter().filter_map(|(_vault_key_bytes, maybe_asset_bytes)| {
-        maybe_asset_bytes.map(|bytes| Asset::read_from_bytes(&bytes)).transpose()
-    }))
+    entries
+        .into_iter()
+        .filter_map(|(_vault_key_bytes, maybe_asset_bytes)| {
+            maybe_asset_bytes.map(|bytes| Asset::read_from_bytes(&bytes))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 // HELPER FUNCTIONS
