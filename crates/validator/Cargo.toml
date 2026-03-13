@@ -22,14 +22,12 @@ aws-config             = { version = "1.8.14" }
 aws-sdk-kms            = { version = "1.100" }
 diesel                 = { workspace = true }
 diesel_migrations      = { workspace = true }
-k256                   = { features = ["ecdsa"], version = "0.13" }
 miden-node-db          = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { workspace = true }
-spki                   = { version = "0.7" }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }

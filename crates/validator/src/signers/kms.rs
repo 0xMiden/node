@@ -5,8 +5,7 @@ use miden_node_utils::signer::BlockSigner;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::keccak::Keccak256;
-use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
-use spki::der::Decode;
+use miden_protocol::utils::serde::{DeserializationError, Serializable};
 
 // KMS SIGNER ERROR
 // ================================================================================================
@@ -71,14 +70,8 @@ impl KmsSigner {
         let pub_key_output = client.get_public_key().key_id(key_id.clone()).send().await?;
         let spki_der = pub_key_output.public_key().ok_or(KmsSignerError::EmptyBlob)?.as_ref();
 
-        // Parse the SPKI DER to extract the raw SEC1 public key bytes.
-        let spki = spki::SubjectPublicKeyInfoRef::from_der(spki_der)
-            .map_err(|e| DeserializationError::InvalidValue(e.to_string()))?;
-        let sec1_bytes = spki
-            .subject_public_key
-            .as_bytes()
-            .ok_or_else(|| DeserializationError::InvalidValue("Invalid SPKI BIT STRING".into()))?;
-        let pub_key = PublicKey::read_from_bytes(sec1_bytes)?;
+        // Decode the compressed SPKI as a Miden public key.
+        let pub_key = PublicKey::from_der(spki_der)?;
         Ok(Self { key_id, pub_key, client })
     }
 }
@@ -108,13 +101,11 @@ impl BlockSigner for KmsSigner {
             .map_err(Box::from)
             .map_err(KmsSignerError::KmsServiceError)?;
 
-        // Decode DER-encoded ECDSA signature into r||s bytes.
+        // Decode DER-encoded signature.
         let sig_der = sign_output.signature().ok_or(KmsSignerError::EmptyBlob)?;
-        let k256_sig = k256::ecdsa::Signature::from_der(sig_der.as_ref())
-            .map_err(|e| DeserializationError::InvalidValue(e.to_string()))
-            .map_err(KmsSignerError::SignatureFormatError)?;
         // Recovery id is not used by verify(pk), so 0 is fine.
-        let sig = Signature::from_sec1_bytes_and_recovery_id(k256_sig.to_bytes().into(), 0)
+        let recovery_id = 0;
+        let sig = Signature::from_der(sig_der.as_ref(), recovery_id)
             .map_err(KmsSignerError::SignatureFormatError)?;
 
         // Check the returned signature.
