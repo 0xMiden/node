@@ -1,3 +1,19 @@
+# OTel field allowlist
+#
+# Only the names listed here may be used as field keys in `#[instrument(…)]`.
+#
+# Rules:
+#   - One dotted name per line (e.g. `account.id`).
+#   - Lines that are empty or start with `#` are ignored.
+#   - Names are matched verbatim (case-sensitive, no wildcards).
+#
+# When an unlisted name is supplied the macro emits a compile error and
+# suggests the closest match(es) from this file (Levenshtein distance ≤ 5).
+#
+# To add a new name: append it below and open a PR for review.  New names
+# should correspond to a documented semantic convention in the OTel spec or
+# in the Miden node attribute registry.
+
 account.id
 nullifier.id
 block.number

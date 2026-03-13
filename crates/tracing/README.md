@@ -4,14 +4,14 @@ Tracing utilities for Miden node with enhanced error reporting.
 
 ## Overview
 
-This crate provides an `#[instrument_with_err_report]` attribute macro that enhances the standard `tracing::instrument` with full error chain reporting. When a function returns an error, instead of just logging the top-level error message, it captures and logs the entire error chain.
+This crate provides an `#[instrument]` attribute macro that enhances the standard `tracing::instrument` with full error chain reporting. When a function returns an error, instead of just logging the top-level error message, it captures and logs the entire error chain.
 
 ## Usage
 
 ```rust
-use miden_node_tracing::instrument_with_err_report;
+use miden_node_tracing::instrument;
 
-#[instrument_with_err_report(target = "my_component", skip_all, err)]
+#[instrument(target = "my_component", skip_all, err)]
 pub async fn apply_block(&self, block: ProvenBlock) -> Result<(), ApplyBlockError> {
     // Function body...
 }

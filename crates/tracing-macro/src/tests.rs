@@ -2,6 +2,11 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::instrument::instrument2;
+use crate::log;
+
+fn warn2(ts: TokenStream2) -> syn::Result<TokenStream2> {
+    log::parse("warn", ts)
+}
 
 // ── item fixtures ─────────────────────────────────────────────────────────────
 
@@ -185,4 +190,136 @@ fn instrument_allowlisted_field_display_report_err_fails() {
     //   allowlist ok, but report + err are mutually exclusive  →  error
     let result = instrument2(quote! { rpc: account.id = %bar, report, err }, item_result_unit_fn());
     assert!(result.is_err(), "{result:?}");
+}
+
+// ── warn! / log macros ────────────────────────────────────────────────────────
+
+// ── empty / message only ──────────────────────────────────────────────────────
+
+#[test]
+fn warn_empty_succeeds() {
+    // warn!()  –  empty stream  →  ok  (empty tracing event)
+    let result = warn2(quote! {});
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_message_only_succeeds() {
+    // warn!("something odd")  –  plain string literal  →  ok
+    let result = warn2(quote! { "something odd" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_format_string_succeeds() {
+    // warn!("retry after {}ms", delay)  –  format string  →  ok
+    let result = warn2(quote! { "retry after {}ms", delay });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+// ── component ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn warn_component_ident_message_succeeds() {
+    // warn!(rpc: "msg")  –  component ident + message  →  ok
+    let result = warn2(quote! { rpc: "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_component_literal_message_succeeds() {
+    // warn!("block-producer": "msg")  –  string-literal component  →  ok
+    let result = warn2(quote! { "block-producer": "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_component_only_succeeds() {
+    // warn!(rpc:)  –  component with no fields or message  →  ok
+    let result = warn2(quote! { rpc: });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+// ── allowlisted fields ────────────────────────────────────────────────────────
+
+#[test]
+fn warn_allowlisted_field_debug_succeeds() {
+    // warn!(account.id = id, "msg")  –  allowlisted, Debug format  →  ok
+    let result = warn2(quote! { account.id = id, "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_allowlisted_field_display_succeeds() {
+    // warn!(account.id = %id, "msg")  –  allowlisted, Display format  →  ok
+    let result = warn2(quote! { account.id = %id, "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_allowlisted_field_debug_explicit_succeeds() {
+    // warn!(account.id = ?id, "msg")  –  allowlisted, explicit Debug  →  ok
+    let result = warn2(quote! { account.id = ?id, "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_multiple_allowlisted_fields_succeeds() {
+    // warn!(account.id = %id, block.number = n, "msg")  –  two allowlisted fields  →  ok
+    let result = warn2(quote! { account.id = %id, block.number = n, "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_allowlisted_fields_no_message_succeeds() {
+    // warn!(account.id = %id, block.number = n)  –  fields only, no message  →  ok
+    let result = warn2(quote! { account.id = %id, block.number = n });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+// ── unlisted fields ───────────────────────────────────────────────────────────
+
+#[test]
+fn warn_unlisted_field_fails() {
+    // warn!(foo = %x, "msg")  –  foo NOT in allowlist  →  error
+    let result = warn2(quote! { foo = %x, "msg" });
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[test]
+fn warn_unlisted_dotted_field_fails() {
+    // warn!(foo.bar = %x, "msg")  –  foo.bar NOT in allowlist  →  error
+    let result = warn2(quote! { foo.bar = %x, "msg" });
+    assert!(result.is_err(), "{result:?}");
+}
+
+// ── component + fields ────────────────────────────────────────────────────────
+
+#[test]
+fn warn_component_allowlisted_field_message_succeeds() {
+    // warn!(rpc: account.id = %id, "msg")  –  component + allowlisted + message  →  ok
+    let result = warn2(quote! { rpc: account.id = %id, "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_component_unlisted_field_fails() {
+    // warn!(rpc: foo = %x, "msg")  –  component present but foo NOT in allowlist  →  error
+    // (allowlist applies regardless of component)
+    let result = warn2(quote! { rpc: foo = %x, "msg" });
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[test]
+fn warn_component_multiple_fields_message_succeeds() {
+    // warn!(store: account.id = %id, block.number = n, "msg")  →  ok
+    let result = warn2(quote! { store: account.id = %id, block.number = n, "msg" });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn warn_component_nullifier_field_succeeds() {
+    // warn!(rpc: nullifier.id = %id, "msg")  –  nullifier.id allowlisted  →  ok
+    let result = warn2(quote! { rpc: nullifier.id = %id, "msg" });
+    assert!(result.is_ok(), "{result:?}");
 }

@@ -6,6 +6,7 @@ use std::time::Duration;
 use futures::never::Never;
 use futures::{FutureExt, TryFutureExt};
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_tracing::instrument;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
@@ -14,7 +15,6 @@ use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
 use tokio::task::JoinSet;
 use tokio::time;
-use miden_node_tracing::instrument_with_err_report;
 use tracing::{Instrument, Span};
 use url::Url;
 
@@ -103,7 +103,7 @@ impl BatchBuilder {
         }
     }
 
-    #[instrument_with_err_report(parent = None, target = COMPONENT, name = "batch_builder.build_batch", skip_all)]
+    #[instrument(parent = None, target = COMPONENT, name = "batch_builder.build_batch", skip_all)]
     async fn build_batch(&mut self, mempool: SharedMempool) {
         Span::current().set_attribute("workers.count", self.worker_pool.len());
 
@@ -131,7 +131,7 @@ impl BatchBuilder {
     /// require the same logic as here to handle the case when the pool is at capacity. This
     /// design was chosen instead as it removes this branching logic by "always" having the pool
     /// at max capacity. Instead completed workers wait to be culled by this function.
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.wait_for_available_worker", skip_all)]
+    #[instrument(target = COMPONENT, name = "batch_builder.wait_for_available_worker", skip_all)]
     async fn wait_for_available_worker(&mut self) {
         // We must crash here because otherwise we have a batch that has been selected from the
         // mempool, but which is now in limbo. This effectively corrupts the mempool.
@@ -190,12 +190,12 @@ impl BatchJob {
             .await;
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
+    #[instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
     async fn select_batch(&self) -> Option<SelectedBatch> {
         self.mempool.lock().await.select_batch()
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
+    #[instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
     async fn get_batch_inputs(
         &self,
         batch: SelectedBatch,
@@ -218,7 +218,7 @@ impl BatchJob {
             .map(|inputs| (batch, inputs))
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.propose_batch", skip_all, err)]
+    #[instrument(target = COMPONENT, name = "batch_builder.propose_batch", skip_all, err)]
     async fn propose_batch(
         selected: SelectedBatch,
         inputs: BatchInputs,
@@ -238,7 +238,7 @@ impl BatchJob {
         .map_err(BuildBatchError::ProposeBatchError)
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.prove_batch", skip_all, err)]
+    #[instrument(target = COMPONENT, name = "batch_builder.prove_batch", skip_all, err)]
     async fn prove_batch(
         &self,
         proposed_batch: ProposedBatch,
@@ -268,7 +268,7 @@ impl BatchJob {
         }
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.inject_failure", skip_all, err)]
+    #[instrument(target = COMPONENT, name = "batch_builder.inject_failure", skip_all, err)]
     async fn inject_failure<T>(&self, value: T) -> Result<T, BuildBatchError> {
         let roll = rand::rng().random::<f64>();
 
@@ -282,12 +282,12 @@ impl BatchJob {
         }
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
+    #[instrument(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
     async fn commit_batch(&self, batch: Arc<ProvenBatch>) {
         self.mempool.lock().await.commit_batch(batch);
     }
 
-    #[instrument_with_err_report(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
+    #[instrument(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
     async fn rollback_batch(&self, batch_id: BatchId) {
         self.mempool.lock().await.rollback_batch(batch_id);
     }

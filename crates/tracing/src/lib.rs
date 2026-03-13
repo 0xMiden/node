@@ -1,14 +1,14 @@
 //! Tracing utilities for Miden node with enhanced error reporting.
 //!
-//! This crate provides an `#[instrument_with_err_report]` attribute macro that enhances
+//! This crate provides an `#[instrument]` attribute macro that enhances
 //! the standard `tracing::instrument` with full error chain reporting.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use miden_node_tracing::instrument_with_err_report;
+//! use miden_node_tracing::instrument;
 //!
-//! #[instrument_with_err_report(target = "my_component", skip_all, err)]
+//! #[instrument(target = "my_component", skip_all, err)]
 //! async fn apply_block(&self, block: Block) -> Result<(), ApplyBlockError> {
 //!     // ...
 //! }
@@ -22,7 +22,7 @@
 //! ```
 
 // Re-export the instrument macro
-pub use miden_node_tracing_macro::instrument_with_err_report;
+pub use miden_node_tracing_macro::instrument;
 // Re-export ErrorReport from miden-node-utils
 pub use miden_node_utils::ErrorReport;
 // Re-export OpenTelemetrySpanExt from miden-node-utils
