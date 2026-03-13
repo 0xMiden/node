@@ -210,13 +210,9 @@ pub(super) fn select_latest_vault_assets(
             .filter(vault::is_latest.eq(true))
             .load(conn)?;
 
-    let mut assets = Vec::new();
-    for (_vault_key_bytes, maybe_asset_bytes) in entries {
-        if let Some(asset_bytes) = maybe_asset_bytes {
-            assets.push(Asset::read_from_bytes(&asset_bytes)?);
-        }
-    }
-    Ok(assets)
+    Result::from_iter(entries.into_iter().filter_map(|(_vault_key_bytes, maybe_asset_bytes)| {
+        maybe_asset_bytes.map(|bytes| Asset::read_from_bytes(&bytes)).transpose()
+    }))
 }
 
 // HELPER FUNCTIONS
