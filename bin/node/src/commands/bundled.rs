@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
+use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -18,13 +18,11 @@ use super::{ENV_DATA_DIRECTORY, ENV_RPC_URL};
 use crate::commands::{
     BlockProducerConfig,
     BundledValidatorConfig,
-    DEFAULT_TIMEOUT,
     ENV_BLOCK_PROVER_URL,
     ENV_ENABLE_OTEL,
     ENV_GENESIS_CONFIG_FILE,
     NtxBuilderConfig,
     ValidatorKey,
-    duration_to_human_readable_string,
 };
 
 #[derive(clap::Subcommand)]
@@ -84,16 +82,11 @@ pub enum BundledCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        /// Maximum duration a gRPC request is allocated before being dropped by the server.
-        ///
-        /// This may occur if the server is overloaded or due to an internal bug.
-        #[arg(
-            long = "grpc.timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_TIMEOUT),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        grpc_timeout: Duration,
+        #[command(flatten)]
+        grpc_options: GrpcOptionsExternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
@@ -106,16 +99,21 @@ impl BundledCommand {
                 genesis_config_file,
                 validator_key,
             } => {
-                // Currently the bundled bootstrap is identical to the store's bootstrap.
-                crate::commands::store::StoreCommand::Bootstrap {
-                    data_directory,
-                    accounts_directory,
-                    genesis_config_file,
+                // Run validator bootstrap to create genesis block + account files.
+                crate::commands::validator::ValidatorCommand::bootstrap_genesis(
+                    &data_directory,
+                    &accounts_directory,
+                    genesis_config_file.as_ref(),
                     validator_key,
-                }
-                .handle()
+                )
                 .await
-                .context("failed to bootstrap the store component")
+                .context("failed to bootstrap genesis block")?;
+
+                // Feed the genesis block file into the store bootstrap.
+                let genesis_block_path =
+                    data_directory.join(crate::commands::validator::GENESIS_BLOCK_FILENAME);
+                crate::commands::store::bootstrap_store(&data_directory, &genesis_block_path)
+                    .context("failed to bootstrap the store component")
             },
             BundledCommand::Start {
                 rpc_url,
@@ -125,7 +123,8 @@ impl BundledCommand {
                 ntx_builder,
                 validator,
                 enable_otel: _,
-                grpc_timeout,
+                grpc_options,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -134,14 +133,15 @@ impl BundledCommand {
                     block_producer,
                     ntx_builder,
                     validator,
-                    grpc_timeout,
+                    grpc_options,
+                    storage_options,
                 )
                 .await
             },
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         block_prover_url: Option<Url>,
@@ -149,7 +149,8 @@ impl BundledCommand {
         block_producer: BlockProducerConfig,
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
-        grpc_timeout: Duration,
+        grpc_options: GrpcOptionsExternal,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -206,7 +207,8 @@ impl BundledCommand {
                     ntx_builder_listener: store_ntx_builder_listener,
                     data_directory: data_directory_clone,
                     block_prover_url,
-                    grpc_timeout,
+                    grpc_options: grpc_options.into(),
+                    storage_options,
                 }
                 .serve()
                 .await
@@ -233,7 +235,7 @@ impl BundledCommand {
                             block_interval: block_producer.block_interval,
                             max_batches_per_block: block_producer.max_batches_per_block,
                             max_txs_per_batch: block_producer.max_txs_per_batch,
-                            grpc_timeout,
+                            grpc_options: grpc_options.into(),
                             mempool_tx_capacity: block_producer.mempool_tx_capacity,
                         }
                         .serve()
@@ -257,7 +259,7 @@ impl BundledCommand {
                         store_url,
                         block_producer_url: Some(block_producer_url),
                         validator_url,
-                        grpc_timeout,
+                        grpc_options,
                     }
                     .serve()
                     .await
@@ -311,7 +313,7 @@ impl BundledCommand {
                     async move {
                         Validator {
                             address,
-                            grpc_timeout,
+                            grpc_options: grpc_options.into(),
                             signer,
                             data_directory,
                         }

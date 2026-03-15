@@ -57,6 +57,7 @@ use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta,
+    select_latest_vault_assets,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
@@ -684,18 +685,13 @@ impl StorageMapValue {
 ///
 /// * Response payload size: 0 <= size <= 2MB
 /// * Storage map values per response: 0 <= count <= (2MB / (2*Word + u32 + u8)) + 1
-pub(crate) fn select_account_storage_map_values(
+pub(crate) fn select_account_storage_map_values_paged(
     conn: &mut SqliteConnection,
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
+    limit: usize,
 ) -> Result<StorageMapValuesPage, DatabaseError> {
     use schema::account_storage_map_values as t;
-
-    // TODO: These limits should be given by the protocol.
-    // See miden-base/issues/1770 for more details
-    pub const ROW_OVERHEAD_BYTES: usize =
-        2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>(); // key + value + block_num + slot_idx
-    pub const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
     if !account_id.has_public_state() {
         return Err(DatabaseError::AccountNotPublic(account_id));
@@ -717,13 +713,13 @@ pub(crate) fn select_account_storage_map_values(
                     .and(t::block_num.le(block_range.end().to_raw_sql())),
             )
             .order(t::block_num.asc())
-            .limit(i64::try_from(MAX_ROWS + 1).expect("limit fits within i64"))
+            .limit(i64::try_from(limit + 1).expect("limit fits within i64"))
             .load(conn)?;
 
     // Discard the last block in the response (assumes more than one block may be present)
 
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
-        && raw.len() > MAX_ROWS
+        && raw.len() > limit
     {
         // NOTE: If the query contains at least one more row than the amount of storage map updates
         // allowed in a single block for an account, then the response is guaranteed to have at
@@ -739,7 +735,9 @@ pub(crate) fn select_account_storage_map_values(
     } else {
         (
             *block_range.end(),
-            raw.into_iter().map(StorageMapValue::from_raw_row).collect::<Result<_, _>>()?,
+            raw.into_iter()
+                .map(StorageMapValue::from_raw_row)
+                .collect::<Result<Vec<_>, _>>()?,
         )
     };
 
@@ -1074,7 +1072,6 @@ fn prepare_partial_account_update(
     update: &BlockAccountUpdate,
     account_id: AccountId,
     delta: &miden_protocol::account::delta::AccountDelta,
-    block_num: BlockNumber,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     // Build the minimal account state needed for partial delta application.
     // Only load the storage map entries and vault balances that will receive updates.
@@ -1144,9 +1141,7 @@ fn prepare_partial_account_update(
 
     // --- Update the vault root by constructing the asset vault from DB.
     let new_vault_root = {
-        let (_last_block, assets) =
-            select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
-        let assets: Vec<Asset> = assets.into_iter().filter_map(|entry| entry.asset).collect();
+        let assets = select_latest_vault_assets(conn, account_id)?;
         let mut vault = AssetVault::new(&assets)?;
         vault.apply_delta(delta.vault())?;
         vault.root()
@@ -1246,7 +1241,7 @@ pub(crate) fn upsert_accounts(
 
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                prepare_partial_account_update(conn, update, account_id, delta, block_num)?
+                prepare_partial_account_update(conn, update, account_id, delta)?
             },
         };
 

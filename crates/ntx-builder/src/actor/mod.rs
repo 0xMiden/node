@@ -1,17 +1,15 @@
-pub(crate) mod account_effect;
-pub mod account_state;
+pub mod candidate;
 mod execute;
-pub(crate) mod inflight_note;
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use account_state::TransactionCandidate;
+use anyhow::Context;
+use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -20,45 +18,31 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
+use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::actor::inflight_note::InflightNetworkNote;
-use crate::block_producer::BlockProducerClient;
-use crate::builder::ChainState;
+use crate::chain_state::ChainState;
+use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
-use crate::store::StoreClient;
+use crate::inflight_note::InflightNetworkNote;
 
-// ACTOR NOTIFICATION
+// ACTOR REQUESTS
 // ================================================================================================
 
-/// A notification sent from an account actor to the coordinator.
-pub enum ActorNotification {
+/// A request sent from an account actor to the coordinator via a shared mpsc channel.
+pub enum ActorRequest {
     /// One or more notes failed during transaction execution and should have their attempt
-    /// counters incremented.
+    /// counters incremented. The actor waits for the coordinator to acknowledge the DB write via
+    /// the oneshot channel, preventing race conditions where the actor could re-select the same
+    /// notes before the failure is persisted.
     NotesFailed {
         nullifiers: Vec<Nullifier>,
         block_num: BlockNumber,
+        ack_tx: tokio::sync::oneshot::Sender<()>,
     },
     /// A note script was fetched from the remote store and should be persisted to the local DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
-}
-
-// ACTOR SHUTDOWN REASON
-// ================================================================================================
-
-/// The reason an actor has shut down.
-pub enum ActorShutdownReason {
-    /// Occurs when an account actor detects failure in the messaging channel used by the
-    /// coordinator.
-    EventChannelClosed,
-    /// Occurs when an account actor detects failure in acquiring the rate-limiting semaphore.
-    SemaphoreFailed(AcquireError),
-    /// Occurs when an account actor detects its corresponding cancellation token has been triggered
-    /// by the coordinator. Cancellation tokens are triggered by the coordinator to initiate
-    /// graceful shutdown of actors.
-    Cancelled(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -86,10 +70,49 @@ pub struct AccountActorContext {
     pub max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     pub max_note_attempts: usize,
+    /// Duration after which an idle actor will deactivate.
+    pub idle_timeout: Duration,
     /// Database for persistent state.
     pub db: Db,
-    /// Channel for sending notifications to the coordinator (via the builder event loop).
-    pub notification_tx: mpsc::Sender<ActorNotification>,
+    /// Channel for sending requests to the coordinator (via the builder event loop).
+    pub request_tx: mpsc::Sender<ActorRequest>,
+}
+
+#[cfg(test)]
+impl AccountActorContext {
+    /// Creates a minimal `AccountActorContext` suitable for unit tests.
+    ///
+    /// The URLs are fake and actors spawned with this context will fail on their first gRPC call,
+    /// but this is sufficient for testing coordinator logic (registry, deactivation, etc.).
+    pub fn test(db: &crate::db::Db) -> Self {
+        use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
+        use tokio::sync::RwLock;
+        use url::Url;
+
+        use crate::chain_state::ChainState;
+        use crate::clients::StoreClient;
+        use crate::test_utils::mock_block_header;
+
+        let url = Url::parse("http://127.0.0.1:1").unwrap();
+        let block_header = mock_block_header(0_u32.into());
+        let chain_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
+        let chain_state = Arc::new(RwLock::new(ChainState::new(block_header, chain_mmr)));
+        let (request_tx, _request_rx) = mpsc::channel(1);
+
+        Self {
+            block_producer_url: url.clone(),
+            validator_url: url.clone(),
+            tx_prover_url: None,
+            chain_state,
+            store: StoreClient::new(url),
+            script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
+            max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
+            max_note_attempts: 1,
+            idle_timeout: Duration::from_secs(60),
+            db: db.clone(),
+            request_tx,
+        }
+    }
 }
 
 // ACCOUNT ORIGIN
@@ -180,7 +203,7 @@ pub struct AccountActor {
     store: StoreClient,
     db: Db,
     mode: ActorMode,
-    event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
+    notify: Arc<Notify>,
     cancel_token: CancellationToken,
     block_producer: BlockProducerClient,
     validator: ValidatorClient,
@@ -191,17 +214,18 @@ pub struct AccountActor {
     max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
-    /// Channel for sending notifications to the coordinator.
-    notification_tx: mpsc::Sender<ActorNotification>,
+    /// Duration after which an idle actor will deactivate.
+    idle_timeout: Duration,
+    /// Channel for sending requests to the coordinator.
+    request_tx: mpsc::Sender<ActorRequest>,
 }
 
 impl AccountActor {
-    /// Constructs a new account actor and corresponding messaging channel with the given
-    /// configuration.
+    /// Constructs a new account actor with the given configuration.
     pub fn new(
         origin: AccountOrigin,
         actor_context: &AccountActorContext,
-        event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
+        notify: Arc<Notify>,
         cancel_token: CancellationToken,
     ) -> Self {
         let block_producer = BlockProducerClient::new(actor_context.block_producer_url.clone());
@@ -218,7 +242,7 @@ impl AccountActor {
             store: actor_context.store.clone(),
             db: actor_context.db.clone(),
             mode: ActorMode::NoViableNotes,
-            event_rx,
+            notify,
             cancel_token,
             block_producer,
             validator,
@@ -227,13 +251,18 @@ impl AccountActor {
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
-            notification_tx: actor_context.notification_tx.clone(),
+            idle_timeout: actor_context.idle_timeout,
+            request_tx: actor_context.request_tx.clone(),
         }
     }
 
-    /// Runs the account actor, processing events and managing state until a reason to shutdown is
-    /// encountered.
-    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> ActorShutdownReason {
+    /// Runs the account actor, processing events and managing state until shutdown.
+    ///
+    /// The return value signals the shutdown category to the coordinator:
+    ///
+    /// - `Ok(())`: intentional shutdown (idle timeout, cancellation, or account removal).
+    /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
+    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.origin.id();
 
         // Determine initial mode by checking DB for available notes.
@@ -242,7 +271,7 @@ impl AccountActor {
             .db
             .has_available_notes(account_id, block_num, self.max_note_attempts)
             .await
-            .expect("actor should be able to check for available notes");
+            .context("failed to check for available notes")?;
 
         if has_notes {
             self.mode = ActorMode::NotesAvailable;
@@ -258,58 +287,61 @@ impl AccountActor {
                 // Enable transaction execution.
                 ActorMode::NotesAvailable => semaphore.acquire().boxed(),
             };
+
+            // Idle timeout timer: only ticks when in NoViableNotes mode.
+            // Mode changes cause the next loop iteration to create a fresh sleep or pending.
+            let idle_timeout_sleep = match self.mode {
+                ActorMode::NoViableNotes => tokio::time::sleep(self.idle_timeout).boxed(),
+                _ => std::future::pending().boxed(),
+            };
+
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
-                    return ActorShutdownReason::Cancelled(account_id);
+                    return Ok(());
                 }
-                // Handle mempool events.
-                event = self.event_rx.recv() => {
-                    let Some(event) = event else {
-                         return ActorShutdownReason::EventChannelClosed;
-                    };
-                    // Re-enable transaction execution if the transaction being waited on has
-                    // been resolved (added to mempool, committed in a block, or reverted).
-                    if let ActorMode::TransactionInflight(awaited_id) = self.mode {
-                        let should_wake = match event.as_ref() {
-                            MempoolEvent::TransactionAdded { id, .. } => *id == awaited_id,
-                            MempoolEvent::BlockCommitted { txs, .. } => {
-                                txs.contains(&awaited_id)
-                            },
-                            MempoolEvent::TransactionsReverted(tx_ids) => {
-                                tx_ids.contains(&awaited_id)
-                            },
-                        };
-                        if should_wake {
+                // Handle coordinator notifications. On notification, re-evaluate state from DB.
+                _ = self.notify.notified() => {
+                    match self.mode {
+                        ActorMode::TransactionInflight(awaited_id) => {
+                            // Check DB: is the inflight tx still pending?
+                            let exists = self
+                                .db
+                                .transaction_exists(awaited_id)
+                                .await
+                                .context("failed to check transaction status")?;
+                            if exists {
+                                self.mode = ActorMode::NotesAvailable;
+                            }
+                        },
+                        _ => {
                             self.mode = ActorMode::NotesAvailable;
                         }
-                    } else {
-                        self.mode = ActorMode::NotesAvailable;
                     }
                 },
                 // Execute transactions.
                 permit = tx_permit_acquisition => {
-                    match permit {
-                        Ok(_permit) => {
-                            // Read the chain state.
-                            let chain_state = self.chain_state.read().await.clone();
+                    let _permit = permit.context("semaphore closed")?;
 
-                            // Query DB for latest account and available notes.
-                            let tx_candidate = self.select_candidate_from_db(
-                                account_id,
-                                chain_state,
-                            ).await;
+                    // Read the chain state.
+                    let chain_state = self.chain_state.read().await.clone();
 
-                            if let Some(tx_candidate) = tx_candidate {
-                                self.execute_transactions(account_id, tx_candidate).await;
-                            } else {
-                                // No transactions to execute, wait for events.
-                                self.mode = ActorMode::NoViableNotes;
-                            }
-                        }
-                        Err(err) => {
-                            return ActorShutdownReason::SemaphoreFailed(err);
-                        }
+                    // Query DB for latest account and available notes.
+                    let tx_candidate = self.select_candidate_from_db(
+                        account_id,
+                        chain_state,
+                    ).await?;
+
+                    if let Some(tx_candidate) = tx_candidate {
+                        self.execute_transactions(account_id, tx_candidate).await;
+                    } else {
+                        // No transactions to execute, wait for events.
+                        self.mode = ActorMode::NoViableNotes;
                     }
+                }
+                // Idle timeout: actor has been idle too long, deactivate account.
+                _ = idle_timeout_sleep => {
+                    tracing::info!(%account_id, "Account actor deactivated due to idle timeout");
+                    return Ok(());
                 }
             }
         }
@@ -320,7 +352,7 @@ impl AccountActor {
         &self,
         account_id: NetworkAccountId,
         chain_state: ChainState,
-    ) -> Option<TransactionCandidate> {
+    ) -> anyhow::Result<Option<TransactionCandidate>> {
         let block_num = chain_state.chain_tip_header.block_num();
         let max_notes = self.max_notes_per_tx.get();
 
@@ -328,22 +360,25 @@ impl AccountActor {
             .db
             .select_candidate(account_id, block_num, self.max_note_attempts)
             .await
-            .expect("actor should be able to query DB for candidate");
+            .context("failed to query DB for transaction candidate")?;
 
-        let account = latest_account?;
+        let Some(account) = latest_account else {
+            tracing::info!(account_id = %account_id, "Account no longer exists in DB");
+            return Ok(None);
+        };
 
         let notes: Vec<_> = notes.into_iter().take(max_notes).collect();
         if notes.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let (chain_tip_header, chain_mmr) = chain_state.into_parts();
-        Some(TransactionCandidate {
+        Ok(Some(TransactionCandidate {
             account,
             notes,
             chain_tip_header,
             chain_mmr,
-        })
+        }))
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.
@@ -368,24 +403,40 @@ impl AccountActor {
         );
 
         let notes = tx_candidate.notes.clone();
+        let account_id = tx_candidate.account.id();
+        let note_ids: Vec<_> = notes.iter().map(|n| n.to_inner().as_note().id()).collect();
+        tracing::info!(
+            %account_id,
+            ?note_ids,
+            num_notes = notes.len(),
+            "executing network transaction",
+        );
+
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
-            // Execution completed without failed notes.
-            Ok((tx_id, failed, scripts_to_cache)) if failed.is_empty() => {
-                self.cache_note_scripts(scripts_to_cache).await;
-                self.mode = ActorMode::TransactionInflight(tx_id);
-            },
-            // Execution completed with some failed notes.
             Ok((tx_id, failed, scripts_to_cache)) => {
+                tracing::info!(
+                    %account_id,
+                    %tx_id,
+                    num_failed = failed.len(),
+                    "network transaction executed with some failed notes",
+                );
                 self.cache_note_scripts(scripts_to_cache).await;
-                let nullifiers: Vec<_> =
-                    failed.into_iter().map(|note| note.note.nullifier()).collect();
-                self.mark_notes_failed(&nullifiers, block_num).await;
+                if !failed.is_empty() {
+                    let nullifiers: Vec<_> =
+                        failed.into_iter().map(|note| note.note.nullifier()).collect();
+                    self.mark_notes_failed(&nullifiers, block_num).await;
+                }
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
             Err(err) => {
-                tracing::error!(err = err.as_report(), "network transaction failed");
+                tracing::error!(
+                    %account_id,
+                    ?note_ids,
+                    err = err.as_report(),
+                    "network transaction failed",
+                );
                 self.mode = ActorMode::NoViableNotes;
                 let nullifiers: Vec<_> = notes.iter().map(InflightNetworkNote::nullifier).collect();
                 self.mark_notes_failed(&nullifiers, block_num).await;
@@ -393,90 +444,38 @@ impl AccountActor {
         }
     }
 
-    /// Sends notifications to the coordinator to cache note scripts fetched from the remote store.
+    /// Sends requests to the coordinator to cache note scripts fetched from the remote store.
     async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
         for (script_root, script) in scripts {
-            let _ = self
-                .notification_tx
-                .send(ActorNotification::CacheNoteScript { script_root, script })
-                .await;
+            if self
+                .request_tx
+                .send(ActorRequest::CacheNoteScript { script_root, script })
+                .await
+                .is_err()
+            {
+                break;
+            }
         }
     }
 
-    /// Sends a notification to the coordinator to mark notes as failed.
+    /// Sends a request to the coordinator to mark notes as failed and waits for the DB write to
+    /// complete. This prevents a race condition where the actor could re-select the same notes
+    /// before the failure counts are updated in the database.
     async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
-        let _ = self
-            .notification_tx
-            .send(ActorNotification::NotesFailed {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if self
+            .request_tx
+            .send(ActorRequest::NotesFailed {
                 nullifiers: nullifiers.to_vec(),
                 block_num,
+                ack_tx,
             })
-            .await;
-    }
-}
-
-// HELPERS
-// ================================================================================================
-
-/// Checks if the backoff block period has passed.
-///
-/// The number of blocks passed since the last attempt must be greater than or equal to
-/// e^(0.25 * `attempt_count`) rounded to the nearest integer.
-///
-/// This evaluates to the following:
-/// - After 1 attempt, the backoff period is 1 block.
-/// - After 3 attempts, the backoff period is 2 blocks.
-/// - After 10 attempts, the backoff period is 12 blocks.
-/// - After 20 attempts, the backoff period is 148 blocks.
-/// - etc...
-#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
-fn has_backoff_passed(
-    chain_tip: BlockNumber,
-    last_attempt: Option<BlockNumber>,
-    attempts: usize,
-) -> bool {
-    if attempts == 0 {
-        return true;
-    }
-    // Compute the number of blocks passed since the last attempt.
-    let blocks_passed = last_attempt
-        .and_then(|last| chain_tip.checked_sub(last.as_u32()))
-        .unwrap_or_default();
-
-    // Compute the exponential backoff threshold: Δ = e^(0.25 * n).
-    let backoff_threshold = (0.25 * attempts as f64).exp().round() as usize;
-
-    // Check if the backoff period has passed.
-    blocks_passed.as_usize() > backoff_threshold
-}
-
-#[cfg(test)]
-mod tests {
-    use miden_protocol::block::BlockNumber;
-
-    use super::has_backoff_passed;
-
-    #[rstest::rstest]
-    #[test]
-    #[case::all_zero(Some(BlockNumber::GENESIS), BlockNumber::GENESIS, 0, true)]
-    #[case::no_attempts(None, BlockNumber::GENESIS, 0, true)]
-    #[case::one_attempt(Some(BlockNumber::GENESIS), BlockNumber::from(2), 1, true)]
-    #[case::three_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(3), 3, true)]
-    #[case::ten_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(13), 10, true)]
-    #[case::twenty_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(149), 20, true)]
-    #[case::one_attempt_false(Some(BlockNumber::GENESIS), BlockNumber::from(1), 1, false)]
-    #[case::three_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(2), 3, false)]
-    #[case::ten_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(12), 10, false)]
-    #[case::twenty_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(148), 20, false)]
-    fn backoff_has_passed(
-        #[case] last_attempt_block_num: Option<BlockNumber>,
-        #[case] current_block_num: BlockNumber,
-        #[case] attempt_count: usize,
-        #[case] backoff_should_have_passed: bool,
-    ) {
-        assert_eq!(
-            backoff_should_have_passed,
-            has_backoff_passed(current_block_num, last_attempt_block_num, attempt_count)
-        );
+            .await
+            .is_err()
+        {
+            return;
+        }
+        // Wait for the coordinator to confirm the DB write.
+        let _ = ack_rx.await;
     }
 }

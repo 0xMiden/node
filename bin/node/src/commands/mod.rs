@@ -10,6 +10,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
+use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::Deserializable;
@@ -48,13 +49,8 @@ const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 const ENV_NTX_DATA_DIRECTORY: &str = "MIDEN_NODE_NTX_DATA_DIRECTORY";
 
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_NTX_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-
-// Formats a Duration into a human-readable string for display in clap help text.
-fn duration_to_human_readable_string(duration: Duration) -> String {
-    humantime::format_duration(duration).to_string()
-}
 
 /// Configuration for the Validator key used to sign blocks.
 ///
@@ -176,6 +172,28 @@ pub struct NtxBuilderConfig {
     )]
     pub script_cache_size: NonZeroUsize,
 
+    /// Duration after which an idle network account will deactivate.
+    ///
+    /// An account is considered idle once it has no viable notes to consume.
+    /// A deactivated account will reactivate if targeted with new notes.
+    #[arg(
+        long = "ntx-builder.idle-timeout",
+        default_value = &duration_to_human_readable_string(DEFAULT_NTX_IDLE_TIMEOUT),
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION"
+    )]
+    pub idle_timeout: Duration,
+
+    /// Maximum number of crashes before an account deactivated.
+    ///
+    /// Once this limit is reached, no new transactions will be created for this account.
+    #[arg(
+        long = "ntx-builder.max-account-crashes",
+        default_value_t = 10,
+        value_name = "NUM"
+    )]
+    pub max_account_crashes: usize,
+
     /// Directory for the ntx-builder's persistent database.
     ///
     /// If not set, defaults to the node's data directory.
@@ -206,6 +224,8 @@ impl NtxBuilderConfig {
         )
         .with_tx_prover_url(self.tx_prover_url)
         .with_script_cache_size(self.script_cache_size)
+        .with_idle_timeout(self.idle_timeout)
+        .with_max_account_crashes(self.max_account_crashes)
     }
 }
 
