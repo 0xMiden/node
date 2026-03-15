@@ -72,6 +72,12 @@ pub enum NtxBuilderCommand {
         )]
         idle_timeout: Duration,
 
+        /// Maximum number of crashes before an account deactivated.
+        ///
+        /// Once this limit is reached, no new transactions will be created for this account.
+        #[arg(long = "max-account-crashes", default_value_t = 10, value_name = "NUM")]
+        max_account_crashes: usize,
+
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
@@ -95,6 +101,7 @@ impl NtxBuilderCommand {
             ticker_interval: _,
             script_cache_size,
             idle_timeout,
+            max_account_crashes,
             data_directory,
             enable_otel: _,
         } = self;
@@ -109,7 +116,8 @@ impl NtxBuilderCommand {
         )
         .with_tx_prover_url(tx_prover_url)
         .with_script_cache_size(script_cache_size)
-        .with_idle_timeout(idle_timeout);
+        .with_idle_timeout(idle_timeout)
+        .with_max_account_crashes(max_account_crashes);
 
         config
             .build()

@@ -34,6 +34,8 @@
 - Removed `chain_tip` requirement from mempool subscription request ([#1771](https://github.com/0xMiden/node/pull/1771)).
 - Moved bootstrap procedure to `miden-node validator bootstrap` command ([#1764](https://github.com/0xMiden/node/pull/1764)).
 - [BREAKING] Removed `bundled` command; each component is now started as a separate process. Added `ntx-builder` CLI subcommand. Added `docker-compose.yml` for local multi-process deployment ([#1765](https://github.com/0xMiden/node/pull/1765)).
+- NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-account-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
+
 
 ### Fixes
 
@@ -114,7 +116,7 @@
 - Pin tool versions in CI ([#1523](https://github.com/0xMiden/miden-node/pull/1523)).
 - Add `GetVaultAssetWitnesses` and `GetStorageMapWitness` RPC endpoints to store ([#1529](https://github.com/0xMiden/miden-node/pull/1529)).
 - Add check to ensure tree store state is in sync with database storage ([#1532](https://github.com/0xMiden/miden-node/issues/1534)).
-- Improve speed of account updates ([#1567](https://github.com/0xMiden/miden-node/pull/1567)).
+- Improve speed of account updates ([#1567](https://github.com/0xMiden/miden-node/pull/1567), [#1789](https://github.com/0xMiden/node/pull/1789)).
 - Ensure store terminates on nullifier tree or account tree root vs header mismatch (#[#1569](https://github.com/0xMiden/miden-node/pull/1569)).
 - Added support for foreign accounts to `NtxDataStore` and add `GetAccount` endpoint to NTX Builder gRPC store client ([#1521](https://github.com/0xMiden/miden-node/pull/1521)).
 - Use paged queries for tree rebuilding to reduce memory usage during startup ([#1536](https://github.com/0xMiden/miden-node/pull/1536)).
