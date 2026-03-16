@@ -2,28 +2,9 @@ use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 use miden_protocol::utils::{Deserializable, Serializable};
-use thiserror::Error;
 
-use crate::domain::digest::DigestConversionError;
-use crate::errors::{ConversionError, MissingFieldHelper, ProtoConversionError};
+use crate::errors::ConversionError;
 use crate::generated as proto;
-
-// TRANSACTION CONVERSION ERROR
-// ================================================================================================
-
-#[derive(Debug, Error)]
-pub enum TransactionConversionError {
-    #[error(transparent)]
-    Proto(#[from] ProtoConversionError),
-    #[error(transparent)]
-    Digest(#[from] DigestConversionError),
-}
-
-impl From<TransactionConversionError> for tonic::Status {
-    fn from(value: TransactionConversionError) -> Self {
-        tonic::Status::invalid_argument(value.to_string())
-    }
-}
 
 // FROM TRANSACTION ID
 // ================================================================================================
@@ -56,7 +37,7 @@ impl From<TransactionId> for proto::transaction::TransactionId {
 // ================================================================================================
 
 impl TryFrom<proto::primitives::Digest> for TransactionId {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         let digest: Word = value.try_into()?;
@@ -65,14 +46,13 @@ impl TryFrom<proto::primitives::Digest> for TransactionId {
 }
 
 impl TryFrom<proto::transaction::TransactionId> for TransactionId {
-    type Error = TransactionConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::transaction::TransactionId) -> Result<Self, Self::Error> {
         value
             .id
-            .ok_or(proto::transaction::TransactionId::missing_field("id"))?
+            .ok_or(ConversionError::missing_field::<proto::transaction::TransactionId>("id"))?
             .try_into()
-            .map_err(TransactionConversionError::from)
     }
 }
 
@@ -95,7 +75,9 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
         let nullifier: Nullifier = value
             .nullifier
             .ok_or_else(|| {
-                proto::transaction::InputNoteCommitment::missing_field(stringify!(nullifier))
+                ConversionError::missing_field::<proto::transaction::InputNoteCommitment>(
+                    stringify!(nullifier),
+                )
             })?
             .try_into()?;
 
@@ -109,6 +91,6 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
         nullifier.write_into(&mut bytes);
         header.write_into(&mut bytes);
         InputNoteCommitment::read_from_bytes(&bytes)
-            .map_err(|err| ConversionError::deserialization_error("InputNoteCommitment", err))
+            .map_err(|err| ConversionError::deserialization("InputNoteCommitment", err))
     }
 }

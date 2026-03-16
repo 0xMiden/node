@@ -1,4 +1,3 @@
-use std::num::TryFromIntError;
 use std::sync::Arc;
 
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -16,43 +15,10 @@ use miden_protocol::note::{
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
-use miden_standards::note::{AccountTargetNetworkNote, NetworkAccountTargetError};
-use thiserror::Error;
+use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::domain::account::AccountConversionError;
-use crate::domain::digest::DigestConversionError;
-use crate::domain::merkle::MerkleConversionError;
-use crate::errors::{ConversionError, MissingFieldHelper, ProtoConversionError};
+use crate::errors::ConversionError;
 use crate::generated as proto;
-
-// NOTE CONVERSION ERROR
-// ================================================================================================
-
-#[derive(Debug, Error)]
-pub enum NoteConversionError {
-    #[error(transparent)]
-    Proto(#[from] ProtoConversionError),
-    #[error(transparent)]
-    Digest(#[from] DigestConversionError),
-    #[error(transparent)]
-    Merkle(#[from] MerkleConversionError),
-    #[error(transparent)]
-    Account(#[from] AccountConversionError),
-    #[error("note error")]
-    NoteError(#[from] miden_protocol::errors::NoteError),
-    #[error("network note error")]
-    NetworkNoteError(#[source] NetworkAccountTargetError),
-    #[error("enum variant discriminant out of range")]
-    EnumDiscriminantOutOfRange,
-    #[error("integer conversion error: {0}")]
-    TryFromIntError(#[from] TryFromIntError),
-}
-
-impl From<NoteConversionError> for tonic::Status {
-    fn from(value: NoteConversionError) -> Self {
-        tonic::Status::invalid_argument(value.to_string())
-    }
-}
 
 // NOTE TYPE
 // ================================================================================================
@@ -67,14 +33,14 @@ impl From<NoteType> for proto::note::NoteType {
 }
 
 impl TryFrom<proto::note::NoteType> for NoteType {
-    type Error = NoteConversionError;
+    type Error = ConversionError;
 
     fn try_from(note_type: proto::note::NoteType) -> Result<Self, Self::Error> {
         match note_type {
             proto::note::NoteType::Public => Ok(NoteType::Public),
             proto::note::NoteType::Private => Ok(NoteType::Private),
             proto::note::NoteType::Unspecified => {
-                Err(NoteConversionError::EnumDiscriminantOutOfRange)
+                Err(ConversionError::message("enum variant discriminant out of range"))
             },
         }
     }
@@ -84,16 +50,17 @@ impl TryFrom<proto::note::NoteType> for NoteType {
 // ================================================================================================
 
 impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
-    type Error = NoteConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::note::NoteMetadata) -> Result<Self, Self::Error> {
         let sender = value
             .sender
-            .ok_or_else(|| proto::note::NoteMetadata::missing_field(stringify!(sender)))?
-            .try_into()
-            .map_err(NoteConversionError::from)?;
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::note::NoteMetadata>(stringify!(sender))
+            })?
+            .try_into()?;
         let note_type = proto::note::NoteType::try_from(value.note_type)
-            .map_err(|_| NoteConversionError::EnumDiscriminantOutOfRange)?
+            .map_err(|_| ConversionError::message("enum variant discriminant out of range"))?
             .try_into()?;
         let tag = NoteTag::new(value.tag);
 
@@ -102,7 +69,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
             NoteAttachment::default()
         } else {
             NoteAttachment::read_from_bytes(&value.attachment)
-                .map_err(|err| ProtoConversionError::deserialization_error("NoteAttachment", err))?
+                .map_err(|err| ConversionError::deserialization("NoteAttachment", err))?
         };
 
         Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
@@ -138,18 +105,20 @@ impl From<AccountTargetNetworkNote> for proto::note::NetworkNote {
 }
 
 impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
-    type Error = NoteConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::note::NetworkNote) -> Result<Self, Self::Error> {
         let details = NoteDetails::read_from_bytes(&value.details)
-            .map_err(|err| ProtoConversionError::deserialization_error("NoteDetails", err))?;
+            .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
         let (assets, recipient) = details.into_parts();
         let metadata: NoteMetadata = value
             .metadata
-            .ok_or_else(|| proto::note::NetworkNote::missing_field(stringify!(metadata)))?
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::note::NetworkNote>(stringify!(metadata))
+            })?
             .try_into()?;
         let note = Note::new(assets, metadata, recipient);
-        AccountTargetNetworkNote::new(note).map_err(NoteConversionError::NetworkNoteError)
+        AccountTargetNetworkNote::new(note).map_err(ConversionError::from)
     }
 }
 
@@ -171,13 +140,13 @@ impl From<Word> for proto::note::NoteId {
 }
 
 impl TryFrom<proto::note::NoteId> for Word {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(note_id: proto::note::NoteId) -> Result<Self, Self::Error> {
         note_id
             .id
             .as_ref()
-            .ok_or(proto::note::NoteId::missing_field(stringify!(id)))?
+            .ok_or(ConversionError::missing_field::<proto::note::NoteId>(stringify!(id)))?
             .try_into()
     }
 }
@@ -200,7 +169,7 @@ impl From<(&NoteId, &NoteInclusionProof)> for proto::note::NoteInclusionInBlockP
 }
 
 impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusionProof) {
-    type Error = NoteConversionError;
+    type Error = ConversionError;
 
     fn try_from(
         proof: &proto::note::NoteInclusionInBlockProof,
@@ -209,9 +178,9 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
             proof
                 .inclusion_path
                 .as_ref()
-                .ok_or(proto::note::NoteInclusionInBlockProof::missing_field(stringify!(
-                    inclusion_path
-                )))?
+                .ok_or(ConversionError::missing_field::<proto::note::NoteInclusionInBlockProof>(
+                    stringify!(inclusion_path),
+                ))?
                 .clone(),
         )?;
 
@@ -219,10 +188,12 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
             proof
                 .note_id
                 .as_ref()
-                .ok_or(proto::note::NoteInclusionInBlockProof::missing_field(stringify!(note_id)))?
+                .ok_or(ConversionError::missing_field::<proto::note::NoteInclusionInBlockProof>(
+                    stringify!(note_id),
+                ))?
                 .id
                 .as_ref()
-                .ok_or(proto::note::NoteId::missing_field(stringify!(id)))?,
+                .ok_or(ConversionError::missing_field::<proto::note::NoteId>(stringify!(id)))?,
         )?;
 
         Ok((
@@ -237,20 +208,20 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
 }
 
 impl TryFrom<proto::note::Note> for Note {
-    type Error = NoteConversionError;
+    type Error = ConversionError;
 
     fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
         let metadata: NoteMetadata = proto_note
             .metadata
-            .ok_or(proto::note::Note::missing_field(stringify!(metadata)))?
+            .ok_or(ConversionError::missing_field::<proto::note::Note>(stringify!(metadata)))?
             .try_into()?;
 
         let details = proto_note
             .details
-            .ok_or(proto::note::Note::missing_field(stringify!(details)))?;
+            .ok_or(ConversionError::missing_field::<proto::note::Note>(stringify!(details)))?;
 
         let note_details = NoteDetails::read_from_bytes(&details)
-            .map_err(|err| ProtoConversionError::deserialization_error("NoteDetails", err))?;
+            .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
 
         let (assets, recipient) = note_details.into_parts();
         Ok(Note::new(assets, metadata, recipient))
@@ -275,11 +246,15 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
     fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
         let note_id_word: Word = value
             .note_id
-            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(note_id)))?
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::note::NoteHeader>(stringify!(note_id))
+            })?
             .try_into()?;
         let metadata: NoteMetadata = value
             .metadata
-            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(metadata)))?
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::note::NoteHeader>(stringify!(metadata))
+            })?
             .try_into()?;
 
         Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
@@ -299,16 +274,15 @@ impl From<NoteScript> for proto::note::NoteScript {
 }
 
 impl TryFrom<proto::note::NoteScript> for NoteScript {
-    type Error = NoteConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::note::NoteScript) -> Result<Self, Self::Error> {
         let proto::note::NoteScript { entrypoint, mast } = value;
 
         let mast = MastForest::read_from_bytes(&mast)
-            .map_err(|err| ProtoConversionError::deserialization_error("note_script.mast", err))?;
-        let entrypoint = MastNodeId::from_u32_safe(entrypoint, &mast).map_err(|err| {
-            ProtoConversionError::deserialization_error("note_script.entrypoint", err)
-        })?;
+            .map_err(|err| ConversionError::deserialization("note_script.mast", err))?;
+        let entrypoint = MastNodeId::from_u32_safe(entrypoint, &mast)
+            .map_err(|err| ConversionError::deserialization("note_script.entrypoint", err))?;
 
         Ok(Self::from_parts(Arc::new(mast), entrypoint))
     }

@@ -4,33 +4,9 @@ use hex::{FromHex, ToHex};
 use miden_protocol::account::StorageMapKey;
 use miden_protocol::note::NoteId;
 use miden_protocol::{Felt, StarkField, Word};
-use thiserror::Error;
 
-use crate::errors::ProtoConversionError;
+use crate::errors::ConversionError;
 use crate::generated as proto;
-
-// DIGEST CONVERSION ERROR
-// ================================================================================================
-
-#[derive(Debug, Error)]
-pub enum DigestConversionError {
-    #[error(transparent)]
-    Proto(#[from] ProtoConversionError),
-    #[error("hex error")]
-    HexError(#[from] hex::FromHexError),
-    #[error("too much data, expected {expected}, got {got}")]
-    TooMuchData { expected: usize, got: usize },
-    #[error("not enough data, expected {expected}, got {got}")]
-    InsufficientData { expected: usize, got: usize },
-    #[error("value is not in the range 0..MODULUS")]
-    NotAValidFelt,
-}
-
-impl From<DigestConversionError> for tonic::Status {
-    fn from(value: DigestConversionError) -> Self {
-        tonic::Status::invalid_argument(value.to_string())
-    }
-}
 
 // CONSTANTS
 // ================================================================================================
@@ -83,19 +59,18 @@ impl ToHex for proto::primitives::Digest {
 }
 
 impl FromHex for proto::primitives::Digest {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
         let data = hex::decode(hex)?;
 
         match data.len() {
-            size if size < DIGEST_DATA_SIZE => Err(DigestConversionError::InsufficientData {
-                expected: DIGEST_DATA_SIZE,
-                got: size,
-            }),
-            size if size > DIGEST_DATA_SIZE => {
-                Err(DigestConversionError::TooMuchData { expected: DIGEST_DATA_SIZE, got: size })
-            },
+            size if size < DIGEST_DATA_SIZE => Err(ConversionError::message(format!(
+                "not enough data, expected {DIGEST_DATA_SIZE}, got {size}"
+            ))),
+            size if size > DIGEST_DATA_SIZE => Err(ConversionError::message(format!(
+                "too much data, expected {DIGEST_DATA_SIZE}, got {size}"
+            ))),
             _ => {
                 let d0 = u64::from_be_bytes(data[..8].try_into().unwrap());
                 let d1 = u64::from_be_bytes(data[8..16].try_into().unwrap());
@@ -196,14 +171,14 @@ impl From<proto::primitives::Digest> for [u64; 4] {
 }
 
 impl TryFrom<proto::primitives::Digest> for [Felt; 4] {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         if [value.d0, value.d1, value.d2, value.d3]
             .iter()
             .any(|v| *v >= <Felt as StarkField>::MODULUS)
         {
-            return Err(DigestConversionError::NotAValidFelt);
+            return Err(ConversionError::message("value is not in the range 0..MODULUS"));
         }
 
         Ok([
@@ -216,7 +191,7 @@ impl TryFrom<proto::primitives::Digest> for [Felt; 4] {
 }
 
 impl TryFrom<proto::primitives::Digest> for Word {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         Ok(Self::new(value.try_into()?))
@@ -224,7 +199,7 @@ impl TryFrom<proto::primitives::Digest> for Word {
 }
 
 impl TryFrom<proto::primitives::Digest> for StorageMapKey {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         Ok(StorageMapKey::new(value.try_into()?))
@@ -232,7 +207,7 @@ impl TryFrom<proto::primitives::Digest> for StorageMapKey {
 }
 
 impl TryFrom<&proto::primitives::Digest> for [Felt; 4] {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: &proto::primitives::Digest) -> Result<Self, Self::Error> {
         (*value).try_into()
@@ -240,7 +215,7 @@ impl TryFrom<&proto::primitives::Digest> for [Felt; 4] {
 }
 
 impl TryFrom<&proto::primitives::Digest> for Word {
-    type Error = DigestConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: &proto::primitives::Digest) -> Result<Self, Self::Error> {
         (*value).try_into()

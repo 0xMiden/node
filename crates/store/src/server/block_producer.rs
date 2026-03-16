@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use futures::TryFutureExt;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_node_proto::errors::MissingFieldHelper;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
@@ -55,23 +55,29 @@ impl block_producer_server::BlockProducer for StoreApi {
                 )
             })?;
         // Read block.
-        let block = request
-            .block
-            .ok_or(proto::store::ApplyBlockRequest::missing_field(stringify!(block)))?;
+        let block = request.block.ok_or(ConversionError::missing_field::<
+            proto::store::ApplyBlockRequest,
+        >(stringify!(block)))?;
         // Read block header.
         let header: BlockHeader = block
             .header
-            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(header)))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
+                header
+            )))?
             .try_into()?;
         // Read block body.
         let body: BlockBody = block
             .body
-            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(body)))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
+                body
+            )))?
             .try_into()?;
         // Read signature.
         let signature: Signature = block
             .signature
-            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(signature)))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
+                signature
+            )))?
             .try_into()?;
 
         // Get block inputs from ordered batches.

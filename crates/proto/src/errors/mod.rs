@@ -1,104 +1,223 @@
 use std::any::type_name;
+use std::fmt;
 
 // Re-export the GrpcError derive macro for convenience
 pub use miden_node_grpc_error_macro::GrpcError;
 use miden_protocol::utils::DeserializationError;
-use thiserror::Error;
-
-// Re-export per-domain conversion errors
-pub use crate::domain::account::AccountConversionError;
-pub use crate::domain::batch::BatchConversionError;
-pub use crate::domain::block::BlockConversionError;
-pub use crate::domain::digest::DigestConversionError;
-pub use crate::domain::mempool::MempoolConversionError;
-pub use crate::domain::merkle::MerkleConversionError;
-pub use crate::domain::note::NoteConversionError;
-pub use crate::domain::nullifier::NullifierConversionError;
-pub use crate::domain::transaction::TransactionConversionError;
 
 #[cfg(test)]
 mod test_macro;
 
-// SHARED PROTO CONVERSION ERROR
+// CONVERSION ERROR
 // ================================================================================================
 
-/// Shared error variants common to all protobuf conversions.
-#[derive(Debug, Error)]
-pub enum ProtoConversionError {
-    #[error("field `{entity}::{field_name}` is missing")]
-    MissingField {
-        entity: &'static str,
-        field_name: &'static str,
-    },
-    #[error("failed to deserialize {entity}")]
-    DeserializationError {
-        entity: &'static str,
-        source: DeserializationError,
-    },
-}
-
-impl ProtoConversionError {
-    pub fn deserialization_error(entity: &'static str, source: DeserializationError) -> Self {
-        Self::DeserializationError { entity, source }
-    }
-}
-
-impl From<ProtoConversionError> for tonic::Status {
-    fn from(value: ProtoConversionError) -> Self {
-        tonic::Status::invalid_argument(value.to_string())
-    }
-}
-
-pub trait MissingFieldHelper {
-    fn missing_field(field_name: &'static str) -> ProtoConversionError;
-}
-
-impl<T: prost::Message> MissingFieldHelper for T {
-    fn missing_field(field_name: &'static str) -> ProtoConversionError {
-        ProtoConversionError::MissingField { entity: type_name::<T>(), field_name }
-    }
-}
-
-// CONVERSION ERROR (WRAPPER)
-// ================================================================================================
-
-/// Union error type that wraps all per-domain conversion errors.
+/// Opaque error for protobuf-to-domain conversions.
 ///
-/// This preserves backward compatibility for downstream crates that use `#[from] ConversionError`.
-/// Prefer using the domain-specific error types (e.g. `DigestConversionError`,
-/// `AccountConversionError`) at conversion boundaries.
-#[derive(Debug, Error)]
-pub enum ConversionError {
-    #[error(transparent)]
-    Digest(#[from] DigestConversionError),
-    #[error(transparent)]
-    Account(#[from] AccountConversionError),
-    #[error(transparent)]
-    Note(#[from] NoteConversionError),
-    #[error(transparent)]
-    Block(#[from] BlockConversionError),
-    #[error(transparent)]
-    Merkle(#[from] MerkleConversionError),
-    #[error(transparent)]
-    Nullifier(#[from] NullifierConversionError),
-    #[error(transparent)]
-    Transaction(#[from] TransactionConversionError),
-    #[error(transparent)]
-    Batch(#[from] BatchConversionError),
-    #[error(transparent)]
-    Mempool(#[from] MempoolConversionError),
-    #[error(transparent)]
-    Proto(#[from] ProtoConversionError),
+/// Captures an underlying error plus an optional field path stack that describes which nested
+/// field caused the error (e.g. `"block.header.account_root: value is not in range 0..MODULUS"`).
+///
+/// Always maps to [`tonic::Status::invalid_argument()`].
+#[derive(Debug)]
+pub struct ConversionError {
+    path: Vec<&'static str>,
+    source: Box<dyn std::error::Error + Send + Sync>,
 }
 
 impl ConversionError {
-    pub fn deserialization_error(entity: &'static str, source: DeserializationError) -> Self {
-        Self::Proto(ProtoConversionError::deserialization_error(entity, source))
+    /// Create a new `ConversionError` wrapping any error source.
+    pub fn new(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            path: Vec::new(),
+            source: Box::new(source),
+        }
+    }
+
+    /// Add field context to the error path.
+    ///
+    /// Called from inner to outer, so the path accumulates in reverse
+    /// (outermost field pushed last).
+    #[must_use]
+    pub fn context(mut self, field: &'static str) -> Self {
+        self.path.push(field);
+        self
+    }
+
+    /// Create a "missing field" error for a protobuf message type `T`.
+    pub fn missing_field<T: prost::Message>(field_name: &'static str) -> Self {
+        Self {
+            path: Vec::new(),
+            source: Box::new(MissingFieldError { entity: type_name::<T>(), field_name }),
+        }
+    }
+
+    /// Create a deserialization error for a named entity.
+    pub fn deserialization(entity: &'static str, source: DeserializationError) -> Self {
+        Self {
+            path: Vec::new(),
+            source: Box::new(DeserializationErrorWrapper { entity, source }),
+        }
+    }
+
+    /// Create a `ConversionError` from an ad-hoc error message.
+    pub fn message(msg: impl Into<String>) -> Self {
+        Self {
+            path: Vec::new(),
+            source: Box::new(StringError(msg.into())),
+        }
+    }
+}
+
+impl fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.path.is_empty() {
+            // Path was pushed inner-to-outer, so reverse for display.
+            for (i, segment) in self.path.iter().rev().enumerate() {
+                if i > 0 {
+                    f.write_str(".")?;
+                }
+                f.write_str(segment)?;
+            }
+            f.write_str(": ")?;
+        }
+        write!(f, "{}", self.source)
+    }
+}
+
+impl std::error::Error for ConversionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
     }
 }
 
 impl From<ConversionError> for tonic::Status {
     fn from(value: ConversionError) -> Self {
         tonic::Status::invalid_argument(value.to_string())
+    }
+}
+
+// INTERNAL HELPER ERROR TYPES
+// ================================================================================================
+
+#[derive(Debug)]
+struct MissingFieldError {
+    entity: &'static str,
+    field_name: &'static str,
+}
+
+impl fmt::Display for MissingFieldError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "field `{}::{}` is missing", self.entity, self.field_name)
+    }
+}
+
+impl std::error::Error for MissingFieldError {}
+
+#[derive(Debug)]
+struct DeserializationErrorWrapper {
+    entity: &'static str,
+    source: DeserializationError,
+}
+
+impl fmt::Display for DeserializationErrorWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to deserialize {}: {}", self.entity, self.source)
+    }
+}
+
+impl std::error::Error for DeserializationErrorWrapper {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Debug)]
+struct StringError(String);
+
+impl fmt::Display for StringError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StringError {}
+
+// FROM IMPLS FOR EXTERNAL ERROR TYPES
+// ================================================================================================
+
+impl From<hex::FromHexError> for ConversionError {
+    fn from(e: hex::FromHexError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::errors::AccountError> for ConversionError {
+    fn from(e: miden_protocol::errors::AccountError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::errors::AssetError> for ConversionError {
+    fn from(e: miden_protocol::errors::AssetError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::errors::FeeError> for ConversionError {
+    fn from(e: miden_protocol::errors::FeeError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::errors::NoteError> for ConversionError {
+    fn from(e: miden_protocol::errors::NoteError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::errors::StorageSlotNameError> for ConversionError {
+    fn from(e: miden_protocol::errors::StorageSlotNameError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::crypto::merkle::MerkleError> for ConversionError {
+    fn from(e: miden_protocol::crypto::merkle::MerkleError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::crypto::merkle::smt::SmtLeafError> for ConversionError {
+    fn from(e: miden_protocol::crypto::merkle::smt::SmtLeafError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::crypto::merkle::smt::SmtProofError> for ConversionError {
+    fn from(e: miden_protocol::crypto::merkle::smt::SmtProofError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<std::num::TryFromIntError> for ConversionError {
+    fn from(e: std::num::TryFromIntError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_standards::note::NetworkAccountTargetError> for ConversionError {
+    fn from(e: miden_standards::note::NetworkAccountTargetError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<DeserializationError> for ConversionError {
+    fn from(e: DeserializationError) -> Self {
+        Self::new(e)
+    }
+}
+
+impl From<miden_protocol::errors::AssetVaultError> for ConversionError {
+    fn from(e: miden_protocol::errors::AssetVaultError) -> Self {
+        Self::new(e)
     }
 }

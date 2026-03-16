@@ -3,7 +3,6 @@ use std::num::{NonZero, TryFromIntError};
 
 use miden_crypto::merkle::smt::SmtProof;
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
@@ -173,9 +172,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         debug!(target: COMPONENT, ?request);
         let request = request.into_inner();
-        let account_request = request
-            .try_into()
-            .map_err(|e| GetAccountError::DeserializationFailed(ConversionError::from(e)))?;
+        let account_request = request.try_into().map_err(GetAccountError::DeserializationFailed)?;
 
         let proof = self.state.get_account(account_request).await?;
 

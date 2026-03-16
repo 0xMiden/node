@@ -1,42 +1,11 @@
 use miden_protocol::Word;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
-use miden_protocol::crypto::merkle::smt::{
-    LeafIndex,
-    SmtLeaf,
-    SmtLeafError,
-    SmtProof,
-    SmtProofError,
-};
+use miden_protocol::crypto::merkle::smt::{LeafIndex, SmtLeaf, SmtProof};
 use miden_protocol::crypto::merkle::{MerklePath, SparseMerklePath};
-use thiserror::Error;
 
-use crate::domain::digest::DigestConversionError;
 use crate::domain::{convert, try_convert};
-use crate::errors::{MissingFieldHelper, ProtoConversionError};
+use crate::errors::ConversionError;
 use crate::generated as proto;
-
-// MERKLE CONVERSION ERROR
-// ================================================================================================
-
-#[derive(Debug, Error)]
-pub enum MerkleConversionError {
-    #[error(transparent)]
-    Proto(#[from] ProtoConversionError),
-    #[error(transparent)]
-    Digest(#[from] DigestConversionError),
-    #[error("merkle error")]
-    MerkleError(#[from] miden_protocol::crypto::merkle::MerkleError),
-    #[error("SMT leaf error")]
-    SmtLeafError(#[from] SmtLeafError),
-    #[error("SMT proof error")]
-    SmtProofError(#[from] SmtProofError),
-}
-
-impl From<MerkleConversionError> for tonic::Status {
-    fn from(value: MerkleConversionError) -> Self {
-        tonic::Status::invalid_argument(value.to_string())
-    }
-}
 
 // MERKLE PATH
 // ================================================================================================
@@ -55,19 +24,15 @@ impl From<MerklePath> for proto::primitives::MerklePath {
 }
 
 impl TryFrom<&proto::primitives::MerklePath> for MerklePath {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(merkle_path: &proto::primitives::MerklePath) -> Result<Self, Self::Error> {
-        merkle_path
-            .siblings
-            .iter()
-            .map(|s| Word::try_from(s).map_err(MerkleConversionError::from))
-            .collect()
+        merkle_path.siblings.iter().map(Word::try_from).collect()
     }
 }
 
 impl TryFrom<proto::primitives::MerklePath> for MerklePath {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(merkle_path: proto::primitives::MerklePath) -> Result<Self, Self::Error> {
         (&merkle_path).try_into()
@@ -88,7 +53,7 @@ impl From<SparseMerklePath> for proto::primitives::SparseMerklePath {
 }
 
 impl TryFrom<proto::primitives::SparseMerklePath> for SparseMerklePath {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(merkle_path: proto::primitives::SparseMerklePath) -> Result<Self, Self::Error> {
         Ok(SparseMerklePath::from_parts(
@@ -96,7 +61,7 @@ impl TryFrom<proto::primitives::SparseMerklePath> for SparseMerklePath {
             merkle_path
                 .siblings
                 .into_iter()
-                .map(|s| Word::try_from(s).map_err(MerkleConversionError::from))
+                .map(Word::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
         )?)
     }
@@ -116,14 +81,11 @@ impl From<MmrDelta> for proto::primitives::MmrDelta {
 }
 
 impl TryFrom<proto::primitives::MmrDelta> for MmrDelta {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::primitives::MmrDelta) -> Result<Self, Self::Error> {
-        let data: Result<Vec<_>, MerkleConversionError> = value
-            .data
-            .into_iter()
-            .map(|d| Word::try_from(d).map_err(MerkleConversionError::from))
-            .collect();
+        let data: Result<Vec<_>, ConversionError> =
+            value.data.into_iter().map(Word::try_from).collect();
 
         Ok(MmrDelta {
             forest: Forest::new(value.forest as usize),
@@ -139,10 +101,12 @@ impl TryFrom<proto::primitives::MmrDelta> for MmrDelta {
 // ------------------------------------------------------------------------------------------------
 
 impl TryFrom<proto::primitives::SmtLeaf> for SmtLeaf {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(value: proto::primitives::SmtLeaf) -> Result<Self, Self::Error> {
-        let leaf = value.leaf.ok_or(proto::primitives::SmtLeaf::missing_field(stringify!(leaf)))?;
+        let leaf = value.leaf.ok_or(
+            ConversionError::missing_field::<proto::primitives::SmtLeaf>(stringify!(leaf)),
+        )?;
 
         match leaf {
             proto::primitives::smt_leaf::Leaf::EmptyLeafIndex(leaf_index) => {
@@ -183,16 +147,20 @@ impl From<SmtLeaf> for proto::primitives::SmtLeaf {
 // ------------------------------------------------------------------------------------------------
 
 impl TryFrom<proto::primitives::SmtLeafEntry> for (Word, Word) {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(entry: proto::primitives::SmtLeafEntry) -> Result<Self, Self::Error> {
         let key: Word = entry
             .key
-            .ok_or(proto::primitives::SmtLeafEntry::missing_field(stringify!(key)))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>(stringify!(
+                key
+            )))?
             .try_into()?;
         let value: Word = entry
             .value
-            .ok_or(proto::primitives::SmtLeafEntry::missing_field(stringify!(value)))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>(stringify!(
+                value
+            )))?
             .try_into()?;
 
         Ok((key, value))
@@ -212,16 +180,20 @@ impl From<(Word, Word)> for proto::primitives::SmtLeafEntry {
 // ------------------------------------------------------------------------------------------------
 
 impl TryFrom<proto::primitives::SmtOpening> for SmtProof {
-    type Error = MerkleConversionError;
+    type Error = ConversionError;
 
     fn try_from(opening: proto::primitives::SmtOpening) -> Result<Self, Self::Error> {
         let path: SparseMerklePath = opening
             .path
-            .ok_or(proto::primitives::SmtOpening::missing_field(stringify!(path)))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>(stringify!(
+                path
+            )))?
             .try_into()?;
         let leaf: SmtLeaf = opening
             .leaf
-            .ok_or(proto::primitives::SmtOpening::missing_field(stringify!(leaf)))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>(stringify!(
+                leaf
+            )))?
             .try_into()?;
 
         Ok(SmtProof::new(path, leaf)?)
