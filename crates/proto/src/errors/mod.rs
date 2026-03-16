@@ -171,80 +171,30 @@ impl<T, E: Into<ConversionError>> ConversionResultExt<T> for Result<T, E> {
 // FROM IMPLS FOR EXTERNAL ERROR TYPES
 // ================================================================================================
 
-impl From<hex::FromHexError> for ConversionError {
-    fn from(e: hex::FromHexError) -> Self {
-        Self::new(e)
-    }
+macro_rules! impl_from_for_conversion_error {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl From<$ty> for ConversionError {
+                fn from(e: $ty) -> Self {
+                    Self::new(e)
+                }
+            }
+        )*
+    };
 }
 
-impl From<miden_protocol::errors::AccountError> for ConversionError {
-    fn from(e: miden_protocol::errors::AccountError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::errors::AssetError> for ConversionError {
-    fn from(e: miden_protocol::errors::AssetError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::errors::FeeError> for ConversionError {
-    fn from(e: miden_protocol::errors::FeeError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::errors::NoteError> for ConversionError {
-    fn from(e: miden_protocol::errors::NoteError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::errors::StorageSlotNameError> for ConversionError {
-    fn from(e: miden_protocol::errors::StorageSlotNameError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::crypto::merkle::MerkleError> for ConversionError {
-    fn from(e: miden_protocol::crypto::merkle::MerkleError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::crypto::merkle::smt::SmtLeafError> for ConversionError {
-    fn from(e: miden_protocol::crypto::merkle::smt::SmtLeafError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::crypto::merkle::smt::SmtProofError> for ConversionError {
-    fn from(e: miden_protocol::crypto::merkle::smt::SmtProofError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<std::num::TryFromIntError> for ConversionError {
-    fn from(e: std::num::TryFromIntError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_standards::note::NetworkAccountTargetError> for ConversionError {
-    fn from(e: miden_standards::note::NetworkAccountTargetError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<DeserializationError> for ConversionError {
-    fn from(e: DeserializationError) -> Self {
-        Self::new(e)
-    }
-}
-
-impl From<miden_protocol::errors::AssetVaultError> for ConversionError {
-    fn from(e: miden_protocol::errors::AssetVaultError) -> Self {
-        Self::new(e)
-    }
-}
+impl_from_for_conversion_error!(
+    hex::FromHexError,
+    miden_protocol::errors::AccountError,
+    miden_protocol::errors::AssetError,
+    miden_protocol::errors::AssetVaultError,
+    miden_protocol::errors::FeeError,
+    miden_protocol::errors::NoteError,
+    miden_protocol::errors::StorageSlotNameError,
+    miden_protocol::crypto::merkle::MerkleError,
+    miden_protocol::crypto::merkle::smt::SmtLeafError,
+    miden_protocol::crypto::merkle::smt::SmtProofError,
+    miden_standards::note::NetworkAccountTargetError,
+    std::num::TryFromIntError,
+    DeserializationError,
+);
