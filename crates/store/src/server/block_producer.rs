@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use futures::TryFutureExt;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
@@ -64,21 +64,24 @@ impl block_producer_server::BlockProducer for StoreApi {
             .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
                 header
             )))?
-            .try_into()?;
+            .try_into()
+            .context("header")?;
         // Read block body.
         let body: BlockBody = block
             .body
             .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
                 body
             )))?
-            .try_into()?;
+            .try_into()
+            .context("body")?;
         // Read signature.
         let signature: Signature = block
             .signature
             .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
                 signature
             )))?
-            .try_into()?;
+            .try_into()
+            .context("signature")?;
 
         // Get block inputs from ordered batches.
         let block_inputs =

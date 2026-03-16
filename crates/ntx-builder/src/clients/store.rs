@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
@@ -103,6 +103,7 @@ impl StoreClient {
             Some(block) => {
                 let peaks: Vec<Word> = try_convert(response.current_peaks)
                     .collect::<Result<_, _>>()
+                    .context("current_peaks")
                     .map_err(StoreError::DeserializationError)?;
                 let header =
                     BlockHeader::try_from(block).map_err(StoreError::DeserializationError)?;
@@ -142,7 +143,9 @@ impl StoreClient {
         // which implies details being public, so OK to error otherwise
         let account = match store_response.map(|acc| acc.details) {
             Some(Some(details)) => Some(Account::read_from_bytes(&details).map_err(|err| {
-                StoreError::DeserializationError(ConversionError::deserialization("account", err))
+                StoreError::DeserializationError(
+                    ConversionError::from(err).context("account_details"),
+                )
             })?),
             _ => None,
         };
@@ -321,10 +324,9 @@ impl StoreClient {
             .into_iter()
             .map(|account_id| {
                 let account_id = AccountId::read_from_bytes(&account_id.id).map_err(|err| {
-                    StoreError::DeserializationError(ConversionError::deserialization(
-                        "account_id",
-                        err,
-                    ))
+                    StoreError::DeserializationError(
+                        ConversionError::from(err).context("account_id"),
+                    )
                 })?;
                 NetworkAccountId::try_from(account_id).map_err(|_| {
                     StoreError::MalformedResponse(
@@ -407,8 +409,10 @@ impl StoreClient {
             let smt_opening = asset_witness.proof.ok_or_else(|| {
                 StoreError::MalformedResponse("missing proof in vault asset witness".to_string())
             })?;
-            let proof: SmtProof =
-                smt_opening.try_into().map_err(StoreError::DeserializationError)?;
+            let proof: SmtProof = smt_opening
+                .try_into()
+                .context("proof")
+                .map_err(StoreError::DeserializationError)?;
             let witness = AssetWitness::new(proof)
                 .map_err(|err| StoreError::DeserializationError(ConversionError::from(err)))?;
 
@@ -446,7 +450,10 @@ impl StoreClient {
             StoreError::MalformedResponse("missing proof in storage map witness".to_string())
         })?;
 
-        let proof: SmtProof = smt_opening.try_into().map_err(StoreError::DeserializationError)?;
+        let proof: SmtProof = smt_opening
+            .try_into()
+            .context("proof")
+            .map_err(StoreError::DeserializationError)?;
 
         // Create the storage map witness using the proof and raw map key.
         let witness = StorageMapWitness::new(proof, [map_key]).map_err(|_err| {

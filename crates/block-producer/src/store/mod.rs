@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use itertools::Itertools;
 use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{AccountState, generated as proto};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
@@ -75,7 +75,8 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
             .ok_or(ConversionError::missing_field::<proto::store::TransactionInputs>(stringify!(
                 account_state
             )))?
-            .try_into()?;
+            .try_into()
+            .context("account_state")?;
 
         let mut nullifiers = HashMap::new();
         for nullifier_record in response.nullifiers {
@@ -84,7 +85,8 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
                 .ok_or(ConversionError::missing_field::<
                     proto::store::transaction_inputs::NullifierTransactionInputRecord,
                 >(stringify!(nullifier)))?
-                .try_into()?;
+                .try_into()
+                .context("nullifier")?;
 
             // Note that this intentionally maps 0 to None as this is the definition used in
             // protobuf.
@@ -95,7 +97,8 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
             .found_unauthenticated_notes
             .into_iter()
             .map(Word::try_from)
-            .collect::<Result<_, ConversionError>>()?;
+            .collect::<Result<_, ConversionError>>()
+            .context("found_unauthenticated_notes")?;
 
         let current_block_height = response.block_height.into();
 

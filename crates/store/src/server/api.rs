@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
@@ -124,6 +124,7 @@ where
 {
     root.ok_or_else(|| ConversionError::message(format!("{entity}: missing field `root`")))?
         .try_into()
+        .context("root")
         .map_err(|e: ConversionError| e.into())
 }
 
@@ -139,6 +140,7 @@ where
         .into_iter()
         .map(TryInto::try_into)
         .collect::<Result<Vec<_>, ConversionError>>()
+        .context("digests")
         .map_err(Into::into)
 }
 
@@ -152,6 +154,7 @@ where
         .cloned()
         .map(AccountId::try_from)
         .collect::<Result<_, ConversionError>>()
+        .context("account_ids")
         .map_err(Into::into)
 }
 
@@ -161,6 +164,7 @@ where
 {
     id.ok_or_else(|| ConversionError::message("missing account ID"))?
         .try_into()
+        .context("account_id")
         .map_err(|e: ConversionError| e.into())
 }
 
@@ -180,6 +184,7 @@ where
         .copied()
         .map(Nullifier::try_from)
         .collect::<Result<_, ConversionError>>()
+        .context("nullifiers")
         .map_err(Into::into)
 }
 
