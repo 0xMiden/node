@@ -2553,7 +2553,8 @@ fn test_prune_history() {
 
     // Run cleanup with chain_tip = block_tip, cutoff will be block_tip - HISTORICAL_BLOCK_RETENTION
     // = block_cutoff
-    let (vault_deleted, storage_deleted) = queries::prune_history(conn, block_tip).unwrap();
+    let (vault_deleted, storage_deleted, _codes_deleted) =
+        queries::prune_history(conn, block_tip).unwrap();
 
     // Verify deletions occurred
     assert_eq!(vault_deleted, 1, "should delete 1 old vault asset");
@@ -2634,7 +2635,7 @@ fn test_prune_history() {
 
     // This entry at block 0 is marked as is_latest=true by insert_account_vault_asset
     // Run cleanup again
-    let (vault_deleted_2, _) = queries::prune_history(conn, block_tip).unwrap();
+    let (vault_deleted_2, ..) = queries::prune_history(conn, block_tip).unwrap();
 
     // The old latest entry should not be deleted (vault_deleted_2 should be 0)
     assert_eq!(vault_deleted_2, 0, "should not delete any is_latest=true entries");

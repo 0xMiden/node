@@ -64,12 +64,12 @@ miden-remote-prover-client      = { path = "crates/remote-prover-client", versio
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "=0.14.0-beta.1" }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
-miden-block-prover    = { version = "=0.14.0-beta.1" }
-miden-protocol        = { default-features = false, version = "=0.14.0-beta.1" }
-miden-standards       = { version = "=0.14.0-beta.1" }
-miden-testing         = { version = "=0.14.0-beta.1" }
-miden-tx              = { default-features = false, version = "=0.14.0-beta.1" }
-miden-tx-batch-prover = { version = "=0.14.0-beta.1" }
+miden-block-prover    = { version = "=0.14.0-beta.2" }
+miden-protocol        = { default-features = false, version = "=0.14.0-beta.2" }
+miden-standards       = { version = "=0.14.0-beta.2" }
+miden-testing         = { version = "=0.14.0-beta.2" }
+miden-tx              = { default-features = false, version = "=0.14.0-beta.2" }
+miden-tx-batch-prover = { version = "=0.14.0-beta.2" }
 
 # Other miden dependencies. These should align with those expected by miden-base.
 miden-crypto = { version = "0.22" }
@@ -146,4 +146,3 @@ should_panic_without_expect  = "allow" # We don't care about the specific panic 
 files.extend-exclude = ["*.svg"] # Ignore SVG files.
 
 [patch.crates-io]
-miden-protocol = { branch = "igamigo-fix-partial-smt", git = "https://github.com/0xMiden/protocol" }

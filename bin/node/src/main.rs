@@ -6,6 +6,8 @@ use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
 
 mod commands;
+#[cfg(test)]
+mod tests;
 
 // COMMANDS
 // ================================================================================================

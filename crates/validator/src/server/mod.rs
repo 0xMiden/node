@@ -70,15 +70,6 @@ impl Validator {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        // This is currently required for postman to work properly because
-        // it doesn't support the new version yet.
-        //
-        // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
-        let reflection_service_alpha = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(validator_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         // Build the gRPC server with the API service and trace layer.
         tonic::transport::Server::builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
@@ -86,7 +77,6 @@ impl Validator {
             .timeout(self.grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(ValidatorServer::new(self.signer, db)))
             .add_service(reflection_service)
-            .add_service(reflection_service_alpha)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .context("failed to serve validator API")

@@ -53,7 +53,7 @@ url               = { workspace = true }
 [build-dependencies]
 build-rs        = { workspace = true }
 fs-err          = { workspace = true }
-miden-agglayer  = { features = ["testing"], version = "=0.14.0-beta.1" }
+miden-agglayer  = { features = ["testing"], version = "=0.14.0-beta.2" }
 miden-protocol  = { features = ["std"], workspace = true }
 miden-standards = { workspace = true }
 
