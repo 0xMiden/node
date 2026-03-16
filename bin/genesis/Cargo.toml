@@ -1,0 +1,26 @@
+[package]
+name    = "miden-genesis"
+publish = false
+
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+license.workspace      = true
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow          = { workspace = true }
+clap            = { workspace = true }
+fs-err          = { workspace = true }
+hex             = { workspace = true }
+miden-agglayer  = { version = "=0.14.0-alpha.1" }
+miden-protocol  = { features = ["std"], workspace = true }
+miden-standards = { workspace = true }
+rand            = { workspace = true }
+rand_chacha     = { workspace = true }
