@@ -44,6 +44,11 @@
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
+## v0.13.8 (2026-03-12)
+
+- Private notes with the network note attachment are no longer incorrectly considered as network notes (#[#1736](https://github.com/0xMiden/node/pull/1736)).
+- Fixed network monitor looping on stale wallet nonce after node restarts by re-syncing wallet state from RPC after repeated failures ([#1748](https://github.com/0xMiden/node/pull/1748)).
+- Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 
 ## v0.13.7 (2026-02-25)
 
@@ -60,6 +65,12 @@
 - Debian packages now include debug symbols ([#1666](https://github.com/0xMiden/node/pull/1666)).
 - Debian packages now have coredumps enabled ([#1666](https://github.com/0xMiden/node/pull/1666)).
 - Fixed storage map keys not being hashed before insertion into the store's SMT forest ([#1681](https://github.com/0xMiden/node/pull/1681)).
+- OpenTelemetry traces are now flushed before program termination on panic ([#1643](https://github.com/0xMiden/miden-node/pull/1643)).
+- Added support for the note transport layer in the network monitor ([#1660](https://github.com/0xMiden/miden-node/pull/1660)).
+- Debian packages now include debug symbols ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
+- Debian packages now have coredumps enabled ([#1666](https://github.com/0xMiden/miden-node/pull/1666)).
+- Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1763](https://github.com/0xMiden/node/issues/1763)).
+- Fixed storage map keys not being hashed before insertion into the store's SMT forest ([#1681](https://github.com/0xMiden/miden-node/pull/1681)).
 
 ## v0.13.4 (2026-02-04)
 
