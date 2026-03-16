@@ -144,7 +144,7 @@ async fn run(
         tokio::select! {
             // Proving task completed.
             result = join_set.join_next() => {
-                inflight_count -= 1;
+                inflight_count = inflight_count.saturating_sub(1);
                 info!(target=COMPONENT, block.number=%result?, "Block proven");
             },
 
