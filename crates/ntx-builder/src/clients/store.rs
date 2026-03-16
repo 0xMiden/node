@@ -143,9 +143,7 @@ impl StoreClient {
         // which implies details being public, so OK to error otherwise
         let account = match store_response.map(|acc| acc.details) {
             Some(Some(details)) => Some(Account::read_from_bytes(&details).map_err(|err| {
-                StoreError::DeserializationError(
-                    ConversionError::from(err).context("account_details"),
-                )
+                StoreError::DeserializationError(ConversionError::from(err).context("details"))
             })?),
             _ => None,
         };
