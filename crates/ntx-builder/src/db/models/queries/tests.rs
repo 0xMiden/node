@@ -1,13 +1,21 @@
 //! DB-level tests for NTX builder query functions.
 
+use std::sync::Arc;
+
 use diesel::prelude::*;
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 
 use super::*;
+use crate::NoteError;
 use crate::db::models::conv as conversions;
 use crate::db::{Db, schema};
 use crate::test_utils::*;
+
+/// Creates a [`NoteError`] from a string message, for use in tests.
+fn test_note_error(msg: &str) -> NoteError {
+    Arc::new(std::io::Error::other(msg.to_string()))
+}
 
 // TEST HELPERS
 // ================================================================================================
@@ -347,19 +355,19 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
     let block_num = BlockNumber::from(100u32);
     notes_failed(
         conn,
-        &[(note_failed.as_note().nullifier(), "test error".to_string())],
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
         block_num,
     )
     .unwrap();
     notes_failed(
         conn,
-        &[(note_failed.as_note().nullifier(), "test error".to_string())],
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
         block_num,
     )
     .unwrap();
     notes_failed(
         conn,
-        &[(note_failed.as_note().nullifier(), "test error".to_string())],
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
         block_num,
     )
     .unwrap();
@@ -405,11 +413,15 @@ fn notes_failed_increments_attempt_count() {
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
 
     let block_num = BlockNumber::from(5u32);
-    notes_failed(conn, &[(note.as_note().nullifier(), "execution failed".to_string())], block_num)
-        .unwrap();
     notes_failed(
         conn,
-        &[(note.as_note().nullifier(), "execution failed 2".to_string())],
+        &[(note.as_note().nullifier(), test_note_error("execution failed"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("execution failed 2"))],
         block_num,
     )
     .unwrap();
@@ -447,7 +459,7 @@ fn get_note_error_returns_latest_error() {
 
     // Mark as failed.
     let block_num = BlockNumber::from(5u32);
-    notes_failed(conn, &[(note.as_note().nullifier(), "first error".to_string())], block_num)
+    notes_failed(conn, &[(note.as_note().nullifier(), test_note_error("first error"))], block_num)
         .unwrap();
 
     let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
@@ -456,8 +468,12 @@ fn get_note_error_returns_latest_error() {
     assert_eq!(row.attempt_count, 1);
 
     // Mark as failed again with different error, should overwrite.
-    notes_failed(conn, &[(note.as_note().nullifier(), "second error".to_string())], block_num)
-        .unwrap();
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("second error"))],
+        block_num,
+    )
+    .unwrap();
 
     let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
     let row = result.unwrap();

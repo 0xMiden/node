@@ -17,10 +17,12 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
+use miden_tx::FailedNote;
 use tokio::sync::{AcquireError, Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::NoteError;
 use crate::chain_state::ChainState;
 use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
@@ -35,7 +37,7 @@ pub enum ActorRequest {
     /// the oneshot channel, preventing race conditions where the actor could re-select the same
     /// notes before the failure is persisted.
     NotesFailed {
-        failed_notes: Vec<(Nullifier, String)>,
+        failed_notes: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
         ack_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -410,19 +412,7 @@ impl AccountActor {
                 );
                 self.cache_note_scripts(scripts_to_cache).await;
                 if !failed.is_empty() {
-                    let failed_notes: Vec<_> = failed
-                        .into_iter()
-                        .map(|f| {
-                            let error_msg = f.error.as_report();
-                            tracing::info!(
-                                note.id = %f.note.id(),
-                                nullifier = %f.note.nullifier(),
-                                err = %error_msg,
-                                "note failed: consumability check",
-                            );
-                            (f.note.nullifier(), error_msg)
-                        })
-                        .collect();
+                    let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
                 self.mode = ActorMode::TransactionInflight(tx_id);
@@ -440,22 +430,10 @@ impl AccountActor {
 
                 // For `AllNotesFailed`, use the per-note errors which contain the
                 // specific reason each note failed (e.g. consumability check details).
-                let failed_notes: Vec<_> =
-                    if let execute::NtxError::AllNotesFailed(per_note) = err {
-                        per_note
-                            .into_iter()
-                            .map(|f| {
-                                let note_error = f.error.as_report();
-                                tracing::info!(
-                                    note.id = %f.note.id(),
-                                    nullifier = %f.note.nullifier(),
-                                    err = %note_error,
-                                    "note failed: consumability check",
-                                );
-                                (f.note.nullifier(), note_error)
-                            })
-                            .collect()
-                    } else {
+                let failed_notes: Vec<_> = match err {
+                    execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
+                    other => {
+                        let error: NoteError = Arc::new(other);
                         notes
                             .iter()
                             .map(|note| {
@@ -465,10 +443,11 @@ impl AccountActor {
                                     err = %error_msg,
                                     "note failed: transaction execution error",
                                 );
-                                (note.nullifier(), error_msg.clone())
+                                (note.nullifier(), error.clone())
                             })
                             .collect()
-                    };
+                    },
+                };
                 self.mark_notes_failed(&failed_notes, block_num).await;
             },
         }
@@ -493,7 +472,7 @@ impl AccountActor {
     /// before the failure counts are updated in the database.
     async fn mark_notes_failed(
         &self,
-        failed_notes: &[(Nullifier, String)],
+        failed_notes: &[(Nullifier, NoteError)],
         block_num: BlockNumber,
     ) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -512,4 +491,21 @@ impl AccountActor {
         // Wait for the coordinator to confirm the DB write.
         let _ = ack_rx.await;
     }
+}
+
+/// Logs each failed note and returns a vec of `(nullifier, error)` pairs.
+fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
+    failed
+        .into_iter()
+        .map(|f| {
+            let error_msg = f.error.as_report();
+            tracing::info!(
+                note.id = %f.note.id(),
+                nullifier = %f.note.nullifier(),
+                err = %error_msg,
+                "note failed: consumability check",
+            );
+            (f.note.nullifier(), Arc::new(f.error) as NoteError)
+        })
+        .collect()
 }

@@ -8,6 +8,7 @@ use miden_protocol::note::{Note, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::utils::{Deserializable, Serializable};
 
+use crate::NoteError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 use crate::inflight_note::InflightNetworkNote;
@@ -155,19 +156,20 @@ pub fn available_notes(
 /// ```
 pub fn notes_failed(
     conn: &mut SqliteConnection,
-    failed_notes: &[(Nullifier, String)],
+    failed_notes: &[(Nullifier, NoteError)],
     block_num: BlockNumber,
 ) -> Result<(), DatabaseError> {
     let block_num_val = conversions::block_num_to_i64(block_num);
 
     for (nullifier, error) in failed_notes {
         let nullifier_bytes = conversions::nullifier_to_bytes(nullifier);
+        let error_report = error.as_report();
 
         diesel::update(schema::notes::table.find(&nullifier_bytes))
             .set((
                 schema::notes::attempt_count.eq(schema::notes::attempt_count + 1),
                 schema::notes::last_attempt.eq(Some(block_num_val)),
-                schema::notes::last_error.eq(Some(error)),
+                schema::notes::last_error.eq(Some(error_report)),
             ))
             .execute(conn)?;
     }

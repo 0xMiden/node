@@ -56,7 +56,7 @@ network transaction is simply the same as any other.
 
 ## gRPC Server
 
-The NTB exposes an internal gRPC server for querying its state. The RPC component proxies public
+The NTX exposes an internal gRPC server for querying its state. The RPC component proxies public
 requests to this server. In bundled mode the server is started automatically on a random port and
 wired to the RPC; in distributed mode operators must pass the NTB's address to the RPC via
 `--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`).

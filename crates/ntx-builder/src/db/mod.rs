@@ -12,10 +12,10 @@ use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
-use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
 use crate::inflight_note::InflightNetworkNote;
+use crate::{COMPONENT, NoteError};
 
 pub(crate) mod models;
 
@@ -105,7 +105,7 @@ impl Db {
     /// the latest error message.
     pub async fn notes_failed(
         &self,
-        failed_notes: Vec<(Nullifier, String)>,
+        failed_notes: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
     ) -> Result<()> {
         self.inner
