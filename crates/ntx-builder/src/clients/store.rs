@@ -488,10 +488,11 @@ pub fn build_minimal_foreign_account(
     account_details: &AccountDetails,
 ) -> Result<PartialAccount, ConversionError> {
     // Derive account code.
-    let account_code_bytes = account_details
-        .account_code
-        .as_ref()
-        .ok_or_else(|| ConversionError::message("account code missing"))?;
+    let account_code_bytes = account_details.account_code.as_ref().ok_or_else(|| {
+        ConversionError::missing_field::<proto::rpc::account_response::AccountDetails>(
+            "account_code",
+        )
+    })?;
     let account_code = AccountCode::from_bytes(account_code_bytes)?;
 
     // Derive partial storage. Storage maps are not required for foreign accounts.
