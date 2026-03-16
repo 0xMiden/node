@@ -1,11 +1,13 @@
 [package]
-name    = "miden-genesis"
-publish = false
-
 authors.workspace      = true
+description            = "A tool for generating canonical Miden genesis accounts and configuration"
 edition.workspace      = true
+exclude.workspace      = true
 homepage.workspace     = true
+keywords               = ["miden", "genesis"]
 license.workspace      = true
+name                   = "miden-genesis"
+publish                = false
 readme.workspace       = true
 repository.workspace   = true
 rust-version.workspace = true
