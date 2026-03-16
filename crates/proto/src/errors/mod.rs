@@ -36,6 +36,11 @@ impl ConversionError {
     ///
     /// Called from inner to outer, so the path accumulates in reverse
     /// (outermost field pushed last).
+    ///
+    /// Use this to annotate errors from `try_into()` / `try_from()` where the underlying
+    /// error has no knowledge of which field it originated from. Do not use it with
+    /// [`missing_field`](Self::missing_field) which already embeds the field name in its
+    /// message.
     #[must_use]
     pub fn context(mut self, field: &'static str) -> Self {
         self.path.push(field);
