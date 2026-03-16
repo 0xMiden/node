@@ -208,12 +208,8 @@ mod tests {
         Err(ConversionError::message("value is not in range 0..MODULUS"))
     }
 
-    fn mid_conversion() -> Result<(), ConversionError> {
-        inner_conversion().context("account_root")
-    }
-
     fn outer_conversion() -> Result<(), ConversionError> {
-        mid_conversion().context("header")
+        inner_conversion().context("account_root").context("header")
     }
 
     #[test]
