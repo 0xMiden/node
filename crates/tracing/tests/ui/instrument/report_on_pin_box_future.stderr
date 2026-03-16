@@ -1,0 +1,5 @@
+error: `err` / `report` is not supported on `Box<dyn Future>` return types; use `async fn` instead
+ --> tests/ui/instrument/report_on_pin_box_future.rs:4:13
+  |
+4 | fn foo() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>> {
+  |             ^^^
