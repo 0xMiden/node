@@ -38,22 +38,20 @@ fn main() {
     warn!("block-producer": "batch timeout");
     info!("block-producer": "produced block {}", 42u32);
 
-    // ── allowlisted dotted field, Display ─────────────────────────────────────
+    // ── component + allowlisted dotted fields + message ───────────────────────
 
-    warn!(account.id = %1u64, "unexpected account");
-    error!(nullifier.id = %2u64, "double spend");
-    info!(block.number = 3u32, "block committed");
+    warn!(rpc: account.id = %1u64, "unexpected account");
+    error!(store: nullifier.id = %2u64, "double spend");
+    info!(rpc: block.number = 3u32, "block committed");
+    debug!(store: account.id = %1u64, block.number = 3u32, "state check");
+    trace!(rpc: nullifier.id = ?2u64, account.id = %1u64, "lookup");
 
-    // ── allowlisted dotted field, Debug ───────────────────────────────────────
+    // ── component + fields + format string ────────────────────────────────────
 
-    warn!(account.id = 1u64, "unexpected account");
-    debug!(block.number = 3u32, "processing");
+    warn!(rpc: account.id = %1u64, "rejected after {} retries", 3u32);
+    info!(store: block.number = 3u32, "applied in {}ms", 12u64);
 
-    // ── allowlisted dotted field, explicit Debug ──────────────────────────────
-
-    trace!(nullifier.id = ?2u64, "lookup");
-
-    // ── multiple allowlisted fields + message ─────────────────────────────────
+    // ── fields without component ──────────────────────────────────────────────
 
     warn!(account.id = %1u64, block.number = 3u32, "state inconsistency");
     error!(nullifier.id = %2u64, block.number = 3u32, "double spend at block");
@@ -62,4 +60,8 @@ fn main() {
 
     warn!(account.id = %1u64, block.number = 3u32);
     info!(nullifier.id = %2u64);
+
+    // ── component + fields only, no message ──────────────────────────────────
+
+    warn!(rpc: account.id = %1u64, block.number = 3u32);
 }

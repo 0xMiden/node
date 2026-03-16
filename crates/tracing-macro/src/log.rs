@@ -140,14 +140,19 @@ impl Parse for LogArgs {
 // ── public entry point ────────────────────────────────────────────────────────
 
 /// Parses and validates a log-macro call, then expands it to
-/// `::tracing::<level>!(target: "…", field = value, …, "message", …)`.
+/// `::tracing::event!(target: "…", Level::LEVEL, field = value, …, "message", …)`.
 ///
-/// Called by all five log proc-macros (`error!`, `warn!`, `info!`, `debug!`,
-/// `trace!`).
+/// [`tracing::event!`] is used instead of the level-specific macros (`warn!`, `info!`, …)
+/// because those macros only accept ident keys when `target:` is present, rejecting the
+/// string-literal dotted keys we emit (e.g. `"account.id"`).  `event!` has a more permissive
+/// parser that accepts string literal keys in all argument positions.
+///
+/// Called by all five log proc-macros (`error!`, `warn!`, `info!`, `debug!`, `trace!`).
 pub(crate) fn parse(level: &'static str, ts: TokenStream2) -> syn::Result<TokenStream2> {
     let args: LogArgs = syn::parse2(ts)?;
 
-    let level_ident = syn::Ident::new(level, proc_macro2::Span::call_site());
+    // `tracing::Level` variant matching the requested level.
+    let level_variant = syn::Ident::new(&level.to_uppercase(), proc_macro2::Span::call_site());
 
     // Build the target fragment (present only when a component was given).
     let target_tok = args.component.as_ref().map(ComponentName::to_event_target_tokens);
@@ -172,6 +177,6 @@ pub(crate) fn parse(level: &'static str, ts: TokenStream2) -> syn::Result<TokenS
     };
 
     Ok(quote! {
-        ::tracing::#level_ident!(#target_tok #(#field_toks),* #sep #msg)
+        ::tracing::event!(#target_tok ::tracing::Level::#level_variant, #(#field_toks),* #sep #msg)
     })
 }

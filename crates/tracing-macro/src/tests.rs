@@ -384,25 +384,106 @@ fn assert_level(result: syn::Result<TokenStream2>, expected_level: &str) {
 
 #[test]
 fn error_level_dispatch() {
-    assert_level(error2(quote! { "msg" }), "error");
+    assert_level(error2(quote! { "msg" }), "ERROR");
 }
 
 #[test]
 fn warn_level_dispatch() {
-    assert_level(warn2(quote! { "msg" }), "warn");
+    assert_level(warn2(quote! { "msg" }), "WARN");
 }
 
 #[test]
 fn info_level_dispatch() {
-    assert_level(info2(quote! { "msg" }), "info");
+    assert_level(info2(quote! { "msg" }), "INFO");
 }
 
 #[test]
 fn debug_level_dispatch() {
-    assert_level(debug2(quote! { "msg" }), "debug");
+    assert_level(debug2(quote! { "msg" }), "DEBUG");
 }
 
 #[test]
 fn trace_level_dispatch() {
-    assert_level(trace2(quote! { "msg" }), "trace");
+    assert_level(trace2(quote! { "msg" }), "TRACE");
+}
+
+// ── async fn support ─────────────────────────────────────────────────────────
+
+/// `async fn` returning `Result` – `report` must succeed.
+fn item_async_result_fn() -> TokenStream2 {
+    quote! { async fn foo() -> Result<(), String> { Ok(()) } }
+}
+
+/// `async fn` returning nothing – `report` must fail.
+fn item_async_bare_fn() -> TokenStream2 {
+    quote! { async fn foo() {} }
+}
+
+#[test]
+fn instrument_report_on_async_result_fn_succeeds() {
+    // async fn returning Result is syntactically identical to a sync Result fn
+    // from syn's perspective; the declared return type is Result, not a Future.
+    let result = instrument2(quote! { rpc: report }, item_async_result_fn());
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn instrument_err_on_async_result_fn_succeeds() {
+    let result = instrument2(quote! { rpc: err }, item_async_result_fn());
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn instrument_report_on_async_bare_fn_fails() {
+    let result = instrument2(quote! { rpc: report }, item_async_bare_fn());
+    assert!(result.is_err(), "{result:?}");
+}
+
+// ── impl Future / Box<dyn Future> rejection ───────────────────────────────────
+
+/// `fn` returning `impl Future<Output = Result<…>>` – `report` must be rejected
+/// with a clear error because the body-wrap codegen cannot `.await` the block.
+fn item_impl_future_result_fn() -> TokenStream2 {
+    quote! {
+        fn foo() -> impl ::std::future::Future<Output = Result<(), String>> {
+            async { Ok(()) }
+        }
+    }
+}
+
+/// `fn` returning `Pin<Box<dyn Future<Output = Result<…>>>>` – same restriction.
+fn item_pin_box_future_result_fn() -> TokenStream2 {
+    quote! {
+        fn foo() -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<(), String>>>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+}
+
+#[test]
+fn instrument_report_on_impl_future_fails() {
+    let result = instrument2(quote! { rpc: report }, item_impl_future_result_fn());
+    assert!(result.is_err(), "expected error for impl Future, got {result:?}");
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("impl Future"), "unexpected error message: {msg}");
+}
+
+#[test]
+fn instrument_err_on_impl_future_fails() {
+    let result = instrument2(quote! { rpc: err }, item_impl_future_result_fn());
+    assert!(result.is_err(), "expected error for impl Future, got {result:?}");
+}
+
+#[test]
+fn instrument_report_on_pin_box_future_fails() {
+    let result = instrument2(quote! { rpc: report }, item_pin_box_future_result_fn());
+    assert!(result.is_err(), "expected error for Box<dyn Future>, got {result:?}");
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("Box<dyn Future>"), "unexpected error message: {msg}");
+}
+
+#[test]
+fn instrument_err_on_pin_box_future_fails() {
+    let result = instrument2(quote! { rpc: err }, item_pin_box_future_result_fn());
+    assert!(result.is_err(), "expected error for Box<dyn Future>, got {result:?}");
 }

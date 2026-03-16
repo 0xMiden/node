@@ -41,4 +41,11 @@ fn with_ret_report() -> Result<u32, MyError> { Ok(42) }
 #[instrument("block-producer": err)]
 fn string_literal_component() -> Result<(), MyError> { Ok(()) }
 
+// async fn – report/err read the declared return type, which is Result
+#[instrument(rpc: report)]
+async fn async_with_report() -> Result<(), MyError> { Ok(()) }
+
+#[instrument(store: err)]
+async fn async_with_err() -> Result<(), MyError> { Ok(()) }
+
 fn main() {}

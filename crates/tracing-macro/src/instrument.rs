@@ -3,7 +3,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, ItemFn, LitStr, PathSegment, ReturnType, Token, Type};
+use syn::{Expr, Ident, ItemFn, LitStr, PathSegment, ReturnType, Token, Type, TypeImplTrait};
 
 // ── Name ──────────────────────────────────────────────────────────────────────
 
@@ -272,6 +272,10 @@ impl Parse for InstrumentArgs {
 /// is a [`Type::Path`] whose last segment is literally named `Result`.  This
 /// avoids the false positive produced by a plain string-contains search (e.g.
 /// a type named `NotAResult` would previously pass).
+///
+/// `async fn` is handled transparently: `syn` represents the declared return
+/// type (before desugaring to `impl Future`) directly, so `async fn foo() ->
+/// Result<T,E>` has `sig.output = Result<T,E>` just like its sync equivalent.
 fn has_result_return_type(item: &ItemFn) -> bool {
     let ty = match &item.sig.output {
         ReturnType::Default => return false,
@@ -288,6 +292,77 @@ fn has_result_return_type(item: &ItemFn) -> bool {
         .last()
         .map(|PathSegment { ident, .. }| ident == "Result")
         .unwrap_or(false)
+}
+
+/// Returns an error when the return type is an `impl Future` or `Pin<Box<dyn
+/// Future>>` — shapes that are not supported with `err` / `report` because the
+/// body-wrapping codegen cannot `.await` the function body.
+///
+/// Plain `async fn` is **not** affected: its declared return type is the inner
+/// `Result`, and `tracing::instrument` desugars it correctly.
+fn reject_future_return_type(item: &ItemFn) -> syn::Result<()> {
+    let ty = match &item.sig.output {
+        ReturnType::Default => return Ok(()),
+        ReturnType::Type(_, ty) => ty.as_ref(),
+    };
+
+    // `impl Future<Output = …>` — syn represents this as Type::ImplTrait.
+    if let Type::ImplTrait(TypeImplTrait { .. }) = ty {
+        return Err(syn::Error::new(
+            ty.span(),
+            "`err` / `report` is not supported on `impl Future` return types; \
+             use `async fn` instead",
+        ));
+    }
+
+    // `Pin<Box<dyn Future<…>>>` or any other outer wrapper — heuristic: check
+    // whether the return type is *not* a bare `Result` path and contains a
+    // `dyn` trait object somewhere (Type::TraitObject nested inside).
+    //
+    // We only emit the error when the outermost path does NOT end in `Result`
+    // to avoid false positives, and the function is not async (which would be
+    // fine).  The check is intentionally conservative: we only flag the
+    // `Pin<Box<dyn …>>` idiom, not every non-Result path (those are rejected
+    // later by `has_result_return_type`).
+    if item.sig.asyncness.is_none() {
+        if let Type::Path(tp) = ty {
+            if let Some(seg) = tp.path.segments.last() {
+                if seg.ident != "Result" {
+                    if type_contains_dyn(ty) {
+                        return Err(syn::Error::new(
+                            ty.span(),
+                            "`err` / `report` is not supported on `Box<dyn Future>` return types; \
+                             use `async fn` instead",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively checks whether a type contains a `dyn Trait` object.
+fn type_contains_dyn(ty: &Type) -> bool {
+    match ty {
+        Type::TraitObject(_) => true,
+        Type::Path(tp) => tp.path.segments.iter().any(|seg| {
+            if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                ab.args.iter().any(|arg| {
+                    if let syn::GenericArgument::Type(inner) = arg {
+                        type_contains_dyn(inner)
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                false
+            }
+        }),
+        Type::Reference(r) => type_contains_dyn(&r.elem),
+        _ => false,
+    }
 }
 
 // ── codegen helpers ───────────────────────────────────────────────────────────
@@ -397,6 +472,11 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
             Span::call_site(),
             "`err` and `report` are mutually exclusive – use one or the other",
         ));
+    }
+
+    // Reject unsupported future-returning shapes before the Result check.
+    if has_err || has_report {
+        reject_future_return_type(&func)?;
     }
 
     // err / report require a Result return type.
