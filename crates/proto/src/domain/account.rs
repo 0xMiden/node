@@ -309,9 +309,7 @@ impl TryFrom<proto::account::AccountHeader> for AccountHeader {
             )))?
             .try_into()
             .context("code_commitment")?;
-        let nonce = nonce
-            .try_into()
-            .map_err(|_e| ConversionError::message("value is not in the range 0..MODULUS"))?;
+        let nonce = nonce.try_into().map_err(ConversionError::message).context("nonce")?;
 
         Ok(AccountHeader::new(
             account_id,
