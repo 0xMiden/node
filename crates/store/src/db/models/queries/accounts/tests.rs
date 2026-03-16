@@ -1121,7 +1121,7 @@ fn test_select_account_vault_at_block_with_deletion() {
 // ACCOUNT CODE PRUNING TESTS
 // ================================================================================================
 
-/// Counts the number of rows in `account_codes` for the given code commitments.
+/// Counts the number of rows in `account_codes`.
 fn count_account_codes(conn: &mut SqliteConnection) -> usize {
     use schema::account_codes;
 
