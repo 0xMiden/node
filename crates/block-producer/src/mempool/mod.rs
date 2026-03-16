@@ -40,6 +40,7 @@
 //! - Similarly, batches are proposed for block inclusion once _all_ ancestors have been included in
 //!   a block (or are part of the currently proposed block).
 //! - Reverting a node reverts all descendents as well.
+#![allow(unused, reason = "refactor wip")]
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
@@ -68,6 +69,7 @@ use crate::{
 mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
+pub(super) mod graph;
 mod nodes;
 mod state;
 mod subscription;
