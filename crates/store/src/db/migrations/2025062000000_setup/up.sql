@@ -47,6 +47,8 @@ CREATE INDEX idx_accounts_created_at_block ON accounts(created_at_block);
 CREATE INDEX idx_accounts_block_num ON accounts(block_num);
 -- Index for joining with account_codes
 CREATE INDEX idx_accounts_code_commitment ON accounts(code_commitment) WHERE code_commitment IS NOT NULL;
+-- Covering index for the prune_account_codes subquery: filters rows by block_num/is_latest and projects code_commitment
+CREATE INDEX idx_accounts_prune_code ON accounts(block_num, is_latest, code_commitment) WHERE code_commitment IS NOT NULL;
 
 CREATE TABLE notes (
     committed_at                  INTEGER NOT NULL, -- Block number when the note was committed
