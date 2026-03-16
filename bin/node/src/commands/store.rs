@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_store::Store;
-use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_store::genesis::GenesisBlock;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
+use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
-use miden_node_utils::signer::BlockSigner;
-use miden_node_validator::ValidatorSigner;
+use miden_protocol::block::ProvenBlock;
+use miden_protocol::utils::Deserializable;
 use url::Url;
 
 use super::{
@@ -15,35 +16,21 @@ use super::{
     ENV_STORE_NTX_BUILDER_URL,
     ENV_STORE_RPC_URL,
 };
-use crate::commands::{
-    ENV_BLOCK_PROVER_URL,
-    ENV_ENABLE_OTEL,
-    ENV_GENESIS_CONFIG_FILE,
-    ValidatorKey,
-};
+use crate::commands::{ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL};
 
 #[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
-    /// Bootstraps the blockchain database with the genesis block.
+    /// Bootstraps the blockchain database with a pre-existing genesis block.
     ///
-    /// The genesis block contains a single public faucet account. The private key for this
-    /// account is written to the `accounts-directory` which can be used to control the account.
-    ///
-    /// This key is not required by the node and can be moved.
+    /// The genesis block file should be produced by `miden-node validator bootstrap`.
     Bootstrap {
         /// Directory in which to store the database and raw block data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
-        /// Directory to write the account data to.
-        #[arg(long, value_name = "DIR")]
-        accounts_directory: PathBuf,
-        /// Use the given configuration file to construct the genesis state from.
-        #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
-        genesis_config_file: Option<PathBuf>,
-        /// Configuration for the Validator key used to sign genesis block.
-        #[command(flatten)]
-        validator_key: ValidatorKey,
+        /// Path to the pre-signed genesis block file produced by the validator.
+        #[arg(long, value_name = "FILE")]
+        genesis_block: PathBuf,
     },
 
     /// Starts the store component.
@@ -80,26 +67,19 @@ pub enum StoreCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
 impl StoreCommand {
-    /// Executes the subcommand as described by each variants documentation.
+    /// Executes the subcommand as described by each variant's documentation.
     pub async fn handle(self) -> anyhow::Result<()> {
         match self {
-            StoreCommand::Bootstrap {
-                data_directory,
-                accounts_directory,
-                genesis_config_file,
-                validator_key,
-            } => {
-                Self::bootstrap(
-                    &data_directory,
-                    &accounts_directory,
-                    genesis_config_file.as_ref(),
-                    validator_key,
-                )
-                .await
+            StoreCommand::Bootstrap { data_directory, genesis_block } => {
+                ensure_empty_directory(&data_directory)?;
+                bootstrap_store(&data_directory, &genesis_block)
             },
             StoreCommand::Start {
                 rpc_url,
@@ -109,6 +89,7 @@ impl StoreCommand {
                 data_directory,
                 enable_otel: _,
                 grpc_options,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -117,6 +98,7 @@ impl StoreCommand {
                     block_prover_url,
                     data_directory,
                     grpc_options,
+                    storage_options,
                 )
                 .await
             },
@@ -138,6 +120,7 @@ impl StoreCommand {
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         let rpc_listener = rpc_url
             .to_socket()
@@ -167,98 +150,22 @@ impl StoreCommand {
             block_producer_listener,
             data_directory,
             grpc_options,
+            storage_options,
         }
         .serve()
         .await
         .context("failed while serving store component")
     }
+}
 
-    async fn bootstrap(
-        data_directory: &Path,
-        accounts_directory: &Path,
-        genesis_config: Option<&PathBuf>,
-        validator_key: ValidatorKey,
-    ) -> anyhow::Result<()> {
-        // Parse genesis config (or default if not given).
-        let config = genesis_config
-            .map(|file_path| {
-                GenesisConfig::read_toml_file(file_path).with_context(|| {
-                    format!("failed to parse genesis config from file {}", file_path.display())
-                })
-            })
-            .transpose()?
-            .unwrap_or_default();
+/// Reads a genesis block from disk, validates it, and bootstraps the store.
+pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyhow::Result<()> {
+    // Read and deserialize the genesis block file.
+    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
+    let proven_block = ProvenBlock::read_from_bytes(&bytes)
+        .context("failed to deserialize genesis block from file")?;
+    let genesis_block =
+        GenesisBlock::try_from(proven_block).context("genesis block validation failed")?;
 
-        // Create directories if they do not already exist.
-        for directory in &[accounts_directory, data_directory] {
-            if fs_err::exists(directory)? {
-                let is_empty = fs_err::read_dir(directory)?.next().is_none();
-                // If the directory exists and is empty, we store the files there
-                if !is_empty {
-                    anyhow::bail!(format!("{} exists but it is not empty.", directory.display()));
-                }
-            } else {
-                fs_err::create_dir(directory).with_context(|| {
-                    format!(
-                        "failed to create {} at {}",
-                        directory
-                            .file_name()
-                            .unwrap_or(std::ffi::OsStr::new("directory"))
-                            .display(),
-                        directory.display()
-                    )
-                })?;
-            }
-        }
-
-        // Bootstrap with KMS key or local key.
-        let signer = validator_key.into_signer().await?;
-        match signer {
-            ValidatorSigner::Kms(signer) => {
-                Self::bootstrap_accounts_and_store(
-                    config,
-                    signer,
-                    accounts_directory,
-                    data_directory,
-                )
-                .await
-            },
-            ValidatorSigner::Local(signer) => {
-                Self::bootstrap_accounts_and_store(
-                    config,
-                    signer,
-                    accounts_directory,
-                    data_directory,
-                )
-                .await
-            },
-        }
-    }
-
-    /// Builds the genesis state of the chain, writes accounts to file, and bootstraps the store.
-    async fn bootstrap_accounts_and_store(
-        config: GenesisConfig,
-        signer: impl BlockSigner,
-        accounts_directory: &Path,
-        data_directory: &Path,
-    ) -> anyhow::Result<()> {
-        // Build genesis state with the provided signer.
-        let (genesis_state, secrets) = config.into_state(signer)?;
-
-        // Write accounts to file.
-        for item in secrets.as_account_files(&genesis_state) {
-            let AccountFileWithName { account_file, name } = item?;
-            let accountpath = accounts_directory.join(name);
-            // do not override existing keys
-            fs_err::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&accountpath)
-                .context("key file already exists")?;
-            account_file.write(accountpath)?;
-        }
-
-        // Bootstrap store.
-        Store::bootstrap(genesis_state, data_directory).await
-    }
+    Store::bootstrap(&genesis_block, data_directory)
 }

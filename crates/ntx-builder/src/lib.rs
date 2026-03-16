@@ -1,25 +1,30 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use actor::AccountActorContext;
 use anyhow::Context;
-use block_producer::BlockProducerClient;
-use builder::{ChainState, MempoolEventStream};
+use builder::MempoolEventStream;
+use chain_state::ChainState;
+use clients::{BlockProducerClient, StoreClient};
 use coordinator::Coordinator;
 use db::Db;
 use futures::TryStreamExt;
 use miden_node_utils::lru_cache::LruCache;
-use store::StoreClient;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
 
 mod actor;
-mod block_producer;
 mod builder;
+mod chain_state;
+mod clients;
 mod coordinator;
 pub(crate) mod db;
-mod store;
+pub(crate) mod inflight_note;
+
+#[cfg(test)]
+pub(crate) mod test_utils;
 
 pub use builder::NetworkTransactionBuilder;
 
@@ -44,15 +49,18 @@ const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
 /// Default channel capacity for account loading from the store.
 const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
-/// Default channel size for actor event channels.
-const DEFAULT_ACTOR_CHANNEL_SIZE: usize = 100;
-
 /// Default maximum number of attempts to execute a failing note before dropping it.
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 
 /// Default script cache size.
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
     NonZeroUsize::new(1_000).expect("literal is non-zero");
+
+/// Default duration after which an idle network account actor will deactivate.
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Default maximum number of crashes an account actor is allowed before being deactivated.
+const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
 // CONFIGURATION
 // =================================================================================================
@@ -95,8 +103,16 @@ pub struct NtxBuilderConfig {
     /// Channel capacity for loading accounts from the store during startup.
     pub account_channel_capacity: usize,
 
-    /// Channel size for each actor's event channel.
-    pub actor_channel_size: usize,
+    /// Duration after which an idle network account will deactivate.
+    ///
+    /// An account is considered idle once it has no viable notes to consume.
+    /// A deactivated account will reactivate if targeted with new notes.
+    pub idle_timeout: Duration,
+
+    /// Maximum number of crashes before an account deactivated.
+    ///
+    /// Once this limit is reached, no new transactions will be created for this account.
+    pub max_account_crashes: usize,
 
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
@@ -120,7 +136,8 @@ impl NtxBuilderConfig {
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
-            actor_channel_size: DEFAULT_ACTOR_CHANNEL_SIZE,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             database_filepath,
         }
     }
@@ -186,10 +203,19 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the actor event channel size.
+    /// Sets the idle timeout for actors.
+    ///
+    /// Actors that remain idle (no viable notes) for this duration will be deactivated.
     #[must_use]
-    pub fn with_actor_channel_size(mut self, size: usize) -> Self {
-        self.actor_channel_size = size;
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = timeout;
+        self
+    }
+
+    /// Sets the maximum number of crashes before an account actor is deactivated.
+    #[must_use]
+    pub fn with_max_account_crashes(mut self, max: usize) -> Self {
+        self.max_account_crashes = max;
         self
     }
 
@@ -213,34 +239,24 @@ impl NtxBuilderConfig {
 
         let script_cache = LruCache::new(self.script_cache_size);
         let coordinator =
-            Coordinator::new(self.max_concurrent_txs, self.actor_channel_size, db.clone());
+            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
 
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
 
-        let (chain_tip_header, chain_mmr, mempool_events) = loop {
-            let (chain_tip_header, chain_mmr) = store
-                .get_latest_blockchain_data_with_retry()
-                .await?
-                .context("store should contain a latest block")?;
+        // Subscribe to mempool first to ensure we don't miss any events. The subscription
+        // replays all inflight transactions, so the subscriber's state is fully reconstructed.
+        let subscription = block_producer
+            .subscribe_to_mempool_with_retry()
+            .await
+            .map_err(|err| anyhow::anyhow!(err))
+            .context("failed to subscribe to mempool events")?;
+        let mempool_events: MempoolEventStream = Box::pin(subscription.into_stream());
 
-            match block_producer
-                .subscribe_to_mempool_with_retry(chain_tip_header.block_num())
-                .await
-            {
-                Ok(subscription) => {
-                    let stream: MempoolEventStream = Box::pin(subscription.into_stream());
-                    break (chain_tip_header, chain_mmr, stream);
-                },
-                Err(status) if status.code() == tonic::Code::InvalidArgument => {
-                    tracing::warn!(
-                        err = %status,
-                        "mempool subscription failed due to chain tip desync, retrying"
-                    );
-                },
-                Err(err) => return Err(err).context("failed to subscribe to mempool events"),
-            }
-        };
+        let (chain_tip_header, chain_mmr) = store
+            .get_latest_blockchain_data_with_retry()
+            .await?
+            .context("store should contain a latest block")?;
 
         // Store the chain tip in the DB.
         db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
@@ -249,7 +265,7 @@ impl NtxBuilderConfig {
 
         let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
 
-        let (notification_tx, notification_rx) = mpsc::channel(1);
+        let (request_tx, actor_request_rx) = mpsc::channel(1);
 
         let actor_context = AccountActorContext {
             block_producer_url: self.block_producer_url.clone(),
@@ -260,8 +276,9 @@ impl NtxBuilderConfig {
             script_cache,
             max_notes_per_tx: self.max_notes_per_tx,
             max_note_attempts: self.max_note_attempts,
+            idle_timeout: self.idle_timeout,
             db: db.clone(),
-            notification_tx,
+            request_tx,
         };
 
         Ok(NetworkTransactionBuilder::new(
@@ -272,7 +289,7 @@ impl NtxBuilderConfig {
             chain_state,
             actor_context,
             mempool_events,
-            notification_rx,
+            actor_request_rx,
         ))
     }
 }

@@ -16,12 +16,14 @@ workspace = true
 
 [features]
 # Enables utility functions for testing traces created by some other crate's stack.
+rocksdb = ["dep:miden-large-smt-backend-rocksdb"]
 testing = ["miden-protocol/testing"]
 
 [dependencies]
 anyhow                = { workspace = true }
 bytes                 = { version = "1.10" }
 clap                  = { workspace = true }
+fs-err                = { workspace = true }
 governor              = { version = "0.10" }
 http                  = { workspace = true }
 http-body-util        = { version = "0.1" }
@@ -44,6 +46,9 @@ tracing-forest        = { features = ["chrono"], optional = true, version = "0.3
 tracing-opentelemetry = { version = "0.32" }
 tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
+
+# RocksDbConfig is needed due to orphan rules
+miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 
 [dev-dependencies]
 thiserror = { workspace = true }

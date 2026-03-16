@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use miden_node_proto::generated::block_producer::api_client as block_producer_client;
 use miden_node_store::{GenesisState, Store};
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee_params;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::testing::random_secret_key::random_secret_key;
@@ -131,9 +131,12 @@ async fn start_store(
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
-    Store::bootstrap(genesis_state.clone(), data_directory)
+    let genesis_block = genesis_state
+        .clone()
+        .into_block()
         .await
-        .expect("store should bootstrap");
+        .expect("genesis block should be created");
+    Store::bootstrap(&genesis_block, data_directory).expect("store should bootstrap");
 
     let dir = data_directory.to_path_buf();
     let rpc_listener =
@@ -156,6 +159,7 @@ async fn start_store(
             block_prover_url: None,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::bench(),
+            storage_options: StorageOptions::bench(),
         }
         .serve()
         .await

@@ -13,9 +13,9 @@ use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::actor::inflight_note::InflightNetworkNote;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
+use crate::inflight_note::InflightNetworkNote;
 
 pub(crate) mod models;
 
@@ -77,6 +77,13 @@ impl Db {
             .await
     }
 
+    /// Returns `true` when an inflight account row exists with the given transaction ID.
+    pub async fn transaction_exists(&self, tx_id: TransactionId) -> Result<bool> {
+        self.inner
+            .query("transaction_exists", move |conn| queries::transaction_exists(conn, &tx_id))
+            .await
+    }
+
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
@@ -123,12 +130,14 @@ impl Db {
     }
 
     /// Handles a `BlockCommitted` mempool event by committing transaction effects.
+    ///
+    /// Returns the list of affected account IDs that should be notified.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,
         block_num: BlockNumber,
         header: BlockHeader,
-    ) -> Result<()> {
+    ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_block_committed", move |conn| {
                 queries::commit_block(conn, &txs, block_num, &header)
@@ -138,7 +147,7 @@ impl Db {
 
     /// Handles a `TransactionsReverted` mempool event by undoing transaction effects.
     ///
-    /// Returns the list of account IDs whose creation was reverted.
+    /// Returns all affected account IDs that should be notified.
     pub async fn handle_transactions_reverted(
         &self,
         tx_ids: Vec<TransactionId>,
@@ -216,5 +225,16 @@ impl Db {
         configure_connection_on_creation(&mut conn).expect("connection configuration should work");
         apply_migrations(&mut conn).expect("migrations should apply on empty database");
         (conn, dir)
+    }
+
+    /// Creates an async `Db` instance backed by a temp file for testing.
+    ///
+    /// Returns `(Db, TempDir)` — the `TempDir` must be kept alive for the DB's lifetime.
+    #[cfg(test)]
+    pub async fn test_setup() -> (Db, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("test.sqlite3");
+        let db = Db::setup(db_path).await.expect("test DB setup should succeed");
+        (db, dir)
     }
 }
