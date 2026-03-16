@@ -20,11 +20,11 @@ impl GraphNode for AuthenticatedTransaction {
         Box::new(self.nullifiers())
     }
 
-    fn output_note_commitments(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
         Box::new(self.output_note_commitments())
     }
 
-    fn unauthenticated_note_commitments(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
         Box::new(self.unauthenticated_note_commitments())
     }
 
@@ -67,5 +67,30 @@ impl TransactionGraph {
 
     pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
         todo!();
+    }
+
+    /// The given account's current commitment in this graph.
+    ///
+    /// Returns `None` if the account has not been seen by this graph at all.
+    pub fn account_commitment(&self, account: &AccountId) -> Option<Word> {
+        self.inner.account_commitment(account)
+    }
+
+    /// Returns `true` if the given nullifier has already been consumed by a node in this graph.
+    pub fn nullifier_exists(&self, nullifier: &Nullifier) -> bool {
+        self.inner.nullifier_exists(nullifier)
+    }
+
+    /// Returns `true` if a node in this graph created an output note with the given ID.
+    ///
+    /// Uses the note's commitment (its `Word` representation) for the lookup.
+    pub fn output_note_exists(&self, note: &Word) -> bool {
+        self.inner.output_note_exists(note)
+    }
+
+    /// Returns `true` if the output note with the given ID has already been consumed as an
+    /// unauthenticated input note by another node in this graph.
+    pub fn output_note_is_consumed(&self, note: &Word) -> bool {
+        self.inner.output_note_is_consumed(note)
     }
 }
