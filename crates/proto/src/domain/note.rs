@@ -17,7 +17,7 @@ use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated as proto;
 
 // NOTE TYPE
@@ -58,10 +58,12 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
             .ok_or_else(|| {
                 ConversionError::missing_field::<proto::note::NoteMetadata>(stringify!(sender))
             })?
-            .try_into()?;
+            .try_into()
+            .context("sender")?;
         let note_type = proto::note::NoteType::try_from(value.note_type)
             .map_err(|_| ConversionError::message("enum variant discriminant out of range"))?
-            .try_into()?;
+            .try_into()
+            .context("note_type")?;
         let tag = NoteTag::new(value.tag);
 
         // Deserialize attachment if present
@@ -116,7 +118,8 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
             .ok_or_else(|| {
                 ConversionError::missing_field::<proto::note::NetworkNote>(stringify!(metadata))
             })?
-            .try_into()?;
+            .try_into()
+            .context("metadata")?;
         let note = Note::new(assets, metadata, recipient);
         AccountTargetNetworkNote::new(note).map_err(ConversionError::from)
     }
@@ -182,7 +185,8 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
                     stringify!(inclusion_path),
                 ))?
                 .clone(),
-        )?;
+        )
+        .context("inclusion_path")?;
 
         let note_id = Word::try_from(
             proof
@@ -194,13 +198,14 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
                 .id
                 .as_ref()
                 .ok_or(ConversionError::missing_field::<proto::note::NoteId>(stringify!(id)))?,
-        )?;
+        )
+        .context("note_id")?;
 
         Ok((
             NoteId::from_raw(note_id),
             NoteInclusionProof::new(
                 proof.block_num.into(),
-                proof.note_index_in_block.try_into()?,
+                proof.note_index_in_block.try_into().context("note_index_in_block")?,
                 inclusion_path,
             )?,
         ))
@@ -214,7 +219,8 @@ impl TryFrom<proto::note::Note> for Note {
         let metadata: NoteMetadata = proto_note
             .metadata
             .ok_or(ConversionError::missing_field::<proto::note::Note>(stringify!(metadata)))?
-            .try_into()?;
+            .try_into()
+            .context("metadata")?;
 
         let details = proto_note
             .details
@@ -249,13 +255,15 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
             .ok_or_else(|| {
                 ConversionError::missing_field::<proto::note::NoteHeader>(stringify!(note_id))
             })?
-            .try_into()?;
+            .try_into()
+            .context("note_id")?;
         let metadata: NoteMetadata = value
             .metadata
             .ok_or_else(|| {
                 ConversionError::missing_field::<proto::note::NoteHeader>(stringify!(metadata))
             })?
-            .try_into()?;
+            .try_into()
+            .context("metadata")?;
 
         Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }

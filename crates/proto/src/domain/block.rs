@@ -17,7 +17,7 @@ use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::{Deserializable, Serializable};
 use thiserror::Error;
 
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
 
 // BLOCK NUMBER
@@ -82,55 +82,64 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(prev_block_commitment),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("prev_block_commitment")?,
             value.block_num.into(),
             value
                 .chain_commitment
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(chain_commitment),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("chain_commitment")?,
             value
                 .account_root
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(account_root),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("account_root")?,
             value
                 .nullifier_root
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(nullifier_root),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("nullifier_root")?,
             value
                 .note_root
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(note_root),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("note_root")?,
             value
                 .tx_commitment
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(tx_commitment),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("tx_commitment")?,
             value
                 .tx_kernel_commitment
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(tx_kernel_commitment),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("tx_kernel_commitment")?,
             value
                 .validator_key
                 .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                     stringify!(validator_key),
                 ))?
-                .try_into()?,
+                .try_into()
+                .context("validator_key")?,
             FeeParameters::try_from(value.fee_parameters.ok_or(
                 ConversionError::missing_field::<proto::blockchain::FeeParameters>(stringify!(
                     fee_parameters
                 )),
-            )?)?,
+            )?)
+            .context("fee_parameters")?,
             value.timestamp,
         ))
     }
@@ -202,19 +211,22 @@ impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
             .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
                 header
             )))?
-            .try_into()?;
+            .try_into()
+            .context("header")?;
         let body = value
             .body
             .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
                 body
             )))?
-            .try_into()?;
+            .try_into()
+            .context("body")?;
         let signature = value
             .signature
             .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
                 signature
             )))?
-            .try_into()?;
+            .try_into()
+            .context("signature")?;
 
         Ok(SignedBlock::new_unchecked(header, body, signature))
     }
@@ -264,7 +276,8 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
             .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
                 "block_header",
             ))?
-            .try_into()?;
+            .try_into()
+            .context("latest_block_header")?;
 
         let account_witnesses = response
             .account_witnesses
@@ -273,7 +286,8 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
                 let witness_record: AccountWitnessRecord = entry.try_into()?;
                 Ok((witness_record.account_id, witness_record.witness))
             })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+            .collect::<Result<BTreeMap<_, _>, ConversionError>>()
+            .context("account_witnesses")?;
 
         let nullifier_witnesses = response
             .nullifier_witnesses
@@ -282,13 +296,15 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
                 let witness: NullifierWitnessRecord = entry.try_into()?;
                 Ok((witness.nullifier, NullifierWitness::new(witness.proof)))
             })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+            .collect::<Result<BTreeMap<_, _>, ConversionError>>()
+            .context("nullifier_witnesses")?;
 
         let unauthenticated_note_proofs = response
             .unauthenticated_note_proofs
             .iter()
             .map(<(NoteId, NoteInclusionProof)>::try_from)
-            .collect::<Result<_, ConversionError>>()?;
+            .collect::<Result<_, ConversionError>>()
+            .context("unauthenticated_note_proofs")?;
 
         let partial_block_chain = PartialBlockchain::read_from_bytes(&response.partial_block_chain)
             .map_err(|source| ConversionError::deserialization("PartialBlockchain", source))?;
@@ -355,11 +371,13 @@ impl From<&Signature> for proto::blockchain::BlockSignature {
 impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
     type Error = ConversionError;
     fn try_from(fee_params: proto::blockchain::FeeParameters) -> Result<Self, Self::Error> {
-        let native_asset_id = fee_params.native_asset_id.map(AccountId::try_from).ok_or(
-            ConversionError::missing_field::<proto::blockchain::FeeParameters>(stringify!(
+        let native_asset_id = fee_params
+            .native_asset_id
+            .map(AccountId::try_from)
+            .ok_or(ConversionError::missing_field::<proto::blockchain::FeeParameters>(stringify!(
                 native_asset_id
-            )),
-        )??;
+            )))?
+            .context("native_asset_id")?;
         let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee)?;
         Ok(fee_params)
     }

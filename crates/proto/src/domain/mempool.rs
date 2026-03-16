@@ -7,7 +7,7 @@ use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated as proto;
 
 #[derive(Debug, Clone)]
@@ -93,14 +93,20 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                     .ok_or(ConversionError::missing_field::<
                         proto::block_producer::mempool_event::TransactionAdded,
                     >("id"))?
-                    .try_into()?;
-                let nullifiers =
-                    tx.nullifiers.into_iter().map(Nullifier::try_from).collect::<Result<_, _>>()?;
+                    .try_into()
+                    .context("id")?;
+                let nullifiers = tx
+                    .nullifiers
+                    .into_iter()
+                    .map(Nullifier::try_from)
+                    .collect::<Result<_, _>>()
+                    .context("nullifiers")?;
                 let network_notes = tx
                     .network_notes
                     .into_iter()
                     .map(AccountTargetNetworkNote::try_from)
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>()
+                    .context("network_notes")?;
                 let account_delta = tx
                     .network_account_delta
                     .as_deref()
@@ -121,13 +127,15 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                     .ok_or(ConversionError::missing_field::<
                         proto::block_producer::mempool_event::BlockCommitted,
                     >("block_header"))?
-                    .try_into()?;
+                    .try_into()
+                    .context("block_header")?;
                 let header = Box::new(header);
                 let txs = block_committed
                     .transactions
                     .into_iter()
                     .map(TransactionId::try_from)
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>()
+                    .context("transactions")?;
 
                 Ok(Self::BlockCommitted { header, txs })
             },
@@ -136,7 +144,8 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                     .reverted
                     .into_iter()
                     .map(TransactionId::try_from)
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>()
+                    .context("reverted")?;
 
                 Ok(Self::TransactionsReverted(txs))
             },

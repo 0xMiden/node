@@ -3,7 +3,7 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 use miden_protocol::utils::{Deserializable, Serializable};
 
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated as proto;
 
 // FROM TRANSACTION ID
@@ -53,6 +53,7 @@ impl TryFrom<proto::transaction::TransactionId> for TransactionId {
             .id
             .ok_or(ConversionError::missing_field::<proto::transaction::TransactionId>("id"))?
             .try_into()
+            .context("id")
     }
 }
 
@@ -79,10 +80,11 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
                     stringify!(nullifier),
                 )
             })?
-            .try_into()?;
+            .try_into()
+            .context("nullifier")?;
 
         let header: Option<miden_protocol::note::NoteHeader> =
-            value.header.map(TryInto::try_into).transpose()?;
+            value.header.map(TryInto::try_into).transpose().context("header")?;
 
         // TODO: https://github.com/0xMiden/node/issues/1783
         // InputNoteCommitment has private fields, so we reconstruct it via

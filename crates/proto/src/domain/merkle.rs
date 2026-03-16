@@ -4,7 +4,7 @@ use miden_protocol::crypto::merkle::smt::{LeafIndex, SmtLeaf, SmtProof};
 use miden_protocol::crypto::merkle::{MerklePath, SparseMerklePath};
 
 use crate::domain::{convert, try_convert};
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated as proto;
 
 // MERKLE PATH
@@ -62,7 +62,8 @@ impl TryFrom<proto::primitives::SparseMerklePath> for SparseMerklePath {
                 .siblings
                 .into_iter()
                 .map(Word::try_from)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<Result<Vec<_>, _>>()
+                .context("siblings")?,
         )?)
     }
 }
@@ -84,12 +85,16 @@ impl TryFrom<proto::primitives::MmrDelta> for MmrDelta {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::MmrDelta) -> Result<Self, Self::Error> {
-        let data: Result<Vec<_>, ConversionError> =
-            value.data.into_iter().map(Word::try_from).collect();
+        let data: Vec<_> = value
+            .data
+            .into_iter()
+            .map(Word::try_from)
+            .collect::<Result<_, _>>()
+            .context("data")?;
 
         Ok(MmrDelta {
             forest: Forest::new(value.forest as usize),
-            data: data?,
+            data,
         })
     }
 }
@@ -113,13 +118,13 @@ impl TryFrom<proto::primitives::SmtLeaf> for SmtLeaf {
                 Ok(Self::new_empty(LeafIndex::new_max_depth(leaf_index)))
             },
             proto::primitives::smt_leaf::Leaf::Single(entry) => {
-                let (key, value): (Word, Word) = entry.try_into()?;
+                let (key, value): (Word, Word) = entry.try_into().context("single")?;
 
                 Ok(SmtLeaf::new_single(key, value))
             },
             proto::primitives::smt_leaf::Leaf::Multiple(entries) => {
                 let domain_entries: Vec<(Word, Word)> =
-                    try_convert(entries.entries).collect::<Result<_, _>>()?;
+                    try_convert(entries.entries).collect::<Result<_, _>>().context("multiple")?;
 
                 Ok(SmtLeaf::new_multiple(domain_entries)?)
             },
@@ -155,13 +160,15 @@ impl TryFrom<proto::primitives::SmtLeafEntry> for (Word, Word) {
             .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>(stringify!(
                 key
             )))?
-            .try_into()?;
+            .try_into()
+            .context("key")?;
         let value: Word = entry
             .value
             .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>(stringify!(
                 value
             )))?
-            .try_into()?;
+            .try_into()
+            .context("value")?;
 
         Ok((key, value))
     }
@@ -188,13 +195,15 @@ impl TryFrom<proto::primitives::SmtOpening> for SmtProof {
             .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>(stringify!(
                 path
             )))?
-            .try_into()?;
+            .try_into()
+            .context("path")?;
         let leaf: SmtLeaf = opening
             .leaf
             .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>(stringify!(
                 leaf
             )))?
-            .try_into()?;
+            .try_into()
+            .context("leaf")?;
 
         Ok(SmtProof::new(path, leaf)?)
     }

@@ -141,6 +141,33 @@ impl fmt::Display for StringError {
 
 impl std::error::Error for StringError {}
 
+// CONVERSION RESULT EXTENSION TRAIT
+// ================================================================================================
+
+/// Extension trait to ergonomically add field context to [`ConversionError`] results.
+///
+/// This makes it easy to inject field names into the error path at each `?` site:
+///
+/// ```rust,ignore
+/// let account_root = value.account_root
+///     .ok_or(ConversionError::missing_field::<proto::BlockHeader>("account_root"))?
+///     .try_into()
+///     .context("account_root")?;
+/// ```
+///
+/// The context stacks automatically through nested conversions, producing error paths like
+/// `"header.account_root: value is not in range 0..MODULUS"`.
+pub trait ConversionResultExt<T> {
+    /// Add field context to the error, wrapping it in a [`ConversionError`] if needed.
+    fn context(self, field: &'static str) -> Result<T, ConversionError>;
+}
+
+impl<T, E: Into<ConversionError>> ConversionResultExt<T> for Result<T, E> {
+    fn context(self, field: &'static str) -> Result<T, ConversionError> {
+        self.map_err(|e| e.into().context(field))
+    }
+}
+
 // FROM IMPLS FOR EXTERNAL ERROR TYPES
 // ================================================================================================
 

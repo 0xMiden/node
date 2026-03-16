@@ -2,7 +2,7 @@ use miden_protocol::Word;
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::Nullifier;
 
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated as proto;
 
 // FROM NULLIFIER
@@ -53,13 +53,15 @@ impl TryFrom<proto::store::block_inputs::NullifierWitness> for NullifierWitnessR
                 .ok_or(ConversionError::missing_field::<
                     proto::store::block_inputs::NullifierWitness,
                 >(stringify!(nullifier)))?
-                .try_into()?,
+                .try_into()
+                .context("nullifier")?,
             proof: nullifier_witness_record
                 .opening
                 .ok_or(ConversionError::missing_field::<
                     proto::store::block_inputs::NullifierWitness,
                 >(stringify!(opening)))?
-                .try_into()?,
+                .try_into()
+                .context("opening")?,
         })
     }
 }
