@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+mod proven_batch;
+mod selected_batch;
 mod transaction;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteId, Nullifier};
+pub use proven_batch::ProvenBatchGraph;
+pub use selected_batch::SelectedBatchGraph;
 pub use transaction::TransactionGraph;
 
 trait GraphNode {
