@@ -21,14 +21,12 @@
 //! caused by: SQLite error: table 'blocks' has 10 columns but 9 values were supplied
 //! ```
 
-// Re-export the instrument macro
-pub use miden_node_tracing_macro::instrument;
-// Re-export ErrorReport from miden-node-utils
+pub use miden_node_tracing_macro::{debug, error, info, instrument, trace, warn};
 pub use miden_node_utils::ErrorReport;
-// Re-export OpenTelemetrySpanExt from miden-node-utils
 pub use miden_node_utils::tracing::OpenTelemetrySpanExt;
-// Re-export OpenTelemetry types needed by the macro
+#[doc(hidden)]
 pub use opentelemetry::trace::Status as OtelStatus;
+#[doc(hidden)]
 pub use tracing::field::Empty as FieldEmpty;
-// Re-export tracing types needed by the macro
-pub use tracing::{Instrument, Level, Span, error, event};
+#[doc(hidden)]
+pub use tracing::{Instrument, Level, Span, event};

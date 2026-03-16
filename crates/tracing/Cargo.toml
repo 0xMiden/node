@@ -19,3 +19,6 @@ miden-node-tracing-macro = { workspace = true }
 miden-node-utils         = { workspace = true }
 opentelemetry            = { version = "0.31" }
 tracing                  = { workspace = true }
+
+[dev-dependencies]
+trybuild = { workspace = true }

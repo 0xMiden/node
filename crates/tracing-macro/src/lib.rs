@@ -1,4 +1,4 @@
-//! Procedural macros for structured, OTel-aware tracing in the Miden node.
+//! Procedural macros for structured, OpenTelemetry-aware tracing in the Miden node.
 //!
 //! **Do not use this crate directly.** Import from `miden-node-tracing` instead, which
 //! re-exports every macro here together with all required runtime dependencies
@@ -22,10 +22,10 @@
 //! 2. **`report` keyword** – a richer alternative to `tracing`'s `err` that walks the full
 //!    [`ErrorReport`] chain, emits a structured `error!` event *and* sets the OpenTelemetry span
 //!    status to `Error`.
-//! 3. **OTel field allowlist** – only names declared in `allowlist.txt` may appear as field keys,
+//! 3. **OpenTelemetry field allowlist** – only names declared in `allowlist.txt` may appear as field keys,
 //!    preventing accidental cardinality explosions in the metrics / trace backend.
 //! 4. **Log macros** – `warn!`, `error!`, etc. mirror `tracing::<level>!` syntax but additionally
-//!    enforce the same `COMPONENT:` target shorthand and OTel field allowlist as `#[instrument]`.
+//!    enforce the same `COMPONENT:` target shorthand and OpenTelemetry field allowlist as `#[instrument]`.
 //!
 //! # `#[instrument]` – complete reference
 //!
@@ -52,7 +52,7 @@
 //! | `rpc: ret` | any | ✓ | Records return value via `tracing::instrument`'s `ret` |
 //! | `rpc: err` | `Result<_, E>` | ✓ | Delegates to `tracing::instrument`'s `err` (single-level `Display`/`Debug`) |
 //! | `rpc: err` | non-`Result` | ✗ | Compile error: `err` requires `Result` return |
-//! | `rpc: report` | `Result<_, E>` | ✓ | Walks full error chain via [`ErrorReport`], emits `error!` event, sets OTel span status |
+//! | `rpc: report` | `Result<_, E>` | ✓ | Walks full error chain via [`ErrorReport`], emits `error!` event, sets OpenTelemetry span status |
 //! | `rpc: report` | non-`Result` | ✗ | Compile error: `report` requires `Result` return |
 //! | `rpc: err, report` | any | ✗ | Compile error: mutually exclusive |
 //! | `rpc: report, err` | any | ✗ | Compile error: mutually exclusive (order does not matter) |
@@ -61,8 +61,8 @@
 //! | `rpc: ret, report` | non-`Result` | ✗ | Compile error: `report` requires `Result` return |
 //! | `rpc: account.id = id` | any | ✓ | Attaches `account.id` field (Debug format, allowlisted) |
 //! | `rpc: account.id = %id` | any | ✓ | Attaches `account.id` field (Display format via `%`) |
-//! | `rpc: foo = id` | any | ✗ | Compile error: `foo` not in OTel allowlist |
-//! | `rpc: foo.bar.baz = %id` | any | ✗ | Compile error: `foo.bar.baz` not in OTel allowlist |
+//! | `rpc: foo = id` | any | ✗ | Compile error: `foo` not in OpenTelemetry allowlist |
+//! | `rpc: foo.bar.baz = %id` | any | ✗ | Compile error: `foo.bar.baz` not in OpenTelemetry allowlist |
 //! | `rpc: account.id = %id, err` | `Result<_, E>` | ✓ | Allowlisted field + standard error tracking |
 //! | `rpc: account.id = %id, report` | `Result<_, E>` | ✓ | Allowlisted field + full error chain |
 //! | `rpc: account.id = %id, ret, report` | `Result<T, E>` | ✓ | Field + return value + full error chain |
@@ -77,7 +77,7 @@
 //! |---|---|---|
 //! | Mechanism | delegates to `tracing::instrument`'s built-in `err` | custom body wrapper |
 //! | Error formatting | top-level `Display` or `Debug` only | full chain via [`ErrorReport::as_report`] (every `source()` cause) |
-//! | OTel span status | not set | set to `Error` with the full report string |
+//! | OpenTelemetry span status | not set | set to `Error` with the full report string |
 //! | tracing event level | `ERROR` (tracing default) | `ERROR` |
 //!
 //! Use `err` for lightweight internal helpers where the single-level message is
@@ -121,7 +121,7 @@
 //! # Log macros – complete reference
 //!
 //! `error!`, `warn!`, `info!`, `debug!`, `trace!` enforce the same `COMPONENT:`
-//! target shorthand and OTel field allowlist as `#[instrument]`, then expand to
+//! target shorthand and OpenTelemetry field allowlist as `#[instrument]`, then expand to
 //! the underlying `tracing::<level>!` macro.
 //!
 //! ## Syntax
@@ -225,7 +225,7 @@ mod tests;
 /// #[instrument(store: err)]
 /// async fn load() -> Result<Data, LoadError> { … }
 ///
-/// // Full error chain + OTel span status.
+/// // Full error chain + OpenTelemetry span status.
 /// #[instrument(rpc: report)]
 /// async fn apply_block(&self, block: Block) -> Result<(), ApplyBlockError> { … }
 ///
@@ -233,7 +233,7 @@ mod tests;
 /// #[instrument(rpc: ret, report)]
 /// async fn fetch_count() -> Result<u32, FetchError> { … }
 ///
-/// // Attach an allowlisted OTel field (Display format).
+/// // Attach an allowlisted OpenTelemetry field (Display format).
 /// #[instrument(rpc: account.id = %account_id, report)]
 /// async fn get_account(account_id: AccountId) -> Result<Account, RpcError> { … }
 ///

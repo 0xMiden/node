@@ -1,0 +1,5 @@
+error: `err` / `report` requires the function to return `Result`
+ --> tests/ui/instrument/err_requires_result.rs:4:4
+  |
+4 | fn foo() {}
+  |    ^^^

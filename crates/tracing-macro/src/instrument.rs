@@ -26,7 +26,7 @@ impl Name {
         self.segments.span()
     }
 
-    /// Validates this name against the OTel allowlist and, on success, returns a
+    /// Validates this name against the OpenTelemetry allowlist and, on success, returns a
     /// [`CheckedName`] that carries the pre-computed dotted string and span.
     ///
     /// On failure, emits a [`syn::Error`] anchored at the name's span. If the
@@ -40,7 +40,7 @@ impl Name {
             } else {
                 format!(" – did you mean: {}?", suggestions.join(", "))
             };
-            syn::Error::new(span, format!("`{dotted}` is not in the OTel allowlist{hint}"))
+            syn::Error::new(span, format!("`{dotted}` is not in the OpenTelemetry allowlist{hint}"))
         })?;
         Ok(CheckedName { dotted, span })
     }
@@ -60,7 +60,7 @@ impl Parse for Name {
 
 // ── CheckedName ───────────────────────────────────────────────────────────────
 
-/// A field name that has been validated against the OTel allowlist.
+/// A field name that has been validated against the OpenTelemetry allowlist.
 ///
 /// The only way to construct a `CheckedName` is via [`Name::check`], ensuring
 /// that unchecked names can never reach codegen.
@@ -105,7 +105,7 @@ impl Parse for Value {
 
 /// A single `dotted-name = [%] expr` pair inside the attribute list.
 ///
-/// The `name` has been validated against the OTel allowlist at parse time.
+/// The `name` has been validated against the OpenTelemetry allowlist at parse time.
 /// Both `account.id = id` (Debug) and `account.id = %id` (Display) are accepted.
 struct Field {
     name: CheckedName,
@@ -131,7 +131,7 @@ impl Parse for Field {
 /// `Field` parse.  Any other leading identifier is treated as the start of a
 /// `name = value` field entry.
 enum Element {
-    /// A `dotted-name = [%] expr` field (validated against the OTel allowlist).
+    /// A `dotted-name = [%] expr` field (validated against the OpenTelemetry allowlist).
     Field(Field),
     /// `ret` – record the function's return value inside the span.
     Ret,
@@ -139,7 +139,7 @@ enum Element {
     /// Delegates to `tracing::instrument`'s built-in `err`.  Requires `Result`.
     Err,
     /// `report` – on `Err`, walk the full error chain via [`ErrorReport`] and set
-    /// the OTel span status.  Mutually exclusive with `err`.  Requires `Result`.
+    /// the OpenTelemetry span status.  Mutually exclusive with `err`.  Requires `Result`.
     Report,
 }
 
@@ -436,7 +436,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
 
     if has_report {
         // Wrap the original body so we can inspect the result before returning.
-        // On Err: emit the full error chain and mark the OTel span as failed.
+        // On Err: emit the full error chain and mark the OpenTelemetry span as failed.
         Ok(quote! {
             #(#attrs)*
             #[::tracing::instrument(#target_tokens #skip_all #fields_tok #ret_tok)]

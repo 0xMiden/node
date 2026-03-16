@@ -1,0 +1,7 @@
+error: `err` and `report` are mutually exclusive – use one or the other
+ --> tests/ui/instrument/report_and_err_exclusive.rs:3:1
+  |
+3 | #[instrument(rpc: report, err)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `instrument` (in Nightly builds, run with -Z macro-backtrace for more info)

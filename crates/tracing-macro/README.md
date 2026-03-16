@@ -11,7 +11,7 @@ which re-exports every macro here together with all required runtime dependencie
 ## `#[instrument]`
 
 Instruments a function with a [`tracing`] span.  Extends `tracing::instrument`
-with a component-target shorthand, an OTel field allowlist, and a `report`
+with a component-target shorthand, an OpenTelemetry field allowlist, and a `report`
 keyword for full error-chain capture.
 
 ### Syntax
@@ -32,7 +32,7 @@ dotted-name ::= ident ["." ident]*   -- must appear in allowlist.txt
 |---|---|---|
 | `ret` | no | Records the return value inside the span |
 | `err` | yes | Emits a tracing event with the top-level error message (delegates to `tracing::instrument`'s built-in `err`) |
-| `report` | yes | Emits an `error!` event with the **full error chain** via `ErrorReport::as_report()` and sets the OTel span status to `Error`.  Mutually exclusive with `err`. |
+| `report` | yes | Emits an `error!` event with the **full error chain** via `ErrorReport::as_report()` and sets the OpenTelemetry span status to `Error`.  Mutually exclusive with `err`. |
 
 ### Field entries
 
@@ -53,7 +53,7 @@ is a compile error; the macro suggests the closest allowlisted names.
 | `rpc: ret` | any | ✓ | `tracing::instrument` `ret` |
 | `rpc: err` | yes | ✓ | `tracing::instrument` `err` (top-level message) |
 | `rpc: err` | no | ✗ | `err` requires `Result` return |
-| `rpc: report` | yes | ✓ | Full error chain + OTel status |
+| `rpc: report` | yes | ✓ | Full error chain + OpenTelemetry status |
 | `rpc: report` | no | ✗ | `report` requires `Result` return |
 | `rpc: err, report` | any | ✗ | Mutually exclusive |
 | `rpc: report, err` | any | ✗ | Mutually exclusive (order irrelevant) |
@@ -75,7 +75,7 @@ is a compile error; the macro suggests the closest allowlisted names.
 |---|---|---|
 | Mechanism | `tracing::instrument` built-in | Custom body wrapper |
 | Error detail | Top-level `Display`/`Debug` | Full chain via `ErrorReport::as_report()` |
-| OTel span status | Not set | Set to `Error` |
+| OpenTelemetry span status | Not set | Set to `Error` |
 | Event level | `ERROR` | `ERROR` |
 
 Use `err` for lightweight internal helpers.  Use `report` on RPC handlers and
@@ -102,7 +102,7 @@ fn compute() -> u32 { 42 }
 #[instrument(store: err)]
 async fn load() -> Result<Data, LoadError> { todo!() }
 
-// Full error chain + OTel span status.
+// Full error chain + OpenTelemetry span status.
 #[instrument(rpc: report)]
 async fn apply_block(block: Block) -> Result<(), ApplyBlockError> { todo!() }
 
@@ -140,7 +140,7 @@ dotted-name ::= ident ["." ident]*   -- must appear in allowlist.txt
 ```
 
 The optional `COMPONENT:` prefix sets the tracing target (e.g. `rpc:` →
-`target: "rpc"`).  Field names are validated against the OTel allowlist;
+`target: "rpc"`).  Field names are validated against the OpenTelemetry allowlist;
 an unlisted name is a compile error with fuzzy-matched suggestions.
 
 ### Full argument reference for `warn!`

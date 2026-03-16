@@ -66,6 +66,7 @@ miden-remote-prover-client      = { path = "crates/remote-prover-client", versio
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "=0.14.0-alpha.1" }
 miden-node-tracing-macro = { path = "crates/tracing-macro", version = "=0.14.0-alpha.1" }
+trybuild               = { version = "1.0", features = ["diff"] }
 
 # miden-base aka protocol dependencies. These should be updated in sync.
 miden-block-prover    = { version = "=0.14.0-alpha.1" }

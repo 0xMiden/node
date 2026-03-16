@@ -10,7 +10,7 @@ use crate::instrument::{CheckedName, ComponentName, Name};
 /// A single `dotted-name = [% | ?] expr` structured field in a log event.
 ///
 /// Both the `%` (Display) and `?` (Debug) value modifiers are accepted, matching
-/// `tracing`'s own syntax.  The field name is validated against the OTel allowlist
+/// `tracing`'s own syntax.  The field name is validated against the OpenTelemetry allowlist
 /// at parse time via [`Name::check`].
 struct LogField {
     name: CheckedName,
@@ -58,7 +58,7 @@ impl Parse for LogField {
 /// ```
 ///
 /// The `COMPONENT:` prefix maps to `target: "component"` in the emitted
-/// `tracing::<level>!` call.  Field names are validated against the OTel
+/// `tracing::<level>!` call.  Field names are validated against the OpenTelemetry
 /// allowlist at parse time.  The trailing message (if any) is forwarded verbatim.
 struct LogArgs {
     /// Optional component prefix; emitted as `target: "…"` in the tracing call.

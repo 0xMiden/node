@@ -1,0 +1,5 @@
+error: `foo` is not in the OpenTelemetry allowlist
+ --> tests/ui/log/component_with_unlisted_field.rs:4:16
+  |
+4 |     warn!(rpc: foo = %x, "msg");
+  |                ^^^

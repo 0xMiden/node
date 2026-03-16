@@ -1,0 +1,5 @@
+error: `foo.bar` is not in the OpenTelemetry allowlist
+ --> tests/ui/log/dotted_field_not_in_allowlist.rs:4:11
+  |
+4 |     warn!(foo.bar = %x, "msg");
+  |           ^^^

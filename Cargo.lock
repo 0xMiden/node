@@ -3192,6 +3192,7 @@ dependencies = [
  "miden-node-utils",
  "opentelemetry",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]
