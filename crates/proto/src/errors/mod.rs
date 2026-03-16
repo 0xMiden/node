@@ -198,3 +198,55 @@ impl_from_for_conversion_error!(
     std::num::TryFromIntError,
     DeserializationError,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Simulates a deeply nested conversion where each layer adds its field context.
+    fn inner_conversion() -> Result<(), ConversionError> {
+        Err(ConversionError::message("value is not in range 0..MODULUS"))
+    }
+
+    fn mid_conversion() -> Result<(), ConversionError> {
+        inner_conversion().context("account_root")
+    }
+
+    fn outer_conversion() -> Result<(), ConversionError> {
+        mid_conversion().context("header")
+    }
+
+    #[test]
+    fn test_context_builds_dotted_field_path() {
+        let err = outer_conversion().unwrap_err();
+        assert_eq!(err.to_string(), "header.account_root: value is not in range 0..MODULUS");
+    }
+
+    #[test]
+    fn test_context_single_field() {
+        let err = inner_conversion().context("nullifier").unwrap_err();
+        assert_eq!(err.to_string(), "nullifier: value is not in range 0..MODULUS");
+    }
+
+    #[test]
+    fn test_context_deep_nesting() {
+        let err = outer_conversion().context("block").context("response").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "response.block.header.account_root: value is not in range 0..MODULUS"
+        );
+    }
+
+    #[test]
+    fn test_no_context_shows_source_only() {
+        let err = inner_conversion().unwrap_err();
+        assert_eq!(err.to_string(), "value is not in range 0..MODULUS");
+    }
+
+    #[test]
+    fn test_context_on_external_error_type() {
+        let result: Result<u8, std::num::TryFromIntError> = u8::try_from(256u16);
+        let err = result.context("fee_amount").unwrap_err();
+        assert!(err.to_string().starts_with("fee_amount: "), "expected field prefix, got: {err}",);
+    }
+}
