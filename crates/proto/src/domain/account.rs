@@ -380,11 +380,9 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         } else {
             let parsed_assets =
                 Result::<Vec<_>, ConversionError>::from_iter(assets.into_iter().map(|asset| {
-                    let asset = asset.asset.ok_or(ConversionError::missing_field::<
-                        proto::primitives::Asset,
-                    >("asset"))?;
-                    let asset = Word::try_from(asset).context("asset")?;
-                    Asset::try_from(asset).map_err(ConversionError::from)
+                    let word: Word =
+                        asset.asset.try_convert_field::<proto::primitives::Asset>("asset")?;
+                    Asset::try_from(word).map_err(ConversionError::from)
                 }))
                 .context("assets")?;
             Ok(Self::Assets(parsed_assets))
