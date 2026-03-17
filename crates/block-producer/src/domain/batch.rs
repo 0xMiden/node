@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::u32;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
 
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -49,6 +51,15 @@ impl SelectedBatch {
     /// transaction updates to an account of `a -> b -> c` will result in a single `a -> c`.
     pub(crate) fn account_updates(&self) -> impl Iterator<Item = (AccountId, Word, Word)> {
         self.account_updates.iter().map(|(account, (from, to))| (*account, *from, *to))
+    }
+
+    pub(crate) fn expires_at(&self) -> BlockNumber {
+        self.txs
+            .iter()
+            .map(|tx| tx.expires_at().as_u32())
+            .min()
+            .unwrap_or(u32::MAX)
+            .into()
     }
 }
 

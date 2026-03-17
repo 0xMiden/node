@@ -376,7 +376,7 @@ impl Mempool {
             self.prune_oldest_block();
         }
 
-        let reverted_tx_ids = self.revert_expired_nodes();
+        let reverted_tx_ids = self.revert_expired();
         self.subscription.txs_reverted(reverted_tx_ids);
         self.inject_telemetry();
     }
@@ -514,107 +514,12 @@ impl Mempool {
         }
     }
 
-    /// Reverts expired transactions and batches as per the current `chain_tip`.
-    ///
-    /// Returns the list of all transactions that were reverted.
-    fn revert_expired_nodes(&mut self) -> HashSet<TransactionId> {
-        let expired_txs = self.nodes.txs.iter().filter_map(|(id, node)| {
-            (node.expires_at() <= self.chain_tip).then_some(NodeId::Transaction(*id))
-        });
-        let expired_proposed_batches =
-            self.nodes.proposed_batches.iter().filter_map(|(id, node)| {
-                (node.expires_at() <= self.chain_tip).then_some(NodeId::ProposedBatch(*id))
-            });
-        let expired_proven_batches = self.nodes.proven_batches.iter().filter_map(|(id, node)| {
-            (node.expires_at() <= self.chain_tip).then_some(NodeId::ProvenBatch(*id))
-        });
-
-        let expired = expired_proven_batches
-            .chain(expired_proposed_batches)
-            .chain(expired_txs)
-            .collect::<Vec<_>>();
-        let mut reverted_txs = HashSet::default();
-        for expired_id in expired {
-            let reverted = self.revert_subtree(expired_id);
-            for (id, node) in reverted {
-                match id {
-                    NodeId::ProposedBatch(batch_id) | NodeId::ProvenBatch(batch_id) => {
-                        tracing::info!(
-                            ancestor=?expired_id,
-                            batch.id=%batch_id,
-                            "Reverted batch due to expiration of ancestor"
-                        );
-                    },
-                    NodeId::Transaction(_) => {},
-                    NodeId::Block(block_number) => panic!(
-                        "Found block {block_number} descendent while reverting expired nodes which shouldn't be possible since only one block is in progress"
-                    ),
-                }
-
-                for tx in node.transactions() {
-                    reverted_txs.insert(tx.id());
-                    tracing::info!(
-                        ancestor=?expired_id,
-                        transaction.id=%tx.id(),
-                        "Reverted transaction due to expiration of ancestor"
-                    );
-                }
-            }
+    fn revert_expired(&mut self) -> HashSet<TransactionId> {
+        let batches = self.batches.revert_expired(self.chain_tip);
+        for batch in batches {
+            self.transactions.requeue_batch_transactions(batch);
         }
-
-        reverted_txs
-    }
-
-    /// Reverts the subtree with the given root and returns the reverted nodes. Does nothing if the
-    /// root node does not exist to allow using this in cases where multiple overlapping calls to
-    /// this are made.
-    fn revert_subtree(&mut self, root: NodeId) -> HashMap<NodeId, Box<dyn Node>> {
-        let root_exists = match root {
-            NodeId::Transaction(id) => self.nodes.txs.contains_key(&id),
-            NodeId::ProposedBatch(id) => self.nodes.proposed_batches.contains_key(&id),
-            NodeId::ProvenBatch(id) => self.nodes.proven_batches.contains_key(&id),
-            NodeId::Block(id) => {
-                self.nodes.proposed_block.as_ref().is_some_and(|(number, _)| *number == id)
-            },
-        };
-        if !root_exists {
-            return HashMap::default();
-        }
-
-        let mut to_process = vec![root];
-        let mut reverted = HashMap::default();
-
-        while let Some(id) = to_process.pop() {
-            if reverted.contains_key(&id) {
-                continue;
-            }
-
-            // SAFETY: all IDs come from the state DAG and must therefore exist. The processed check
-            // above also prevents removing a node twice.
-            let node: Box<dyn Node> = match id {
-                NodeId::Transaction(id) => {
-                    self.nodes.txs.remove(&id).map(|x| Box::new(x) as Box<dyn Node>)
-                },
-                NodeId::ProposedBatch(id) => {
-                    self.nodes.proposed_batches.remove(&id).map(|x| Box::new(x) as Box<dyn Node>)
-                },
-                NodeId::ProvenBatch(id) => {
-                    self.nodes.proven_batches.remove(&id).map(|x| Box::new(x) as Box<dyn Node>)
-                },
-                NodeId::Block(id) => self
-                    .nodes
-                    .proposed_block
-                    .take_if(|(number, _)| number == &id)
-                    .map(|(_, x)| Box::new(x) as Box<dyn Node>),
-            }
-            .unwrap();
-
-            to_process.extend(self.state.children(id, node.as_ref()));
-            self.state.remove(node.as_ref());
-            reverted.insert(id, node);
-        }
-
-        reverted
+        self.transactions.revert_expired(self.chain_tip)
     }
 
     /// Rejects authentication height's which we cannot guarantee are correct from the locally

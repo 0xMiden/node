@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::Not;
 use std::sync::Arc;
@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProvenBatch};
+use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
 use super::{Graph, GraphNode};
@@ -85,6 +86,30 @@ impl BatchGraph {
             }
 
             panic!("revert_batch_and_descendents failed to make progress");
+        }
+
+        reverted
+    }
+
+    /// Reverts expired batches and their descendents.
+    ///
+    /// Only unselected batches are considered, the assumption being that selected batches
+    /// are in committed blocks and should not be reverted.
+    ///
+    /// Batches are returned in reverse-chronological order.
+    pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> Vec<SelectedBatch> {
+        let mut reverted = Vec::default();
+
+        let mut expired = self
+            .batches
+            .iter()
+            .filter_map(|(id, batch)| (batch.expires_at() <= chain_tip).then_some(id))
+            // TODO: consider selected once they're re-added.
+            .copied()
+            .collect::<HashSet<_>>();
+
+        for batch in expired {
+            reverted.extend(self.revert_batch_and_descendents(batch));
         }
 
         reverted
