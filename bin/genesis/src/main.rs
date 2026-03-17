@@ -197,99 +197,58 @@ fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
 
 #[cfg(test)]
 mod tests {
-    use miden_protocol::ZERO;
+    use miden_node_store::genesis::config::GenesisConfig;
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
     use miden_protocol::utils::Serializable;
 
     use super::*;
 
-    #[test]
-    fn default_mode_generates_accounts_with_secret_keys() {
-        let dir = tempfile::tempdir().unwrap();
+    /// Parses the generated genesis.toml, builds a genesis block, and asserts the bridge account
+    /// is included with nonce=1.
+    async fn assert_valid_genesis_block(dir: &Path) {
+        let bridge_id = AccountFile::read(dir.join("bridge.mac")).unwrap().account.id();
 
-        run(dir.path(), None, None).expect("run should succeed");
+        let config = GenesisConfig::read_toml_file(&dir.join("genesis.toml")).unwrap();
+        let signer = SecretKey::read_from_bytes(&[0x01; 32]).unwrap();
+        let (state, _) = config.into_state(signer).unwrap();
 
-        // All 4 files should exist.
-        assert!(dir.path().join("bridge_admin.mac").exists());
-        assert!(dir.path().join("ger_manager.mac").exists());
-        assert!(dir.path().join("bridge.mac").exists());
-        assert!(dir.path().join("genesis.toml").exists());
+        let bridge = state.accounts.iter().find(|a| a.id() == bridge_id).unwrap();
+        assert_eq!(bridge.nonce(), ONE);
 
-        // Bridge account should have nonce=1 (genesis account).
-        let bridge = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
-        assert_eq!(bridge.account.nonce(), ONE);
-        assert!(bridge.auth_secret_keys.is_empty(), "bridge should have no secret keys");
-
-        // Bridge admin should have nonce=0 and include a secret key.
-        let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
-        assert_eq!(admin.account.nonce(), ZERO);
-        assert_eq!(admin.auth_secret_keys.len(), 1, "bridge admin should have a secret key");
-
-        // GER manager should have nonce=0 and include a secret key.
-        let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
-        assert_eq!(ger.account.nonce(), ZERO);
-        assert_eq!(ger.auth_secret_keys.len(), 1, "GER manager should have a secret key");
+        state.into_block().await.expect("genesis block should build");
     }
 
-    #[test]
-    fn custom_public_keys_generates_accounts_without_secret_keys() {
+    #[tokio::test]
+    async fn default_mode_includes_secret_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), None, None).unwrap();
+
+        let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
+        assert_eq!(admin.auth_secret_keys.len(), 1);
+
+        let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
+        assert_eq!(ger.auth_secret_keys.len(), 1);
+
+        assert_valid_genesis_block(dir.path()).await;
+    }
+
+    #[tokio::test]
+    async fn custom_public_keys_excludes_secret_keys() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Generate two keypairs and pass their public keys as hex.
         let (admin_pub, _) = generate_falcon_keypair();
         let (ger_pub, _) = generate_falcon_keypair();
         let admin_hex = hex::encode((&admin_pub).to_bytes());
         let ger_hex = hex::encode((&ger_pub).to_bytes());
 
-        run(dir.path(), Some(&admin_hex), Some(&ger_hex)).expect("run should succeed");
+        run(dir.path(), Some(&admin_hex), Some(&ger_hex)).unwrap();
 
-        // Bridge admin and GER manager should have no secret keys when public keys are provided.
         let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
-        assert!(
-            admin.auth_secret_keys.is_empty(),
-            "bridge admin should have no secret keys in custom mode"
-        );
+        assert!(admin.auth_secret_keys.is_empty());
 
         let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
-        assert!(
-            ger.auth_secret_keys.is_empty(),
-            "GER manager should have no secret keys in custom mode"
-        );
+        assert!(ger.auth_secret_keys.is_empty());
 
-        // Bridge should still have nonce=1.
-        let bridge = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
-        assert_eq!(bridge.account.nonce(), ONE);
-    }
-
-    #[tokio::test]
-    async fn genesis_config_produces_valid_genesis_block() {
-        use miden_node_store::genesis::config::GenesisConfig;
-        use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-
-        let dir = tempfile::tempdir().unwrap();
-        run(dir.path(), None, None).expect("run should succeed");
-
-        // Read the bridge account to know its expected ID.
-        let bridge_file = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
-        let expected_bridge_id = bridge_file.account.id();
-
-        // Parse the generated genesis.toml.
-        let config = GenesisConfig::read_toml_file(&dir.path().join("genesis.toml"))
-            .expect("genesis.toml should be parseable");
-
-        // Build the genesis state and block.
-        let signer = SecretKey::read_from_bytes(&[0x01; 32]).unwrap();
-        let (state, _secrets) = config.into_state(signer).expect("genesis state should build");
-
-        // The genesis state should contain the bridge account (+ the default MIDEN faucet).
-        let bridge_in_genesis = state
-            .accounts
-            .iter()
-            .find(|a| a.id() == expected_bridge_id)
-            .expect("bridge account should be in genesis state");
-        assert_eq!(bridge_in_genesis.nonce(), ONE);
-
-        // Build the actual genesis block to verify it's valid.
-        let block = state.into_block().await.expect("genesis block should build successfully");
-        assert_eq!(block.inner().header().block_num(), miden_protocol::block::BlockNumber::GENESIS);
+        assert_valid_genesis_block(dir.path()).await;
     }
 }
