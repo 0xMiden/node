@@ -198,7 +198,7 @@ pub(super) fn select_vault_balances_by_faucet_ids(
 /// FROM account_vault_assets
 /// WHERE account_id = ?1 AND is_latest = 1
 /// ```
-pub(super) fn select_latest_vault_assets(
+pub(crate) fn select_latest_vault_assets(
     conn: &mut SqliteConnection,
     account_id: AccountId,
 ) -> Result<Vec<Asset>, DatabaseError> {

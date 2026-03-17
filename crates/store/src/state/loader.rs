@@ -361,13 +361,49 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 /// Loads SMT forest with storage map and vault Merkle paths for all public accounts.
 #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
 pub async fn load_smt_forest(
-    db: &mut Db,
+    db: &Db,
     block_num: BlockNumber,
 ) -> Result<AccountStateForest, StateInitializationError> {
-    use miden_protocol::account::delta::AccountDelta;
-
-    let mut forest = AccountStateForest::new();
     let mut cursor = None;
+
+    let limit = PUBLIC_ACCOUNT_IDS_PAGE_SIZE.get() * 2;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+
+    let (tx2, mut rx2) = tokio::sync::mpsc::channel(limit);
+
+    let jh1 = tokio::spawn(async move {
+        let mut buffer = Vec::with_capacity(limit);
+        loop {
+            let n = rx.recv_many(&mut buffer, limit).await;
+            if n == 0 || rx.is_closed() {
+                break;
+            }
+            for account_id in buffer.drain(..).flatten() {
+                let (assets, map_entries) = db.select_account_forest_data(account_id).await?;
+                tx2.send((account_id, assets, map_entries)).await.unwrap();
+            }
+        }
+        Ok::<_, DatabaseError>(())
+    });
+
+    let jh2 = tokio::task::spawn_blocking(
+        move || -> Result<AccountStateForest, StateInitializationError> {
+            let mut forest = AccountStateForest::new();
+
+            let mut buffer = Vec::with_capacity(limit);
+            loop {
+                let n = rx2.blocking_recv_many(&mut buffer, limit);
+                if n == 0 || rx2.is_closed() {
+                    break;
+                }
+                for (account_id, ref assets, ref map_entries) in buffer.drain(..) {
+                    forest.insert_account(block_num, account_id, assets, map_entries)?;
+                }
+            }
+            Ok(forest)
+        },
+    );
 
     loop {
         let page = db.select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor).await?;
@@ -376,28 +412,16 @@ pub async fn load_smt_forest(
             break;
         }
 
-        // Process each account in this page
-        for account_id in page.account_ids {
-            // TODO: Loading the full account from the database is inefficient and will need to
-            // go away. <https://github.com/0xMiden/node/issues/1556>
-            let account_info = db.select_account(account_id).await?;
-            let account = account_info
-                .details
-                .ok_or(StateInitializationError::PublicAccountMissingDetails(account_id))?;
-
-            // Convert the full account to a full-state delta
-            let delta = AccountDelta::try_from(account).map_err(|e| {
-                StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
-            })?;
-
-            forest.update_account(block_num, &delta)?;
-        }
+        tx.send(page.account_ids).await;
 
         cursor = page.next_cursor;
         if cursor.is_none() {
             break;
         }
     }
+    drop(tx);
+    jh1.await.unwrap()?;
+    let forest = jh2.await.unwrap()?;
 
     Ok(forest)
 }

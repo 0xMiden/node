@@ -23,6 +23,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use indicatif::{ProgressBar, ProgressStyle};
 use miden_crypto::utils::Serializable;
 use miden_node_store::Store;
 use miden_node_store::genesis::GenesisBlock;
@@ -63,7 +64,7 @@ use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
 use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::wallets::BasicWallet;
-use tempfile::TempDir;
+use rayon::prelude::*;
 use tracing::Subscriber;
 use tracing_subscriber::fmt::format::{FmtSpan, FormatEvent, FormatFields, Writer};
 use tracing_subscriber::fmt::{FmtContext, FormattedFields};
@@ -76,7 +77,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 // ================================================================================================
 
 /// Account counts to benchmark: 1e4, 1e5, 1e6.
-const ACCOUNT_COUNTS: &[usize] = &[1_000_000, 100_000];
+const ACCOUNT_COUNTS: &[usize] = &[100_000];
 
 /// ANSI escape: bold yellow.
 const BOLD_YELLOW: &str = "\x1b[1;33m";
@@ -275,13 +276,23 @@ fn build_public_account(
 // BENCHMARK SETUP
 // ================================================================================================
 
-/// Creates a fully bootstrapped data directory with `num_accounts` public accounts.
+/// Returns a stable, reusable data directory for `num_accounts` public accounts.
+///
+/// The directory is stored at `target/bench-data-{num_accounts}` relative to the workspace root
+/// (via the `CARGO_MANIFEST_DIR` env var). If `miden-store.sqlite3` already exists inside it,
+/// the previous bootstrap is reused and account generation is skipped entirely. Otherwise the
+/// full setup runs and the result persists for future runs.
 ///
 /// Every account carries a vault asset and storage data so that `load_smt_forest` has real work
-/// to do. The returned [`TempDir`] must be kept alive for the duration of the benchmark.
-fn setup_data_directory(num_accounts: usize) -> (TempDir, PathBuf) {
-    let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let data_dir = temp_dir.path().to_path_buf();
+/// to do.
+fn setup_data_directory(num_accounts: usize) -> PathBuf {
+    let cache_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/bench-data")
+        .join(num_accounts.to_string());
+
+    std::fs::create_dir_all(&cache_root).expect("failed to create bench-data cache directory");
+
+    let data_dir = cache_root;
 
     let faucet_id = miden_protocol::account::AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET)
         .expect("valid faucet account id");
@@ -289,13 +300,35 @@ fn setup_data_directory(num_accounts: usize) -> (TempDir, PathBuf) {
     // Precompile the BasicWallet library once; `AccountComponentCode` is `Clone` (Arc-backed).
     let wallet_code: AccountComponentCode = AccountComponent::from(BasicWallet).into();
 
+    // If the database file already exists this directory was fully bootstrapped previously.
+    let db_path = data_dir.join("miden-store.sqlite3");
+    if db_path.exists() {
+        tracing::info!(num_accounts=%num_accounts, "Reusing cached data directory");
+        return data_dir;
+    }
+
     tracing::info!(num_accounts=%num_accounts, "Building accounts....");
-    let accounts = Vec::<Account>::from_iter((0..num_accounts).map(|i| {
-        let src = Felt::new(i as u64 + 235230).to_bytes();
-        let mut seed = [0u8; 32];
-        seed[0..src.len()].copy_from_slice(&src[..]);
-        build_public_account(seed, faucet_id, wallet_code.clone())
-    }));
+    let pb = ProgressBar::new(num_accounts as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{msg} [{bar:50.cyan/blue}] {pos}/{len} accounts ({eta} remaining)",
+        )
+        .unwrap()
+        .progress_chars("=> "),
+    );
+    pb.set_message(format!("Building {num_accounts} accounts"));
+    let accounts: Vec<Account> = (0..num_accounts)
+        .into_par_iter()
+        .map(|i| {
+            let src = Felt::new(i as u64 + 235230).to_bytes();
+            let mut seed = [0u8; 32];
+            seed[0..src.len()].copy_from_slice(&src[..]);
+            let account = build_public_account(seed, faucet_id, wallet_code.clone());
+            pb.inc(1);
+            account
+        })
+        .collect();
+    pb.finish_with_message(format!("Built {num_accounts} accounts"));
     tracing::info!(num_accounts=%num_accounts, "Building accounts >> DONE");
 
     tracing::info!(num_accounts=%num_accounts, "Building genesis block....");
@@ -306,27 +339,29 @@ fn setup_data_directory(num_accounts: usize) -> (TempDir, PathBuf) {
     Store::bootstrap(&genesis_block, &data_dir).expect("Store::bootstrap failed");
     tracing::info!(num_accounts=%num_accounts, "Bootstraping >> DONE");
 
-    (temp_dir, data_dir)
+    data_dir
 }
 
 /// Wraps the account list in a `GenesisBlock` with consistent account-tree and nullifier-tree
 /// roots so that `verify_tree_consistency` passes on every `State::load` call.
 fn build_genesis_block(accounts: Vec<Account>) -> GenesisBlock {
-    let account_updates: Vec<BlockAccountUpdate> = accounts
-        .iter()
+    let (account_updates, smt_entries): (Vec<BlockAccountUpdate>, Vec<_>) = accounts
+        .into_par_iter()
         .map(|account| {
-            let delta = AccountDelta::try_from(account.clone())
-                .expect("full-state delta should always succeed");
-            BlockAccountUpdate::new(
-                account.id(),
-                account.to_commitment(),
-                AccountUpdateDetails::Delta(delta),
-            )
-        })
-        .collect();
+            let id = account.id();
+            let commitment = account.to_commitment();
 
-    let smt_entries = accounts.iter().map(|a| (account_id_to_smt_key(a.id()), a.to_commitment()));
-    let smt = LargeSmt::with_entries(MemoryStorage::default(), smt_entries)
+            let delta =
+                AccountDelta::try_from(account).expect("full-state delta should always succeed");
+            let update =
+                BlockAccountUpdate::new(id, commitment, AccountUpdateDetails::Delta(delta));
+            let smt_entry =
+                (account_id_to_smt_key(update.account_id()), update.final_state_commitment());
+            (update, smt_entry)
+        })
+        .unzip();
+
+    let smt = LargeSmt::with_entries(MemoryStorage::default(), smt_entries.into_iter())
         .expect("failed to build account SMT");
     let account_tree = AccountTree::new(smt).expect("failed to create AccountTree");
 
@@ -369,7 +404,7 @@ fn bench_state_load(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_load");
 
     for &num_accounts in ACCOUNT_COUNTS {
-        let (_temp_dir, data_dir) = setup_data_directory(num_accounts);
+        let data_dir = setup_data_directory(num_accounts);
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

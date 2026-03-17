@@ -100,9 +100,11 @@ pretty_assertions = { version = "1.4" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
+indicatif          = { version = "0.17" }
 prost              = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
 rand               = { version = "0.9" }
+rayon              = { version = "1" }
 rand_chacha        = { default-features = false, version = "0.9" }
 reqwest            = { version = "0.13" }
 rstest             = { version = "0.26" }

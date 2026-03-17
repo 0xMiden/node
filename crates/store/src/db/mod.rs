@@ -10,7 +10,13 @@ use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
+use miden_protocol::account::{
+    AccountHeader,
+    AccountId,
+    AccountStorageHeader,
+    StorageMapKey,
+    StorageSlotName,
+};
 use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -82,6 +88,7 @@ pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 /// The Store's database.
 ///
 /// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.
+#[derive(Clone)]
 pub struct Db {
     db: miden_node_db::Db,
 }
@@ -427,6 +434,25 @@ impl Db {
     pub async fn select_account(&self, id: AccountId) -> Result<AccountInfo> {
         self.transact("Get account details", move |conn| queries::select_account(conn, id))
             .await
+    }
+
+    /// Loads only the vault assets and storage map entries for a public account.
+    ///
+    /// This is the minimal data needed to populate
+    /// [`crate::account_state_forest::AccountStateForest`] during startup via
+    /// `load_smt_forest`, avoiding a full account load.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_account_forest_data(
+        &self,
+        id: AccountId,
+    ) -> Result<(Vec<Asset>, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>)> {
+        self.transact("get account forest data", move |conn| {
+            let assets = queries::select_latest_vault_assets(conn, id)?;
+            let (_header, map_entries) =
+                queries::select_latest_account_storage_components(conn, id)?;
+            Ok((assets, map_entries))
+        })
+        .await
     }
 
     /// Loads public account details for a network account by its full account ID.

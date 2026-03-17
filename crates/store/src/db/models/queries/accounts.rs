@@ -53,11 +53,11 @@ pub(crate) use at_block::{
 };
 
 mod delta;
+pub(crate) use delta::select_latest_vault_assets;
 use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta,
-    select_latest_vault_assets,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
