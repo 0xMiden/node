@@ -372,9 +372,7 @@ impl Mempool {
         self.subscription.block_committed(to_commit, tx_ids);
 
         self.committed_blocks.push_back(batches);
-        if self.committed_blocks.len() > self.config.state_retention.get() {
-            self.prune_oldest_block();
-        }
+        self.prune_oldest_block();
 
         let reverted_tx_ids = self.revert_expired();
         self.subscription.txs_reverted(reverted_tx_ids);
@@ -406,12 +404,7 @@ impl Mempool {
         // FIXME: We should consider a more robust check here to identify the block by a hash.
         //        If multiple jobs are possible, then so are multiple variants with the same block
         //        number.
-        if self
-            .nodes
-            .proposed_block
-            .as_ref()
-            .is_none_or(|(proposed, _)| proposed != &block)
-        {
+        if self.pending_block.as_ref().is_none_or(|(num, _)| num != &block) {
             return;
         }
 
@@ -423,33 +416,19 @@ impl Mempool {
         //
         // A more refined approach could be to tag the offending transactions and then evict them
         // once a certain failure threshold has been met.
-        let reverted = self.revert_subtree(NodeId::Block(block));
         let mut reverted_txs = HashSet::default();
+        let (_, batches) = self.pending_block.take().unwrap();
+        for batch in batches {
+            let reverted = self.batches.revert_batch_and_descendents(batch.id());
 
-        // Log reverted batches and transactions.
-        for (id, node) in reverted {
-            match id {
-                NodeId::ProposedBatch(batch_id) | NodeId::ProvenBatch(batch_id) => {
-                    tracing::info!(
-                        block.number=%block,
-                        batch.id=%batch_id,
-                        "Reverted batch as part of block rollback"
-                    );
-                },
-                NodeId::Transaction(_) | NodeId::Block(_) => {},
-            }
-
-            for tx in node.transactions() {
-                reverted_txs.insert(tx.id());
-                tracing::info!(
-                    block.number=%block,
-                    transaction.id=%tx.id(),
-                    "Reverted transaction as part of block rollback"
-                );
+            for batch in reverted {
+                for tx in batch.into_transactions() {
+                    reverted_txs.extend(self.transactions.revert_tx_and_descendents(tx.id()));
+                }
             }
         }
-        self.subscription.txs_reverted(reverted_txs);
 
+        self.subscription.txs_reverted(reverted_txs);
         self.inject_telemetry();
     }
 
@@ -496,16 +475,21 @@ impl Mempool {
         self.state.inject_telemetry(&span);
     }
 
+    /// Prunes the oldest locally retained block if the number of blocks exceeds the configured
+    /// limit.
+    ///
+    /// This includes pruning the block's batches and transactions from their graphs.
     fn prune_oldest_block(&mut self) {
-        let Some(batches) = self.committed_blocks.pop_front() else {
+        if self.committed_blocks.len() <= self.config.state_retention.get() {
             return;
-        };
+        }
+        let block = self.committed_blocks.pop_front().unwrap();
 
-        for batch in batches.iter().map(|batch| batch.id()) {
+        for batch in block.iter().map(|batch| batch.id()) {
             self.batches.prune(batch);
         }
 
-        for tx in batches
+        for tx in block
             .iter()
             .flat_map(|batch| batch.transactions().as_slice())
             .map(TransactionHeader::id)

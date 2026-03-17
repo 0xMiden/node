@@ -111,6 +111,36 @@ impl TransactionGraph {
         // reverted
     }
 
+    /// Reverts the given transaction and _all_ its descendents _IFF_ it is present in the graph.
+    ///
+    /// This includes batches that have been marked as proven.
+    ///
+    /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
+    pub fn revert_tx_and_descendents(&mut self, transaction: TransactionId) -> Vec<TransactionId> {
+        if !self.txs.contains_key(&transaction) {
+            return Vec::default();
+        }
+
+        let mut descendents = self.inner.descendents(&transaction);
+        descendents.insert(transaction);
+
+        let mut reverted = Vec::new();
+        'outer: while !descendents.is_empty() {
+            for node in &descendents {
+                if let Some(leaf) = self.inner.revert_leaf(node) {
+                    descendents.remove(&leaf);
+                    self.txs.remove(&leaf).unwrap();
+                    reverted.push(leaf);
+                    continue 'outer;
+                }
+            }
+
+            panic!("revert_tx_and_descendents failed to make progress");
+        }
+
+        reverted
+    }
+
     pub fn requeue_batch_transactions(&mut self, batch: SelectedBatch) {
         todo!();
     }

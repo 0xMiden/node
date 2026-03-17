@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::u32;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;

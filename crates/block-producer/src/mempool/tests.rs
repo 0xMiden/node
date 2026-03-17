@@ -214,29 +214,29 @@ fn block_failure_reverts_its_transactions() {
     assert_eq!(uut, reference);
 }
 
-/// Ensures that reverting a subtree removes the node and all its descendents. We test this by
-/// comparing against a reference mempool that never had the subtree inserted at all.
-#[test]
-fn subtree_reversion_removes_all_descendents() {
-    let (mut uut, mut reference) = Mempool::for_tests();
+// /// Ensures that reverting a subtree removes the node and all its descendents. We test this by
+// /// comparing against a reference mempool that never had the subtree inserted at all.
+// #[test]
+// fn subtree_reversion_removes_all_descendents() {
+//     let (mut uut, mut reference) = Mempool::for_tests();
 
-    let reverted_txs = MockProvenTxBuilder::sequential();
+//     let reverted_txs = MockProvenTxBuilder::sequential();
 
-    uut.add_transaction(reverted_txs[0].clone()).unwrap();
-    uut.select_batch().unwrap();
+//     uut.add_transaction(reverted_txs[0].clone()).unwrap();
+//     uut.select_batch().unwrap();
 
-    uut.add_transaction(reverted_txs[1].clone()).unwrap();
-    let to_revert = uut.select_batch().unwrap();
+//     uut.add_transaction(reverted_txs[1].clone()).unwrap();
+//     let to_revert = uut.select_batch().unwrap();
 
-    uut.add_transaction(reverted_txs[2].clone()).unwrap();
-    uut.revert_subtree(NodeId::ProposedBatch(to_revert.id()));
+//     uut.add_transaction(reverted_txs[2].clone()).unwrap();
+//     uut.revert_subtree(NodeId::ProposedBatch(to_revert.id()));
 
-    // We expect the second batch and the latter reverted txns to be non-existent.
-    reference.add_transaction(reverted_txs[0].clone()).unwrap();
-    reference.select_batch().unwrap();
+//     // We expect the second batch and the latter reverted txns to be non-existent.
+//     reference.add_transaction(reverted_txs[0].clone()).unwrap();
+//     reference.select_batch().unwrap();
 
-    assert_eq!(uut, reference);
-}
+//     assert_eq!(uut, reference);
+// }
 
 /// We've decided that transactions from a rolled back batch should be requeued.
 ///
