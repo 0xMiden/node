@@ -302,18 +302,7 @@ impl Mempool {
     /// Marks a batch as proven if it exists.
     #[instrument(target = COMPONENT, name = "mempool.commit_batch", skip_all)]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
-        // Due to the distributed nature of the system, its possible that a proposed batch was
-        // already proven, or already reverted. This guards against this eventuality.
-        let Some(proposed) = self.nodes.proposed_batches.remove(&proof.id()) else {
-            return;
-        };
-
-        self.state.remove(&proposed);
-
-        let proven = proposed.into_proven_batch_node(proof);
-        self.state.insert(NodeId::ProvenBatch(proven.id()), &proven);
-        self.nodes.proven_batches.insert(proven.id(), proven);
-
+        self.batches.submit_proof(proof);
         self.inject_telemetry();
     }
 

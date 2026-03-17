@@ -88,6 +88,14 @@ impl BatchGraph {
         reverted
     }
 
+    /// Marks the given batch as proven, making it available for selection in a block
+    /// once it becomes a root.
+    pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) {
+        if self.batches.contains_key(&proof.id()) {
+            self.proven.insert(proof.id(), proof);
+        }
+    }
+
     /// Returns the most recent commitment known for the specified account.
     pub fn account_commitment(&self, account: &AccountId) -> Option<Word> {
         self.inner.account_commitment(account)
