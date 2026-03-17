@@ -1,9 +1,10 @@
 use miden_node_db::{DatabaseError, Db};
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
-use tracing::instrument;
+use tracing::{Span, instrument};
 
 use crate::db::{find_unvalidated_transactions, load_block_header};
 use crate::{COMPONENT, ValidatorSigner};
@@ -43,7 +44,7 @@ pub enum BlockValidationError {
 ///    tip, validated against the previous block header.
 ///
 /// On success, returns the signature and the validated block header.
-#[instrument(target = COMPONENT, skip_all, err, fields(chain_tip = chain_tip.block_num().as_u32()))]
+#[instrument(target = COMPONENT, skip_all, err, fields(tip.number = chain_tip.block_num().as_u32()))]
 pub async fn validate_block(
     proposed_block: ProposedBlock,
     signer: &ValidatorSigner,
@@ -69,6 +70,10 @@ pub async fn validate_block(
     let (proposed_header, _) = proposed_block
         .into_header_and_body()
         .map_err(BlockValidationError::BlockBuildingFailed)?;
+
+    let span = Span::current();
+    span.set_attribute("block.number", proposed_header.block_num().as_u32());
+    span.set_attribute("block.commitment", proposed_header.commitment());
 
     // If the proposed block has the same block number as the current chain tip, this is a
     // replacement block. Validate it against the previous block header.
