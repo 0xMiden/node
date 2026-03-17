@@ -38,11 +38,6 @@ impl NtxBuilderRpcServer {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        let reflection_service_alpha = server::Builder::configure()
-            .register_file_descriptor_set(ntx_builder_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         tracing::info!(
             target: COMPONENT,
             endpoint = ?listener.local_addr(),
@@ -54,7 +49,6 @@ impl NtxBuilderRpcServer {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .add_service(api_service)
             .add_service(reflection_service)
-            .add_service(reflection_service_alpha)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .context("failed to serve NTX builder gRPC API")
