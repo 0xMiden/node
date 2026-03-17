@@ -17,7 +17,7 @@ use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt, try_convert_field};
+use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
 use crate::generated as proto;
 
 // NOTE TYPE
@@ -53,7 +53,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
     type Error = ConversionError;
 
     fn try_from(value: proto::note::NoteMetadata) -> Result<Self, Self::Error> {
-        let sender = try_convert_field::<proto::note::NoteMetadata, _, _>(value.sender, "sender")?;
+        let sender = value.sender.try_convert_field::<proto::note::NoteMetadata>("sender")?;
         let note_type = proto::note::NoteType::try_from(value.note_type)
             .map_err(|_| ConversionError::message("enum variant discriminant out of range"))?
             .try_into()
@@ -108,7 +108,7 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
             .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
         let (assets, recipient) = details.into_parts();
         let metadata: NoteMetadata =
-            try_convert_field::<proto::note::NetworkNote, _, _>(value.metadata, "metadata")?;
+            value.metadata.try_convert_field::<proto::note::NetworkNote>("metadata")?;
         let note = Note::new(assets, metadata, recipient);
         AccountTargetNetworkNote::new(note).map_err(ConversionError::from)
     }
@@ -206,7 +206,7 @@ impl TryFrom<proto::note::Note> for Note {
 
     fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
         let metadata: NoteMetadata =
-            try_convert_field::<proto::note::Note, _, _>(proto_note.metadata, "metadata")?;
+            proto_note.metadata.try_convert_field::<proto::note::Note>("metadata")?;
 
         let details = proto_note
             .details
@@ -237,9 +237,9 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
 
     fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
         let note_id_word: Word =
-            try_convert_field::<proto::note::NoteHeader, _, _>(value.note_id, "note_id")?;
+            value.note_id.try_convert_field::<proto::note::NoteHeader>("note_id")?;
         let metadata: NoteMetadata =
-            try_convert_field::<proto::note::NoteHeader, _, _>(value.metadata, "metadata")?;
+            value.metadata.try_convert_field::<proto::note::NoteHeader>("metadata")?;
 
         Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }

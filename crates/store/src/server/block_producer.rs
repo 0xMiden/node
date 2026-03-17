@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use futures::TryFutureExt;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_node_proto::errors::{ConversionError, try_convert_field};
+use miden_node_proto::errors::{ConversionError, TryConvertFieldExt};
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
@@ -60,15 +60,14 @@ impl block_producer_server::BlockProducer for StoreApi {
             .ok_or(ConversionError::missing_field::<proto::store::ApplyBlockRequest>("block"))?;
         // Read block header.
         let header: BlockHeader =
-            try_convert_field::<proto::blockchain::SignedBlock, _, _>(block.header, "header")?;
+            block.header.try_convert_field::<proto::blockchain::SignedBlock>("header")?;
         // Read block body.
         let body: BlockBody =
-            try_convert_field::<proto::blockchain::SignedBlock, _, _>(block.body, "body")?;
+            block.body.try_convert_field::<proto::blockchain::SignedBlock>("body")?;
         // Read signature.
-        let signature: Signature = try_convert_field::<proto::blockchain::SignedBlock, _, _>(
-            block.signature,
-            "signature",
-        )?;
+        let signature: Signature = block
+            .signature
+            .try_convert_field::<proto::blockchain::SignedBlock>("signature")?;
 
         // Get block inputs from ordered batches.
         let block_inputs =

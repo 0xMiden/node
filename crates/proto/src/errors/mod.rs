@@ -176,33 +176,42 @@ impl<T, E: Into<ConversionError>> ConversionResultExt<T> for Result<T, E> {
 // FIELD CONVERSION HELPERS
 // ================================================================================================
 
-/// Converts a required `Option` field from a protobuf message, combining the missing-field check
-/// and fallible conversion into a single call.
+/// Extension trait on `Option<F>` to convert a required protobuf field in one step.
 ///
-/// This deduplicates the common pattern of:
+/// Combines the missing-field check, fallible conversion, and context injection:
+///
 /// ```rust,ignore
+/// // Before:
 /// let body = block.body
 ///     .ok_or(ConversionError::missing_field::<proto::SignedBlock>("body"))?
 ///     .try_into()
 ///     .context("body")?;
-/// ```
 ///
-/// Into:
-/// ```rust,ignore
-/// let body = try_convert_field::<proto::SignedBlock, _, _>(block.body, "body")?;
+/// // After:
+/// let body = block.body.try_convert_field::<proto::SignedBlock>("body")?;
 /// ```
-pub fn try_convert_field<M: prost::Message, T, F>(
-    field: Option<F>,
-    name: &'static str,
-) -> Result<T, ConversionError>
+pub trait TryConvertFieldExt<F> {
+    /// Unwraps the `Option`, returning a [`ConversionError::missing_field`] for `None`,
+    /// then converts via `TryInto` with field context on failure.
+    ///
+    /// `M` is the parent protobuf message that contains this field.
+    fn try_convert_field<M: prost::Message>(self, name: &'static str)
+    -> Result<F, ConversionError>;
+}
+
+impl<T, F> TryConvertFieldExt<F> for Option<T>
 where
-    F: TryInto<T>,
-    F::Error: Into<ConversionError>,
+    T: TryInto<F>,
+    T::Error: Into<ConversionError>,
 {
-    field
-        .ok_or_else(|| ConversionError::missing_field::<M>(name))?
-        .try_into()
-        .context(name)
+    fn try_convert_field<M: prost::Message>(
+        self,
+        name: &'static str,
+    ) -> Result<F, ConversionError> {
+        self.ok_or_else(|| ConversionError::missing_field::<M>(name))?
+            .try_into()
+            .context(name)
+    }
 }
 
 // FROM IMPLS FOR EXTERNAL ERROR TYPES
@@ -289,11 +298,10 @@ mod tests {
 
         use crate::generated::primitives::Digest;
 
-        let result = try_convert_field::<
-            crate::generated::blockchain::BlockHeader,
-            [Felt; 4],
-            Digest,
-        >(None, "account_root");
+        let field: Option<Digest> = None;
+        let result =
+            field.try_convert_field::<crate::generated::blockchain::BlockHeader>("account_root");
+        let result: Result<[Felt; 4], _> = result;
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("account_root") && err.to_string().contains("missing"),
@@ -309,11 +317,9 @@ mod tests {
 
         // Create a digest with an out-of-range value.
         let bad_digest = Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 };
-        let result = try_convert_field::<
-            crate::generated::blockchain::BlockHeader,
-            [Felt; 4],
-            Digest,
-        >(Some(bad_digest), "account_root");
+        let result: Result<[Felt; 4], _> =
+            Some(bad_digest)
+                .try_convert_field::<crate::generated::blockchain::BlockHeader>("account_root");
         let err = result.unwrap_err();
         assert!(
             err.to_string().starts_with("account_root: "),

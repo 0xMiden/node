@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use itertools::Itertools;
 use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::errors::{ConversionError, ConversionResultExt, try_convert_field};
+use miden_node_proto::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
 use miden_node_proto::{AccountState, generated as proto};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
@@ -71,18 +71,15 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
 
     fn try_from(response: proto::store::TransactionInputs) -> Result<Self, Self::Error> {
         let AccountState { account_id, account_commitment } =
-            try_convert_field::<proto::store::TransactionInputs, _, _>(
-                response.account_state,
-                "account_state",
-            )?;
+            response
+                .account_state
+                .try_convert_field::<proto::store::TransactionInputs>("account_state")?;
 
         let mut nullifiers = HashMap::new();
         for nullifier_record in response.nullifiers {
-            let nullifier = try_convert_field::<
+            let nullifier = nullifier_record.nullifier.try_convert_field::<
                 proto::store::transaction_inputs::NullifierTransactionInputRecord,
-                _,
-                _,
-            >(nullifier_record.nullifier, "nullifier")?;
+            >("nullifier")?;
 
             // Note that this intentionally maps 0 to None as this is the definition used in
             // protobuf.

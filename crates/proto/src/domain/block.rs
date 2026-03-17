@@ -17,7 +17,7 @@ use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::{Deserializable, Serializable};
 use thiserror::Error;
 
-use crate::errors::{ConversionError, ConversionResultExt, try_convert_field};
+use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
 use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
 
 // BLOCK NUMBER
@@ -75,42 +75,33 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
     type Error = ConversionError;
 
     fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
-        let prev_block_commitment = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.prev_block_commitment,
-            "prev_block_commitment",
-        )?;
-        let chain_commitment = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.chain_commitment,
-            "chain_commitment",
-        )?;
-        let account_root = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.account_root,
-            "account_root",
-        )?;
-        let nullifier_root = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.nullifier_root,
-            "nullifier_root",
-        )?;
-        let note_root = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.note_root,
-            "note_root",
-        )?;
-        let tx_commitment = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.tx_commitment,
-            "tx_commitment",
-        )?;
-        let tx_kernel_commitment = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.tx_kernel_commitment,
-            "tx_kernel_commitment",
-        )?;
-        let validator_key = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.validator_key,
-            "validator_key",
-        )?;
-        let fee_parameters = try_convert_field::<proto::blockchain::BlockHeader, _, _>(
-            value.fee_parameters,
-            "fee_parameters",
-        )?;
+        let prev_block_commitment = value
+            .prev_block_commitment
+            .try_convert_field::<proto::blockchain::BlockHeader>("prev_block_commitment")?;
+        let chain_commitment = value
+            .chain_commitment
+            .try_convert_field::<proto::blockchain::BlockHeader>("chain_commitment")?;
+        let account_root = value
+            .account_root
+            .try_convert_field::<proto::blockchain::BlockHeader>("account_root")?;
+        let nullifier_root = value
+            .nullifier_root
+            .try_convert_field::<proto::blockchain::BlockHeader>("nullifier_root")?;
+        let note_root = value
+            .note_root
+            .try_convert_field::<proto::blockchain::BlockHeader>("note_root")?;
+        let tx_commitment = value
+            .tx_commitment
+            .try_convert_field::<proto::blockchain::BlockHeader>("tx_commitment")?;
+        let tx_kernel_commitment = value
+            .tx_kernel_commitment
+            .try_convert_field::<proto::blockchain::BlockHeader>("tx_kernel_commitment")?;
+        let validator_key = value
+            .validator_key
+            .try_convert_field::<proto::blockchain::BlockHeader>("validator_key")?;
+        let fee_parameters = value
+            .fee_parameters
+            .try_convert_field::<proto::blockchain::BlockHeader>("fee_parameters")?;
 
         Ok(BlockHeader::new(
             value.version,
@@ -190,13 +181,11 @@ impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
 impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
     type Error = ConversionError;
     fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
-        let header =
-            try_convert_field::<proto::blockchain::SignedBlock, _, _>(value.header, "header")?;
-        let body = try_convert_field::<proto::blockchain::SignedBlock, _, _>(value.body, "body")?;
-        let signature = try_convert_field::<proto::blockchain::SignedBlock, _, _>(
-            value.signature,
-            "signature",
-        )?;
+        let header = value.header.try_convert_field::<proto::blockchain::SignedBlock>("header")?;
+        let body = value.body.try_convert_field::<proto::blockchain::SignedBlock>("body")?;
+        let signature = value
+            .signature
+            .try_convert_field::<proto::blockchain::SignedBlock>("signature")?;
 
         Ok(SignedBlock::new_unchecked(header, body, signature))
     }
@@ -241,10 +230,10 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
     type Error = ConversionError;
 
     fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
-        let latest_block_header: BlockHeader = try_convert_field::<proto::store::BlockInputs, _, _>(
-            response.latest_block_header,
-            "latest_block_header",
-        )?;
+        let latest_block_header: BlockHeader =
+            response
+                .latest_block_header
+                .try_convert_field::<proto::store::BlockInputs>("latest_block_header")?;
 
         let account_witnesses = response
             .account_witnesses

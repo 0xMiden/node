@@ -5,7 +5,7 @@ use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::{Deserializable, Serializable};
 
-use crate::errors::{ConversionError, ConversionResultExt, try_convert_field};
+use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
 use crate::generated as proto;
 
 /// Data required for a transaction batch.
@@ -31,8 +31,9 @@ impl TryFrom<proto::store::BatchInputs> for BatchInputs {
 
     fn try_from(response: proto::store::BatchInputs) -> Result<Self, ConversionError> {
         let result = Self {
-            batch_reference_block_header: try_convert_field::<proto::store::BatchInputs, _, _>(
-                response.batch_reference_block_header,
+            batch_reference_block_header: response
+                .batch_reference_block_header
+                .try_convert_field::<proto::store::BatchInputs>(
                 "block_header",
             )?,
             note_proofs: response

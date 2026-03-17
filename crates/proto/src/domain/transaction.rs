@@ -3,7 +3,7 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 use miden_protocol::utils::{Deserializable, Serializable};
 
-use crate::errors::{ConversionError, ConversionResultExt, try_convert_field};
+use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
 use crate::generated as proto;
 
 // FROM TRANSACTION ID
@@ -49,7 +49,7 @@ impl TryFrom<proto::transaction::TransactionId> for TransactionId {
     type Error = ConversionError;
 
     fn try_from(value: proto::transaction::TransactionId) -> Result<Self, Self::Error> {
-        try_convert_field::<proto::transaction::TransactionId, _, _>(value.id, "id")
+        value.id.try_convert_field::<proto::transaction::TransactionId>("id")
     }
 }
 
@@ -69,11 +69,9 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
     type Error = ConversionError;
 
     fn try_from(value: proto::transaction::InputNoteCommitment) -> Result<Self, Self::Error> {
-        let nullifier: Nullifier = try_convert_field::<
-            proto::transaction::InputNoteCommitment,
-            _,
-            _,
-        >(value.nullifier, "nullifier")?;
+        let nullifier: Nullifier = value
+            .nullifier
+            .try_convert_field::<proto::transaction::InputNoteCommitment>("nullifier")?;
 
         let header: Option<miden_protocol::note::NoteHeader> =
             value.header.map(TryInto::try_into).transpose().context("header")?;
