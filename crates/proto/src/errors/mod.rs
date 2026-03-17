@@ -1,5 +1,6 @@
 use std::any::type_name;
 use std::fmt;
+use std::marker::PhantomData;
 
 // Re-export the GrpcError derive macro for convenience
 pub use miden_node_grpc_error_macro::GrpcError;
@@ -173,46 +174,64 @@ impl<T, E: Into<ConversionError>> ConversionResultExt<T> for Result<T, E> {
     }
 }
 
-// FIELD CONVERSION HELPERS
+// GRPC STRUCT DECODER
 // ================================================================================================
 
-/// Extension trait on `Option<F>` to convert a required protobuf field in one step.
+/// Zero-cost struct decoder that captures the parent proto message type.
 ///
-/// Combines the missing-field check, fallible conversion, and context injection:
+/// Created via [`GrpcDecodeExt::decoder`] which infers the parent type from the value:
 ///
 /// ```rust,ignore
 /// // Before:
-/// let body = block.body
-///     .ok_or(ConversionError::missing_field::<proto::SignedBlock>("body"))?
-///     .try_into()
-///     .context("body")?;
+/// let body = block.body.try_convert_field::<proto::SignedBlock>("body")?;
+/// let header = block.header.try_convert_field::<proto::SignedBlock>("header")?;
 ///
 /// // After:
-/// let body = block.body.try_convert_field::<proto::SignedBlock>("body")?;
+/// let decoder = block.decoder();
+/// let body = decoder.decode_field("body", block.body)?;
+/// let header = decoder.decode_field("header", block.header)?;
 /// ```
-pub trait TryConvertFieldExt<F> {
-    /// Unwraps the `Option`, returning a [`ConversionError::missing_field`] for `None`,
-    /// then converts via `TryInto` with field context on failure.
+pub struct GrpcStructDecoder<M>(PhantomData<M>);
+
+impl<M: prost::Message> Default for GrpcStructDecoder<M> {
+    /// Create a decoder for the given parent message type directly.
     ///
-    /// `M` is the parent protobuf message that contains this field.
-    fn try_convert_field<M: prost::Message>(self, name: &'static str)
-    -> Result<F, ConversionError>;
+    /// Prefer [`GrpcDecodeExt::decoder`] when a value of type `M` is available, as it infers
+    /// the type automatically.
+    fn default() -> Self {
+        Self(PhantomData)
+    }
 }
 
-impl<T, F> TryConvertFieldExt<F> for Option<T>
-where
-    T: TryInto<F>,
-    T::Error: Into<ConversionError>,
-{
-    fn try_convert_field<M: prost::Message>(
-        self,
+impl<M: prost::Message> GrpcStructDecoder<M> {
+    /// Decode a required optional field: checks for `None`, converts via `TryInto`, and adds
+    /// field context on error.
+    pub fn decode_field<T, F>(
+        &self,
         name: &'static str,
-    ) -> Result<F, ConversionError> {
-        self.ok_or_else(|| ConversionError::missing_field::<M>(name))?
+        value: Option<T>,
+    ) -> Result<F, ConversionError>
+    where
+        T: TryInto<F>,
+        T::Error: Into<ConversionError>,
+    {
+        value
+            .ok_or_else(|| ConversionError::missing_field::<M>(name))?
             .try_into()
             .context(name)
     }
 }
+
+/// Extension trait on [`prost::Message`] types to create a [`GrpcStructDecoder`] with the parent
+/// type inferred from the value.
+pub trait GrpcDecodeExt: prost::Message + Sized {
+    /// Create a decoder that uses `Self` as the parent message type for error reporting.
+    fn decoder(&self) -> GrpcStructDecoder<Self> {
+        GrpcStructDecoder(PhantomData)
+    }
+}
+
+impl<T: prost::Message> GrpcDecodeExt for T {}
 
 // BYTE DESERIALIZATION EXTENSION TRAIT
 // ================================================================================================
@@ -320,15 +339,14 @@ mod tests {
     }
 
     #[test]
-    fn test_try_convert_field_missing() {
+    fn test_decode_field_missing() {
         use miden_protocol::Felt;
 
         use crate::generated::primitives::Digest;
 
+        let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
         let field: Option<Digest> = None;
-        let result =
-            field.try_convert_field::<crate::generated::blockchain::BlockHeader>("account_root");
-        let result: Result<[Felt; 4], _> = result;
+        let result: Result<[Felt; 4], _> = decoder.decode_field("account_root", field);
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("account_root") && err.to_string().contains("missing"),
@@ -337,16 +355,15 @@ mod tests {
     }
 
     #[test]
-    fn test_try_convert_field_conversion_error() {
+    fn test_decode_field_conversion_error() {
         use miden_protocol::Felt;
 
         use crate::generated::primitives::Digest;
 
+        let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
         // Create a digest with an out-of-range value.
         let bad_digest = Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 };
-        let result: Result<[Felt; 4], _> =
-            Some(bad_digest)
-                .try_convert_field::<crate::generated::blockchain::BlockHeader>("account_root");
+        let result: Result<[Felt; 4], _> = decoder.decode_field("account_root", Some(bad_digest));
         let err = result.unwrap_err();
         assert!(
             err.to_string().starts_with("account_root: "),

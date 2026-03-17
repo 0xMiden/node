@@ -4,7 +4,7 @@ use miden_protocol::crypto::merkle::smt::{LeafIndex, SmtLeaf, SmtProof};
 use miden_protocol::crypto::merkle::{MerklePath, SparseMerklePath};
 
 use crate::domain::{convert, try_convert};
-use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
+use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
 use crate::generated as proto;
 
 // MERKLE PATH
@@ -155,9 +155,9 @@ impl TryFrom<proto::primitives::SmtLeafEntry> for (Word, Word) {
     type Error = ConversionError;
 
     fn try_from(entry: proto::primitives::SmtLeafEntry) -> Result<Self, Self::Error> {
-        let key: Word = entry.key.try_convert_field::<proto::primitives::SmtLeafEntry>("key")?;
-        let value: Word =
-            entry.value.try_convert_field::<proto::primitives::SmtLeafEntry>("value")?;
+        let decoder = entry.decoder();
+        let key: Word = decoder.decode_field("key", entry.key)?;
+        let value: Word = decoder.decode_field("value", entry.value)?;
 
         Ok((key, value))
     }
@@ -179,10 +179,9 @@ impl TryFrom<proto::primitives::SmtOpening> for SmtProof {
     type Error = ConversionError;
 
     fn try_from(opening: proto::primitives::SmtOpening) -> Result<Self, Self::Error> {
-        let path: SparseMerklePath =
-            opening.path.try_convert_field::<proto::primitives::SmtOpening>("path")?;
-        let leaf: SmtLeaf =
-            opening.leaf.try_convert_field::<proto::primitives::SmtOpening>("leaf")?;
+        let decoder = opening.decoder();
+        let path: SparseMerklePath = decoder.decode_field("path", opening.path)?;
+        let leaf: SmtLeaf = decoder.decode_field("leaf", opening.leaf)?;
 
         Ok(SmtProof::new(path, leaf)?)
     }
