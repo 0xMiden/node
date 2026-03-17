@@ -3188,6 +3188,7 @@ dependencies = [
  "tonic-reflection",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 

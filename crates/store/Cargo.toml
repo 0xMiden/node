@@ -69,6 +69,7 @@ rand                  = { workspace = true }
 regex                 = { version = "1.11" }
 tempfile              = { workspace = true }
 termtree              = "1.0"
+tracing-subscriber    = { workspace = true }
 
 [features]
 default = ["rocksdb"]
@@ -78,6 +79,10 @@ rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-node-utils/rocksdb"]
 harness           = false
 name              = "account_tree"
 required-features = ["rocksdb"]
+
+[[bench]]
+harness = false
+name    = "state_load"
 
 [package.metadata.cargo-machete]
 # This is an indirect dependency for which we need to enable optimisations/features

@@ -121,7 +121,7 @@ tonic-reflection   = { version = "0.14" }
 tower              = { version = "0.5" }
 tower-http         = { features = ["cors", "trace"], version = "0.6" }
 tracing            = { version = "0.1" }
-tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
+tracing-subscriber = { features = ["ansi", "env-filter", "fmt", "json"], version = "0.3" }
 url                = { features = ["serde"], version = "2.5" }
 
 # Lints are set to warn for development, which are promoted to errors in CI.
