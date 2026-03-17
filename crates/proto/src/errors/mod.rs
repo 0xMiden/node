@@ -173,6 +173,38 @@ impl<T, E: Into<ConversionError>> ConversionResultExt<T> for Result<T, E> {
     }
 }
 
+// FIELD CONVERSION HELPERS
+// ================================================================================================
+
+/// Converts a required `Option` field from a protobuf message, combining the missing-field check
+/// and fallible conversion into a single call.
+///
+/// This deduplicates the common pattern of:
+/// ```rust,ignore
+/// let body = block.body
+///     .ok_or(ConversionError::missing_field::<proto::SignedBlock>("body"))?
+///     .try_into()
+///     .context("body")?;
+/// ```
+///
+/// Into:
+/// ```rust,ignore
+/// let body = try_convert_field::<proto::SignedBlock, _, _>(block.body, "body")?;
+/// ```
+pub fn try_convert_field<M: prost::Message, T, F>(
+    field: Option<F>,
+    name: &'static str,
+) -> Result<T, ConversionError>
+where
+    F: TryInto<T>,
+    F::Error: Into<ConversionError>,
+{
+    field
+        .ok_or_else(|| ConversionError::missing_field::<M>(name))?
+        .try_into()
+        .context(name)
+}
+
 // FROM IMPLS FOR EXTERNAL ERROR TYPES
 // ================================================================================================
 
@@ -249,5 +281,43 @@ mod tests {
         let result: Result<u8, std::num::TryFromIntError> = u8::try_from(256u16);
         let err = result.context("fee_amount").unwrap_err();
         assert!(err.to_string().starts_with("fee_amount: "), "expected field prefix, got: {err}",);
+    }
+
+    #[test]
+    fn test_try_convert_field_missing() {
+        use miden_protocol::Felt;
+
+        use crate::generated::primitives::Digest;
+
+        let result = try_convert_field::<
+            crate::generated::blockchain::BlockHeader,
+            [Felt; 4],
+            Digest,
+        >(None, "account_root");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("account_root") && err.to_string().contains("missing"),
+            "expected missing field error, got: {err}",
+        );
+    }
+
+    #[test]
+    fn test_try_convert_field_conversion_error() {
+        use miden_protocol::Felt;
+
+        use crate::generated::primitives::Digest;
+
+        // Create a digest with an out-of-range value.
+        let bad_digest = Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 };
+        let result = try_convert_field::<
+            crate::generated::blockchain::BlockHeader,
+            [Felt; 4],
+            Digest,
+        >(Some(bad_digest), "account_root");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().starts_with("account_root: "),
+            "expected field prefix, got: {err}",
+        );
     }
 }

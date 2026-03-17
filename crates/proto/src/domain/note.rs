@@ -17,7 +17,7 @@ use miden_protocol::utils::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt};
+use crate::errors::{ConversionError, ConversionResultExt, try_convert_field};
 use crate::generated as proto;
 
 // NOTE TYPE
@@ -53,13 +53,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
     type Error = ConversionError;
 
     fn try_from(value: proto::note::NoteMetadata) -> Result<Self, Self::Error> {
-        let sender = value
-            .sender
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NoteMetadata>("sender")
-            })?
-            .try_into()
-            .context("sender")?;
+        let sender = try_convert_field::<proto::note::NoteMetadata, _, _>(value.sender, "sender")?;
         let note_type = proto::note::NoteType::try_from(value.note_type)
             .map_err(|_| ConversionError::message("enum variant discriminant out of range"))?
             .try_into()
@@ -113,13 +107,8 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
         let details = NoteDetails::read_from_bytes(&value.details)
             .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
         let (assets, recipient) = details.into_parts();
-        let metadata: NoteMetadata = value
-            .metadata
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NetworkNote>("metadata")
-            })?
-            .try_into()
-            .context("metadata")?;
+        let metadata: NoteMetadata =
+            try_convert_field::<proto::note::NetworkNote, _, _>(value.metadata, "metadata")?;
         let note = Note::new(assets, metadata, recipient);
         AccountTargetNetworkNote::new(note).map_err(ConversionError::from)
     }
@@ -216,11 +205,8 @@ impl TryFrom<proto::note::Note> for Note {
     type Error = ConversionError;
 
     fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
-        let metadata: NoteMetadata = proto_note
-            .metadata
-            .ok_or(ConversionError::missing_field::<proto::note::Note>("metadata"))?
-            .try_into()
-            .context("metadata")?;
+        let metadata: NoteMetadata =
+            try_convert_field::<proto::note::Note, _, _>(proto_note.metadata, "metadata")?;
 
         let details = proto_note
             .details
@@ -250,20 +236,10 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
     type Error = ConversionError;
 
     fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
-        let note_id_word: Word = value
-            .note_id
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NoteHeader>("note_id")
-            })?
-            .try_into()
-            .context("note_id")?;
-        let metadata: NoteMetadata = value
-            .metadata
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NoteHeader>("metadata")
-            })?
-            .try_into()
-            .context("metadata")?;
+        let note_id_word: Word =
+            try_convert_field::<proto::note::NoteHeader, _, _>(value.note_id, "note_id")?;
+        let metadata: NoteMetadata =
+            try_convert_field::<proto::note::NoteHeader, _, _>(value.metadata, "metadata")?;
 
         Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }

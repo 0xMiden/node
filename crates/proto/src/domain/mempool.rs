@@ -7,7 +7,7 @@ use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt};
+use crate::errors::{ConversionError, ConversionResultExt, try_convert_field};
 use crate::generated as proto;
 
 #[derive(Debug, Clone)]
@@ -88,13 +88,11 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
 
         match event {
             proto::block_producer::mempool_event::Event::TransactionAdded(tx) => {
-                let id = tx
-                    .id
-                    .ok_or(ConversionError::missing_field::<
-                        proto::block_producer::mempool_event::TransactionAdded,
-                    >("id"))?
-                    .try_into()
-                    .context("id")?;
+                let id = try_convert_field::<
+                    proto::block_producer::mempool_event::TransactionAdded,
+                    _,
+                    _,
+                >(tx.id, "id")?;
                 let nullifiers = tx
                     .nullifiers
                     .into_iter()
@@ -122,13 +120,11 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                 })
             },
             proto::block_producer::mempool_event::Event::BlockCommitted(block_committed) => {
-                let header = block_committed
-                    .block_header
-                    .ok_or(ConversionError::missing_field::<
-                        proto::block_producer::mempool_event::BlockCommitted,
-                    >("block_header"))?
-                    .try_into()
-                    .context("block_header")?;
+                let header = try_convert_field::<
+                    proto::block_producer::mempool_event::BlockCommitted,
+                    _,
+                    _,
+                >(block_committed.block_header, "block_header")?;
                 let header = Box::new(header);
                 let txs = block_committed
                     .transactions
