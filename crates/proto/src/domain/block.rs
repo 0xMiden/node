@@ -14,10 +14,10 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Serializable;
 use thiserror::Error;
 
-use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
+use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, TryConvertFieldExt};
 use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
 
 // BLOCK NUMBER
@@ -146,8 +146,7 @@ impl TryFrom<&proto::blockchain::BlockBody> for BlockBody {
 impl TryFrom<proto::blockchain::BlockBody> for BlockBody {
     type Error = ConversionError;
     fn try_from(value: proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
-        BlockBody::read_from_bytes(&value.block_body)
-            .map_err(|source| ConversionError::deserialization("BlockBody", source))
+        BlockBody::decode_bytes(&value.block_body, "BlockBody")
     }
 }
 
@@ -262,8 +261,8 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
             .collect::<Result<_, ConversionError>>()
             .context("unauthenticated_note_proofs")?;
 
-        let partial_block_chain = PartialBlockchain::read_from_bytes(&response.partial_block_chain)
-            .map_err(|source| ConversionError::deserialization("PartialBlockchain", source))?;
+        let partial_block_chain =
+            PartialBlockchain::decode_bytes(&response.partial_block_chain, "PartialBlockchain")?;
 
         Ok(BlockInputs::new(
             latest_block_header,
@@ -281,8 +280,7 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
 impl TryFrom<proto::blockchain::ValidatorPublicKey> for PublicKey {
     type Error = ConversionError;
     fn try_from(public_key: proto::blockchain::ValidatorPublicKey) -> Result<Self, Self::Error> {
-        PublicKey::read_from_bytes(&public_key.validator_key)
-            .map_err(|source| ConversionError::deserialization("PublicKey", source))
+        PublicKey::decode_bytes(&public_key.validator_key, "PublicKey")
     }
 }
 
@@ -304,8 +302,7 @@ impl From<&PublicKey> for proto::blockchain::ValidatorPublicKey {
 impl TryFrom<proto::blockchain::BlockSignature> for Signature {
     type Error = ConversionError;
     fn try_from(signature: proto::blockchain::BlockSignature) -> Result<Self, Self::Error> {
-        Signature::read_from_bytes(&signature.signature)
-            .map_err(|source| ConversionError::deserialization("Signature", source))
+        Signature::decode_bytes(&signature.signature, "Signature")
     }
 }
 

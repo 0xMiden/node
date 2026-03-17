@@ -1,9 +1,9 @@
 use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Serializable;
 
-use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
+use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, TryConvertFieldExt};
 use crate::generated as proto;
 
 // FROM TRANSACTION ID
@@ -82,7 +82,6 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
         let mut bytes = Vec::new();
         nullifier.write_into(&mut bytes);
         header.write_into(&mut bytes);
-        InputNoteCommitment::read_from_bytes(&bytes)
-            .map_err(|err| ConversionError::deserialization("InputNoteCommitment", err))
+        InputNoteCommitment::decode_bytes(&bytes, "InputNoteCommitment")
     }
 }

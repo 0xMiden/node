@@ -4,10 +4,10 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Serializable;
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
+use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, TryConvertFieldExt};
 use crate::generated as proto;
 
 #[derive(Debug, Clone)]
@@ -108,9 +108,8 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                 let account_delta = tx
                     .network_account_delta
                     .as_deref()
-                    .map(AccountUpdateDetails::read_from_bytes)
-                    .transpose()
-                    .map_err(|err| ConversionError::deserialization("account_delta", err))?;
+                    .map(|bytes| AccountUpdateDetails::decode_bytes(bytes, "account_delta"))
+                    .transpose()?;
 
                 Ok(Self::TransactionAdded {
                     id,

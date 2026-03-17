@@ -13,11 +13,11 @@ use miden_protocol::note::{
     NoteTag,
     NoteType,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::Serializable;
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
+use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, TryConvertFieldExt};
 use crate::generated as proto;
 
 // NOTE TYPE
@@ -64,8 +64,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
         let attachment = if value.attachment.is_empty() {
             NoteAttachment::default()
         } else {
-            NoteAttachment::read_from_bytes(&value.attachment)
-                .map_err(|err| ConversionError::deserialization("NoteAttachment", err))?
+            NoteAttachment::decode_bytes(&value.attachment, "NoteAttachment")?
         };
 
         Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
@@ -104,8 +103,7 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
     type Error = ConversionError;
 
     fn try_from(value: proto::note::NetworkNote) -> Result<Self, Self::Error> {
-        let details = NoteDetails::read_from_bytes(&value.details)
-            .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
+        let details = NoteDetails::decode_bytes(&value.details, "NoteDetails")?;
         let (assets, recipient) = details.into_parts();
         let metadata: NoteMetadata =
             value.metadata.try_convert_field::<proto::note::NetworkNote>("metadata")?;
@@ -212,8 +210,7 @@ impl TryFrom<proto::note::Note> for Note {
             .details
             .ok_or(ConversionError::missing_field::<proto::note::Note>("details"))?;
 
-        let note_details = NoteDetails::read_from_bytes(&details)
-            .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
+        let note_details = NoteDetails::decode_bytes(&details, "NoteDetails")?;
 
         let (assets, recipient) = note_details.into_parts();
         Ok(Note::new(assets, metadata, recipient))
@@ -263,8 +260,7 @@ impl TryFrom<proto::note::NoteScript> for NoteScript {
     fn try_from(value: proto::note::NoteScript) -> Result<Self, Self::Error> {
         let proto::note::NoteScript { entrypoint, mast } = value;
 
-        let mast = MastForest::read_from_bytes(&mast)
-            .map_err(|err| ConversionError::deserialization("note_script.mast", err))?;
+        let mast = MastForest::decode_bytes(&mast, "note_script.mast")?;
         let entrypoint = MastNodeId::from_u32_safe(entrypoint, &mast)
             .map_err(|err| ConversionError::deserialization("note_script.entrypoint", err))?;
 

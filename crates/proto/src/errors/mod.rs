@@ -214,6 +214,33 @@ where
     }
 }
 
+// BYTE DESERIALIZATION EXTENSION TRAIT
+// ================================================================================================
+
+/// Extension trait on [`Deserializable`](miden_protocol::utils::Deserializable) types to
+/// deserialize from bytes and wrap errors as [`ConversionError`].
+///
+/// This removes the boilerplate of calling `T::read_from_bytes(&bytes)` followed by
+/// `.map_err(|source| ConversionError::deserialization("T", source))`:
+///
+/// ```rust,ignore
+/// // Before:
+/// BlockBody::read_from_bytes(&value.block_body)
+///     .map_err(|source| ConversionError::deserialization("BlockBody", source))
+///
+/// // After:
+/// BlockBody::decode_bytes(&value.block_body, "BlockBody")
+/// ```
+pub trait DecodeBytesExt: miden_protocol::utils::Deserializable {
+    /// Deserialize from bytes, wrapping any error as a [`ConversionError`].
+    fn decode_bytes(bytes: &[u8], entity: &'static str) -> Result<Self, ConversionError> {
+        Self::read_from_bytes(bytes)
+            .map_err(|source| ConversionError::deserialization(entity, source))
+    }
+}
+
+impl<T: miden_protocol::utils::Deserializable> DecodeBytesExt for T {}
+
 // FROM IMPLS FOR EXTERNAL ERROR TYPES
 // ================================================================================================
 
