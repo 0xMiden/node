@@ -117,10 +117,13 @@ fn main() -> anyhow::Result<()> {
         .context("failed to write bridge.mac")?;
 
     // Write genesis.toml.
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before UNIX epoch")
-        .as_secs();
+    let timestamp = u32::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before UNIX epoch")
+            .as_secs(),
+    )
+    .expect("timestamp should fit in a u32 before the year 2106");
 
     let genesis_toml = format!(
         r#"version = 1
