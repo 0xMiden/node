@@ -43,8 +43,6 @@ pub enum DatabaseError {
         inner: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
         to: &'static str,
     },
-    #[error("conflict: {0}")]
-    Conflict(String),
     #[error(transparent)]
     Diesel(#[from] diesel::result::Error),
     #[error("schema verification failed")]
