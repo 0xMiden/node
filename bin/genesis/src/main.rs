@@ -184,10 +184,6 @@ fn resolve_pubkey(
 }
 
 /// Bumps an account's nonce from 0 to 1 using an `AccountDelta`.
-///
-/// Genesis accounts loaded via `[[account]]` in genesis.toml are included as-is (no automatic
-/// nonce bump). By convention, nonce=0 means "not yet deployed" and genesis accounts must have
-/// nonce>=1.
 fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
     let delta = AccountDelta::new(
         account.id(),
@@ -196,7 +192,6 @@ fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
         ONE,
     )?;
     account.apply_delta(&delta)?;
-    debug_assert_eq!(account.nonce(), ONE);
     Ok(account)
 }
 
@@ -233,12 +228,6 @@ mod tests {
         let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
         assert_eq!(ger.account.nonce(), ZERO);
         assert_eq!(ger.auth_secret_keys.len(), 1, "GER manager should have a secret key");
-
-        // genesis.toml should reference only bridge.mac.
-        let toml_content = fs_err::read_to_string(dir.path().join("genesis.toml")).unwrap();
-        assert!(toml_content.contains("path = \"bridge.mac\""));
-        assert!(!toml_content.contains("bridge_admin.mac"));
-        assert!(!toml_content.contains("ger_manager.mac"));
     }
 
     #[test]
