@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -58,11 +59,13 @@ impl GraphNode for AuthenticatedTransaction {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionGraph {
     inner: Graph<AuthenticatedTransaction>,
+    txs: HashMap<TransactionId, Arc<AuthenticatedTransaction>>,
 }
 
 impl TransactionGraph {
-    pub fn append(&mut self, tx: AuthenticatedTransaction) {
+    pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) {
         self.inner.append(&tx);
+        self.txs.insert(tx.id(), tx);
     }
 
     pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {

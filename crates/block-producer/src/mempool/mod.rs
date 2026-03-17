@@ -153,6 +153,13 @@ pub struct Mempool {
     /// Contains all the transactions, batches and blocks currently in the mempool.
     nodes: nodes::Nodes,
 
+    /// Tracks the dependency graph for transactions awaiting batching.
+    transactions: graph::TransactionGraph,
+    /// Tracks the dependency graph for batches pending proof generation.
+    selected_batches: graph::SelectedBatchGraph,
+    /// Tracks the dependency graph for batches awaiting block inclusion.
+    proven_batches: graph::ProvenBatchGraph,
+
     chain_tip: BlockNumber,
 
     config: MempoolConfig,
@@ -162,7 +169,11 @@ pub struct Mempool {
 // We have to implement this manually since the subscription channel does not implement PartialEq.
 impl PartialEq for Mempool {
     fn eq(&self, other: &Self) -> bool {
-        self.state == other.state && self.nodes == other.nodes
+        self.state == other.state
+            && self.nodes == other.nodes
+            && self.transactions == other.transactions
+            && self.selected_batches == other.selected_batches
+            && self.proven_batches == other.proven_batches
     }
 }
 
@@ -182,6 +193,9 @@ impl Mempool {
             subscription: SubscriptionProvider::new(chain_tip),
             state: state::InflightState::default(),
             nodes: nodes::Nodes::default(),
+            transactions: graph::TransactionGraph::default(),
+            selected_batches: graph::SelectedBatchGraph::default(),
+            proven_batches: graph::ProvenBatchGraph::default(),
         }
     }
 
@@ -225,8 +239,10 @@ impl Mempool {
         // - No duplicate notes are created.
         // - All unauthenticated notes exist as output notes.
         let account_commitment = self
-            .state
+            .transactions
             .account_commitment(&tx.account_id())
+            .or_else(|| self.selected_batches.account_commitment(&tx.account_id()))
+            .or_else(|| self.proven_batches.account_commitment(&tx.account_id()))
             .or(tx.store_account_state())
             .unwrap_or_default();
         if tx.account_update().initial_state_commitment() != account_commitment {
@@ -236,25 +252,41 @@ impl Mempool {
             }
             .into());
         }
-        let double_spend = self.state.nullifiers_exist(tx.nullifiers());
+
+        let double_spend: Vec<_> = tx
+            .nullifiers()
+            .filter(|nullifier| self.transactions.nullifier_exists(nullifier))
+            .filter(|nullifier| self.selected_batches.nullifier_exists(nullifier))
+            .filter(|nullifier| self.proven_batches.nullifier_exists(nullifier))
+            .collect();
         if !double_spend.is_empty() {
             return Err(VerifyTxError::InputNotesAlreadyConsumed(double_spend).into());
         }
-        let duplicates = self.state.output_notes_exist(tx.output_note_commitments());
+
+        let duplicates: Vec<_> = tx
+            .output_note_commitments()
+            .filter(|commitment| self.transactions.output_note_exists(commitment))
+            .filter(|commitment| self.selected_batches.output_note_exists(commitment))
+            .filter(|commitment| self.proven_batches.output_note_exists(commitment))
+            .collect();
         if !duplicates.is_empty() {
             return Err(VerifyTxError::OutputNotesAlreadyExist(duplicates).into());
         }
-        let missing = self.state.output_notes_missing(tx.unauthenticated_note_commitments());
+
+        // We don't need to check whether the output is already consumed since that is covered by
+        // the nullifier check.
+        let missing: Vec<_> = tx
+            .unauthenticated_note_commitments()
+            .filter(|commitment| self.transactions.output_note_exists(commitment))
+            .filter(|commitment| self.selected_batches.output_note_exists(commitment))
+            .filter(|commitment| self.proven_batches.output_note_exists(commitment))
+            .collect();
         if !missing.is_empty() {
             return Err(VerifyTxError::UnauthenticatedNotesNotFound(missing).into());
         }
 
-        // Insert the transaction node.
         self.subscription.transaction_added(&tx);
-        let tx = TransactionNode::new(tx);
-        self.state.insert(NodeId::Transaction(tx.id()), &tx);
-        self.nodes.txs.insert(tx.id(), tx);
-
+        self.transactions.append(tx);
         self.inject_telemetry();
 
         Ok(self.chain_tip)
