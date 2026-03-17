@@ -16,6 +16,7 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::{Deserializable, Serializable};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -102,11 +103,18 @@ impl Validator {
 struct ValidatorServer {
     signer: ValidatorSigner,
     db: Arc<Db>,
+    /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
+    /// ensuring consistent chain tip reads and preventing race conditions.
+    sign_block_semaphore: Semaphore,
 }
 
 impl ValidatorServer {
     fn new(signer: ValidatorSigner, db: Db) -> Self {
-        Self { signer, db: db.into() }
+        Self {
+            signer,
+            db: db.into(),
+            sign_block_semaphore: Semaphore::new(1),
+        }
     }
 }
 
@@ -175,6 +183,12 @@ impl api_server::Api for ValidatorServer {
                     "Failed to deserialize proposed block: {err}",
                 ))
             })
+        })?;
+
+        // Serialize sign_block requests to prevent race conditions between loading the
+        // chain tip and persisting the validated block header.
+        let _permit = self.sign_block_semaphore.acquire().await.map_err(|err| {
+            tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
         })?;
 
         // Load the current chain tip from the database.
