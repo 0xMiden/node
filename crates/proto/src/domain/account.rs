@@ -554,17 +554,11 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     let entries = entries
                         .into_iter()
                         .map(|entry| {
-                            let key = entry
-                                .key
-                                .ok_or(ConversionError::missing_field::<StorageMapEntry>("key"))?
-                                .try_into()
-                                .map(StorageMapKey::new)
-                                .context("key")?;
-                            let value = entry
-                                .value
-                                .ok_or(ConversionError::missing_field::<StorageMapEntry>("value"))?
-                                .try_into()
-                                .context("value")?;
+                            let key = StorageMapKey::new(
+                                entry.key.try_convert_field::<StorageMapEntry>("key")?,
+                            );
+                            let value =
+                                entry.value.try_convert_field::<StorageMapEntry>("value")?;
                             Ok((key, value))
                         })
                         .collect::<Result<Vec<_>, ConversionError>>()
@@ -575,11 +569,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     let proofs = entries
                         .into_iter()
                         .map(|entry| {
-                            let smt_opening =
-                                entry.proof.ok_or(ConversionError::missing_field::<
-                                    StorageMapEntryWithProof,
-                                >("proof"))?;
-                            SmtProof::try_from(smt_opening).context("proof")
+                            entry.proof.try_convert_field::<StorageMapEntryWithProof>("proof")
                         })
                         .collect::<Result<Vec<_>, ConversionError>>()
                         .context("entries")?;
@@ -895,13 +885,12 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
         let commitment = account_witness_record
             .commitment
             .try_convert_field::<proto::account::AccountWitness>("commitment")?;
+        let account_id = account_witness_record
+            .account_id
+            .try_convert_field::<proto::account::AccountWitness>("account_id")?;
         let path: SparseMerklePath = account_witness_record
             .path
-            .as_ref()
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("path"))?
-            .clone()
-            .try_into()
-            .context("path")?;
+            .try_convert_field::<proto::account::AccountWitness>("path")?;
 
         let witness = AccountWitness::new(witness_id, commitment, path).map_err(|err| {
             ConversionError::deserialization(
@@ -910,12 +899,7 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
             )
         })?;
 
-        Ok(Self {
-            account_id: account_witness_record
-                .account_id
-                .try_convert_field::<proto::account::AccountWitness>("account_id")?,
-            witness,
-        })
+        Ok(Self { account_id, witness })
     }
 }
 
@@ -998,11 +982,7 @@ impl TryFrom<proto::primitives::Asset> for Asset {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Asset) -> Result<Self, Self::Error> {
-        let inner = value
-            .asset
-            .ok_or(ConversionError::missing_field::<proto::primitives::Asset>("asset"))?;
-        let word = Word::try_from(inner).context("asset")?;
-
+        let word: Word = value.asset.try_convert_field::<proto::primitives::Asset>("asset")?;
         Asset::try_from(word).map_err(ConversionError::from)
     }
 }

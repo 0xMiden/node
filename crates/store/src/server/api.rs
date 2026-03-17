@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use miden_node_proto::errors::{ConversionError, ConversionResultExt};
+use miden_node_proto::errors::{ConversionError, ConversionResultExt, TryConvertFieldExt};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
@@ -164,10 +164,7 @@ pub fn read_account_id<M: miden_node_proto::prost::Message, E>(
 where
     E: From<ConversionError>,
 {
-    id.ok_or_else(|| ConversionError::missing_field::<M>("account_id"))?
-        .try_into()
-        .context("account_id")
-        .map_err(|e: ConversionError| e.into())
+    id.try_convert_field::<M>("account_id").map_err(|e: ConversionError| e.into())
 }
 
 #[instrument(
