@@ -317,14 +317,6 @@ impl Mempool {
     /// Panics if there is already a block in flight.
     #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
     pub fn select_block(&mut self) -> (BlockNumber, Vec<Arc<ProvenBatch>>) {
-        // The selection algorithm is fairly neanderthal in nature.
-        //
-        // We iterate over all proven batch nodes, each time selecting the first which has no
-        // parent nodes that are unselected batches.
-        //
-        // Note that selecting a batch can unblock other batches. This implementation handles this
-        // by resetting the iteration whenever a batch is selected.
-
         assert!(
             self.nodes.proposed_block.is_none(),
             "block {} is already in progress",
@@ -332,51 +324,7 @@ impl Mempool {
         );
 
         let block_number = self.chain_tip.child();
-        let mut selected = BlockNode::new(block_number);
-        let mut budget = self.config.block_budget;
-        let mut candidates = self.nodes.proven_batches.values();
-
-        'next: while let Some(candidate) = candidates.next() {
-            if selected.contains(candidate.id()) {
-                continue 'next;
-            }
-
-            // A batch is selectable if all parents are already blocks, or if the batch is part of
-            // the current block selection.
-            for parent in self.state.parents(NodeId::ProvenBatch(candidate.id()), candidate) {
-                match parent {
-                    NodeId::Block(_) => {},
-                    NodeId::ProvenBatch(parent) if selected.contains(parent) => {},
-                    _ => continue 'next,
-                }
-            }
-
-            if budget.check_then_subtract(candidate.inner()) == BudgetStatus::Exceeded {
-                break;
-            }
-
-            // Reset iteration as this batch could have unblocked previous batches.
-            candidates = self.nodes.proven_batches.values();
-            selected.push(candidate.clone());
-        }
-
-        // Replace the batches with the block in state and nodes.
-        for batch in selected.batches() {
-            // SAFETY: Selected batches came from nodes, and are unique.
-            let batch = self.nodes.proven_batches.remove(&batch.id()).unwrap();
-            self.state.remove(&batch);
-            tracing::info!(
-                block.number = %block_number,
-                batch.id = %batch.id(),
-                "Batch selected for inclusion in block",
-            );
-        }
-
-        let block_number = self.chain_tip.child();
-        let batches = selected.batches().to_vec();
-
-        self.state.insert(NodeId::Block(block_number), &selected);
-        self.nodes.proposed_block = Some((block_number, selected));
+        let batches = self.batches.select_block(self.config.block_budget);
 
         self.inject_telemetry();
         (block_number, batches)

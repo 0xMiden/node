@@ -11,6 +11,8 @@ use miden_protocol::note::Nullifier;
 use super::{Graph, GraphNode};
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
+use crate::mempool::BlockBudget;
+use crate::mempool::budget::BudgetStatus;
 
 impl GraphNode for SelectedBatch {
     type Id = BatchId;
@@ -94,6 +96,24 @@ impl BatchGraph {
         if self.batches.contains_key(&proof.id()) {
             self.proven.insert(proof.id(), proof);
         }
+    }
+
+    pub fn select_block(&mut self, mut budget: BlockBudget) -> Vec<Arc<ProvenBatch>> {
+        let mut selected = Vec::default();
+
+        // Only root's which are proven can be selected for inclusion in a block.
+        while let Some(root) = self.inner.roots().iter().find_map(|root| self.proven.get(root)) {
+            if budget.check_then_subtract(root) == BudgetStatus::Exceeded {
+                break;
+            }
+
+            let root = self.proven.remove(&root.id()).unwrap();
+            let batch = self.batches.remove(&root.id()).expect("BatchGraph::root must exist");
+            self.inner.pop_root(&batch);
+            selected.push(root);
+        }
+
+        selected
     }
 
     /// Returns the most recent commitment known for the specified account.
