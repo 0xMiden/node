@@ -118,13 +118,13 @@ impl TryFrom<proto::primitives::SmtLeaf> for SmtLeaf {
                 Ok(Self::new_empty(LeafIndex::new_max_depth(leaf_index)))
             },
             proto::primitives::smt_leaf::Leaf::Single(entry) => {
-                let (key, value): (Word, Word) = entry.try_into().context("single")?;
+                let (key, value): (Word, Word) = entry.try_into().context("entry")?;
 
                 Ok(SmtLeaf::new_single(key, value))
             },
             proto::primitives::smt_leaf::Leaf::Multiple(entries) => {
                 let domain_entries: Vec<(Word, Word)> =
-                    try_convert(entries.entries).collect::<Result<_, _>>().context("multiple")?;
+                    try_convert(entries.entries).collect::<Result<_, _>>().context("entries")?;
 
                 Ok(SmtLeaf::new_multiple(domain_entries)?)
             },
