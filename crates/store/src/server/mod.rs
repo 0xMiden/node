@@ -84,7 +84,6 @@ impl Store {
     /// Serves the store APIs (rpc, ntx-builder, block-producer) and DB maintenance background task.
     ///
     /// Note: this blocks until the server dies.
-    #[expect(clippy::too_many_lines)]
     pub async fn serve(self) -> anyhow::Result<()> {
         let rpc_address = self.rpc_listener.local_addr()?;
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
