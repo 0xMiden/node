@@ -61,11 +61,11 @@ fn run(
 
     // Generate or parse bridge admin key.
     let (bridge_admin_pub, bridge_admin_secret) =
-        resolve_falcon_key(bridge_admin_public_key, "bridge admin")?;
+        resolve_pubkey(bridge_admin_public_key, "bridge admin")?;
 
     // Generate or parse GER manager key.
     let (ger_manager_pub, ger_manager_secret) =
-        resolve_falcon_key(ger_manager_public_key, "GER manager")?;
+        resolve_pubkey(ger_manager_public_key, "GER manager")?;
 
     // Create bridge admin wallet (nonce=0, local account to be deployed later).
     let bridge_admin = create_basic_wallet(
@@ -155,9 +155,19 @@ path = "bridge.mac"
     Ok(())
 }
 
+/// Generates a new Falcon512 keypair using a random seed.
+fn generate_falcon_keypair() -> (falcon512_rpo::PublicKey, RpoSecretKey) {
+    let mut rng = ChaCha20Rng::from_seed(rand::random());
+    let auth_seed: [u64; 4] = rng.random();
+    let mut coin = RpoRandomCoin::new(Word::from(auth_seed.map(Felt::new)));
+    let secret_key = RpoSecretKey::with_rng(&mut coin);
+    let public_key = secret_key.public_key();
+    (public_key, secret_key)
+}
+
 /// Resolves a Falcon512 key pair: either parses the provided hex public key or generates a new
 /// keypair.
-fn resolve_falcon_key(
+fn resolve_pubkey(
     hex_pubkey: Option<&str>,
     label: &str,
 ) -> anyhow::Result<(falcon512_rpo::PublicKey, Option<RpoSecretKey>)> {
@@ -168,11 +178,7 @@ fn resolve_falcon_key(
             .with_context(|| format!("failed to deserialize {label} public key"))?;
         Ok((pubkey, None))
     } else {
-        let mut rng = ChaCha20Rng::from_seed(rand::random());
-        let auth_seed: [u64; 4] = rng.random();
-        let mut coin = RpoRandomCoin::new(Word::from(auth_seed.map(Felt::new)));
-        let secret_key = RpoSecretKey::with_rng(&mut coin);
-        let public_key = secret_key.public_key();
+        let (public_key, secret_key) = generate_falcon_keypair();
         Ok((public_key, Some(secret_key)))
     }
 }
@@ -240,8 +246,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         // Generate two keypairs and pass their public keys as hex.
-        let (admin_pub, _) = resolve_falcon_key(None, "admin").unwrap();
-        let (ger_pub, _) = resolve_falcon_key(None, "ger").unwrap();
+        let (admin_pub, _) = generate_falcon_keypair();
+        let (ger_pub, _) = generate_falcon_keypair();
         let admin_hex = hex::encode((&admin_pub).to_bytes());
         let ger_hex = hex::encode((&ger_pub).to_bytes());
 
