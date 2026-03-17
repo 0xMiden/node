@@ -116,6 +116,10 @@ impl BatchGraph {
         selected
     }
 
+    pub fn prune(&mut self, batch: BatchId) {
+        todo!();
+    }
+
     /// Returns the most recent commitment known for the specified account.
     pub fn account_commitment(&self, account: &AccountId) -> Option<Word> {
         self.inner.account_commitment(account)

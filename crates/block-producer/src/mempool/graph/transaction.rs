@@ -95,6 +95,10 @@ impl TransactionGraph {
         todo!();
     }
 
+    pub fn prune(&mut self, transaction: TransactionId) {
+        todo!();
+    }
+
     /// The given account's current commitment in this graph.
     ///
     /// Returns `None` if the account has not been seen by this graph at all.

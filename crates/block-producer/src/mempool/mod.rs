@@ -42,14 +42,14 @@
 //! - Reverting a node reverts all descendents as well.
 #![allow(unused, reason = "refactor wip")]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use subscription::SubscriptionProvider;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
 use tracing::{instrument, warn};
@@ -159,6 +159,11 @@ pub struct Mempool {
     batches: graph::BatchGraph,
     /// The block currently being built, if any.
     pending_block: Option<(BlockNumber, Vec<Arc<ProvenBatch>>)>,
+    /// The most recently committed blocks in chronological order.
+    ///
+    /// Limited to the state retention amount defined in the config. Once a pending block is
+    /// committed it is appended here, and the oldest block's state is prunned.
+    committed_blocks: VecDeque<Vec<Arc<ProvenBatch>>>,
 
     chain_tip: BlockNumber,
 
@@ -185,6 +190,7 @@ impl Mempool {
             transactions: graph::TransactionGraph::default(),
             batches: graph::BatchGraph::default(),
             pending_block: None,
+            committed_blocks: VecDeque::default(),
         }
     }
 
@@ -365,10 +371,11 @@ impl Mempool {
         self.chain_tip = self.chain_tip.child();
         self.subscription.block_committed(to_commit, tx_ids);
 
-        // TODO: committed blocks.
-        if self.nodes.committed_blocks.len() > self.config.state_retention.get() {
-            // TODO: prune state.
+        self.committed_blocks.push_back(batches);
+        if self.committed_blocks.len() > self.config.state_retention.get() {
+            self.prune_oldest_block();
         }
+
         let reverted_tx_ids = self.revert_expired_nodes();
         self.subscription.txs_reverted(reverted_tx_ids);
         self.inject_telemetry();
@@ -487,6 +494,24 @@ impl Mempool {
 
         self.nodes.inject_telemetry(&span);
         self.state.inject_telemetry(&span);
+    }
+
+    fn prune_oldest_block(&mut self) {
+        let Some(batches) = self.committed_blocks.pop_front() else {
+            return;
+        };
+
+        for batch in batches.iter().map(|batch| batch.id()) {
+            self.batches.prune(batch);
+        }
+
+        for tx in batches
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice())
+            .map(TransactionHeader::id)
+        {
+            self.transactions.prune(tx);
+        }
     }
 
     /// Reverts expired transactions and batches as per the current `chain_tip`.
