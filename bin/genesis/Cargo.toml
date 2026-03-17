@@ -26,3 +26,6 @@ miden-protocol  = { features = ["std"], workspace = true }
 miden-standards = { workspace = true }
 rand            = { workspace = true }
 rand_chacha     = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
