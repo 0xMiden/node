@@ -157,6 +157,8 @@ pub struct Mempool {
     transactions: graph::TransactionGraph,
     /// Tracks the dependency graph for batches awaiting inclusion in a block.
     batches: graph::BatchGraph,
+    /// The block currently being built, if any.
+    pending_block: Option<(BlockNumber, Vec<Arc<ProvenBatch>>)>,
 
     chain_tip: BlockNumber,
 
@@ -182,6 +184,7 @@ impl Mempool {
             nodes: nodes::Nodes::default(),
             transactions: graph::TransactionGraph::default(),
             batches: graph::BatchGraph::default(),
+            pending_block: None,
         }
     }
 
@@ -318,14 +321,15 @@ impl Mempool {
     #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
     pub fn select_block(&mut self) -> (BlockNumber, Vec<Arc<ProvenBatch>>) {
         assert!(
-            self.nodes.proposed_block.is_none(),
+            self.pending_block.is_none(),
             "block {} is already in progress",
-            self.nodes.proposed_block.as_ref().unwrap().0
+            self.pending_block.as_ref().unwrap().0
         );
 
         let block_number = self.chain_tip.child();
         let batches = self.batches.select_block(self.config.block_budget);
 
+        self.pending_block = Some((block_number, batches.clone()));
         self.inject_telemetry();
         (block_number, batches)
     }
@@ -348,20 +352,22 @@ impl Mempool {
     /// Panics if there is no block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
     pub fn commit_block(&mut self, to_commit: BlockHeader) {
-        let block = self
-            .nodes
-            .proposed_block
+        let (_, batches) = self
+            .pending_block
             .take_if(|(proposed, _)| proposed == &to_commit.block_num())
             .expect("block must be in progress to commit");
-        let tx_ids = block.1.transactions().map(|tx| tx.id()).collect();
+        let tx_ids = batches
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice().iter())
+            .map(miden_protocol::transaction::TransactionHeader::id)
+            .collect();
 
-        self.nodes.committed_blocks.push_back(block);
         self.chain_tip = self.chain_tip.child();
         self.subscription.block_committed(to_commit, tx_ids);
 
+        // TODO: committed blocks.
         if self.nodes.committed_blocks.len() > self.config.state_retention.get() {
-            let (_number, node) = self.nodes.committed_blocks.pop_front().unwrap();
-            self.state.remove(&node);
+            // TODO: prune state.
         }
         let reverted_tx_ids = self.revert_expired_nodes();
         self.subscription.txs_reverted(reverted_tx_ids);
