@@ -83,7 +83,7 @@ mod tests;
 #[derive(Clone)]
 pub struct SharedMempool(Arc<Mutex<Mempool>>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MempoolConfig {
     /// The constraints each proposed block must adhere to.
     pub block_budget: BlockBudget,
@@ -144,7 +144,7 @@ impl SharedMempool {
 // MEMPOOL
 // ================================================================================================
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Mempool {
     /// Contains the aggregated state of all transactions, batches and blocks currently inflight in
     /// the mempool. Combines with `nodes` to describe the mempool's state graph.
@@ -164,17 +164,6 @@ pub struct Mempool {
 
     config: MempoolConfig,
     subscription: subscription::SubscriptionProvider,
-}
-
-// We have to implement this manually since the subscription channel does not implement PartialEq.
-impl PartialEq for Mempool {
-    fn eq(&self, other: &Self) -> bool {
-        self.state == other.state
-            && self.nodes == other.nodes
-            && self.transactions == other.transactions
-            && self.selected_batches == other.selected_batches
-            && self.proven_batches == other.proven_batches
-    }
 }
 
 impl Mempool {

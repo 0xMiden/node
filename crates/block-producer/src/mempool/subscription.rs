@@ -31,6 +31,12 @@ pub(crate) struct SubscriptionProvider {
     inflight_txs: InflightTransactions,
 }
 
+impl PartialEq for SubscriptionProvider {
+    fn eq(&self, other: &Self) -> bool {
+        self.chain_tip == other.chain_tip && self.inflight_txs == other.inflight_txs
+    }
+}
+
 impl SubscriptionProvider {
     pub fn new(chain_tip: BlockNumber) -> Self {
         Self {
@@ -129,7 +135,7 @@ impl SubscriptionProvider {
 /// This is used to track events which need to be sent on fresh subscriptions.
 ///
 /// The events can be iterated over in chronological order.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 struct InflightTransactions {
     /// [`MempoolEvent::TransactionAdded`] events which are still inflight i.e. have not been
     /// committed or reverted.
