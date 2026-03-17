@@ -66,6 +66,12 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
+/// Default maximum number of VM execution cycles allowed for a network transaction.
+///
+/// This limits the computational cost of network transactions. The protocol maximum is
+/// `1 << 29` but network transactions should be much cheaper.
+const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 16;
+
 // CONFIGURATION
 // =================================================================================================
 
@@ -118,6 +124,12 @@ pub struct NtxBuilderConfig {
     /// Once this limit is reached, no new transactions will be created for this account.
     pub max_account_crashes: usize,
 
+    /// Maximum number of VM execution cycles allowed for a single network transaction.
+    ///
+    /// Network transactions that exceed this limit will fail with an execution error.
+    /// Defaults to 64k cycles.
+    pub max_cycles: u32,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -142,6 +154,7 @@ impl NtxBuilderConfig {
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
+            max_cycles: DEFAULT_MAX_TX_CYCLES,
             database_filepath,
         }
     }
@@ -223,6 +236,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the maximum number of VM execution cycles for network transactions.
+    #[must_use]
+    pub fn with_max_cycles(mut self, max: u32) -> Self {
+        self.max_cycles = max;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -283,6 +303,7 @@ impl NtxBuilderConfig {
             idle_timeout: self.idle_timeout,
             db: db.clone(),
             request_tx,
+            max_cycles: self.max_cycles,
         };
 
         Ok(NetworkTransactionBuilder::new(
