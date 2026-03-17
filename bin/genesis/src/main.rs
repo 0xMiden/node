@@ -34,27 +34,22 @@ struct Cli {
 
     /// Hex-encoded Falcon512 public key for the bridge admin account.
     /// If omitted, a new keypair is generated and the secret key is included in the .mac file.
-    #[arg(long, value_name = "HEX")]
+    #[arg(long, value_name = "HEX", requires = "ger_manager_public_key")]
     bridge_admin_public_key: Option<String>,
 
     /// Hex-encoded Falcon512 public key for the GER manager account.
     /// If omitted, a new keypair is generated and the secret key is included in the .mac file.
-    #[arg(long, value_name = "HEX")]
+    #[arg(long, value_name = "HEX", requires = "bridge_admin_public_key")]
     ger_manager_public_key: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-
-    match (cli.bridge_admin_public_key.as_deref(), cli.ger_manager_public_key.as_deref()) {
-        (Some(_), None) | (None, Some(_)) => {
-            anyhow::bail!(
-                "either both --bridge-admin-public-key and --ger-manager-public-key must be \
-                 provided, or neither"
-            );
-        },
-        (admin_pk, ger_pk) => run(&cli.output_dir, admin_pk, ger_pk),
-    }
+    run(
+        &cli.output_dir,
+        cli.bridge_admin_public_key.as_deref(),
+        cli.ger_manager_public_key.as_deref(),
+    )
 }
 
 fn run(
