@@ -128,9 +128,7 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
                 let slot_type = storage_slot_type_from_raw(slot.slot_type)?;
                 let commitment = slot
                     .commitment
-                    .ok_or(ConversionError::message("value is not in the range 0..MODULUS"))?
-                    .try_into()
-                    .context("commitment")?;
+                    .try_convert_field::<proto::account::AccountStorageHeader>("commitment")?;
                 Ok(StorageSlotHeader::new(slot_name, slot_type, commitment))
             })
             .collect::<Result<Vec<_>, ConversionError>>()
