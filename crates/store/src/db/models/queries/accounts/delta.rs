@@ -219,6 +219,103 @@ pub(crate) fn select_latest_vault_assets(
         .map_err(Into::into)
 }
 
+/// Selects the latest vault assets for a batch of accounts in a single query.
+///
+/// Returns a map from `AccountId` to its list of assets.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT account_id, asset
+/// FROM account_vault_assets
+/// WHERE account_id IN (...) AND is_latest = 1
+/// ```
+pub(crate) fn select_latest_vault_assets_batch(
+    conn: &mut SqliteConnection,
+    account_ids: &[AccountId],
+) -> Result<BTreeMap<AccountId, Vec<Asset>>, DatabaseError> {
+    use schema::account_vault_assets as vault;
+
+    if account_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let id_bytes: Vec<Vec<u8>> = account_ids.iter().map(AccountId::to_bytes).collect();
+
+    let entries: Vec<(Vec<u8>, Option<Vec<u8>>)> =
+        SelectDsl::select(vault::table, (vault::account_id, vault::asset))
+            .filter(vault::account_id.eq_any(&id_bytes))
+            .filter(vault::is_latest.eq(true))
+            .load(conn)?;
+
+    let mut result: BTreeMap<AccountId, Vec<Asset>> =
+        account_ids.iter().map(|id| (*id, Vec::new())).collect();
+
+    for (account_id_bytes, maybe_asset_bytes) in entries {
+        let Some(asset_bytes) = maybe_asset_bytes else {
+            continue;
+        };
+        let account_id = AccountId::read_from_bytes(&account_id_bytes)?;
+        let asset = Asset::read_from_bytes(&asset_bytes)?;
+        result.entry(account_id).or_default().push(asset);
+    }
+
+    Ok(result)
+}
+
+/// Selects the latest storage map entries for a batch of accounts in a single query.
+///
+/// Returns a map from `AccountId` to its storage map entries (slot name → key → value).
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT account_id, slot_name, key, value
+/// FROM account_storage_map_values
+/// WHERE account_id IN (...) AND is_latest = 1
+/// ```
+pub(crate) fn select_latest_storage_map_entries_batch(
+    conn: &mut SqliteConnection,
+    account_ids: &[AccountId],
+) -> Result<
+    BTreeMap<AccountId, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>>,
+    DatabaseError,
+> {
+    use schema::account_storage_map_values as t;
+
+    if account_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let id_bytes: Vec<Vec<u8>> = account_ids.iter().map(AccountId::to_bytes).collect();
+
+    let rows: Vec<(Vec<u8>, String, Vec<u8>, Vec<u8>)> =
+        SelectDsl::select(t::table, (t::account_id, t::slot_name, t::key, t::value))
+            .filter(t::account_id.eq_any(&id_bytes))
+            .filter(t::is_latest.eq(true))
+            .load(conn)?;
+
+    let mut result: BTreeMap<AccountId, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>> =
+        account_ids.iter().map(|id| (*id, BTreeMap::new())).collect();
+
+    for (account_id_bytes, slot_name_str, key_bytes, value_bytes) in rows {
+        let account_id = AccountId::read_from_bytes(&account_id_bytes)?;
+        let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
+            DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
+        })?;
+        let key = StorageMapKey::read_from_bytes(&key_bytes)?;
+        let value = Word::read_from_bytes(&value_bytes)?;
+        result
+            .entry(account_id)
+            .or_default()
+            .entry(slot_name)
+            .or_default()
+            .insert(key, value);
+    }
+
+    Ok(result)
+}
+
 // HELPER FUNCTIONS
 // ================================================================================================
 

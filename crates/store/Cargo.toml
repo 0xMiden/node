@@ -21,7 +21,9 @@ deadpool-diesel                 = { features = ["sqlite"], version = "0.6" }
 diesel                          = { features = ["numeric", "sqlite"], version = "2.3" }
 diesel_migrations               = { features = ["sqlite"], version = "2.3" }
 fs-err                          = { workspace = true }
+async-stream                    = { workspace = true }
 futures                         = { workspace = true }
+indicatif                       = { workspace = true }
 hex                             = { version = "0.4" }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }
@@ -67,7 +69,7 @@ miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = 
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
-indicatif             = { workspace = true }
+
 rayon                 = { workspace = true }
 regex                 = { version = "1.11" }
 tempfile              = { workspace = true }

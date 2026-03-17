@@ -436,6 +436,12 @@ impl Db {
             .await
     }
 
+    /// Returns the total number of accounts in the database with `is_latest = true`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn count_accounts(&self) -> Result<usize> {
+        self.transact("count accounts", |conn| queries::count_accounts(conn)).await
+    }
+
     /// Loads only the vault assets and storage map entries for a public account.
     ///
     /// This is the minimal data needed to populate
@@ -451,6 +457,37 @@ impl Db {
             let (_header, map_entries) =
                 queries::select_latest_account_storage_components(conn, id)?;
             Ok((assets, map_entries))
+        })
+        .await
+    }
+
+    /// Loads vault assets and storage map entries for a batch of public accounts in two queries.
+    ///
+    /// Fetches all vault assets and all storage map entries for the given `account_ids` using one
+    /// `WHERE account_id IN (...)` query each, then groups results by account ID. This replaces
+    /// `N` calls to [`Self::select_account_forest_data`] with two round-trips regardless of batch
+    /// size.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_account_forest_data_batch(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<
+        BTreeMap<AccountId, (Vec<Asset>, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>)>,
+    > {
+        self.transact("get account forest data batch", move |conn| {
+            let assets_by_id = queries::select_latest_vault_assets_batch(conn, &account_ids)?;
+            let maps_by_id = queries::select_latest_storage_map_entries_batch(conn, &account_ids)?;
+
+            let result = account_ids
+                .into_iter()
+                .map(|id| {
+                    let assets = assets_by_id.get(&id).cloned().unwrap_or_default();
+                    let maps = maps_by_id.get(&id).cloned().unwrap_or_default();
+                    (id, (assets, maps))
+                })
+                .collect();
+
+            Ok(result)
         })
         .await
     }

@@ -21,6 +21,7 @@ use miden_protocol::crypto::merkle::smt::{
     LineageId,
     RootInfo,
     SMT_DEPTH,
+    SmtForestUpdateBatch,
     SmtUpdateBatch,
     TreeId,
 };
@@ -351,6 +352,78 @@ impl AccountStateForest {
     /// Semantics are identical to calling `update_account` with a full-state delta:
     /// - `insert_account_vault` is called unconditionally (empty vault is still recorded)
     /// - `insert_account_storage` is called for every map slot with its entries
+    /// Inserts a batch of brand-new accounts into the forest.
+    pub(crate) fn insert_accounts_batch(
+        &mut self,
+        block_num: BlockNumber,
+        batch: BTreeMap<
+            AccountId,
+            (Vec<Asset>, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>),
+        >,
+    ) -> Result<(), AccountStateForestError> {
+        let prepared: SmtForestUpdateBatch = batch
+            .into_iter()
+            .map(|(account_id, (assets, map_entries))| {
+                let mut forest_batch = SmtForestUpdateBatch::empty();
+
+                // vault
+                {
+                    let entries: Vec<(Word, Word)> = assets
+                        .iter()
+                        .map(|asset| match asset {
+                            Asset::Fungible(f) => (f.vault_key().into(), (*f).into()),
+                            Asset::NonFungible(nf) => (nf.vault_key().into(), (*nf).into()),
+                        })
+                        .collect();
+                    let ops = Self::build_forest_operations(entries);
+                    forest_batch
+                        .add_operations(Self::vault_lineage_id(account_id), ops.into_iter());
+                }
+
+                // storage maps
+                for (slot_name, entries) in map_entries {
+                    let hashed: Vec<(Word, Word)> = entries
+                        .iter()
+                        .filter(|&(_, v)| *v != EMPTY_WORD)
+                        .map(|(&k, &v)| (k.hash().into(), v))
+                        .collect();
+                    let ops = Self::build_forest_operations(hashed);
+                    forest_batch.add_operations(
+                        Self::storage_lineage_id(account_id, &slot_name),
+                        ops.into_iter(),
+                    );
+                }
+
+                forest_batch
+            })
+            .fold(SmtForestUpdateBatch::empty(), |mut a, b| {
+                for (lineage, batch) in b {
+                    a.add_operations(lineage, batch.into_iter());
+                }
+                a
+            });
+
+        // --- sequential application -----------------------------------------
+        self.update_forest(block_num, prepared);
+
+        Ok(())
+    }
+
+    /// Applies a pre-computed [`SmtForestUpdateBatch`] to the forest in a single sequential pass.
+    ///
+    /// Every lineage must be new (no prior version). This is the only method that mutates
+    /// `self.forest` during bulk loading; all CPU-bound preparation happens before this call.
+    fn update_forest(&mut self, block_num: BlockNumber, updates: SmtForestUpdateBatch) {
+        let version = block_num.as_u64();
+        // TODO FIXME
+        for (lineage, batch) in updates.into_iter() {
+            self.forest
+                .add_lineage(lineage, version, SmtUpdateBatch::new(batch.into_iter()))
+                .expect("forest update should succeed");
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn insert_account(
         &mut self,
         block_num: BlockNumber,

@@ -364,64 +364,77 @@ pub async fn load_smt_forest(
     db: &Db,
     block_num: BlockNumber,
 ) -> Result<AccountStateForest, StateInitializationError> {
-    let mut cursor = None;
+    use futures::StreamExt;
+    use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-    let limit = PUBLIC_ACCOUNT_IDS_PAGE_SIZE.get() * 2;
+    // How many DB fetches to drive concurrently.
+    const CONCURRENCY: usize = 64;
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    let total = db.count_accounts().await? as u64;
 
-    let (tx2, mut rx2) = tokio::sync::mpsc::channel(limit);
+    let multi = MultiProgress::new();
+    let style =
+        ProgressStyle::with_template("{msg:12} [{bar:50.cyan/blue}] {pos}/{len} ({eta} remaining)")
+            .unwrap()
+            .progress_chars("=> ");
 
-    let jh1 = tokio::spawn(async move {
-        let mut buffer = Vec::with_capacity(limit);
+    let pb_page = multi.add(ProgressBar::new(total));
+    pb_page.set_style(style.clone());
+    pb_page.set_message("paging");
+
+    let pb_fetch = multi.add(ProgressBar::new(total));
+    pb_fetch.set_style(style.clone());
+    pb_fetch.set_message("fetching");
+
+    let pb_insert = multi.add(ProgressBar::new(total));
+    pb_insert.set_style(style);
+    pb_insert.set_message("inserting");
+
+    // Build a stream of (account_id, assets, map_entries) by paging through IDs and
+    // mapping each one to a fetch future, then running up to CONCURRENCY futures at once.
+    // Each item in the stream is a full page of account IDs.
+    let page_stream = async_stream::stream! {
+        let mut cursor = None;
         loop {
-            let n = rx.recv_many(&mut buffer, limit).await;
-            if n == 0 || rx.is_closed() {
+            let page = db
+                .select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor)
+                .await?;
+            let done = page.next_cursor.is_none();
+            let n = page.account_ids.len() as u64;
+            yield Ok::<_, StateInitializationError>(page.account_ids);
+            pb_page.inc(n);
+            if done {
                 break;
             }
-            for account_id in buffer.drain(..).flatten() {
-                let (assets, map_entries) = db.select_account_forest_data(account_id).await?;
-                tx2.send((account_id, assets, map_entries)).await.unwrap();
-            }
+            cursor = page.next_cursor;
         }
-        Ok::<_, DatabaseError>(())
+        pb_page.finish_with_message("paged");
+    };
+
+    // Map each page to a single batch fetch future.
+    let fetch_stream = page_stream.map(|res| {
+        let pb_fetch = pb_fetch.clone();
+        async move {
+            let account_ids = res?;
+            let n = account_ids.len() as u64;
+            let batch = db.select_account_forest_data_batch(account_ids).await?;
+            pb_fetch.inc(n);
+            Ok::<_, StateInitializationError>(batch)
+        }
     });
 
-    let jh2 = tokio::task::spawn_blocking(
-        move || -> Result<AccountStateForest, StateInitializationError> {
-            let mut forest = AccountStateForest::new();
+    let buffered = fetch_stream.buffered(CONCURRENCY);
 
-            let mut buffer = Vec::with_capacity(limit);
-            loop {
-                let n = rx2.blocking_recv_many(&mut buffer, limit);
-                if n == 0 || rx2.is_closed() {
-                    break;
-                }
-                for (account_id, ref assets, ref map_entries) in buffer.drain(..) {
-                    forest.insert_account(block_num, account_id, assets, map_entries)?;
-                }
-            }
-            Ok(forest)
-        },
-    );
-
-    loop {
-        let page = db.select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor).await?;
-
-        if page.account_ids.is_empty() {
-            break;
-        }
-
-        tx.send(page.account_ids).await;
-
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
+    let mut forest = AccountStateForest::new();
+    tokio::pin!(buffered);
+    while let Some(result) = buffered.next().await {
+        let batch = result?;
+        let n = batch.len() as u64;
+        forest.insert_accounts_batch(block_num, batch)?;
+        pb_insert.inc(n);
     }
-    drop(tx);
-    jh1.await.unwrap()?;
-    let forest = jh2.await.unwrap()?;
+    pb_fetch.finish_with_message("fetched");
+    pb_insert.finish_with_message("inserted");
 
     Ok(forest)
 }

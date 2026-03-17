@@ -25,9 +25,9 @@ use std::path::PathBuf;
 use criterion::{Criterion, criterion_group, criterion_main};
 use indicatif::{ProgressBar, ProgressStyle};
 use miden_crypto::utils::Serializable;
-use miden_node_store::Store;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::state::State;
+use miden_node_store::{Db, Store};
 use miden_node_utils::clap::StorageOptions;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -439,3 +439,36 @@ criterion_group!(
     targets = bench_state_load
 );
 criterion_main!(state_load);
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// For every entry in [`ACCOUNT_COUNTS`], bootstraps (or reuses) the cached data directory
+    /// and asserts that the database contains exactly that many accounts.
+    #[test]
+    fn account_count_matches_setup() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build Tokio runtime");
+
+        for &num_accounts in ACCOUNT_COUNTS {
+            let data_dir = setup_data_directory(num_accounts);
+            let db_path = data_dir.join("miden-store.sqlite3");
+
+            let count = rt.block_on(async {
+                let db = Db::load(db_path).await.expect("failed to open DB");
+                db.count_accounts().await.expect("failed to count accounts")
+            });
+
+            assert_eq!(
+                count, num_accounts,
+                "expected {num_accounts} accounts in DB, found {count}"
+            );
+        }
+    }
+}
