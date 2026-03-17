@@ -135,7 +135,7 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
                 .try_into()
                 .context("validator_key")?,
             FeeParameters::try_from(value.fee_parameters.ok_or(
-                ConversionError::missing_field::<proto::blockchain::FeeParameters>("fee_parameters"),
+                ConversionError::missing_field::<proto::blockchain::BlockHeader>("fee_parameters"),
             )?)
             .context("fee_parameters")?,
             value.timestamp,
@@ -265,8 +265,8 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
     fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
         let latest_block_header: BlockHeader = response
             .latest_block_header
-            .ok_or(ConversionError::missing_field::<proto::blockchain::BlockHeader>(
-                "block_header",
+            .ok_or(ConversionError::missing_field::<proto::store::BlockInputs>(
+                "latest_block_header",
             ))?
             .try_into()
             .context("latest_block_header")?;
@@ -366,7 +366,9 @@ impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
         let native_asset_id = fee_params
             .native_asset_id
             .map(AccountId::try_from)
-            .ok_or(ConversionError::missing_field::<proto::blockchain::FeeParameters>("native_asset_id"))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::FeeParameters>(
+                "native_asset_id",
+            ))?
             .context("native_asset_id")?;
         let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee)?;
         Ok(fee_params)

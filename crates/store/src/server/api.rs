@@ -162,12 +162,11 @@ pub fn read_account_id<E>(id: Option<proto::account::AccountId>) -> Result<Accou
 where
     E: From<ConversionError>,
 {
-    id.ok_or_else(|| {
-        ConversionError::missing_field::<proto::account::AccountId>("account_id")
-    })?
-    .try_into()
-    .context("account_id")
-    .map_err(|e: ConversionError| e.into())
+    // Note: not a ConversionError::missing_field because the proto message type is unknown.
+    id.ok_or_else(|| ConversionError::message("missing account_id"))?
+        .try_into()
+        .context("account_id")
+        .map_err(|e: ConversionError| e.into())
 }
 
 #[instrument(
