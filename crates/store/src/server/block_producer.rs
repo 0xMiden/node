@@ -55,9 +55,9 @@ impl block_producer_server::BlockProducer for StoreApi {
                 )
             })?;
         // Read block.
-        let block = request.block.ok_or(ConversionError::missing_field::<
-            proto::store::ApplyBlockRequest,
-        >("block"))?;
+        let block = request
+            .block
+            .ok_or(ConversionError::missing_field::<proto::store::ApplyBlockRequest>("block"))?;
         // Read block header.
         let header: BlockHeader = block
             .header
@@ -202,7 +202,8 @@ impl block_producer_server::BlockProducer for StoreApi {
     ) -> Result<Response<proto::store::TransactionInputs>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<Status>(request.account_id)?;
+        let account_id =
+            read_account_id::<proto::store::TransactionInputsRequest, Status>(request.account_id)?;
         let nullifiers = validate_nullifiers(&request.nullifiers)
             .map_err(|err| conversion_error_to_status(&err))?;
         let unauthenticated_note_commitments =

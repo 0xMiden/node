@@ -158,12 +158,13 @@ where
         .map_err(Into::into)
 }
 
-pub fn read_account_id<E>(id: Option<proto::account::AccountId>) -> Result<AccountId, E>
+pub fn read_account_id<M: miden_node_proto::prost::Message, E>(
+    id: Option<proto::account::AccountId>,
+) -> Result<AccountId, E>
 where
     E: From<ConversionError>,
 {
-    // Note: not a ConversionError::missing_field because the proto message type is unknown.
-    id.ok_or_else(|| ConversionError::message("missing account_id"))?
+    id.ok_or_else(|| ConversionError::missing_field::<M>("account_id"))?
         .try_into()
         .context("account_id")
         .map_err(|e: ConversionError| e.into())

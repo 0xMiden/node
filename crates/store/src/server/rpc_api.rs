@@ -262,7 +262,10 @@ impl rpc_server::Rpc for StoreApi {
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
 
-        let account_id: AccountId = read_account_id::<SyncAccountVaultError>(request.account_id)?;
+        let account_id: AccountId = read_account_id::<
+            proto::rpc::SyncAccountVaultRequest,
+            SyncAccountVaultError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             return Err(SyncAccountVaultError::AccountNotPublic(account_id).into());
@@ -310,7 +313,10 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<SyncAccountStorageMapsError>(request.account_id)?;
+        let account_id = read_account_id::<
+            proto::rpc::SyncAccountStorageMapsRequest,
+            SyncAccountStorageMapsError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
