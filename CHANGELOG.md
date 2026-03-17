@@ -5,6 +5,8 @@
 ### Enhancements
 
 - Expose per-tree RocksDB tuning options ([#1782](https://github.com/0xMiden/node/pull/1782)).
+- Added a gRPC server to the NTX builder, configurable via `--ntx-builder.url` / `MIDEN_NODE_NTX_BUILDER_URL` (https://github.com/0xMiden/node/issues/1758).
+- Added `GetNoteError` gRPC endpoint to query the latest execution error for network notes (https://github.com/0xMiden/node/issues/1758).
 - Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).

@@ -3054,6 +3054,7 @@ dependencies = [
  "libsqlite3-sys",
  "miden-node-db",
  "miden-node-proto",
+ "miden-node-proto-build",
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
@@ -3068,6 +3069,8 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tonic",
+ "tonic-reflection",
+ "tower-http",
  "tracing",
  "url",
 ]

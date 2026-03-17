@@ -11,9 +11,12 @@ use clients::{BlockProducerClient, StoreClient};
 use coordinator::Coordinator;
 use db::Db;
 use futures::TryStreamExt;
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
+
+pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
 mod actor;
 mod builder;
@@ -22,6 +25,7 @@ mod clients;
 mod coordinator;
 pub(crate) mod db;
 pub(crate) mod inflight_note;
+pub mod server;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
