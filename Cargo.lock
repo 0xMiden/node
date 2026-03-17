@@ -2831,6 +2831,7 @@ dependencies = [
  "miden-standards",
  "rand",
  "rand_chacha",
+ "tempfile",
 ]
 
 [[package]]

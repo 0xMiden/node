@@ -45,11 +45,16 @@ struct Cli {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    run(
-        &cli.output_dir,
-        cli.bridge_admin_public_key.as_deref(),
-        cli.ger_manager_public_key.as_deref(),
-    )
+
+    match (cli.bridge_admin_public_key.as_deref(), cli.ger_manager_public_key.as_deref()) {
+        (Some(_), None) | (None, Some(_)) => {
+            anyhow::bail!(
+                "either both --bridge-admin-public-key and --ger-manager-public-key must be \
+                 provided, or neither"
+            );
+        },
+        (admin_pk, ger_pk) => run(&cli.output_dir, admin_pk, ger_pk),
+    }
 }
 
 fn run(
@@ -197,11 +202,12 @@ fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
 #[cfg(test)]
 mod tests {
     use miden_protocol::ZERO;
+    use miden_protocol::utils::Serializable;
 
     use super::*;
 
     #[test]
-    fn generates_expected_genesis_files() {
+    fn default_mode_generates_accounts_with_secret_keys() {
         let dir = tempfile::tempdir().unwrap();
 
         run(dir.path(), None, None).expect("run should succeed");
@@ -232,5 +238,35 @@ mod tests {
         assert!(toml_content.contains("path = \"bridge.mac\""));
         assert!(!toml_content.contains("bridge_admin.mac"));
         assert!(!toml_content.contains("ger_manager.mac"));
+    }
+
+    #[test]
+    fn custom_public_keys_generates_accounts_without_secret_keys() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Generate two keypairs and pass their public keys as hex.
+        let (admin_pub, _) = resolve_falcon_key(None, "admin").unwrap();
+        let (ger_pub, _) = resolve_falcon_key(None, "ger").unwrap();
+        let admin_hex = hex::encode((&admin_pub).to_bytes());
+        let ger_hex = hex::encode((&ger_pub).to_bytes());
+
+        run(dir.path(), Some(&admin_hex), Some(&ger_hex)).expect("run should succeed");
+
+        // Bridge admin and GER manager should have no secret keys when public keys are provided.
+        let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
+        assert!(
+            admin.auth_secret_keys.is_empty(),
+            "bridge admin should have no secret keys in custom mode"
+        );
+
+        let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
+        assert!(
+            ger.auth_secret_keys.is_empty(),
+            "GER manager should have no secret keys in custom mode"
+        );
+
+        // Bridge should still have nonce=1.
+        let bridge = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
+        assert_eq!(bridge.account.nonce(), ONE);
     }
 }
