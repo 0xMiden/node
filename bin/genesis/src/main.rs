@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -9,7 +8,6 @@ use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::delta::{AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     Account,
-    AccountCode,
     AccountDelta,
     AccountFile,
     AccountStorageMode,
@@ -47,16 +45,27 @@ struct Cli {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    run(
+        &cli.output_dir,
+        cli.bridge_admin_public_key.as_deref(),
+        cli.ger_manager_public_key.as_deref(),
+    )
+}
 
-    fs_err::create_dir_all(&cli.output_dir).context("failed to create output directory")?;
+fn run(
+    output_dir: &Path,
+    bridge_admin_public_key: Option<&str>,
+    ger_manager_public_key: Option<&str>,
+) -> anyhow::Result<()> {
+    fs_err::create_dir_all(output_dir).context("failed to create output directory")?;
 
     // Generate or parse bridge admin key.
     let (bridge_admin_pub, bridge_admin_secret) =
-        resolve_falcon_key(cli.bridge_admin_public_key.as_deref(), "bridge admin")?;
+        resolve_falcon_key(bridge_admin_public_key, "bridge admin")?;
 
     // Generate or parse GER manager key.
     let (ger_manager_pub, ger_manager_secret) =
-        resolve_falcon_key(cli.ger_manager_public_key.as_deref(), "GER manager")?;
+        resolve_falcon_key(ger_manager_public_key, "GER manager")?;
 
     // Create bridge admin wallet (nonce=0, local account to be deployed later).
     let bridge_admin = create_basic_wallet(
@@ -68,7 +77,6 @@ fn main() -> anyhow::Result<()> {
         AccountStorageMode::Public,
     )
     .context("failed to create bridge admin account")?;
-    let bridge_admin = strip_code_decorators(bridge_admin);
     let bridge_admin_id = bridge_admin.id();
 
     // Create GER manager wallet (nonce=0, local account to be deployed later).
@@ -81,7 +89,6 @@ fn main() -> anyhow::Result<()> {
         AccountStorageMode::Public,
     )
     .context("failed to create GER manager account")?;
-    let ger_manager = strip_code_decorators(ger_manager);
     let ger_manager_id = ger_manager.id();
 
     // Create bridge account (NoAuth, nonce=0), then bump nonce to 1 for genesis.
@@ -89,7 +96,6 @@ fn main() -> anyhow::Result<()> {
     let bridge_seed: [u64; 4] = rng.random();
     let bridge_seed = Word::from(bridge_seed.map(Felt::new));
     let bridge = create_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
-    let bridge = strip_code_decorators(bridge);
 
     // Bump bridge nonce to 1 (required for genesis accounts).
     // File-loaded accounts via [[account]] in genesis.toml are included as-is,
@@ -101,19 +107,19 @@ fn main() -> anyhow::Result<()> {
         .map(|sk| vec![AuthSecretKey::Falcon512Rpo(sk)])
         .unwrap_or_default();
     AccountFile::new(bridge_admin, bridge_admin_secrets)
-        .write(cli.output_dir.join("bridge_admin.mac"))
+        .write(output_dir.join("bridge_admin.mac"))
         .context("failed to write bridge_admin.mac")?;
 
     let ger_manager_secrets = ger_manager_secret
         .map(|sk| vec![AuthSecretKey::Falcon512Rpo(sk)])
         .unwrap_or_default();
     AccountFile::new(ger_manager, ger_manager_secrets)
-        .write(cli.output_dir.join("ger_manager.mac"))
+        .write(output_dir.join("ger_manager.mac"))
         .context("failed to write ger_manager.mac")?;
 
     let bridge_id = bridge.id();
     AccountFile::new(bridge, vec![])
-        .write(cli.output_dir.join("bridge.mac"))
+        .write(output_dir.join("bridge.mac"))
         .context("failed to write bridge.mac")?;
 
     // Write genesis.toml.
@@ -137,10 +143,10 @@ path = "bridge.mac"
 "#,
     );
 
-    fs_err::write(cli.output_dir.join("genesis.toml"), genesis_toml)
+    fs_err::write(output_dir.join("genesis.toml"), genesis_toml)
         .context("failed to write genesis.toml")?;
 
-    println!("Genesis files written to {}", cli.output_dir.display());
+    println!("Genesis files written to {}", output_dir.display());
     println!("  bridge_admin.mac  (id: {})", bridge_admin_id.to_hex());
     println!("  ger_manager.mac   (id: {})", ger_manager_id.to_hex());
     println!("  bridge.mac        (id: {})", bridge_id.to_hex());
@@ -188,15 +194,43 @@ fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
     Ok(account)
 }
 
-/// Strips source location decorators from an account's code MAST forest.
-///
-/// This ensures serialized .mac files are deterministic regardless of build path.
-fn strip_code_decorators(account: Account) -> Account {
-    let (id, vault, storage, code, nonce, seed) = account.into_parts();
+#[cfg(test)]
+mod tests {
+    use miden_protocol::ZERO;
 
-    let mut mast = code.mast();
-    Arc::make_mut(&mut mast).strip_decorators();
-    let code = AccountCode::from_parts(mast, code.procedures().to_vec());
+    use super::*;
 
-    Account::new_unchecked(id, vault, storage, code, nonce, seed)
+    #[test]
+    fn generates_expected_genesis_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        run(dir.path(), None, None).expect("run should succeed");
+
+        // All 4 files should exist.
+        assert!(dir.path().join("bridge_admin.mac").exists());
+        assert!(dir.path().join("ger_manager.mac").exists());
+        assert!(dir.path().join("bridge.mac").exists());
+        assert!(dir.path().join("genesis.toml").exists());
+
+        // Bridge account should have nonce=1 (genesis account).
+        let bridge = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
+        assert_eq!(bridge.account.nonce(), ONE);
+        assert!(bridge.auth_secret_keys.is_empty(), "bridge should have no secret keys");
+
+        // Bridge admin should have nonce=0 and include a secret key.
+        let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
+        assert_eq!(admin.account.nonce(), ZERO);
+        assert_eq!(admin.auth_secret_keys.len(), 1, "bridge admin should have a secret key");
+
+        // GER manager should have nonce=0 and include a secret key.
+        let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
+        assert_eq!(ger.account.nonce(), ZERO);
+        assert_eq!(ger.auth_secret_keys.len(), 1, "GER manager should have a secret key");
+
+        // genesis.toml should reference only bridge.mac.
+        let toml_content = fs_err::read_to_string(dir.path().join("genesis.toml")).unwrap();
+        assert!(toml_content.contains("path = \"bridge.mac\""));
+        assert!(!toml_content.contains("bridge_admin.mac"));
+        assert!(!toml_content.contains("ger_manager.mac"));
+    }
 }
