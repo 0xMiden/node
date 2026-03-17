@@ -288,79 +288,10 @@ impl Mempool {
     /// Returns `None` if no transactions are available.
     #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
-        // The selection algorithm is fairly neanderthal in nature.
-        //
-        // We iterate over all transaction nodes, each time selecting the first transaction which
-        // has no parent nodes that are unselected transactions. This is fairly primitive, but
-        // avoids the manual bookkeeping of which transactions are selectable.
-        //
-        // Note that selecting a transaction can unblock other transactions. This implementation
-        // handles this by resetting the iteration whenever a transaction is selected.
-        //
-        // This is still reasonably performant given that we only retain unselected transactions as
-        // transaction nodes i.e. selected transactions become batch nodes.
-        //
-        // The additional bookkeeping can be implemented once we have fee related strategies. KISS.
-
-        let mut selected = SelectedBatch::builder();
-        let mut budget = self.config.batch_budget;
-
-        let mut candidates = self.nodes.txs.values();
-
-        'next: while let Some(candidate) = candidates.next() {
-            if selected.contains(&candidate.id()) {
-                continue 'next;
-            }
-
-            // A transaction may be placed in a batch IFF all parents were already in a batch (or
-            // are part of this one).
-            for parent in self.state.parents(NodeId::Transaction(candidate.id()), candidate) {
-                match parent {
-                    // TODO(mirko): Once user batches are supported, they will also need to be
-                    // checked here.
-                    NodeId::Transaction(parent) if !selected.contains(&parent) => {
-                        continue 'next;
-                    },
-                    NodeId::Transaction(_)
-                    | NodeId::ProposedBatch(_)
-                    | NodeId::ProvenBatch(_)
-                    | NodeId::Block(_) => {},
-                }
-            }
-
-            if budget.check_then_subtract(candidate.inner()) == BudgetStatus::Exceeded {
-                break;
-            }
-
-            candidates = self.nodes.txs.values();
-            selected.push(candidate.inner().clone());
-        }
-
-        if selected.is_empty() {
-            return None;
-        }
-        let selected = selected.build();
-
-        let batch = ProposedBatchNode::new(selected.clone());
-        let batch_id = batch.batch_id();
-
-        for tx in batch.transactions() {
-            let node =
-                self.nodes.txs.remove(&tx.id()).expect("selected transaction node must exist");
-            self.state.remove(&node);
-            tracing::info!(
-                batch.id = %batch_id,
-                transaction.id = %tx.id(),
-                "Transaction selected for inclusion in batch"
-            );
-        }
-        self.state.insert(NodeId::ProposedBatch(batch_id), &batch);
-        self.nodes.proposed_batches.insert(batch_id, batch);
-
-        // TODO(mirko): Selecting a batch can unblock user batches, which should be checked here.
-
+        let batch = self.transactions.select_batch(self.config.batch_budget)?;
+        self.selected_batches.append(&batch);
         self.inject_telemetry();
-        Some(selected)
+        Some(batch)
     }
 
     /// Drops the proposed batch and all of its descendants.

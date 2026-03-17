@@ -8,8 +8,9 @@ use miden_protocol::transaction::TransactionId;
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
+use crate::mempool::BatchBudget;
+use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::{Graph, GraphNode};
-use crate::mempool::{BatchBudget, budget};
 
 // TRANSACTION GRAPH NODE
 // ================================================================================================
@@ -68,8 +69,26 @@ impl TransactionGraph {
         self.txs.insert(tx.id(), tx);
     }
 
-    pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
-        todo!();
+    pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
+        let mut selected = SelectedBatch::builder();
+
+        while let Some(root) = self.inner.roots().iter().next() {
+            let tx = self.txs.get(root).expect("TransactionGraph::root must exist");
+            if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+                break;
+            }
+
+            let tx = self.txs.remove(root).expect("TransactionGraph::root must exist");
+            self.inner.pop_root(&tx);
+            selected.push(tx);
+        }
+
+        if selected.is_empty() {
+            return None;
+        }
+        let selected = selected.build();
+
+        Some(selected)
     }
 
     /// The given account's current commitment in this graph.

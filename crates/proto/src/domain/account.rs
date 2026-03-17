@@ -522,11 +522,8 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
         value: proto::rpc::account_storage_details::AccountStorageMapDetails,
     ) -> Result<Self, Self::Error> {
         use proto::rpc::account_storage_details::account_storage_map_details::{
-            all_map_entries::StorageMapEntry,
-            map_entries_with_proofs::StorageMapEntryWithProof,
-            AllMapEntries,
-            Entries as ProtoEntries,
-            MapEntriesWithProofs,
+            AllMapEntries, Entries as ProtoEntries, MapEntriesWithProofs,
+            all_map_entries::StorageMapEntry, map_entries_with_proofs::StorageMapEntryWithProof,
         };
 
         let proto::rpc::account_storage_details::AccountStorageMapDetails {
