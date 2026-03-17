@@ -163,7 +163,7 @@ where
     E: From<ConversionError>,
 {
     id.ok_or_else(|| {
-        ConversionError::missing_field::<proto::account::AccountId>(stringify!(account_id))
+        ConversionError::missing_field::<proto::account::AccountId>("account_id")
     })?
     .try_into()
     .context("account_id")

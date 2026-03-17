@@ -158,9 +158,7 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
         let proto::rpc::AccountRequest { account_id, block_num, details } = value;
 
         let account_id = account_id
-            .ok_or(ConversionError::missing_field::<proto::rpc::AccountRequest>(stringify!(
-                account_id
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::rpc::AccountRequest>("account_id"))?
             .try_into()
             .context("account_id")?;
         let block_num = block_num.map(Into::into);
@@ -230,7 +228,7 @@ impl TryFrom<proto::rpc::account_request::account_detail_request::StorageMapDeta
         let slot_data = slot_data
             .ok_or(ConversionError::missing_field::<
                 proto::rpc::account_request::account_detail_request::StorageMapDetailRequest,
-            >(stringify!(slot_data)))?
+            >("slot_data"))?
             .try_into()
             .context("slot_data")?;
 
@@ -286,27 +284,19 @@ impl TryFrom<proto::account::AccountHeader> for AccountHeader {
         } = value;
 
         let account_id = account_id
-            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>(stringify!(
-                account_id
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>("account_id"))?
             .try_into()
             .context("account_id")?;
         let vault_root = vault_root
-            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>(stringify!(
-                vault_root
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>("vault_root"))?
             .try_into()
             .context("vault_root")?;
         let storage_commitment = storage_commitment
-            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>(stringify!(
-                storage_commitment
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>("storage_commitment"))?
             .try_into()
             .context("storage_commitment")?;
         let code_commitment = code_commitment
-            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>(stringify!(
-                code_commitment
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountHeader>("code_commitment"))?
             .try_into()
             .context("code_commitment")?;
         let nonce = nonce.try_into().map_err(ConversionError::message).context("nonce")?;
@@ -407,7 +397,7 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
                 Result::<Vec<_>, ConversionError>::from_iter(assets.into_iter().map(|asset| {
                     let asset = asset.asset.ok_or(ConversionError::missing_field::<
                         proto::primitives::Asset,
-                    >(stringify!(asset)))?;
+                    >("asset"))?;
                     let asset = Word::try_from(asset).context("asset")?;
                     Asset::try_from(asset).map_err(ConversionError::from)
                 }))
@@ -575,7 +565,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                 None => {
                     return Err(ConversionError::missing_field::<
                         proto::rpc::account_storage_details::AccountStorageMapDetails,
-                    >(stringify!(entries)));
+                    >("entries"));
                 },
                 Some(ProtoEntries::AllEntries(AllMapEntries { entries })) => {
                     let entries = entries
@@ -584,7 +574,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                             let key = entry
                                 .key
                                 .ok_or(ConversionError::missing_field::<StorageMapEntry>(
-                                    stringify!(key),
+                                    "key",
                                 ))?
                                 .try_into()
                                 .map(StorageMapKey::new)
@@ -592,7 +582,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                             let value = entry
                                 .value
                                 .ok_or(ConversionError::missing_field::<StorageMapEntry>(
-                                    stringify!(value),
+                                    "value",
                                 ))?
                                 .try_into()
                                 .context("value")?;
@@ -609,9 +599,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                             let smt_opening =
                                 entry.proof.ok_or(ConversionError::missing_field::<
                                     StorageMapEntryWithProof,
-                                >(stringify!(
-                                    proof
-                                )))?;
+                                >("proof"))?;
                             SmtProof::try_from(smt_opening).context("proof")
                         })
                         .collect::<Result<Vec<_>, ConversionError>>()
@@ -715,7 +703,7 @@ impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
 
         let header = header
             .ok_or(ConversionError::missing_field::<proto::rpc::AccountStorageDetails>(
-                stringify!(header),
+                "header",
             ))?
             .try_into()
             .context("header")?;
@@ -770,15 +758,11 @@ impl TryFrom<proto::rpc::AccountResponse> for AccountResponse {
         let proto::rpc::AccountResponse { block_num, witness, details } = value;
 
         let block_num = block_num
-            .ok_or(ConversionError::missing_field::<proto::rpc::AccountResponse>(stringify!(
-                block_num
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::rpc::AccountResponse>("block_num"))?
             .into();
 
         let witness = witness
-            .ok_or(ConversionError::missing_field::<proto::rpc::AccountResponse>(stringify!(
-                witness
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::rpc::AccountResponse>("witness"))?
             .try_into()
             .context("witness")?;
 
@@ -842,21 +826,21 @@ impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
 
         let account_header = header
             .ok_or(ConversionError::missing_field::<proto::rpc::account_response::AccountDetails>(
-                stringify!(header),
+                "header",
             ))?
             .try_into()
             .context("header")?;
 
         let storage_details = storage_details
             .ok_or(ConversionError::missing_field::<proto::rpc::account_response::AccountDetails>(
-                stringify!(storage_details),
+                "storage_details",
             ))?
             .try_into()
             .context("storage_details")?;
 
         let vault_details = vault_details
             .ok_or(ConversionError::missing_field::<proto::rpc::account_response::AccountDetails>(
-                stringify!(vault_details),
+                "vault_details",
             ))?
             .try_into()
             .context("vault_details")?;
@@ -903,23 +887,17 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitness {
     fn try_from(account_witness: proto::account::AccountWitness) -> Result<Self, Self::Error> {
         let witness_id = account_witness
             .witness_id
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(stringify!(
-                witness_id
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("witness_id"))?
             .try_into()
             .context("witness_id")?;
         let commitment = account_witness
             .commitment
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(stringify!(
-                commitment
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("commitment"))?
             .try_into()
             .context("commitment")?;
         let path = account_witness
             .path
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(stringify!(
-                path
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("path"))?
             .try_into()
             .context("path")?;
 
@@ -960,24 +938,18 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
     ) -> Result<Self, Self::Error> {
         let witness_id = account_witness_record
             .witness_id
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(stringify!(
-                witness_id
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("witness_id"))?
             .try_into()
             .context("witness_id")?;
         let commitment = account_witness_record
             .commitment
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(stringify!(
-                commitment
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("commitment"))?
             .try_into()
             .context("commitment")?;
         let path: SparseMerklePath = account_witness_record
             .path
             .as_ref()
-            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(stringify!(
-                path
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>("path"))?
             .clone()
             .try_into()
             .context("path")?;
@@ -993,7 +965,7 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
             account_id: account_witness_record
                 .account_id
                 .ok_or(ConversionError::missing_field::<proto::account::AccountWitness>(
-                    stringify!(account_id),
+                    "account_id",
                 ))?
                 .try_into()
                 .context("account_id")?,
@@ -1045,7 +1017,7 @@ impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> fo
             .account_id
             .ok_or(ConversionError::missing_field::<
                 proto::store::transaction_inputs::AccountTransactionInputRecord,
-            >(stringify!(account_id)))?
+            >("account_id"))?
             .try_into()
             .context("account_id")?;
 
@@ -1053,7 +1025,7 @@ impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> fo
             .account_commitment
             .ok_or(ConversionError::missing_field::<
                 proto::store::transaction_inputs::AccountTransactionInputRecord,
-            >(stringify!(account_commitment)))?
+            >("account_commitment"))?
             .try_into()
             .context("account_commitment")?;
 

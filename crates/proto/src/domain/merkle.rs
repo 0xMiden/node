@@ -110,7 +110,7 @@ impl TryFrom<proto::primitives::SmtLeaf> for SmtLeaf {
 
     fn try_from(value: proto::primitives::SmtLeaf) -> Result<Self, Self::Error> {
         let leaf = value.leaf.ok_or(
-            ConversionError::missing_field::<proto::primitives::SmtLeaf>(stringify!(leaf)),
+            ConversionError::missing_field::<proto::primitives::SmtLeaf>("leaf"),
         )?;
 
         match leaf {
@@ -157,16 +157,12 @@ impl TryFrom<proto::primitives::SmtLeafEntry> for (Word, Word) {
     fn try_from(entry: proto::primitives::SmtLeafEntry) -> Result<Self, Self::Error> {
         let key: Word = entry
             .key
-            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>(stringify!(
-                key
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>("key"))?
             .try_into()
             .context("key")?;
         let value: Word = entry
             .value
-            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>(stringify!(
-                value
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeafEntry>("value"))?
             .try_into()
             .context("value")?;
 
@@ -192,16 +188,12 @@ impl TryFrom<proto::primitives::SmtOpening> for SmtProof {
     fn try_from(opening: proto::primitives::SmtOpening) -> Result<Self, Self::Error> {
         let path: SparseMerklePath = opening
             .path
-            .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>(stringify!(
-                path
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>("path"))?
             .try_into()
             .context("path")?;
         let leaf: SmtLeaf = opening
             .leaf
-            .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>(stringify!(
-                leaf
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtOpening>("leaf"))?
             .try_into()
             .context("leaf")?;
 

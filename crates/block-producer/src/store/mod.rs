@@ -72,9 +72,7 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
     fn try_from(response: proto::store::TransactionInputs) -> Result<Self, Self::Error> {
         let AccountState { account_id, account_commitment } = response
             .account_state
-            .ok_or(ConversionError::missing_field::<proto::store::TransactionInputs>(stringify!(
-                account_state
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::store::TransactionInputs>("account_state"))?
             .try_into()
             .context("account_state")?;
 
@@ -84,7 +82,7 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
                 .nullifier
                 .ok_or(ConversionError::missing_field::<
                     proto::store::transaction_inputs::NullifierTransactionInputRecord,
-                >(stringify!(nullifier)))?
+                >("nullifier"))?
                 .try_into()
                 .context("nullifier")?;
 

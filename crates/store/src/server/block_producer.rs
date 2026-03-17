@@ -57,29 +57,23 @@ impl block_producer_server::BlockProducer for StoreApi {
         // Read block.
         let block = request.block.ok_or(ConversionError::missing_field::<
             proto::store::ApplyBlockRequest,
-        >(stringify!(block)))?;
+        >("block"))?;
         // Read block header.
         let header: BlockHeader = block
             .header
-            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
-                header
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>("header"))?
             .try_into()
             .context("header")?;
         // Read block body.
         let body: BlockBody = block
             .body
-            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
-                body
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>("body"))?
             .try_into()
             .context("body")?;
         // Read signature.
         let signature: Signature = block
             .signature
-            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>(stringify!(
-                signature
-            )))?
+            .ok_or(ConversionError::missing_field::<proto::blockchain::SignedBlock>("signature"))?
             .try_into()
             .context("signature")?;
 

@@ -77,7 +77,7 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
             .nullifier
             .ok_or_else(|| {
                 ConversionError::missing_field::<proto::transaction::InputNoteCommitment>(
-                    stringify!(nullifier),
+                    "nullifier",
                 )
             })?
             .try_into()

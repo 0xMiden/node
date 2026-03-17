@@ -56,7 +56,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
         let sender = value
             .sender
             .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NoteMetadata>(stringify!(sender))
+                ConversionError::missing_field::<proto::note::NoteMetadata>("sender")
             })?
             .try_into()
             .context("sender")?;
@@ -116,7 +116,7 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
         let metadata: NoteMetadata = value
             .metadata
             .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NetworkNote>(stringify!(metadata))
+                ConversionError::missing_field::<proto::note::NetworkNote>("metadata")
             })?
             .try_into()
             .context("metadata")?;
@@ -149,7 +149,7 @@ impl TryFrom<proto::note::NoteId> for Word {
         note_id
             .id
             .as_ref()
-            .ok_or(ConversionError::missing_field::<proto::note::NoteId>(stringify!(id)))?
+            .ok_or(ConversionError::missing_field::<proto::note::NoteId>("id"))?
             .try_into()
     }
 }
@@ -182,7 +182,7 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
                 .inclusion_path
                 .as_ref()
                 .ok_or(ConversionError::missing_field::<proto::note::NoteInclusionInBlockProof>(
-                    stringify!(inclusion_path),
+                    "inclusion_path",
                 ))?
                 .clone(),
         )
@@ -193,11 +193,11 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
                 .note_id
                 .as_ref()
                 .ok_or(ConversionError::missing_field::<proto::note::NoteInclusionInBlockProof>(
-                    stringify!(note_id),
+                    "note_id",
                 ))?
                 .id
                 .as_ref()
-                .ok_or(ConversionError::missing_field::<proto::note::NoteId>(stringify!(id)))?,
+                .ok_or(ConversionError::missing_field::<proto::note::NoteId>("id"))?,
         )
         .context("note_id")?;
 
@@ -218,13 +218,13 @@ impl TryFrom<proto::note::Note> for Note {
     fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
         let metadata: NoteMetadata = proto_note
             .metadata
-            .ok_or(ConversionError::missing_field::<proto::note::Note>(stringify!(metadata)))?
+            .ok_or(ConversionError::missing_field::<proto::note::Note>("metadata"))?
             .try_into()
             .context("metadata")?;
 
         let details = proto_note
             .details
-            .ok_or(ConversionError::missing_field::<proto::note::Note>(stringify!(details)))?;
+            .ok_or(ConversionError::missing_field::<proto::note::Note>("details"))?;
 
         let note_details = NoteDetails::read_from_bytes(&details)
             .map_err(|err| ConversionError::deserialization("NoteDetails", err))?;
@@ -253,14 +253,14 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
         let note_id_word: Word = value
             .note_id
             .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NoteHeader>(stringify!(note_id))
+                ConversionError::missing_field::<proto::note::NoteHeader>("note_id")
             })?
             .try_into()
             .context("note_id")?;
         let metadata: NoteMetadata = value
             .metadata
             .ok_or_else(|| {
-                ConversionError::missing_field::<proto::note::NoteHeader>(stringify!(metadata))
+                ConversionError::missing_field::<proto::note::NoteHeader>("metadata")
             })?
             .try_into()
             .context("metadata")?;

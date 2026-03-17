@@ -52,14 +52,14 @@ impl TryFrom<proto::store::block_inputs::NullifierWitness> for NullifierWitnessR
                 .nullifier
                 .ok_or(ConversionError::missing_field::<
                     proto::store::block_inputs::NullifierWitness,
-                >(stringify!(nullifier)))?
+                >("nullifier"))?
                 .try_into()
                 .context("nullifier")?,
             proof: nullifier_witness_record
                 .opening
                 .ok_or(ConversionError::missing_field::<
                     proto::store::block_inputs::NullifierWitness,
-                >(stringify!(opening)))?
+                >("opening"))?
                 .try_into()
                 .context("opening")?,
         })

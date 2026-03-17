@@ -164,9 +164,7 @@ impl rpc_server::Rpc for StoreApi {
         let block_range = request
             .block_range
             .ok_or_else(|| {
-                ConversionError::missing_field::<proto::rpc::SyncChainMmrRequest>(stringify!(
-                    block_range
-                ))
+                ConversionError::missing_field::<proto::rpc::SyncChainMmrRequest>("block_range")
             })
             .map_err(SyncChainMmrError::DeserializationFailed)?;
 
