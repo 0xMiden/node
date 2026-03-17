@@ -2827,11 +2827,14 @@ dependencies = [
  "fs-err",
  "hex",
  "miden-agglayer",
+ "miden-node-store",
+ "miden-node-utils",
  "miden-protocol",
  "miden-standards",
  "rand",
  "rand_chacha",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

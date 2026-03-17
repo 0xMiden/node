@@ -259,4 +259,37 @@ mod tests {
         let bridge = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
         assert_eq!(bridge.account.nonce(), ONE);
     }
+
+    #[tokio::test]
+    async fn genesis_config_produces_valid_genesis_block() {
+        use miden_node_store::genesis::config::GenesisConfig;
+        use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), None, None).expect("run should succeed");
+
+        // Read the bridge account to know its expected ID.
+        let bridge_file = AccountFile::read(dir.path().join("bridge.mac")).unwrap();
+        let expected_bridge_id = bridge_file.account.id();
+
+        // Parse the generated genesis.toml.
+        let config = GenesisConfig::read_toml_file(&dir.path().join("genesis.toml"))
+            .expect("genesis.toml should be parseable");
+
+        // Build the genesis state and block.
+        let signer = SecretKey::read_from_bytes(&[0x01; 32]).unwrap();
+        let (state, _secrets) = config.into_state(signer).expect("genesis state should build");
+
+        // The genesis state should contain the bridge account (+ the default MIDEN faucet).
+        let bridge_in_genesis = state
+            .accounts
+            .iter()
+            .find(|a| a.id() == expected_bridge_id)
+            .expect("bridge account should be in genesis state");
+        assert_eq!(bridge_in_genesis.nonce(), ONE);
+
+        // Build the actual genesis block to verify it's valid.
+        let block = state.into_block().await.expect("genesis block should build successfully");
+        assert_eq!(block.inner().header().block_num(), miden_protocol::block::BlockNumber::GENESIS);
+    }
 }
