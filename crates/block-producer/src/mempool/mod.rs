@@ -155,10 +155,8 @@ pub struct Mempool {
 
     /// Tracks the dependency graph for transactions awaiting batching.
     transactions: graph::TransactionGraph,
-    /// Tracks the dependency graph for batches pending proof generation.
-    selected_batches: graph::SelectedBatchGraph,
-    /// Tracks the dependency graph for batches awaiting block inclusion.
-    proven_batches: graph::ProvenBatchGraph,
+    /// Tracks the dependency graph for batches awaiting inclusion in a block.
+    batches: graph::BatchGraph,
 
     chain_tip: BlockNumber,
 
@@ -183,8 +181,7 @@ impl Mempool {
             state: state::InflightState::default(),
             nodes: nodes::Nodes::default(),
             transactions: graph::TransactionGraph::default(),
-            selected_batches: graph::SelectedBatchGraph::default(),
-            proven_batches: graph::ProvenBatchGraph::default(),
+            batches: graph::BatchGraph::default(),
         }
     }
 
@@ -230,8 +227,7 @@ impl Mempool {
         let account_commitment = self
             .transactions
             .account_commitment(&tx.account_id())
-            .or_else(|| self.selected_batches.account_commitment(&tx.account_id()))
-            .or_else(|| self.proven_batches.account_commitment(&tx.account_id()))
+            .or_else(|| self.batches.account_commitment(&tx.account_id()))
             .or(tx.store_account_state())
             .unwrap_or_default();
         if tx.account_update().initial_state_commitment() != account_commitment {
@@ -245,8 +241,7 @@ impl Mempool {
         let double_spend: Vec<_> = tx
             .nullifiers()
             .filter(|nullifier| self.transactions.nullifier_exists(nullifier))
-            .filter(|nullifier| self.selected_batches.nullifier_exists(nullifier))
-            .filter(|nullifier| self.proven_batches.nullifier_exists(nullifier))
+            .filter(|nullifier| self.batches.nullifier_exists(nullifier))
             .collect();
         if !double_spend.is_empty() {
             return Err(VerifyTxError::InputNotesAlreadyConsumed(double_spend).into());
@@ -255,8 +250,7 @@ impl Mempool {
         let duplicates: Vec<_> = tx
             .output_note_commitments()
             .filter(|commitment| self.transactions.output_note_exists(commitment))
-            .filter(|commitment| self.selected_batches.output_note_exists(commitment))
-            .filter(|commitment| self.proven_batches.output_note_exists(commitment))
+            .filter(|commitment| self.batches.output_note_exists(commitment))
             .collect();
         if !duplicates.is_empty() {
             return Err(VerifyTxError::OutputNotesAlreadyExist(duplicates).into());
@@ -267,8 +261,7 @@ impl Mempool {
         let missing: Vec<_> = tx
             .unauthenticated_note_commitments()
             .filter(|commitment| self.transactions.output_note_exists(commitment))
-            .filter(|commitment| self.selected_batches.output_note_exists(commitment))
-            .filter(|commitment| self.proven_batches.output_note_exists(commitment))
+            .filter(|commitment| self.batches.output_note_exists(commitment))
             .collect();
         if !missing.is_empty() {
             return Err(VerifyTxError::UnauthenticatedNotesNotFound(missing).into());
@@ -289,7 +282,7 @@ impl Mempool {
     #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_batch(self.config.batch_budget)?;
-        self.selected_batches.append(&batch);
+        self.batches.append(&batch);
         self.inject_telemetry();
         Some(batch)
     }
@@ -299,34 +292,10 @@ impl Mempool {
     /// Transactions are re-queued.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
-        // Due to the distributed nature of the system, its possible that a proposed batch was
-        // already proven, or already reverted. This guards against this eventuality.
-        if !self.nodes.proposed_batches.contains_key(&batch) {
-            return;
+        let reverted_batches = self.batches.revert_batch_and_descendents(batch);
+        for reverted in reverted_batches {
+            self.transactions.requeue_batch_transactions(reverted);
         }
-
-        // TODO(mirko): This will be somewhat complicated by the introduction of user batches
-        // since these don't have all inner txs present and therefore must at least partially
-        // revert their own tx descendents.
-
-        // Remove all descendents and reinsert their transactions. This is safe to do since
-        // a batch's state impact is the aggregation of its transactions.
-        let reverted = self.revert_subtree(NodeId::ProposedBatch(batch));
-
-        for (_, node) in reverted {
-            for tx in node.transactions() {
-                let tx = TransactionNode::new(Arc::clone(tx));
-                let tx_id = tx.id();
-                self.state.insert(NodeId::Transaction(tx_id), &tx);
-                self.nodes.txs.insert(tx_id, tx);
-                tracing::info!(
-                    batch.id = %batch,
-                    transaction.id = %tx_id,
-                    "Transaction requeued as part of batch rollback"
-                );
-            }
-        }
-
         self.inject_telemetry();
     }
 

@@ -91,6 +91,10 @@ impl TransactionGraph {
         Some(selected)
     }
 
+    pub fn requeue_batch_transactions(&mut self, batch: SelectedBatch) {
+        todo!();
+    }
+
     /// The given account's current commitment in this graph.
     ///
     /// Returns `None` if the account has not been seen by this graph at all.

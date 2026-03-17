@@ -1,15 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-mod proven_batch;
-mod selected_batch;
+mod batch;
 mod transaction;
 
+pub use batch::BatchGraph;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteId, Nullifier};
-pub use proven_batch::ProvenBatchGraph;
-pub use selected_batch::SelectedBatchGraph;
 pub use transaction::TransactionGraph;
 
 trait GraphNode {
@@ -299,6 +297,16 @@ where
     /// unauthenticated input note by another node in this graph.
     pub fn output_note_is_consumed(&self, note: &Word) -> bool {
         self.unauthenticated_notes.contains_key(note)
+    }
+
+    /// Returns the IDs of all nodes which depend on the given node.
+    pub fn descendents(&self, node: &N::Id) -> HashSet<N::Id> {
+        todo!();
+    }
+
+    /// Removes the node _IFF_ it is a leaf node (has no descendents).
+    pub fn revert_leaf(&self, node: &N::Id) -> Option<N::Id> {
+        todo!();
     }
 }
 

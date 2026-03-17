@@ -1,10 +1,16 @@
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::ops::Not;
+use std::sync::Arc;
+
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::batch::BatchId;
+use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::note::Nullifier;
 
 use super::{Graph, GraphNode};
 use crate::domain::batch::SelectedBatch;
+use crate::domain::transaction::AuthenticatedTransaction;
 
 impl GraphNode for SelectedBatch {
     type Id = BatchId;
@@ -36,11 +42,13 @@ impl GraphNode for SelectedBatch {
 /// introduced by shared resources (nullifiers, notes, and account states). The graph remains a DAG
 /// by requiring that each batch builds on top of the state created by previously inserted batches.
 #[derive(Clone, Debug, PartialEq, Default)]
-pub struct SelectedBatchGraph {
+pub struct BatchGraph {
     inner: Graph<SelectedBatch>,
+    batches: HashMap<BatchId, SelectedBatch>,
+    proven: HashMap<BatchId, Arc<ProvenBatch>>,
 }
 
-impl SelectedBatchGraph {
+impl BatchGraph {
     /// Inserts the batch into the dependency graph.
     ///
     /// # Panics
@@ -51,13 +59,33 @@ impl SelectedBatchGraph {
         self.inner.append(batch);
     }
 
-    /// Removes a root batch from the graph, reverting any state it introduced.
+    /// Reverts the given batch and _all_ its descendents _IFF_ it is present in the graph.
     ///
-    /// # Panics
+    /// This includes batches that have been marked as proven.
     ///
-    /// Panics if the batch still has parents in the graph.
-    pub fn pop_root(&mut self, batch: &SelectedBatch) {
-        self.inner.pop_root(batch);
+    /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
+    pub fn revert_batch_and_descendents(&mut self, batch: BatchId) -> Vec<SelectedBatch> {
+        if !self.batches.contains_key(&batch) {
+            return Vec::default();
+        }
+
+        let mut descendents = self.inner.descendents(&batch);
+        descendents.insert(batch);
+
+        let mut reverted = Vec::new();
+        'outer: while !descendents.is_empty() {
+            for node in &descendents {
+                if let Some(leaf) = self.inner.revert_leaf(node) {
+                    descendents.remove(&leaf);
+                    reverted.push(self.batches.remove(&leaf).unwrap());
+                    continue 'outer;
+                }
+            }
+
+            panic!("revert_batch_and_descendents failed to make progress");
+        }
+
+        reverted
     }
 
     /// Returns the most recent commitment known for the specified account.
@@ -79,10 +107,5 @@ impl SelectedBatchGraph {
     /// unauthenticated input.
     pub fn output_note_is_consumed(&self, note: &Word) -> bool {
         self.inner.output_note_is_consumed(note)
-    }
-
-    /// Returns the set of batches that currently have no dependencies.
-    pub fn roots(&self) -> std::collections::HashSet<BatchId> {
-        self.inner.roots()
     }
 }
