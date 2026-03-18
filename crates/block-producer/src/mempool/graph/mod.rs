@@ -75,7 +75,7 @@ where
 impl<N> Graph<N>
 where
     N: GraphNode,
-    N::Id: Eq + Hash + Copy + std::fmt::Debug,
+    N::Id: Eq + Hash + Copy + std::fmt::Display,
 {
     /// Appends a node to the graph.
     ///
@@ -234,6 +234,64 @@ where
     /// Removes the node _IFF_ it is a leaf node (has no descendents).
     pub fn revert_leaf(&self, node: &N::Id) -> Option<N::Id> {
         todo!();
+    }
+
+    /// Removes the node _IFF_ it has no ancestor nodes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this node has any ancestor nodes.
+    pub fn prune(&mut self, node: &N) {
+        let id = node.id();
+        assert!(
+            self.parents.get(&id).unwrap().is_empty(),
+            "Cannot prune node {id} as it still has ancestors",
+        );
+
+        self.remove(node);
+    }
+
+    /// Unconditionally removes the given node from the graph, deleting its edges and state.
+    ///
+    /// This is an _internal_ helper, caller is responsible for ensuring that the graph won't be
+    /// corrupted by this removal. This is true if the node has either no parents, or no children.
+    fn remove(&mut self, node: &N) {
+        let id = node.id();
+
+        // We destructure here so that we are reminded to clean up fields that get added in the
+        // future.
+        let Self {
+            children,
+            parents,
+            selected,
+            nullifiers,
+            notes_created,
+            accounts,
+        } = self;
+
+        // Remove edges.
+        parents.remove(&id);
+        let node_children = children.remove(&id).unwrap();
+        for child in node_children {
+            parents.get_mut(&child).unwrap().remove(&id);
+        }
+
+        // Remove state.
+        for nullifier in node.nullifiers() {
+            nullifiers.remove(&nullifier);
+        }
+
+        for note in node.output_notes() {
+            notes_created.remove(&note);
+        }
+
+        for (account, ..) in node.account_updates() {
+            let mut account = accounts.get_mut(&account).unwrap();
+            account.owner.take_if(|owner| owner == &id);
+            account.pass_through.remove(&id);
+        }
+
+        selected.remove(&id);
     }
 }
 

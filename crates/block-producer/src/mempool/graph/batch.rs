@@ -144,7 +144,15 @@ impl BatchGraph {
         selected
     }
 
+    /// Prunes the given batch.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the batch does not exist, or has existing ancestors in the batch
+    /// graph.
     pub fn prune(&mut self, batch: BatchId) {
-        todo!();
+        let batch = self.batches.remove(&batch).expect("batch to prune must exist");
+        self.inner.prune(&batch);
+        self.proven.remove(&batch.id());
     }
 }

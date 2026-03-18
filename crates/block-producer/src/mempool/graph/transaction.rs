@@ -149,8 +149,15 @@ impl TransactionGraph {
         todo!();
     }
 
+    /// Prunes the given transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the transaction does not exist, or has existing ancestors in the transaction
+    /// graph.
     pub fn prune(&mut self, transaction: TransactionId) {
-        todo!();
+        let transaction = self.txs.remove(&transaction).expect("transaction to prune must exist");
+        self.inner.prune(&transaction);
     }
 
     /// Total number of transactions in the graph.
