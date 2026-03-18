@@ -173,4 +173,11 @@ impl TransactionGraph {
     pub fn output_note_is_consumed(&self, note: &Word) -> bool {
         self.inner.output_note_is_consumed(note)
     }
+
+    /// Total number of transactions in the graph.
+    ///
+    /// This includes selected and unselected transactions.
+    pub fn len(&self) -> usize {
+        self.txs.len()
+    }
 }

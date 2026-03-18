@@ -58,7 +58,6 @@ use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{AddTransactionError, VerifyTxError};
 use crate::mempool::budget::BudgetStatus;
-use crate::mempool::nodes::{BlockNode, Node, NodeId, ProposedBatchNode, TransactionNode};
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -69,9 +68,7 @@ use crate::{
 mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
-pub(super) mod graph;
-mod nodes;
-mod state;
+mod graph;
 mod subscription;
 
 #[cfg(test)]
@@ -146,13 +143,6 @@ impl SharedMempool {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mempool {
-    /// Contains the aggregated state of all transactions, batches and blocks currently inflight in
-    /// the mempool. Combines with `nodes` to describe the mempool's state graph.
-    state: state::InflightState,
-
-    /// Contains all the transactions, batches and blocks currently in the mempool.
-    nodes: nodes::Nodes,
-
     /// Tracks the dependency graph for transactions awaiting batching.
     transactions: graph::TransactionGraph,
     /// Tracks the dependency graph for batches awaiting inclusion in a block.
@@ -185,8 +175,6 @@ impl Mempool {
             config,
             chain_tip,
             subscription: SubscriptionProvider::new(chain_tip),
-            state: state::InflightState::default(),
-            nodes: nodes::Nodes::default(),
             transactions: graph::TransactionGraph::default(),
             batches: graph::BatchGraph::default(),
             pending_block: None,
@@ -220,7 +208,7 @@ impl Mempool {
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
     ) -> Result<BlockNumber, AddTransactionError> {
-        if self.nodes.uncommitted_tx_count() >= self.config.tx_capacity.get() {
+        if self.transactions.len() >= self.config.tx_capacity.get() {
             return Err(AddTransactionError::CapacityExceeded);
         }
 
@@ -448,17 +436,17 @@ impl Mempool {
 
     /// Returns the number of transactions currently waiting to be batched.
     pub fn unbatched_transactions_count(&self) -> usize {
-        self.nodes.txs.len()
+        todo!();
     }
 
     /// Returns the number of batches currently being proven.
     pub fn proposed_batches_count(&self) -> usize {
-        self.nodes.proposed_batches.len()
+        todo!();
     }
 
     /// Returns the number of proven batches waiting for block inclusion.
     pub fn proven_batches_count(&self) -> usize {
-        self.nodes.proven_batches.len()
+        todo!();
     }
 
     // INTERNAL HELPERS
@@ -471,8 +459,7 @@ impl Mempool {
     fn inject_telemetry(&self) {
         let span = tracing::Span::current();
 
-        self.nodes.inject_telemetry(&span);
-        self.state.inject_telemetry(&span);
+        todo!();
     }
 
     /// Prunes the oldest locally retained block if the number of blocks exceeds the configured
