@@ -106,8 +106,8 @@ impl BatchGraph {
         let mut expired = self
             .batches
             .iter()
+            .filter(|(id, _)| !self.inner.is_selected(id))
             .filter_map(|(id, batch)| (batch.expires_at() <= chain_tip).then_some(id))
-            // TODO: consider selected once they're re-added.
             .copied()
             .collect::<HashSet<_>>();
 
@@ -140,7 +140,7 @@ impl BatchGraph {
                 break;
             }
 
-            self.inner.select_root(candidate.id());
+            self.inner.select_candidate(candidate.id());
             selected.push(Arc::clone(candidate));
         }
 

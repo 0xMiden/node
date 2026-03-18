@@ -83,7 +83,7 @@ impl TransactionGraph {
                 break;
             }
 
-            self.inner.select_root(tx.id());
+            self.inner.select_candidate(tx.id());
             selected.push(Arc::clone(tx));
         }
 
@@ -95,23 +95,26 @@ impl TransactionGraph {
         Some(selected)
     }
 
+    /// Reverts expired transactions and their descendents.
+    ///
+    /// Only unselected transactions are considered, the assumption being that selected transactions
+    /// are in committed blocks and should not be reverted.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
-        todo!();
-        // let mut reverted = Vec::default();
+        let mut reverted = HashSet::default();
 
-        // let mut expired = self
-        //     .batches
-        //     .iter()
-        //     .filter_map(|(id, batch)| (batch.expires_at() <= chain_tip).then_some(id))
-        //     // TODO: consider selected once they're re-added.
-        //     .copied()
-        //     .collect::<HashSet<_>>();
+        let mut expired = self
+            .txs
+            .iter()
+            .filter(|(id, _)| !self.inner.is_selected(id))
+            .filter_map(|(id, tx)| (tx.expires_at() <= chain_tip).then_some(id))
+            .copied()
+            .collect::<HashSet<_>>();
 
-        // for batch in expired {
-        //     reverted.extend(self.revert_batch_and_descendents(batch));
-        // }
+        for transaction in expired {
+            reverted.extend(self.revert_tx_and_descendents(transaction));
+        }
 
-        // reverted
+        reverted
     }
 
     /// Reverts the given transaction and _all_ its descendents _IFF_ it is present in the graph.

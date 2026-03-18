@@ -214,12 +214,17 @@ where
             .collect()
     }
 
-    /// Marks a root node as selected.
+    /// Returns `true` if the given node was previously selected.
+    pub fn is_selected(&self, node: &N::Id) -> bool {
+        self.selected.contains(node)
+    }
+
+    /// Marks a node as selected.
     ///
     /// # Panics
     ///
-    /// Panics if the given node is not a root.
-    pub fn select_root(&mut self, node: N::Id) {
+    /// Panics if the given node is not a selection candidate.
+    pub fn select_candidate(&mut self, node: N::Id) {
         assert!(!self.selected.contains(&node));
         assert!(
             self.parents
