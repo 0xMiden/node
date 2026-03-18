@@ -219,6 +219,27 @@ where
         self.selected.contains(node)
     }
 
+    /// Marks the given node as unselected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node was not previously selected or if any of its children are marked as
+    /// selected.
+    pub fn deselect(&mut self, node: &N::Id) {
+        assert!(
+            self.is_selected(node),
+            "Cannot deselect node {node} which is not in selected set"
+        );
+
+        let children = self.children.get(node).unwrap();
+        assert!(
+            children.iter().all(|child| !self.is_selected(child)),
+            "Cannot deselect node {node} which still has children selected",
+        );
+
+        self.selected.remove(node);
+    }
+
     /// Marks a node as selected.
     ///
     /// # Panics

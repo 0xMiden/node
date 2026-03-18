@@ -245,7 +245,7 @@ impl Mempool {
     pub fn rollback_batch(&mut self, batch: BatchId) {
         let reverted_batches = self.batches.revert_batch_and_descendents(batch);
         for reverted in reverted_batches {
-            self.transactions.requeue_batch_transactions(reverted);
+            self.transactions.requeue_transactions(reverted);
         }
         self.inject_telemetry();
     }
@@ -456,7 +456,7 @@ impl Mempool {
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
         let batches = self.batches.revert_expired(self.chain_tip);
         for batch in batches {
-            self.transactions.requeue_batch_transactions(batch);
+            self.transactions.requeue_transactions(batch);
         }
         self.transactions.revert_expired(self.chain_tip)
     }

@@ -147,8 +147,15 @@ impl TransactionGraph {
         reverted
     }
 
-    pub fn requeue_batch_transactions(&mut self, batch: SelectedBatch) {
-        todo!();
+    /// Marks the batch's transactions are ready for selection again.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given batch has any child batches which are still in flight.
+    pub fn requeue_transactions(&mut self, batch: SelectedBatch) {
+        for tx in batch.into_transactions().iter().rev() {
+            self.inner.deselect(&tx.id());
+        }
     }
 
     /// Prunes the given transaction.
