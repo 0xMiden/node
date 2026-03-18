@@ -192,7 +192,8 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
 /// 3. Rewrite each `.decode()` call to `decoder.decode_field("field", <param>.field)`
 ///
 /// The field name string is extracted from the last segment of the field access expression.
-/// Calls inside closures are **not** rewritten (closures have their own receiver scope).
+/// `.decode()` calls inside closures, for-loops, and match arms are also rewritten
+/// when the receiver is rooted at the closure parameter, loop variable, or match binding.
 ///
 /// # Example
 ///
@@ -242,9 +243,8 @@ fn process_method(method: &mut syn::ImplItemFn) {
     };
 
     let mut rewriter = DecodeRewriter {
-        param_name: param_name.clone(),
+        roots: vec![param_name.clone()],
         found_decode: false,
-        closure_depth: 0,
     };
 
     syn::visit_mut::visit_block_mut(&mut rewriter, &mut method.block);
@@ -269,24 +269,70 @@ fn extract_param_name(sig: &syn::Signature) -> Option<Ident> {
     None
 }
 
-/// AST visitor that rewrites `<param>.field.decode()` →
-/// `decoder.decode_field("field", <param>.field)`.
+/// Extracts all ident bindings from a pattern (e.g., `Foo::Bar(x)` → `[x]`).
+fn extract_pat_idents(pat: &syn::Pat) -> Vec<Ident> {
+    let mut idents = Vec::new();
+    collect_pat_idents(pat, &mut idents);
+    idents
+}
+
+fn collect_pat_idents(pat: &syn::Pat, idents: &mut Vec<Ident>) {
+    match pat {
+        syn::Pat::Ident(pat_ident) => {
+            idents.push(pat_ident.ident.clone());
+        },
+        syn::Pat::TupleStruct(tuple_struct) => {
+            for elem in &tuple_struct.elems {
+                collect_pat_idents(elem, idents);
+            }
+        },
+        syn::Pat::Tuple(tuple) => {
+            for elem in &tuple.elems {
+                collect_pat_idents(elem, idents);
+            }
+        },
+        syn::Pat::Struct(pat_struct) => {
+            for field in &pat_struct.fields {
+                collect_pat_idents(&field.pat, idents);
+            }
+        },
+        syn::Pat::Reference(pat_ref) => {
+            collect_pat_idents(&pat_ref.pat, idents);
+        },
+        _ => {},
+    }
+}
+
+/// Injects `let decoder = <root>.decoder();` at the start of a block.
+fn inject_decoder_into_block(block: &mut syn::Block, root: &Ident) {
+    let decoder_stmt: syn::Stmt = syn::parse_quote! {
+        let decoder = #root.decoder();
+    };
+    block.stmts.insert(0, decoder_stmt);
+}
+
+/// AST visitor that rewrites `<root>.field.decode()` →
+/// `decoder.decode_field("field", <root>.field)`.
+///
+/// Tracks a stack of "roots" — variable names that are valid decode receivers.
+/// The function parameter is the initial root. Closure parameters, for-loop
+/// variables, and match bindings are pushed as temporary roots when visiting
+/// their respective scopes.
 struct DecodeRewriter {
-    /// The function parameter name (e.g., `value`, `response`, `from`).
-    param_name: Ident,
-    /// Whether any `.decode()` calls were found and rewritten.
+    /// Stack of decode root variable names.
+    roots: Vec<Ident>,
+    /// Whether any `.decode()` calls were found and rewritten at the top-level
+    /// (function parameter) scope.
     found_decode: bool,
-    /// Current closure nesting depth — skip rewriting when > 0.
-    closure_depth: u32,
 }
 
 impl DecodeRewriter {
-    /// Checks if a field access expression is rooted at the function parameter,
+    /// Checks if a field access expression is rooted at any known root,
     /// and returns the last field name segment if so.
     fn extract_field_info(&self, expr: &syn::Expr) -> Option<Ident> {
         if let syn::Expr::Field(field_expr) = expr {
             if let syn::Member::Named(field_ident) = &field_expr.member {
-                if self.root_is_param(expr) {
+                if self.root_matches_any(expr) {
                     return Some(field_ident.clone());
                 }
             }
@@ -294,14 +340,57 @@ impl DecodeRewriter {
         None
     }
 
-    /// Recursively checks if the root of a field access chain is the function parameter.
-    fn root_is_param(&self, expr: &syn::Expr) -> bool {
+    /// Recursively checks if the root of a field access chain matches any known root.
+    fn root_matches_any(&self, expr: &syn::Expr) -> bool {
         match expr {
-            syn::Expr::Path(path) => path.path.is_ident(&self.param_name),
-            syn::Expr::Field(field) => self.root_is_param(&field.base),
+            syn::Expr::Path(path) => self.roots.iter().any(|root| path.path.is_ident(root)),
+            syn::Expr::Field(field) => self.root_matches_any(&field.base),
             _ => false,
         }
     }
+
+    /// Finds which root an expression is rooted at.
+    fn find_root(&self, expr: &syn::Expr) -> Option<&Ident> {
+        match expr {
+            syn::Expr::Path(path) => self.roots.iter().find(|root| path.path.is_ident(&**root)),
+            syn::Expr::Field(field) => self.find_root(&field.base),
+            _ => None,
+        }
+    }
+}
+
+/// Visitor that detects `decoder.decode_field(...)` calls in the immediate scope,
+/// without recursing into nested closures or for-loops (which have their own decoders).
+struct DecoderCallFinder(bool);
+
+impl<'ast> syn::visit::Visit<'ast> for DecoderCallFinder {
+    fn visit_expr_method_call(&mut self, mc: &'ast syn::ExprMethodCall) {
+        if mc.method == "decode_field" {
+            if let syn::Expr::Path(path) = &*mc.receiver {
+                if path.path.is_ident("decoder") {
+                    self.0 = true;
+                }
+            }
+        }
+        syn::visit::visit_expr_method_call(self, mc);
+    }
+
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
+    fn visit_expr_for_loop(&mut self, _: &'ast syn::ExprForLoop) {}
+}
+
+/// Checks if an expression contains any `decoder.decode_field(...)` calls.
+fn expr_contains_decoder_call(expr: &syn::Expr) -> bool {
+    let mut finder = DecoderCallFinder(false);
+    syn::visit::Visit::visit_expr(&mut finder, expr);
+    finder.0
+}
+
+/// Checks if a block contains any `decoder.decode_field(...)` calls.
+fn block_contains_decoder_call(block: &syn::Block) -> bool {
+    let mut finder = DecoderCallFinder(false);
+    syn::visit::Visit::visit_block(&mut finder, block);
+    finder.0
 }
 
 impl VisitMut for DecodeRewriter {
@@ -309,18 +398,16 @@ impl VisitMut for DecodeRewriter {
         // Recurse into children first (bottom-up).
         syn::visit_mut::visit_expr_mut(self, expr);
 
-        // Skip rewriting inside closures.
-        if self.closure_depth > 0 {
-            return;
-        }
-
         // Match: <receiver>.decode() with no arguments.
         if let syn::Expr::MethodCall(mc) = expr {
             if mc.method == "decode" && mc.args.is_empty() {
                 if let Some(field_name) = self.extract_field_info(&mc.receiver) {
+                    let root = self.find_root(&mc.receiver).cloned();
                     let receiver = &mc.receiver;
                     let name_str = field_name.to_string();
-                    self.found_decode = true;
+                    if root.as_ref() == self.roots.first() {
+                        self.found_decode = true;
+                    }
                     *expr = syn::parse_quote! {
                         decoder.decode_field(#name_str, #receiver)
                     };
@@ -330,8 +417,110 @@ impl VisitMut for DecodeRewriter {
     }
 
     fn visit_expr_closure_mut(&mut self, closure: &mut syn::ExprClosure) {
-        self.closure_depth += 1;
+        // Extract closure parameter idents as new roots.
+        let new_roots: Vec<Ident> = closure
+            .inputs
+            .iter()
+            .filter_map(|pat| {
+                if let syn::Pat::Ident(pat_ident) = pat {
+                    Some(pat_ident.ident.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if new_roots.is_empty() {
+            // No usable closure params — visit normally without adding roots.
+            syn::visit_mut::visit_expr_closure_mut(self, closure);
+            return;
+        }
+
+        // If the closure body is a block, we can inject a decoder statement.
+        // If it's an expression, wrap it in a block first.
+        let roots_start = self.roots.len();
+        self.roots.extend(new_roots);
+
         syn::visit_mut::visit_expr_closure_mut(self, closure);
-        self.closure_depth -= 1;
+
+        // Check if we need to inject a decoder. Get the root that was used.
+        let injected_roots: Vec<Ident> = self.roots[roots_start..].to_vec();
+        self.roots.truncate(roots_start);
+
+        // Find which root needs a decoder by checking the closure body.
+        // If the body is a block expression, check it directly.
+        // If the body is a non-block expression (e.g., single-expression closure),
+        // check if the rewritten expression contains decoder.decode_field calls
+        // and wrap it in a block with the decoder statement.
+        for root in &injected_roots {
+            let needs_decoder = match &*closure.body {
+                syn::Expr::Block(expr_block) => block_contains_decoder_call(&expr_block.block),
+                other => expr_contains_decoder_call(other),
+            };
+
+            if needs_decoder {
+                if let syn::Expr::Block(expr_block) = &mut *closure.body {
+                    inject_decoder_into_block(&mut expr_block.block, root);
+                } else {
+                    // Wrap the expression body in a block with a decoder statement.
+                    let body = &closure.body;
+                    *closure.body = syn::parse_quote! {
+                        {
+                            let decoder = #root.decoder();
+                            #body
+                        }
+                    };
+                }
+                break;
+            }
+        }
+    }
+
+    fn visit_expr_for_loop_mut(&mut self, for_loop: &mut syn::ExprForLoop) {
+        // Extract the loop variable as a new root.
+        let new_roots = extract_pat_idents(&for_loop.pat);
+
+        let roots_start = self.roots.len();
+        self.roots.extend(new_roots);
+
+        syn::visit_mut::visit_expr_for_loop_mut(self, for_loop);
+
+        let injected_roots: Vec<Ident> = self.roots[roots_start..].to_vec();
+        self.roots.truncate(roots_start);
+
+        for root in &injected_roots {
+            if block_contains_decoder_call(&for_loop.body) {
+                inject_decoder_into_block(&mut for_loop.body, root);
+                break; // Only one decoder per block
+            }
+        }
+    }
+
+    fn visit_arm_mut(&mut self, arm: &mut syn::Arm) {
+        // Extract match binding idents as new roots.
+        let new_roots = extract_pat_idents(&arm.pat);
+
+        let roots_start = self.roots.len();
+        self.roots.extend(new_roots);
+
+        syn::visit_mut::visit_arm_mut(self, arm);
+
+        let injected_roots: Vec<Ident> = self.roots[roots_start..].to_vec();
+        self.roots.truncate(roots_start);
+
+        // Inject decoder into the arm body if it's a block expression.
+        for root in &injected_roots {
+            let needs_decoder = match &*arm.body {
+                syn::Expr::Block(expr_block) => block_contains_decoder_call(&expr_block.block),
+                _ => false,
+            };
+
+            if needs_decoder {
+                if let syn::Expr::Block(expr_block) = &mut *arm.body {
+                    inject_decoder_into_block(&mut expr_block.block, root);
+                    break;
+                }
+            }
+        }
     }
 }

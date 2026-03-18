@@ -7,7 +7,13 @@ use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::Serializable;
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::{
+    ConversionError,
+    ConversionResultExt,
+    DecodeBytesExt,
+    GrpcDecodeExt as _,
+    grpc_decode,
+};
 use crate::generated as proto;
 
 #[derive(Debug, Clone)]
@@ -78,6 +84,7 @@ impl From<MempoolEvent> for proto::block_producer::MempoolEvent {
     }
 }
 
+#[grpc_decode]
 impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
     type Error = ConversionError;
 
@@ -88,8 +95,7 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
 
         match event {
             proto::block_producer::mempool_event::Event::TransactionAdded(tx) => {
-                let decoder = tx.decoder();
-                let id = decoder.decode_field("id", tx.id)?;
+                let id = tx.id.decode()?;
                 let nullifiers = tx
                     .nullifiers
                     .into_iter()
@@ -116,8 +122,7 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                 })
             },
             proto::block_producer::mempool_event::Event::BlockCommitted(block_committed) => {
-                let decoder = block_committed.decoder();
-                let header = decoder.decode_field("block_header", block_committed.block_header)?;
+                let header = block_committed.block_header.decode()?;
                 let header = Box::new(header);
                 let txs = block_committed
                     .transactions
