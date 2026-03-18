@@ -3,7 +3,7 @@ use std::fmt;
 use std::marker::PhantomData;
 
 // Re-export the GrpcError derive macro for convenience
-pub use miden_node_grpc_error_macro::GrpcError;
+pub use miden_node_grpc_error_macro::{GrpcError, grpc_decode};
 use miden_protocol::utils::DeserializationError;
 
 #[cfg(test)]

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
-use miden_protocol::account::AccountId;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
 use miden_protocol::block::{
     BlockBody,
@@ -17,7 +16,13 @@ use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::Serializable;
 use thiserror::Error;
 
-use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::{
+    ConversionError,
+    ConversionResultExt,
+    DecodeBytesExt,
+    GrpcDecodeExt as _,
+    grpc_decode,
+};
 use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
 
 // BLOCK NUMBER
@@ -71,22 +76,20 @@ impl TryFrom<&proto::blockchain::BlockHeader> for BlockHeader {
     }
 }
 
+#[grpc_decode]
 impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
     type Error = ConversionError;
 
     fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let prev_block_commitment =
-            decoder.decode_field("prev_block_commitment", value.prev_block_commitment)?;
-        let chain_commitment = decoder.decode_field("chain_commitment", value.chain_commitment)?;
-        let account_root = decoder.decode_field("account_root", value.account_root)?;
-        let nullifier_root = decoder.decode_field("nullifier_root", value.nullifier_root)?;
-        let note_root = decoder.decode_field("note_root", value.note_root)?;
-        let tx_commitment = decoder.decode_field("tx_commitment", value.tx_commitment)?;
-        let tx_kernel_commitment =
-            decoder.decode_field("tx_kernel_commitment", value.tx_kernel_commitment)?;
-        let validator_key = decoder.decode_field("validator_key", value.validator_key)?;
-        let fee_parameters = decoder.decode_field("fee_parameters", value.fee_parameters)?;
+        let prev_block_commitment = value.prev_block_commitment.decode()?;
+        let chain_commitment = value.chain_commitment.decode()?;
+        let account_root = value.account_root.decode()?;
+        let nullifier_root = value.nullifier_root.decode()?;
+        let note_root = value.note_root.decode()?;
+        let tx_commitment = value.tx_commitment.decode()?;
+        let tx_kernel_commitment = value.tx_kernel_commitment.decode()?;
+        let validator_key = value.validator_key.decode()?;
+        let fee_parameters = value.fee_parameters.decode()?;
 
         Ok(BlockHeader::new(
             value.version,
@@ -162,13 +165,13 @@ impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
     }
 }
 
+#[grpc_decode]
 impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
     type Error = ConversionError;
     fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let header = decoder.decode_field("header", value.header)?;
-        let body = decoder.decode_field("body", value.body)?;
-        let signature = decoder.decode_field("signature", value.signature)?;
+        let header = value.header.decode()?;
+        let body = value.body.decode()?;
+        let signature = value.signature.decode()?;
 
         Ok(SignedBlock::new_unchecked(header, body, signature))
     }
@@ -209,13 +212,12 @@ impl From<BlockInputs> for proto::store::BlockInputs {
     }
 }
 
+#[grpc_decode]
 impl TryFrom<proto::store::BlockInputs> for BlockInputs {
     type Error = ConversionError;
 
     fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
-        let decoder = response.decoder();
-        let latest_block_header: BlockHeader =
-            decoder.decode_field("latest_block_header", response.latest_block_header)?;
+        let latest_block_header: BlockHeader = response.latest_block_header.decode()?;
 
         let account_witnesses = response
             .account_witnesses
@@ -304,16 +306,11 @@ impl From<&Signature> for proto::blockchain::BlockSignature {
 // FEE PARAMETERS
 // ================================================================================================
 
+#[grpc_decode]
 impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
     type Error = ConversionError;
     fn try_from(fee_params: proto::blockchain::FeeParameters) -> Result<Self, Self::Error> {
-        let native_asset_id = fee_params
-            .native_asset_id
-            .map(AccountId::try_from)
-            .ok_or(ConversionError::missing_field::<proto::blockchain::FeeParameters>(
-                "native_asset_id",
-            ))?
-            .context("native_asset_id")?;
+        let native_asset_id = fee_params.native_asset_id.decode()?;
         let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee)?;
         Ok(fee_params)
     }

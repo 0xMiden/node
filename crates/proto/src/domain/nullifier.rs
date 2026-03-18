@@ -2,7 +2,7 @@ use miden_protocol::Word;
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::Nullifier;
 
-use crate::errors::{ConversionError, GrpcDecodeExt};
+use crate::errors::{ConversionError, GrpcDecodeExt as _, grpc_decode};
 use crate::generated as proto;
 
 // FROM NULLIFIER
@@ -41,16 +41,16 @@ pub struct NullifierWitnessRecord {
     pub proof: SmtProof,
 }
 
+#[grpc_decode]
 impl TryFrom<proto::store::block_inputs::NullifierWitness> for NullifierWitnessRecord {
     type Error = ConversionError;
 
     fn try_from(
         nullifier_witness_record: proto::store::block_inputs::NullifierWitness,
     ) -> Result<Self, Self::Error> {
-        let decoder = nullifier_witness_record.decoder();
         Ok(Self {
-            nullifier: decoder.decode_field("nullifier", nullifier_witness_record.nullifier)?,
-            proof: decoder.decode_field("opening", nullifier_witness_record.opening)?,
+            nullifier: nullifier_witness_record.nullifier.decode()?,
+            proof: nullifier_witness_record.opening.decode()?,
         })
     }
 }
