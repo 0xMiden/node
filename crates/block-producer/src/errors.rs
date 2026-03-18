@@ -11,6 +11,7 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::task::JoinError;
 
+use crate::mempool::StateConflict;
 use crate::validator::ValidatorError;
 
 // Block-producer errors
@@ -128,6 +129,9 @@ pub enum AddTransactionError {
         expired_at: BlockNumber,
         limit: BlockNumber,
     },
+
+    #[error("mempool graph state conflict: {0}")]
+    GraphStateConflict(#[from] StateConflict),
 
     #[error("the mempool is at capacity")]
     CapacityExceeded,

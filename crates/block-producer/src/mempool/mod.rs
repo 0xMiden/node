@@ -47,6 +47,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_utils::ErrorReport;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
@@ -69,6 +70,7 @@ mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
 mod graph;
+pub use graph::StateConflict;
 mod subscription;
 
 #[cfg(test)]
@@ -214,58 +216,8 @@ impl Mempool {
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
-
-        // The transaction should append to the existing mempool state. This means:
-        //
-        // - The current account commitment should match the tx's initial state.
-        // - No duplicate nullifiers are created.
-        // - No duplicate notes are created.
-        // - All unauthenticated notes exist as output notes.
-        let account_commitment = self
-            .transactions
-            .account_commitment(&tx.account_id())
-            .or_else(|| self.batches.account_commitment(&tx.account_id()))
-            .or(tx.store_account_state())
-            .unwrap_or_default();
-        if tx.account_update().initial_state_commitment() != account_commitment {
-            return Err(VerifyTxError::IncorrectAccountInitialCommitment {
-                tx_initial_account_commitment: tx.account_update().initial_state_commitment(),
-                current_account_commitment: account_commitment,
-            }
-            .into());
-        }
-
-        let double_spend: Vec<_> = tx
-            .nullifiers()
-            .filter(|nullifier| self.transactions.nullifier_exists(nullifier))
-            .filter(|nullifier| self.batches.nullifier_exists(nullifier))
-            .collect();
-        if !double_spend.is_empty() {
-            return Err(VerifyTxError::InputNotesAlreadyConsumed(double_spend).into());
-        }
-
-        let duplicates: Vec<_> = tx
-            .output_note_commitments()
-            .filter(|commitment| self.transactions.output_note_exists(commitment))
-            .filter(|commitment| self.batches.output_note_exists(commitment))
-            .collect();
-        if !duplicates.is_empty() {
-            return Err(VerifyTxError::OutputNotesAlreadyExist(duplicates).into());
-        }
-
-        // We don't need to check whether the output is already consumed since that is covered by
-        // the nullifier check.
-        let missing: Vec<_> = tx
-            .unauthenticated_note_commitments()
-            .filter(|commitment| self.transactions.output_note_exists(commitment))
-            .filter(|commitment| self.batches.output_note_exists(commitment))
-            .collect();
-        if !missing.is_empty() {
-            return Err(VerifyTxError::UnauthenticatedNotesNotFound(missing).into());
-        }
-
+        self.transactions.append(Arc::clone(&tx))?;
         self.subscription.transaction_added(&tx);
-        self.transactions.append(tx);
         self.inject_telemetry();
 
         Ok(self.chain_tip)
@@ -279,7 +231,9 @@ impl Mempool {
     #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_batch(self.config.batch_budget)?;
-        self.batches.append(&batch);
+        if let Err(err) = self.batches.append(&batch) {
+            panic!("failed to append batch to dependency graph: {}", err.as_report());
+        }
         self.inject_telemetry();
         Some(batch)
     }

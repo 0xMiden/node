@@ -9,7 +9,7 @@ use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
-use super::{Graph, GraphNode};
+use super::{Graph, GraphNode, StateConflict};
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::mempool::BlockBudget;
@@ -30,8 +30,11 @@ impl GraphNode for SelectedBatch {
         Box::new(self.txs().iter().flat_map(|tx| tx.unauthenticated_note_commitments()))
     }
 
-    fn account_updates(&self) -> Box<dyn Iterator<Item = (AccountId, Word, Word)> + '_> {
-        Box::new(self.account_updates())
+    fn account_updates(
+        &self,
+    ) -> Box<dyn Iterator<Item = (AccountId, Word, Word, Option<Word>)> + '_> {
+        // TODO: store -- this is incorrect
+        Box::new(self.account_updates().map(|(account, from, to)| (account, from, to, None)))
     }
 
     fn id(&self) -> Self::Id {
@@ -54,12 +57,12 @@ pub struct BatchGraph {
 impl BatchGraph {
     /// Inserts the batch into the dependency graph.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the batch's state conflicts with the current graph view (e.g. it consumes a
-    /// nullifier that was already spent).
-    pub fn append(&mut self, batch: &SelectedBatch) {
-        self.inner.append(batch);
+    /// Returns an error if the batch's state conflicts with the current graph view (e.g. it
+    /// consumes a nullifier that was already spent).
+    pub fn append(&mut self, batch: &SelectedBatch) -> Result<(), StateConflict> {
+        self.inner.append(batch)
     }
 
     /// Reverts the given batch and _all_ its descendents _IFF_ it is present in the graph.
@@ -143,26 +146,5 @@ impl BatchGraph {
 
     pub fn prune(&mut self, batch: BatchId) {
         todo!();
-    }
-
-    /// Returns the most recent commitment known for the specified account.
-    pub fn account_commitment(&self, account: &AccountId) -> Option<Word> {
-        self.inner.account_commitment(account)
-    }
-
-    /// Returns `true` if the given nullifier has already been consumed.
-    pub fn nullifier_exists(&self, nullifier: &Nullifier) -> bool {
-        self.inner.nullifier_exists(nullifier)
-    }
-
-    /// Returns `true` if an output note with the given commitment has been created.
-    pub fn output_note_exists(&self, note: &Word) -> bool {
-        self.inner.output_note_exists(note)
-    }
-
-    /// Returns `true` if the output note with the given commitment has been consumed as an
-    /// unauthenticated input.
-    pub fn output_note_is_consumed(&self, note: &Word) -> bool {
-        self.inner.output_note_is_consumed(note)
     }
 }
