@@ -77,15 +77,14 @@ impl TransactionGraph {
     pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
         let mut selected = SelectedBatch::builder();
 
-        while let Some(root) = self.inner.roots().iter().next() {
-            let tx = self.txs.get(root).expect("TransactionGraph::root must exist");
+        while let Some(candidate) = self.inner.selection_candidates().iter().next() {
+            let tx = self.txs.get(candidate).expect("transaction in graph must have data");
             if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
                 break;
             }
 
-            let tx = self.txs.remove(root).expect("TransactionGraph::root must exist");
-            self.inner.select_root(&tx);
-            selected.push(tx);
+            self.inner.select_root(tx.id());
+            selected.push(Arc::clone(tx));
         }
 
         if selected.is_empty() {

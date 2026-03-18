@@ -130,15 +130,18 @@ impl BatchGraph {
         let mut selected = Vec::default();
 
         // Only root's which are proven can be selected for inclusion in a block.
-        while let Some(root) = self.inner.roots().iter().find_map(|root| self.proven.get(root)) {
-            if budget.check_then_subtract(root) == BudgetStatus::Exceeded {
+        while let Some(candidate) = self
+            .inner
+            .selection_candidates()
+            .iter()
+            .find_map(|candidate| self.proven.get(candidate))
+        {
+            if budget.check_then_subtract(candidate) == BudgetStatus::Exceeded {
                 break;
             }
 
-            let root = self.proven.remove(&root.id()).unwrap();
-            let batch = self.batches.remove(&root.id()).expect("BatchGraph::root must exist");
-            self.inner.select_root(&batch);
-            selected.push(root);
+            self.inner.select_root(candidate.id());
+            selected.push(Arc::clone(candidate));
         }
 
         selected

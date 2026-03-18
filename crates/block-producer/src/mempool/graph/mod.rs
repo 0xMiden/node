@@ -201,10 +201,14 @@ where
         }
     }
 
-    /// Returns the set of root node IDs — nodes who's parents have all previously been selected.
-    pub fn roots(&self) -> HashSet<N::Id> {
+    /// Returns the set of nodes which can be selected.
+    ///
+    /// These are nodes which have not been selected before, and who's parents have all been
+    /// selected.
+    pub fn selection_candidates(&self) -> HashSet<N::Id> {
         self.parents
             .iter()
+            .filter(|(id, _)| !self.selected.contains(id))
             .filter(|(_, parents)| parents.iter().all(|parent| self.selected.contains(parent)))
             .map(|(&id, _)| id)
             .collect()
@@ -215,18 +219,17 @@ where
     /// # Panics
     ///
     /// Panics if the given node is not a root.
-    pub fn select_root(&mut self, node: &N) {
-        let id = node.id();
-        assert!(!self.selected.contains(&id));
+    pub fn select_root(&mut self, node: N::Id) {
+        assert!(!self.selected.contains(&node));
         assert!(
             self.parents
-                .get(&id)
+                .get(&node)
                 .unwrap()
                 .iter()
                 .all(|parent| self.selected.contains(parent))
         );
 
-        self.selected.insert(id);
+        self.selected.insert(node);
     }
 
     /// Returns the node's descendents.
