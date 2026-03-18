@@ -485,6 +485,14 @@ impl Mempool {
         }
         let block = self.committed_blocks.pop_front().unwrap();
 
+        // We perform pruning in chronological order, from oldest to youngest.
+        //
+        // Pruning a node requires that the node has no parents, and using chronological
+        // order gives us this property. This works because a batch can only be included in
+        // a block once _all_ its parents have been included. So if we follow the same order,
+        // it means that a batch's parents would already have been pruned.
+        //
+        // The same logic follows for transactions.
         for batch in block.iter().map(|batch| batch.id()) {
             self.batches.prune(batch);
         }
@@ -498,6 +506,12 @@ impl Mempool {
         }
     }
 
+    /// Reverts all batches and transactions that have expired.
+    ///
+    /// Expired batch descendents are also reverted since these are now invalid.
+    ///
+    /// Transactions from batches are requeued. Expired transactions and their descendents are then
+    /// reverted as well.
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
         let batches = self.batches.revert_expired(self.chain_tip);
         for batch in batches {
@@ -522,8 +536,12 @@ impl Mempool {
         &self,
         authentication_height: BlockNumber,
     ) -> Result<(), AddTransactionError> {
-        let oldest = self.nodes.oldest_committed_block().unwrap_or_default();
-        let limit = oldest.parent().unwrap_or_default();
+        let limit = self
+            .chain_tip
+            .as_usize()
+            .checked_sub(self.committed_blocks.len())
+            .expect("amount of committed blocks cannot exceed the chain tip");
+        let limit = BlockNumber::from(limit as u32).parent().unwrap_or_default();
 
         if authentication_height < limit {
             return Err(AddTransactionError::StaleInputs {
@@ -532,11 +550,10 @@ impl Mempool {
             });
         }
 
-        let latest_block =
-            self.nodes.proposed_block.as_ref().map_or(self.chain_tip, |(number, _)| *number);
         assert!(
-            authentication_height <= latest_block,
-            "Authentication height {authentication_height} exceeded the latest known block {latest_block}"
+            authentication_height <= self.chain_tip,
+            "Authentication height {authentication_height} exceeded the chain tip {}",
+            self.chain_tip
         );
 
         Ok(())
