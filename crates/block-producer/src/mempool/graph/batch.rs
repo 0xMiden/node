@@ -134,7 +134,7 @@ impl BatchGraph {
 
             let root = self.proven.remove(&root.id()).unwrap();
             let batch = self.batches.remove(&root.id()).expect("BatchGraph::root must exist");
-            self.inner.pop_root(&batch);
+            self.inner.select_root(&batch);
             selected.push(root);
         }
 

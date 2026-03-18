@@ -80,7 +80,7 @@ impl TransactionGraph {
             }
 
             let tx = self.txs.remove(root).expect("TransactionGraph::root must exist");
-            self.inner.pop_root(&tx);
+            self.inner.select_root(&tx);
             selected.push(tx);
         }
 

@@ -45,6 +45,7 @@ where
 {
     children: HashMap<N::Id, HashSet<N::Id>>,
     parents: HashMap<N::Id, HashSet<N::Id>>,
+    selected: HashSet<N::Id>,
     nullifiers: HashSet<Nullifier>,
     notes_created: HashMap<Word, N::Id>,
     unauthenticated_notes: HashMap<Word, N::Id>,
@@ -60,6 +61,7 @@ where
         Self {
             children: HashMap::default(),
             parents: HashMap::default(),
+            selected: HashSet::default(),
             nullifiers: HashSet::default(),
             notes_created: HashMap::default(),
             unauthenticated_notes: HashMap::default(),
@@ -187,91 +189,100 @@ where
         }
     }
 
-    /// Returns the set of root node IDs — nodes that have no parents in the graph.
+    /// Returns the set of root node IDs — nodes who's parents have all previously been selected.
     pub fn roots(&self) -> HashSet<N::Id> {
         self.parents
             .iter()
-            .filter(|(_, parents)| parents.is_empty())
+            .filter(|(_, parents)| parents.iter().all(|parent| self.selected.contains(parent)))
             .map(|(&id, _)| id)
             .collect()
     }
 
-    /// Removes a root node from the graph and cleans up all state associated with it.
-    ///
-    /// After removal the node's children have their parent entry for this node cleared, which may
-    /// promote some of them to roots.
+    /// Marks a root node as selected.
     ///
     /// # Panics
     ///
-    /// Panics if the given node is not a root (i.e. it still has parents).
-    pub fn pop_root(&mut self, node: &N) {
-        let node_id = node.id();
+    /// Panics if the given node is not a root.
+    pub fn select_root(&mut self, node: &N) {
+        let id = node.id();
+        assert!(!self.selected.contains(&id));
+        assert!(
+            self.parents
+                .get(&id)
+                .unwrap()
+                .iter()
+                .all(|parent| self.selected.contains(parent))
+        );
 
-        let parents = self.parents.remove(&node_id).unwrap_or_default();
-        assert!(parents.is_empty(), "Cannot pop node: it still has parents in the graph");
+        self.selected.insert(id);
 
-        // Remove this node from its children's parent sets.
-        if let Some(children) = self.children.remove(&node_id) {
-            for child_id in children {
-                if let Some(child_parents) = self.parents.get_mut(&child_id) {
-                    child_parents.remove(&node_id);
-                }
-            }
-        }
+        // let node_id = node.id();
 
-        // Remove nullifiers created by this node.
-        for nullifier in node.nullifiers() {
-            assert!(
-                self.nullifiers.remove(&nullifier),
-                "Nullifier {nullifier} was not present for removal"
-            );
-        }
+        // let parents = self.parents.remove(&node_id).unwrap_or_default();
+        // assert!(parents.is_empty(), "Cannot pop node: it still has parents in the graph");
 
-        // Remove output notes created by this node.
-        for commitment in node.output_notes() {
-            assert!(
-                self.notes_created.remove(&commitment).is_some(),
-                "Output note commitment {commitment} was not present for removal"
-            );
-        }
+        // // Remove this node from its children's parent sets.
+        // if let Some(children) = self.children.remove(&node_id) {
+        //     for child_id in children {
+        //         if let Some(child_parents) = self.parents.get_mut(&child_id) {
+        //             child_parents.remove(&node_id);
+        //         }
+        //     }
+        // }
 
-        // Remove unauthenticated note entries consumed by this node.
-        for commitment in node.unauthenticated_notes() {
-            assert!(
-                self.unauthenticated_notes.remove(&commitment).is_some(),
-                "Unauthenticated note commitment {commitment} was not present for removal"
-            );
-        }
+        // // Remove nullifiers created by this node.
+        // for nullifier in node.nullifiers() {
+        //     assert!(
+        //         self.nullifiers.remove(&nullifier),
+        //         "Nullifier {nullifier} was not present for removal"
+        //     );
+        // }
 
-        // Update account state: remove this node as owner or pass-through from every account.
-        for (account, from, to) in node.account_updates() {
-            let Some(state) = self.accounts.get_mut(&account) else {
-                panic!("Account {account} was not present for removal");
-            };
+        // // Remove output notes created by this node.
+        // for commitment in node.output_notes() {
+        //     assert!(
+        //         self.notes_created.remove(&commitment).is_some(),
+        //         "Output note commitment {commitment} was not present for removal"
+        //     );
+        // }
 
-            // A root node is by definition the oldest update an account may have, and therefore
-            // its possible that the latest account commitment has changed.
-            if state.commitment != to {
-                continue;
-            }
+        // // Remove unauthenticated note entries consumed by this node.
+        // for commitment in node.unauthenticated_notes() {
+        //     assert!(
+        //         self.unauthenticated_notes.remove(&commitment).is_some(),
+        //         "Unauthenticated note commitment {commitment} was not present for removal"
+        //     );
+        // }
 
-            if from == to {
-                assert!(
-                    state.pass_through.remove(&node_id),
-                    "Pass through account {account} update was not present for removal"
-                );
-            } else {
-                assert!(
-                    state.owner.take_if(|owner| owner == &node_id).is_some(),
-                    "Account {account} update was not present for removal"
-                );
-            }
+        // // Update account state: remove this node as owner or pass-through from every account.
+        // for (account, from, to) in node.account_updates() {
+        //     let Some(state) = self.accounts.get_mut(&account) else {
+        //         panic!("Account {account} was not present for removal");
+        //     };
 
-            // Stop tracking the account if its got no updates left.
-            if state.is_empty() {
-                self.accounts.remove(&account);
-            }
-        }
+        //     // A root node is by definition the oldest update an account may have, and therefore
+        //     // its possible that the latest account commitment has changed.
+        //     if state.commitment != to {
+        //         continue;
+        //     }
+
+        //     if from == to {
+        //         assert!(
+        //             state.pass_through.remove(&node_id),
+        //             "Pass through account {account} update was not present for removal"
+        //         );
+        //     } else {
+        //         assert!(
+        //             state.owner.take_if(|owner| owner == &node_id).is_some(),
+        //             "Account {account} update was not present for removal"
+        //         );
+        //     }
+
+        //     // Stop tracking the account if its got no updates left.
+        //     if state.is_empty() {
+        //         self.accounts.remove(&account);
+        //     }
+        // }
     }
 
     /// The given account's current commitment in this graph.
