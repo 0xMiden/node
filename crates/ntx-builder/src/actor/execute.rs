@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use miden_node_proto::clients::ValidatorClient;
-use miden_node_proto::generated::{self as proto};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -35,7 +33,6 @@ use miden_protocol::transaction::{
 use miden_protocol::vm::FutureMaybeSend;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
-use miden_tx::utils::Serializable;
 use miden_tx::{
     DataStore,
     DataStoreError,
@@ -56,7 +53,7 @@ use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
 use crate::actor::candidate::TransactionCandidate;
-use crate::clients::{BlockProducerClient, StoreClient};
+use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use crate::db::Db;
 
 #[derive(Debug, thiserror::Error)]
@@ -327,16 +324,10 @@ impl NtxContext {
         proven_tx: &ProvenTransaction,
         tx_inputs: &TransactionInputs,
     ) -> NtxResult<()> {
-        let request = proto::transaction::ProvenTransaction {
-            transaction: proven_tx.to_bytes(),
-            transaction_inputs: Some(tx_inputs.to_bytes()),
-        };
         self.validator
-            .clone()
-            .submit_proven_transaction(request)
+            .submit_proven_transaction(proven_tx, tx_inputs)
             .await
-            .map_err(NtxError::Submission)?;
-        Ok(())
+            .map_err(NtxError::Submission)
     }
 }
 

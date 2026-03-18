@@ -7,12 +7,13 @@ use actor::AccountActorContext;
 use anyhow::Context;
 use builder::MempoolEventStream;
 use chain_state::ChainState;
-use clients::{BlockProducerClient, StoreClient};
+use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
 use db::Db;
 use futures::TryStreamExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
 
@@ -247,6 +248,8 @@ impl NtxBuilderConfig {
 
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
+        let validator = ValidatorClient::new(self.validator_url.clone());
+        let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
 
         // Subscribe to mempool first to ensure we don't miss any events. The subscription
         // replays all inflight transactions, so the subscriber's state is fully reconstructed.
@@ -272,9 +275,9 @@ impl NtxBuilderConfig {
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
         let actor_context = AccountActorContext {
-            block_producer_url: self.block_producer_url.clone(),
-            validator_url: self.validator_url.clone(),
-            tx_prover_url: self.tx_prover_url.clone(),
+            block_producer: block_producer.clone(),
+            validator,
+            prover,
             chain_state: chain_state.clone(),
             store: store.clone(),
             script_cache,
