@@ -158,4 +158,12 @@ impl BatchGraph {
         self.inner.prune(&batch);
         self.proven.remove(&batch.id());
     }
+
+    pub fn proven_count(&self) -> usize {
+        self.proven.len()
+    }
+
+    pub fn proposed_count(&self) -> usize {
+        self.batches.len() - self.proven_count()
+    }
 }

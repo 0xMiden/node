@@ -40,7 +40,7 @@
 //! - Similarly, batches are proposed for block inclusion once _all_ ancestors have been included in
 //!   a block (or are part of the currently proposed block).
 //! - Reverting a node reverts all descendents as well.
-#![allow(unused, reason = "refactor wip")]
+#![allow(unused, clippy::all, clippy::pedantic, reason = "refactor wip")]
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
@@ -205,12 +205,16 @@ impl Mempool {
     /// # Errors
     ///
     /// Returns an error if the transaction's initial conditions don't match the current state.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Not impactful, and we may want ownership in the future"
+    )]
     #[instrument(target = COMPONENT, name = "mempool.add_transaction", skip_all, fields(tx=%tx.id()))]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
     ) -> Result<BlockNumber, AddTransactionError> {
-        if self.transactions.len() >= self.config.tx_capacity.get() {
+        if self.unbatched_transactions_count() >= self.config.tx_capacity.get() {
             return Err(AddTransactionError::CapacityExceeded);
         }
 
@@ -390,17 +394,17 @@ impl Mempool {
 
     /// Returns the number of transactions currently waiting to be batched.
     pub fn unbatched_transactions_count(&self) -> usize {
-        todo!();
+        self.transactions.unselected_count()
     }
 
     /// Returns the number of batches currently being proven.
     pub fn proposed_batches_count(&self) -> usize {
-        todo!();
+        self.batches.proposed_count()
     }
 
     /// Returns the number of proven batches waiting for block inclusion.
     pub fn proven_batches_count(&self) -> usize {
-        todo!();
+        self.batches.proven_count()
     }
 
     // INTERNAL HELPERS
@@ -411,9 +415,16 @@ impl Mempool {
     /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
     /// does not track fields added dynamically.
     fn inject_telemetry(&self) {
-        let span = tracing::Span::current();
+        // use miden_node_utils::tracing::OpenTelemetrySpanExt;
 
-        todo!();
+        // span.set_attribute("mempool.transactions.uncommitted", self.uncommitted_tx_count());
+        // span.set_attribute("mempool.transactions.unbatched", self.txs.len());
+        // span.set_attribute("mempool.batches.proposed", self.proposed_batches.len());
+        // span.set_attribute("mempool.batches.proven", self.proven_batches.len());
+        //
+        // span.set_attribute("mempool.accounts", self.accounts.len());
+        // span.set_attribute("mempool.nullifiers", self.nullifiers.len());
+        // span.set_attribute("mempool.output_notes", self.output_notes.len());
     }
 
     /// Prunes the oldest locally retained block if the number of blocks exceeds the configured

@@ -5,7 +5,6 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::transaction::TransactionId;
 
 use crate::domain::transaction::AuthenticatedTransaction;
 
@@ -97,11 +96,6 @@ not match the current commitment {}",
             .or_insert((update.initial_state_commitment(), update.final_state_commitment()));
 
         self.txs.push(tx);
-    }
-
-    /// Returns `true` if the batch contains the given transaction already.
-    pub(crate) fn contains(&self, target: &TransactionId) -> bool {
-        self.txs.iter().any(|tx| &tx.id() == target)
     }
 
     /// Returns `true` if it contains no transactions.

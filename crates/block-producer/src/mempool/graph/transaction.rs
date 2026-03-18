@@ -169,10 +169,8 @@ impl TransactionGraph {
         self.inner.prune(&transaction);
     }
 
-    /// Total number of transactions in the graph.
-    ///
-    /// This includes selected and unselected transactions.
-    pub fn len(&self) -> usize {
-        self.txs.len()
+    /// Number of transactions which have not been selected for inclusion in a batch.
+    pub fn unselected_count(&self) -> usize {
+        self.txs.len() - self.inner.selected_count()
     }
 }

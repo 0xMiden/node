@@ -337,6 +337,10 @@ where
 
         selected.remove(&id);
     }
+
+    pub fn selected_count(&self) -> usize {
+        self.selected.len()
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
