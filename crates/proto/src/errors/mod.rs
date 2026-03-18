@@ -7,6 +7,8 @@ pub use miden_node_grpc_error_macro::{GrpcError, grpc_decode};
 use miden_protocol::utils::DeserializationError;
 
 #[cfg(test)]
+mod test_grpc_decode;
+#[cfg(test)]
 mod test_macro;
 
 // CONVERSION ERROR

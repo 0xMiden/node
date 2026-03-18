@@ -168,6 +168,7 @@ pub struct AccountDetailRequest {
     pub storage_requests: Vec<StorageMapRequest>,
 }
 
+#[grpc_decode]
 impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetailRequest {
     type Error = ConversionError;
 
