@@ -28,6 +28,10 @@ trait GraphNode {
     /// transactions within them.
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_>;
 
+    /// Input notes which were not authenticated against any committed block thus far.
+    ///
+    /// Such notes are not yet known to exist by us (in the store) and must therefore be the output
+    /// of another node currently in flight in the graph in order to be considered valid.
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_>;
 
     /// The account state updates caused by this node.
@@ -225,10 +229,21 @@ where
         self.selected.insert(id);
     }
 
-    /// Returns `true` if the output note with the given ID has already been consumed as an
-    /// Returns the IDs of all nodes which depend on the given node.
+    /// Returns the node's descendents.
+    ///
+    /// That is, this returns the node's children, their children etc.
     pub fn descendents(&self, node: &N::Id) -> HashSet<N::Id> {
-        todo!();
+        let mut to_process = vec![*node];
+        let mut descendents = HashSet::default();
+
+        while let Some(node) = to_process.pop() {
+            let children = self.children.get(&node).unwrap();
+            // Don't double process.
+            to_process.extend(children.iter().filter(|child| !descendents.contains(*child)));
+            descendents.extend(children);
+        }
+
+        descendents
     }
 
     /// Removes the node _IFF_ it is a leaf node (has no descendents).
