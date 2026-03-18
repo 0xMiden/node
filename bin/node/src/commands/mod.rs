@@ -199,14 +199,14 @@ pub struct NtxBuilderConfig {
 
     /// Maximum number of VM execution cycles allowed for a single network transaction.
     ///
-    /// Network transactions that exceed this limit will fail. Defaults to 64k (65536) cycles.
+    /// Network transactions that exceed this limit will fail. Defaults to 2^16 (65536) cycles.
     #[arg(
         long = "ntx-builder.max-cycles",
         env = ENV_NTX_MAX_CYCLES,
         default_value_t = DEFAULT_NTX_MAX_CYCLES,
-        value_name = "NUM"
+        value_name = "NUM",
     )]
-    pub max_cycles: u32,
+    pub max_tx_cycles: u32,
 
     /// Directory for the ntx-builder's persistent database.
     ///
@@ -240,7 +240,7 @@ impl NtxBuilderConfig {
         .with_script_cache_size(self.script_cache_size)
         .with_idle_timeout(self.idle_timeout)
         .with_max_account_crashes(self.max_account_crashes)
-        .with_max_cycles(self.max_cycles)
+        .with_max_cycles(self.max_tx_cycles)
     }
 }
 
