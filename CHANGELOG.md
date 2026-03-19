@@ -16,6 +16,7 @@
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
 - Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
+- Network transaction actors now share the same gRPC clients, limiting the number of file descriptors being used ([#1806](https://github.com/0xMiden/node/issues/1806)).
 
 ### Changes
 
