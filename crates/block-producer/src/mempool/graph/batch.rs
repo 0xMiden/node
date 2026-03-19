@@ -42,6 +42,10 @@ impl GraphNode for SelectedBatch {
     fn id(&self) -> Self::Id {
         self.id()
     }
+
+    fn expires_at(&self) -> BlockNumber {
+        self.expires_at()
+    }
 }
 
 /// Tracks [`SelectedBatch`] instances that are pending proof generation.
@@ -52,7 +56,6 @@ impl GraphNode for SelectedBatch {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BatchGraph {
     inner: Graph<SelectedBatch>,
-    batches: HashMap<BatchId, SelectedBatch>,
     proven: HashMap<BatchId, Arc<ProvenBatch>>,
 }
 
@@ -63,7 +66,7 @@ impl BatchGraph {
     ///
     /// Returns an error if the batch's state conflicts with the current graph view (e.g. it
     /// consumes a nullifier that was already spent).
-    pub fn append(&mut self, batch: &SelectedBatch) -> Result<(), StateConflict> {
+    pub fn append(&mut self, batch: SelectedBatch) -> Result<(), StateConflict> {
         self.inner.append(batch)
     }
 
@@ -73,27 +76,12 @@ impl BatchGraph {
     ///
     /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
     pub fn revert_batch_and_descendents(&mut self, batch: BatchId) -> Vec<SelectedBatch> {
-        if !self.batches.contains_key(&batch) {
+        // We need this check because `inner.revert..` panics if the node is unknown.
+        if !self.inner.contains(&batch) {
             return Vec::default();
         }
 
-        let mut descendents = self.inner.descendents(&batch);
-
-        let mut reverted = Vec::new();
-        'outer: while !descendents.is_empty() {
-            for node in descendents.iter().copied() {
-                if self.inner.is_leaf(&node) {
-                    descendents.remove(&node);
-                    let batch = self.batches.remove(&node).unwrap();
-                    reverted.push(batch);
-                    continue 'outer;
-                }
-            }
-
-            panic!("revert_batch_and_descendents failed to make progress");
-        }
-
-        reverted
+        self.inner.revert_node_and_descendents(batch)
     }
 
     /// Reverts expired batches and their descendents.
@@ -103,27 +91,13 @@ impl BatchGraph {
     ///
     /// Batches are returned in reverse-chronological order.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> Vec<SelectedBatch> {
-        let mut reverted = Vec::default();
-
-        let mut expired = self
-            .batches
-            .iter()
-            .filter(|(id, _)| !self.inner.is_selected(id))
-            .filter_map(|(id, batch)| (batch.expires_at() <= chain_tip).then_some(id))
-            .copied()
-            .collect::<HashSet<_>>();
-
-        for batch in expired {
-            reverted.extend(self.revert_batch_and_descendents(batch));
-        }
-
-        reverted
+        self.inner.revert_expired_unselected(chain_tip)
     }
 
     /// Marks the given batch as proven, making it available for selection in a block
     /// once it becomes a root.
     pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) {
-        if self.batches.contains_key(&proof.id()) {
+        if self.inner.contains(&proof.id()) {
             self.proven.insert(proof.id(), proof);
         }
     }
@@ -132,11 +106,8 @@ impl BatchGraph {
         let mut selected = Vec::default();
 
         // Only root's which are proven can be selected for inclusion in a block.
-        while let Some(candidate) = self
-            .inner
-            .selection_candidates()
-            .iter()
-            .find_map(|candidate| self.proven.get(candidate))
+        while let Some(candidate) =
+            self.inner.selection_candidates().iter().find_map(|(id, _)| self.proven.get(id))
         {
             if budget.check_then_subtract(candidate) == BudgetStatus::Exceeded {
                 break;
@@ -156,9 +127,8 @@ impl BatchGraph {
     /// Panics if the batch does not exist, or has existing ancestors in the batch
     /// graph.
     pub fn prune(&mut self, batch: BatchId) {
-        let batch = self.batches.remove(&batch).expect("batch to prune must exist");
-        self.inner.prune(&batch);
-        self.proven.remove(&batch.id());
+        self.inner.prune(batch);
+        self.proven.remove(&batch);
     }
 
     pub fn proven_count(&self) -> usize {
@@ -166,6 +136,6 @@ impl BatchGraph {
     }
 
     pub fn proposed_count(&self) -> usize {
-        self.batches.len() - self.proven_count()
+        self.inner.node_count() - self.proven_count()
     }
 }

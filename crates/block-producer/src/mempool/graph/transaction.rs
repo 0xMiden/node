@@ -18,11 +18,11 @@ use crate::mempool::graph::node::GraphNode;
 // TRANSACTION GRAPH NODE
 // ================================================================================================
 
-impl GraphNode for AuthenticatedTransaction {
+impl GraphNode for Arc<AuthenticatedTransaction> {
     type Id = TransactionId;
 
     fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_> {
-        Box::new(self.nullifiers())
+        Box::new(self.as_ref().nullifiers())
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
@@ -46,7 +46,11 @@ impl GraphNode for AuthenticatedTransaction {
     }
 
     fn id(&self) -> Self::Id {
-        self.id()
+        self.as_ref().id()
+    }
+
+    fn expires_at(&self) -> BlockNumber {
+        self.as_ref().expires_at()
     }
 }
 
@@ -65,28 +69,25 @@ impl GraphNode for AuthenticatedTransaction {
 /// descendants.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionGraph {
-    inner: Graph<AuthenticatedTransaction>,
-    txs: HashMap<TransactionId, Arc<AuthenticatedTransaction>>,
+    inner: Graph<Arc<AuthenticatedTransaction>>,
 }
 
 impl TransactionGraph {
     pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) -> Result<(), StateConflict> {
-        self.inner.append(&tx)?;
-        self.txs.insert(tx.id(), tx);
+        self.inner.append(tx)?;
         Ok(())
     }
 
     pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
         let mut selected = SelectedBatch::builder();
 
-        while let Some(candidate) = self.inner.selection_candidates().iter().next() {
-            let tx = self.txs.get(candidate).expect("transaction in graph must have data");
+        while let Some((id, tx)) = self.inner.selection_candidates().into_iter().next() {
             if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
                 break;
             }
 
-            self.inner.select_candidate(tx.id());
             selected.push(Arc::clone(tx));
+            self.inner.select_candidate(*id);
         }
 
         if selected.is_empty() {
@@ -102,21 +103,11 @@ impl TransactionGraph {
     /// Only unselected transactions are considered, the assumption being that selected transactions
     /// are in committed blocks and should not be reverted.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
-        let mut reverted = HashSet::default();
-
-        let mut expired = self
-            .txs
-            .iter()
-            .filter(|(id, _)| !self.inner.is_selected(id))
-            .filter_map(|(id, tx)| (tx.expires_at() <= chain_tip).then_some(id))
-            .copied()
-            .collect::<HashSet<_>>();
-
-        for transaction in expired {
-            reverted.extend(self.revert_tx_and_descendents(transaction));
-        }
-
-        reverted
+        self.inner
+            .revert_expired_unselected(chain_tip)
+            .into_iter()
+            .map(|tx| tx.id())
+            .collect()
     }
 
     /// Reverts the given transaction and _all_ its descendents _IFF_ it is present in the graph.
@@ -125,27 +116,16 @@ impl TransactionGraph {
     ///
     /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
     pub fn revert_tx_and_descendents(&mut self, transaction: TransactionId) -> Vec<TransactionId> {
-        if !self.txs.contains_key(&transaction) {
+        // We need this check because `inner.revert..` panics if the node is unknown.
+        if !self.inner.contains(&transaction) {
             return Vec::default();
         }
 
-        let mut descendents = self.inner.descendents(&transaction);
-
-        let mut reverted = Vec::new();
-        'outer: while !descendents.is_empty() {
-            for node in descendents.iter().copied() {
-                if self.inner.is_leaf(&node) {
-                    descendents.remove(&node);
-                    self.txs.remove(&node).unwrap();
-                    reverted.push(node);
-                    continue 'outer;
-                }
-            }
-
-            panic!("revert_tx_and_descendents failed to make progress");
-        }
-
-        reverted
+        self.inner
+            .revert_node_and_descendents(transaction)
+            .into_iter()
+            .map(|tx| tx.id())
+            .collect()
     }
 
     /// Marks the batch's transactions are ready for selection again.
@@ -155,7 +135,7 @@ impl TransactionGraph {
     /// Panics if the given batch has any child batches which are still in flight.
     pub fn requeue_transactions(&mut self, batch: SelectedBatch) {
         for tx in batch.into_transactions().iter().rev() {
-            self.inner.deselect(&tx.id());
+            self.inner.deselect(tx.id());
         }
     }
 
@@ -166,12 +146,11 @@ impl TransactionGraph {
     /// Panics if the transaction does not exist, or has existing ancestors in the transaction
     /// graph.
     pub fn prune(&mut self, transaction: TransactionId) {
-        let transaction = self.txs.remove(&transaction).expect("transaction to prune must exist");
-        self.inner.prune(&transaction);
+        self.inner.prune(transaction);
     }
 
     /// Number of transactions which have not been selected for inclusion in a batch.
     pub fn unselected_count(&self) -> usize {
-        self.txs.len() - self.inner.selected_count()
+        self.inner.node_count() - self.inner.selected_count()
     }
 }

@@ -1,5 +1,6 @@
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
 /// Defines a node in the mempool graph.
@@ -35,4 +36,7 @@ pub trait GraphNode {
     fn account_updates(
         &self,
     ) -> Box<dyn Iterator<Item = (AccountId, Word, Word, Option<Word>)> + '_>;
+
+    /// The block height at which this node is considered expired.
+    fn expires_at(&self) -> BlockNumber;
 }

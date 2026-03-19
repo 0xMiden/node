@@ -235,7 +235,7 @@ impl Mempool {
     #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_batch(self.config.batch_budget)?;
-        if let Err(err) = self.batches.append(&batch) {
+        if let Err(err) = self.batches.append(batch.clone()) {
             panic!("failed to append batch to dependency graph: {}", err.as_report());
         }
         self.inject_telemetry();
