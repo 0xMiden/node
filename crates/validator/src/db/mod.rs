@@ -7,14 +7,15 @@ use std::path::PathBuf;
 use diesel::SqliteConnection;
 use diesel::dsl::exists;
 use diesel::prelude::*;
-use miden_node_db::{DatabaseError, Db};
+use miden_node_db::{DatabaseError, Db, SqlTypeConvert};
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::{Deserializable, Serializable};
 use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
-use crate::db::models::ValidatedTransactionRowInsert;
+use crate::db::models::{BlockHeaderRowInsert, ValidatedTransactionRowInsert};
 use crate::tx_validation::ValidatedTransaction;
 
 /// Open a connection to the DB and apply any pending migrations.
@@ -77,4 +78,60 @@ pub(crate) fn find_unvalidated_transactions(
         }
     }
     Ok(unvalidated_tx_ids)
+}
+
+/// Upserts a block header into the database.
+///
+/// Inserts a new row if no block header exists at the given block number, or replaces the
+/// existing block header if one already exists.
+#[instrument(target = COMPONENT, skip(conn, header), err)]
+pub fn upsert_block_header(
+    conn: &mut SqliteConnection,
+    header: &BlockHeader,
+) -> Result<(), DatabaseError> {
+    let row = BlockHeaderRowInsert {
+        block_num: header.block_num().to_raw_sql(),
+        block_header: header.to_bytes(),
+    };
+    diesel::replace_into(schema::block_headers::table).values(row).execute(conn)?;
+    Ok(())
+}
+
+/// Loads the chain tip (block header with the highest block number) from the database.
+///
+/// Returns `None` if no block headers have been persisted (i.e. bootstrap has not been run).
+#[instrument(target = COMPONENT, skip(conn), err)]
+pub fn load_chain_tip(conn: &mut SqliteConnection) -> Result<Option<BlockHeader>, DatabaseError> {
+    let row = schema::block_headers::table
+        .order(schema::block_headers::block_num.desc())
+        .select(schema::block_headers::block_header)
+        .first::<Vec<u8>>(conn)
+        .optional()?;
+
+    row.map(|bytes| {
+        BlockHeader::read_from_bytes(&bytes)
+            .map_err(|err| DatabaseError::deserialization("BlockHeader", err))
+    })
+    .transpose()
+}
+
+/// Loads a block header by its block number.
+///
+/// Returns `None` if no block header exists at the given block number.
+#[instrument(target = COMPONENT, skip(conn), err)]
+pub fn load_block_header(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Option<BlockHeader>, DatabaseError> {
+    let row = schema::block_headers::table
+        .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
+        .select(schema::block_headers::block_header)
+        .first::<Vec<u8>>(conn)
+        .optional()?;
+
+    row.map(|bytes| {
+        BlockHeader::read_from_bytes(&bytes)
+            .map_err(|err| DatabaseError::deserialization("BlockHeader", err))
+    })
+    .transpose()
 }
