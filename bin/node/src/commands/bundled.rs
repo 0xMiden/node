@@ -5,7 +5,7 @@ use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
 use miden_node_store::Store;
-use miden_node_utils::clap::GrpcOptionsExternal;
+use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
@@ -84,6 +84,9 @@ pub enum BundledCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsExternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
     },
 }
 
@@ -122,6 +125,7 @@ impl BundledCommand {
                 validator,
                 enable_otel: _,
                 grpc_options,
+                storage_options,
             } => {
                 Self::start(
                     rpc_url,
@@ -131,13 +135,14 @@ impl BundledCommand {
                     ntx_builder,
                     validator,
                     grpc_options,
+                    storage_options,
                 )
                 .await
             },
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn start(
         rpc_url: Url,
         block_prover_url: Option<Url>,
@@ -146,6 +151,7 @@ impl BundledCommand {
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
         grpc_options: GrpcOptionsExternal,
+        storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
         // before each component is fully started up.
@@ -203,6 +209,7 @@ impl BundledCommand {
                     data_directory: data_directory_clone,
                     block_prover_url,
                     grpc_options: grpc_options.into(),
+                    storage_options,
                 }
                 .serve()
                 .await
@@ -240,10 +247,44 @@ impl BundledCommand {
                 .id()
         };
 
+        // Prepare network transaction builder (bind listener + config before starting RPC,
+        // so that the ntx-builder URL is available for the RPC proxy).
+        let mut ntx_builder_url_for_rpc = None;
+        let ntx_builder_prepared = if should_start_ntx_builder {
+            let store_ntx_builder_url = Url::parse(&format!("http://{store_ntx_builder_address}"))
+                .context("Failed to parse URL")?;
+            let block_producer_url = block_producer_url.clone();
+            let validator_url = validator_url.clone();
+
+            let builder_config = ntx_builder.into_builder_config(
+                store_ntx_builder_url,
+                block_producer_url,
+                validator_url,
+                &data_directory,
+            );
+
+            // Bind a listener for the ntx-builder gRPC server.
+            let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .context("Failed to bind to ntx-builder gRPC endpoint")?;
+            let ntx_builder_address = ntx_builder_listener
+                .local_addr()
+                .context("Failed to retrieve the ntx-builder's gRPC address")?;
+            ntx_builder_url_for_rpc = Some(
+                Url::parse(&format!("http://{ntx_builder_address}"))
+                    .context("Failed to parse ntx-builder URL")?,
+            );
+
+            Some((builder_config, ntx_builder_listener))
+        } else {
+            None
+        };
+
         // Start RPC component.
         let rpc_id = {
             let block_producer_url = block_producer_url.clone();
             let validator_url = validator_url.clone();
+            let ntx_builder_url = ntx_builder_url_for_rpc;
             join_set
                 .spawn(async move {
                     let store_url = Url::parse(&format!("http://{store_rpc_address}"))
@@ -253,6 +294,7 @@ impl BundledCommand {
                         store_url,
                         block_producer_url: Some(block_producer_url),
                         validator_url,
+                        ntx_builder_url,
                         grpc_options,
                     }
                     .serve()
@@ -269,27 +311,15 @@ impl BundledCommand {
             (rpc_id, "rpc"),
         ]);
 
-        // Start network transaction builder. The endpoint is available after loading completes.
-        if should_start_ntx_builder {
-            let store_ntx_builder_url = Url::parse(&format!("http://{store_ntx_builder_address}"))
-                .context("Failed to parse URL")?;
-            let block_producer_url = block_producer_url.clone();
-            let validator_url = validator_url.clone();
-
-            let builder_config = ntx_builder.into_builder_config(
-                store_ntx_builder_url,
-                block_producer_url,
-                validator_url,
-                &data_directory,
-            );
-
+        // Start network transaction builder.
+        if let Some((builder_config, ntx_builder_listener)) = ntx_builder_prepared {
             let id = join_set
                 .spawn(async move {
                     builder_config
                         .build()
                         .await
                         .context("failed to initialize ntx builder")?
-                        .run()
+                        .run(Some(ntx_builder_listener))
                         .await
                         .context("failed while serving ntx builder component")
                 })

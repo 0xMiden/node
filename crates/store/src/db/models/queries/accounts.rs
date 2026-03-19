@@ -57,6 +57,7 @@ use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta,
+    select_latest_vault_assets,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
@@ -1071,7 +1072,6 @@ fn prepare_partial_account_update(
     update: &BlockAccountUpdate,
     account_id: AccountId,
     delta: &miden_protocol::account::delta::AccountDelta,
-    block_num: BlockNumber,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     // Build the minimal account state needed for partial delta application.
     // Only load the storage map entries and vault balances that will receive updates.
@@ -1141,9 +1141,7 @@ fn prepare_partial_account_update(
 
     // --- Update the vault root by constructing the asset vault from DB.
     let new_vault_root = {
-        let (_last_block, assets) =
-            select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
-        let assets: Vec<Asset> = assets.into_iter().filter_map(|entry| entry.asset).collect();
+        let assets = select_latest_vault_assets(conn, account_id)?;
         let mut vault = AssetVault::new(&assets)?;
         vault.apply_delta(delta.vault())?;
         vault.root()
@@ -1243,7 +1241,7 @@ pub(crate) fn upsert_accounts(
 
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                prepare_partial_account_update(conn, update, account_id, delta, block_num)?
+                prepare_partial_account_update(conn, update, account_id, delta)?
             },
         };
 
@@ -1459,18 +1457,19 @@ pub(crate) struct AccountStorageMapRowInsert {
 // CLEANUP FUNCTIONS
 // ================================================================================================
 
-/// Number of historical blocks to retain for vault assets and storage map values.
+/// Number of historical blocks to retain for vault assets, storage map values, and account codes.
 /// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
 /// except for entries marked with `is_latest=true` which are always retained.
 pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 
 /// Clean up old entries for all accounts, deleting entries older than the retention window.
 ///
-/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`.
-/// This is a simple and efficient approach that doesn't require window functions.
+/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`
+/// for vault assets and storage map values. Also deletes account codes that are no longer
+/// referenced by any account row within the retention window.
 ///
 /// # Returns
-/// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
+/// A tuple of `(vault_assets_deleted, storage_map_values_deleted, account_codes_deleted)`
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -1480,13 +1479,14 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 pub(crate) fn prune_history(
     conn: &mut SqliteConnection,
     chain_tip: BlockNumber,
-) -> Result<(usize, usize), DatabaseError> {
+) -> Result<(usize, usize, usize), DatabaseError> {
     let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
     tracing::Span::current().record("cutoff_block", cutoff_block);
     let vault_deleted = prune_account_vault_assets(conn, cutoff_block)?;
     let storage_deleted = prune_account_storage_map_values(conn, cutoff_block)?;
+    let codes_deleted = prune_account_codes(conn, cutoff_block)?;
 
-    Ok((vault_deleted, storage_deleted))
+    Ok((vault_deleted, storage_deleted, codes_deleted))
 }
 
 #[tracing::instrument(
@@ -1527,6 +1527,50 @@ fn prune_account_storage_map_values(
                 .and(schema::account_storage_map_values::is_latest.eq(false)),
         ),
     )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
+}
+
+/// Deletes account codes that are no longer referenced by any account row within the retention
+/// window.
+///
+/// An account code is safe to delete when no `accounts` row with `block_num >= cutoff_block`
+/// references its `code_commitment`. This covers both active accounts (`is_latest=true`) and
+/// recent historical rows that still fall within the retention window.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// DELETE FROM account_codes
+/// WHERE code_commitment NOT IN (
+///     SELECT DISTINCT code_commitment
+///     FROM accounts
+///     WHERE code_commitment IS NOT NULL
+///       AND (block_num >= ?1 OR is_latest = 1)
+/// )
+/// ```
+#[tracing::instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+    fields(cutoff_block),
+)]
+fn prune_account_codes(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    use diesel::sql_types::BigInt;
+
+    diesel::sql_query(
+        "DELETE FROM account_codes \
+         WHERE code_commitment NOT IN ( \
+             SELECT DISTINCT code_commitment \
+             FROM accounts \
+             WHERE code_commitment IS NOT NULL \
+               AND (block_num >= ?1 OR is_latest = 1 ) \
+         )",
+    )
+    .bind::<BigInt, _>(cutoff_block)
     .execute(conn)
     .map_err(DatabaseError::Diesel)
 }

@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
@@ -17,14 +18,15 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::{AcquireError, Notify, RwLock, Semaphore, mpsc};
+use miden_tx::FailedNote;
+use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::NoteError;
 use crate::chain_state::ChainState;
 use crate::clients::{BlockProducerClient, StoreClient};
 use crate::db::Db;
-use crate::inflight_note::InflightNetworkNote;
 
 // ACTOR REQUESTS
 // ================================================================================================
@@ -36,30 +38,12 @@ pub enum ActorRequest {
     /// the oneshot channel, preventing race conditions where the actor could re-select the same
     /// notes before the failure is persisted.
     NotesFailed {
-        nullifiers: Vec<Nullifier>,
+        failed_notes: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
         ack_tx: tokio::sync::oneshot::Sender<()>,
     },
     /// A note script was fetched from the remote store and should be persisted to the local DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
-}
-
-// ACTOR SHUTDOWN REASON
-// ================================================================================================
-
-/// The reason an actor has shut down.
-pub enum ActorShutdownReason {
-    /// Occurs when an account actor detects failure in acquiring the rate-limiting semaphore.
-    SemaphoreFailed(AcquireError),
-    /// Occurs when an account actor detects its corresponding cancellation token has been triggered
-    /// by the coordinator. Cancellation tokens are triggered by the coordinator to initiate
-    /// graceful shutdown of actors.
-    Cancelled(NetworkAccountId),
-    /// Occurs when the actor encounters a database error it cannot recover from.
-    DbError(NetworkAccountId, miden_node_db::DatabaseError),
-    /// Occurs when an account actor detects that its account has been removed from the database
-    /// (e.g. due to a reverted account creation).
-    AccountRemoved(NetworkAccountId),
 }
 
 // ACCOUNT ACTOR CONFIG
@@ -87,10 +71,49 @@ pub struct AccountActorContext {
     pub max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     pub max_note_attempts: usize,
+    /// Duration after which an idle actor will deactivate.
+    pub idle_timeout: Duration,
     /// Database for persistent state.
     pub db: Db,
     /// Channel for sending requests to the coordinator (via the builder event loop).
     pub request_tx: mpsc::Sender<ActorRequest>,
+}
+
+#[cfg(test)]
+impl AccountActorContext {
+    /// Creates a minimal `AccountActorContext` suitable for unit tests.
+    ///
+    /// The URLs are fake and actors spawned with this context will fail on their first gRPC call,
+    /// but this is sufficient for testing coordinator logic (registry, deactivation, etc.).
+    pub fn test(db: &crate::db::Db) -> Self {
+        use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
+        use tokio::sync::RwLock;
+        use url::Url;
+
+        use crate::chain_state::ChainState;
+        use crate::clients::StoreClient;
+        use crate::test_utils::mock_block_header;
+
+        let url = Url::parse("http://127.0.0.1:1").unwrap();
+        let block_header = mock_block_header(0_u32.into());
+        let chain_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
+        let chain_state = Arc::new(RwLock::new(ChainState::new(block_header, chain_mmr)));
+        let (request_tx, _request_rx) = mpsc::channel(1);
+
+        Self {
+            block_producer_url: url.clone(),
+            validator_url: url.clone(),
+            tx_prover_url: None,
+            chain_state,
+            store: StoreClient::new(url),
+            script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
+            max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
+            max_note_attempts: 1,
+            idle_timeout: Duration::from_secs(60),
+            db: db.clone(),
+            request_tx,
+        }
+    }
 }
 
 // ACCOUNT ORIGIN
@@ -192,6 +215,8 @@ pub struct AccountActor {
     max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     max_note_attempts: usize,
+    /// Duration after which an idle actor will deactivate.
+    idle_timeout: Duration,
     /// Channel for sending requests to the coordinator.
     request_tx: mpsc::Sender<ActorRequest>,
 }
@@ -227,13 +252,18 @@ impl AccountActor {
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
+            idle_timeout: actor_context.idle_timeout,
             request_tx: actor_context.request_tx.clone(),
         }
     }
 
-    /// Runs the account actor, processing events and managing state until a reason to shutdown is
-    /// encountered.
-    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> Result<(), ActorShutdownReason> {
+    /// Runs the account actor, processing events and managing state until shutdown.
+    ///
+    /// The return value signals the shutdown category to the coordinator:
+    ///
+    /// - `Ok(())`: intentional shutdown (idle timeout, cancellation, or account removal).
+    /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
+    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.origin.id();
 
         // Determine initial mode by checking DB for available notes.
@@ -242,10 +272,7 @@ impl AccountActor {
             .db
             .has_available_notes(account_id, block_num, self.max_note_attempts)
             .await
-            .map_err(|err| {
-                tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check for available notes");
-                ActorShutdownReason::DbError(account_id, err)
-            })?;
+            .context("failed to check for available notes")?;
 
         if has_notes {
             self.mode = ActorMode::NotesAvailable;
@@ -261,9 +288,17 @@ impl AccountActor {
                 // Enable transaction execution.
                 ActorMode::NotesAvailable => semaphore.acquire().boxed(),
             };
+
+            // Idle timeout timer: only ticks when in NoViableNotes mode.
+            // Mode changes cause the next loop iteration to create a fresh sleep or pending.
+            let idle_timeout_sleep = match self.mode {
+                ActorMode::NoViableNotes => tokio::time::sleep(self.idle_timeout).boxed(),
+                _ => std::future::pending().boxed(),
+            };
+
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
-                    return Err(ActorShutdownReason::Cancelled(account_id));
+                    return Ok(());
                 }
                 // Handle coordinator notifications. On notification, re-evaluate state from DB.
                 _ = self.notify.notified() => {
@@ -274,12 +309,7 @@ impl AccountActor {
                                 .db
                                 .transaction_exists(awaited_id)
                                 .await
-                                .inspect_err(|err| {
-                                    tracing::error!(err = err.as_report(), account_id = %account_id, "failed to check transaction status");
-                                })
-                                .map_err(|err| {
-                                    ActorShutdownReason::DbError(account_id, err)
-                                })?;
+                                .context("failed to check transaction status")?;
                             if exists {
                                 self.mode = ActorMode::NotesAvailable;
                             }
@@ -291,7 +321,7 @@ impl AccountActor {
                 },
                 // Execute transactions.
                 permit = tx_permit_acquisition => {
-                    let _permit = permit.map_err(ActorShutdownReason::SemaphoreFailed)?;
+                    let _permit = permit.context("semaphore closed")?;
 
                     // Read the chain state.
                     let chain_state = self.chain_state.read().await.clone();
@@ -309,6 +339,11 @@ impl AccountActor {
                         self.mode = ActorMode::NoViableNotes;
                     }
                 }
+                // Idle timeout: actor has been idle too long, deactivate account.
+                _ = idle_timeout_sleep => {
+                    tracing::info!(%account_id, "Account actor deactivated due to idle timeout");
+                    return Ok(());
+                }
             }
         }
     }
@@ -318,7 +353,7 @@ impl AccountActor {
         &self,
         account_id: NetworkAccountId,
         chain_state: ChainState,
-    ) -> Result<Option<TransactionCandidate>, ActorShutdownReason> {
+    ) -> anyhow::Result<Option<TransactionCandidate>> {
         let block_num = chain_state.chain_tip_header.block_num();
         let max_notes = self.max_notes_per_tx.get();
 
@@ -326,13 +361,11 @@ impl AccountActor {
             .db
             .select_candidate(account_id, block_num, self.max_note_attempts)
             .await
-            .map_err(|err| {
-                tracing::error!(err = err.as_report(), account_id = %account_id, "failed to query DB for transaction candidate");
-                ActorShutdownReason::DbError(account_id, err)
-            })?;
+            .context("failed to query DB for transaction candidate")?;
 
         let Some(account) = latest_account else {
-            return Err(ActorShutdownReason::AccountRemoved(account_id));
+            tracing::info!(account_id = %account_id, "Account no longer exists in DB");
+            return Ok(None);
         };
 
         let notes: Vec<_> = notes.into_iter().take(max_notes).collect();
@@ -391,23 +424,43 @@ impl AccountActor {
                 );
                 self.cache_note_scripts(scripts_to_cache).await;
                 if !failed.is_empty() {
-                    let nullifiers: Vec<_> =
-                        failed.into_iter().map(|note| note.note.nullifier()).collect();
-                    self.mark_notes_failed(&nullifiers, block_num).await;
+                    let failed_notes = log_failed_notes(failed);
+                    self.mark_notes_failed(&failed_notes, block_num).await;
                 }
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
             Err(err) => {
+                let error_msg = err.as_report();
                 tracing::error!(
                     %account_id,
                     ?note_ids,
-                    err = err.as_report(),
+                    err = %error_msg,
                     "network transaction failed",
                 );
                 self.mode = ActorMode::NoViableNotes;
-                let nullifiers: Vec<_> = notes.iter().map(InflightNetworkNote::nullifier).collect();
-                self.mark_notes_failed(&nullifiers, block_num).await;
+
+                // For `AllNotesFailed`, use the per-note errors which contain the
+                // specific reason each note failed (e.g. consumability check details).
+                let failed_notes: Vec<_> = match err {
+                    execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
+                    other => {
+                        let error: NoteError = Arc::new(other);
+                        notes
+                            .iter()
+                            .map(|note| {
+                                tracing::info!(
+                                    note.id = %note.to_inner().as_note().id(),
+                                    nullifier = %note.nullifier(),
+                                    err = %error_msg,
+                                    "note failed: transaction execution error",
+                                );
+                                (note.nullifier(), error.clone())
+                            })
+                            .collect()
+                    },
+                };
+                self.mark_notes_failed(&failed_notes, block_num).await;
             },
         }
     }
@@ -429,12 +482,16 @@ impl AccountActor {
     /// Sends a request to the coordinator to mark notes as failed and waits for the DB write to
     /// complete. This prevents a race condition where the actor could re-select the same notes
     /// before the failure counts are updated in the database.
-    async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
+    async fn mark_notes_failed(
+        &self,
+        failed_notes: &[(Nullifier, NoteError)],
+        block_num: BlockNumber,
+    ) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         if self
             .request_tx
             .send(ActorRequest::NotesFailed {
-                nullifiers: nullifiers.to_vec(),
+                failed_notes: failed_notes.to_vec(),
                 block_num,
                 ack_tx,
             })
@@ -446,4 +503,21 @@ impl AccountActor {
         // Wait for the coordinator to confirm the DB write.
         let _ = ack_rx.await;
     }
+}
+
+/// Logs each failed note and returns a vec of `(nullifier, error)` pairs.
+fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
+    failed
+        .into_iter()
+        .map(|f| {
+            let error_msg = f.error.as_report();
+            tracing::info!(
+                note.id = %f.note.id(),
+                nullifier = %f.note.nullifier(),
+                err = %error_msg,
+                "note failed: consumability check",
+            );
+            (f.note.nullifier(), Arc::new(f.error) as NoteError)
+        })
+        .collect()
 }

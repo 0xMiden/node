@@ -138,6 +138,30 @@ You can inspect the service file with `systemctl cat miden-node` or alternativel
 our repository in the `packaging` folder. For the bootstrapping process be sure to specify the data-directory as
 expected by the systemd file.
 
+## RocksDB tuning
+
+The store uses RocksDB for the account and nullifier trees, one instance each. The two most impactful knobs per tree
+are exposed as CLI flags (also available as environment variables):
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--account_tree.rocksdb.max_cache_size` | 2 GiB | Shared LRU block cache. Increase on memory-rich hosts. |
+| `--account_tree.rocksdb.max_open_fds` | 64 | Raise to 512+ when `ulimit -n` allows. |
+| `--nullifier_tree.rocksdb.max_cache_size` | 2 GiB | Same as above for the nullifier tree. |
+| `--nullifier_tree.rocksdb.max_open_fds` | 64 | Same as above for the nullifier tree. |
+
+Compaction parallelism is set automatically to the number of available CPU cores.
+
+```sh
+miden-node bundled start \
+  --data-directory data \
+  --rpc.url http://0.0.0.0:57291 \
+  --account_tree.rocksdb.max_cache_size 4294967296 \
+  --account_tree.rocksdb.max_open_fds 512 \
+  --nullifier_tree.rocksdb.max_cache_size 4294967296 \
+  --nullifier_tree.rocksdb.max_open_fds 512
+```
+
 ## Environment variables
 
 Most configuration options can also be configured using environment variables as an alternative to providing the values

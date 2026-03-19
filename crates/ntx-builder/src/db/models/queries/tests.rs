@@ -1,28 +1,21 @@
 //! DB-level tests for NTX builder query functions.
 
+use std::sync::Arc;
+
 use diesel::prelude::*;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
-use miden_protocol::account::{
-    AccountComponentMetadata,
-    AccountId,
-    AccountStorageMode,
-    AccountType,
-};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::testing::account_id::{
-    ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE,
-    AccountIdBuilder,
-};
-use miden_protocol::transaction::TransactionId;
-use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
-use miden_standards::testing::note::NoteBuilder;
-use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::SeedableRng;
 
 use super::*;
+use crate::NoteError;
 use crate::db::models::conv as conversions;
 use crate::db::{Db, schema};
+use crate::test_utils::*;
+
+/// Creates a [`NoteError`] from a string message, for use in tests.
+fn test_note_error(msg: &str) -> NoteError {
+    Arc::new(std::io::Error::other(msg.to_string()))
+}
 
 // TEST HELPERS
 // ================================================================================================
@@ -30,47 +23,6 @@ use crate::db::{Db, schema};
 /// Creates a file-backed SQLite connection with migrations applied.
 fn test_conn() -> (SqliteConnection, tempfile::TempDir) {
     Db::test_conn()
-}
-
-/// Creates a network account ID from a test constant.
-fn mock_network_account_id() -> NetworkAccountId {
-    let account_id: AccountId =
-        ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap();
-    NetworkAccountId::try_from(account_id).unwrap()
-}
-
-/// Creates a distinct network account ID using a seeded RNG.
-fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
-    let account_id = AccountIdBuilder::new()
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Network)
-        .build_with_seed([seed; 32]);
-    NetworkAccountId::try_from(account_id).unwrap()
-}
-
-/// Creates a unique `TransactionId` from a seed value.
-fn mock_tx_id(seed: u64) -> TransactionId {
-    let w = |n: u64| Word::try_from([n, 0, 0, 0]).unwrap();
-    TransactionId::new(w(seed), w(seed + 1), w(seed + 2), w(seed + 3))
-}
-
-/// Creates a `SingleTargetNetworkNote` targeting the given network account.
-fn mock_single_target_note(
-    network_account_id: NetworkAccountId,
-    seed: u8,
-) -> AccountTargetNetworkNote {
-    let mut rng = ChaCha20Rng::from_seed([seed; 32]);
-    let sender = AccountIdBuilder::new()
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Private)
-        .build_with_rng(&mut rng);
-
-    let target = NetworkAccountTarget::new(network_account_id.inner(), NoteExecutionHint::Always)
-        .expect("network account should be valid target");
-
-    let note = NoteBuilder::new(sender, rng).attachment(target).build().unwrap();
-
-    AccountTargetNetworkNote::new(note).expect("note should be single-target network note")
 }
 
 /// Counts the total number of rows in the `notes` table.
@@ -401,9 +353,24 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
 
     // Mark one note as failed many times (exceed max_attempts=3).
     let block_num = BlockNumber::from(100u32);
-    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
+    notes_failed(
+        conn,
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+        block_num,
+    )
+    .unwrap();
 
     // Query available notes with max_attempts=3.
     let result = available_notes(conn, account_id, block_num, 3).unwrap();
@@ -446,8 +413,18 @@ fn notes_failed_increments_attempt_count() {
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
 
     let block_num = BlockNumber::from(5u32);
-    notes_failed(conn, &[note.as_note().nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note.as_note().nullifier()], block_num).unwrap();
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("execution failed"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("execution failed 2"))],
+        block_num,
+    )
+    .unwrap();
 
     let (attempt_count, last_attempt): (i32, Option<i64>) = schema::notes::table
         .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
@@ -457,6 +434,60 @@ fn notes_failed_increments_attempt_count() {
 
     assert_eq!(attempt_count, 2);
     assert_eq!(last_attempt, Some(conversions::block_num_to_i64(block_num)));
+}
+
+// GET NOTE ERROR TESTS
+// ================================================================================================
+
+#[test]
+fn get_note_error_returns_latest_error() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 10);
+    let note_id = note.as_note().id();
+
+    // Insert as committed note.
+    insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
+
+    // Initially no error.
+    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    assert!(result.is_some());
+    let row = result.unwrap();
+    assert!(row.last_error.is_none());
+    assert_eq!(row.attempt_count, 0);
+
+    // Mark as failed.
+    let block_num = BlockNumber::from(5u32);
+    notes_failed(conn, &[(note.as_note().nullifier(), test_note_error("first error"))], block_num)
+        .unwrap();
+
+    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    let row = result.unwrap();
+    assert_eq!(row.last_error.as_deref(), Some("first error"));
+    assert_eq!(row.attempt_count, 1);
+
+    // Mark as failed again with different error, should overwrite.
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("second error"))],
+        block_num,
+    )
+    .unwrap();
+
+    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    let row = result.unwrap();
+    assert_eq!(row.last_error.as_deref(), Some("second error"));
+    assert_eq!(row.attempt_count, 2);
+}
+
+#[test]
+fn get_note_error_returns_none_for_unknown_note() {
+    let (conn, _dir) = &mut test_conn();
+
+    let unknown_id = vec![0u8; 32];
+    let result = get_note_error(conn, &unknown_id).unwrap();
+    assert!(result.is_none());
 }
 
 // CHAIN STATE TESTS
@@ -534,43 +565,4 @@ fn note_script_insert_is_idempotent() {
     // Should still be retrievable.
     let found = lookup_note_script(conn, &root).unwrap();
     assert!(found.is_some());
-}
-
-// HELPERS (domain type construction)
-// ================================================================================================
-
-/// Creates a mock `Account` for a network account.
-///
-/// Uses `AccountBuilder` with minimal components needed for serialization.
-fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Account {
-    use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
-    use miden_protocol::account::{AccountBuilder, AccountComponent};
-    use miden_standards::account::auth::AuthSingleSig;
-
-    let component_code = miden_standards::code_builder::CodeBuilder::default()
-        .compile_component_code("test::interface", "pub proc test_proc push.1.2 add end")
-        .unwrap();
-
-    let component = AccountComponent::new(
-        component_code,
-        vec![],
-        AccountComponentMetadata::mock("test").with_supports_all_types(),
-    )
-    .unwrap();
-
-    AccountBuilder::new([0u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Network)
-        .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
-            PublicKeyCommitment::from(Word::default()),
-            AuthScheme::Falcon512Rpo,
-        ))
-        .build_existing()
-        .unwrap()
-}
-
-/// Creates a mock `BlockHeader` for the given block number.
-fn mock_block_header(block_num: BlockNumber) -> miden_protocol::block::BlockHeader {
-    miden_protocol::block::BlockHeader::mock(block_num, None, None, &[], Word::default())
 }

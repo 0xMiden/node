@@ -10,7 +10,7 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
@@ -41,6 +41,7 @@ pub struct Store {
     /// URL for the Block Prover client. Uses local prover if `None`.
     pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
+    pub storage_options: StorageOptions,
     pub grpc_options: GrpcOptionsInternal,
 }
 
@@ -90,7 +91,7 @@ impl Store {
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
         let state = Arc::new(
-            State::load(&self.data_directory, termination_ask)
+            State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?,
         );
@@ -122,17 +123,6 @@ impl Store {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        // This is currently required for postman to work properly because
-        // it doesn't support the new version yet.
-        //
-        // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
-        let reflection_service_alpha = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(store_rpc_api_descriptor())
-            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
-            .register_file_descriptor_set(store_block_producer_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         info!(target: COMPONENT, "Database loaded");
 
         let mut join_set = JoinSet::new();
@@ -158,7 +148,6 @@ impl Store {
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
-                .add_service(reflection_service_alpha.clone())
                 .serve_with_incoming(TcpListenerStream::new(self.rpc_listener)),
         );
 
@@ -169,7 +158,6 @@ impl Store {
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
-                .add_service(reflection_service_alpha.clone())
                 .serve_with_incoming(TcpListenerStream::new(self.ntx_builder_listener)),
         );
 
@@ -181,7 +169,6 @@ impl Store {
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
-                .add_service(reflection_service_alpha)
                 .serve_with_incoming(TcpListenerStream::new(self.block_producer_listener)),
         );
 
