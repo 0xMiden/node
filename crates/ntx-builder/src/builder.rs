@@ -15,11 +15,14 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
 
+use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
+
 use crate::MAX_IN_PROGRESS_TXS;
 use crate::actor::{AccountActorContext, AccountOrigin};
 use crate::block_producer::BlockProducerClient;
 use crate::coordinator::Coordinator;
 use crate::store::StoreClient;
+use crate::validator::ValidatorClient;
 
 // CONSTANTS
 // =================================================================================================
@@ -141,10 +144,13 @@ impl NetworkTransactionBuilder {
         // Create chain state that will be updated by the coordinator and read by actors.
         let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
 
+        let validator = ValidatorClient::new(self.validator_url.clone());
+        let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
+
         let actor_context = AccountActorContext {
-            block_producer_url: self.block_producer_url.clone(),
-            validator_url: self.validator_url.clone(),
-            tx_prover_url: self.tx_prover_url.clone(),
+            block_producer: block_producer.clone(),
+            validator,
+            prover,
             chain_state: chain_state.clone(),
             store: store.clone(),
             script_cache: self.script_cache.clone(),

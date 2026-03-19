@@ -5,6 +5,7 @@ mod block_producer;
 mod builder;
 mod coordinator;
 mod store;
+mod validator;
 
 pub use builder::NetworkTransactionBuilder;
 
