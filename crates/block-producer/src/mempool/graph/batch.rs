@@ -80,10 +80,11 @@ impl BatchGraph {
 
         let mut reverted = Vec::new();
         'outer: while !descendents.is_empty() {
-            for node in &descendents {
-                if let Some(leaf) = self.inner.revert_leaf(node) {
-                    descendents.remove(&leaf);
-                    reverted.push(self.batches.remove(&leaf).unwrap());
+            for node in descendents.iter().copied() {
+                if self.inner.is_leaf(&node) {
+                    descendents.remove(&node);
+                    let batch = self.batches.remove(&node).unwrap();
+                    reverted.push(batch);
                     continue 'outer;
                 }
             }

@@ -275,9 +275,21 @@ where
         descendents
     }
 
-    /// Removes the node _IFF_ it is a leaf node (has no descendents).
-    pub fn revert_leaf(&self, node: &N::Id) -> Option<N::Id> {
-        todo!();
+    /// Returns `true` if the given node is a leaf node aka has no children.
+    pub fn is_leaf(&self, node: &N::Id) -> bool {
+        self.children.get(node).unwrap().is_empty()
+    }
+
+    /// Removes the leaf node from the graph.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node **is not** a leaf node. Use [`is_leaf`] to ensure it is.
+    pub fn revert_leaf(&mut self, node: &N) {
+        let id = node.id();
+        assert!(self.is_leaf(&id), "Cannot revert node {id} as it still has descendents",);
+
+        self.remove(node);
     }
 
     /// Removes the node _IFF_ it has no ancestor nodes.

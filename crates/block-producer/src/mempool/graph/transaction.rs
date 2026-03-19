@@ -132,11 +132,11 @@ impl TransactionGraph {
 
         let mut reverted = Vec::new();
         'outer: while !descendents.is_empty() {
-            for node in &descendents {
-                if let Some(leaf) = self.inner.revert_leaf(node) {
-                    descendents.remove(&leaf);
-                    self.txs.remove(&leaf).unwrap();
-                    reverted.push(leaf);
+            for node in descendents.iter().copied() {
+                if self.inner.is_leaf(&node) {
+                    descendents.remove(&node);
+                    self.txs.remove(&node).unwrap();
+                    reverted.push(node);
                     continue 'outer;
                 }
             }
