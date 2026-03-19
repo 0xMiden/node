@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Context;
 use candidate::TransactionCandidate;
 use futures::FutureExt;
-use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
@@ -21,11 +20,10 @@ use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::FailedNote;
 use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use crate::NoteError;
 use crate::chain_state::ChainState;
-use crate::clients::{BlockProducerClient, StoreClient};
+use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use crate::db::Db;
 
 // ACTOR REQUESTS
@@ -54,13 +52,13 @@ pub enum ActorRequest {
 pub struct AccountActorContext {
     /// Client for interacting with the store in order to load account state.
     pub store: StoreClient,
-    /// Address of the block producer gRPC server.
-    pub block_producer_url: Url,
-    /// Address of the Validator server.
-    pub validator_url: Url,
-    /// Address of the remote prover. If `None`, transactions will be proven locally, which is
-    // undesirable due to the performance impact.
-    pub tx_prover_url: Option<Url>,
+    /// Client for interacting with the block producer.
+    pub block_producer: BlockProducerClient,
+    /// Client for interacting with the validator.
+    pub validator: ValidatorClient,
+    /// Client for remote transaction proving. If `None`, transactions will be proven locally,
+    /// which is undesirable due to the performance impact.
+    pub prover: Option<RemoteTransactionProver>,
     /// The latest chain state that account all actors can rely on. A single chain state is shared
     /// among all actors.
     pub chain_state: Arc<RwLock<ChainState>>,
@@ -101,9 +99,9 @@ impl AccountActorContext {
         let (request_tx, _request_rx) = mpsc::channel(1);
 
         Self {
-            block_producer_url: url.clone(),
-            validator_url: url.clone(),
-            tx_prover_url: None,
+            block_producer: BlockProducerClient::new(url.clone()),
+            validator: ValidatorClient::new(url.clone()),
+            prover: None,
             chain_state,
             store: StoreClient::new(url),
             script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
@@ -229,15 +227,6 @@ impl AccountActor {
         notify: Arc<Notify>,
         cancel_token: CancellationToken,
     ) -> Self {
-        let block_producer = BlockProducerClient::new(actor_context.block_producer_url.clone());
-        let validator = Builder::new(actor_context.validator_url.clone())
-            .without_tls()
-            .with_timeout(Duration::from_secs(10))
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>();
-        let prover = actor_context.tx_prover_url.clone().map(RemoteTransactionProver::new);
         Self {
             origin,
             store: actor_context.store.clone(),
@@ -245,9 +234,9 @@ impl AccountActor {
             mode: ActorMode::NoViableNotes,
             notify,
             cancel_token,
-            block_producer,
-            validator,
-            prover,
+            block_producer: actor_context.block_producer.clone(),
+            validator: actor_context.validator.clone(),
+            prover: actor_context.prover.clone(),
             chain_state: actor_context.chain_state.clone(),
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
