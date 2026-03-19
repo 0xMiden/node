@@ -5,6 +5,8 @@
 ### Enhancements
 
 - Expose per-tree RocksDB tuning options ([#1782](https://github.com/0xMiden/node/pull/1782)).
+- Added a gRPC server to the NTX builder, configurable via `--ntx-builder.url` / `MIDEN_NODE_NTX_BUILDER_URL` (https://github.com/0xMiden/node/issues/1758).
+- Added `GetNoteError` gRPC endpoint to query the latest execution error for network notes (https://github.com/0xMiden/node/issues/1758).
 - Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).
@@ -14,6 +16,7 @@
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
 - Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
+- Added limit to execution cycles for a transaction network, configurable through CLI args (`--ntx-builder.max-tx-cycles`) ([#1801](https://github.com/0xMiden/node/issues/1801)).
 
 ### Changes
 
@@ -35,7 +38,7 @@
 - Moved bootstrap procedure to `miden-node validator bootstrap` command ([#1764](https://github.com/0xMiden/node/pull/1764)).
 - NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-account-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
 - Removed gRPC reflection v1-alpha support ([#1795](https://github.com/0xMiden/node/pull/1795)).
-
+- [BREAKING] Rust requirement bumped from `v1.91` to `v1.93` ([#1803](https://github.com/0xMiden/node/pull/1803)).
 
 ### Fixes
 
@@ -44,11 +47,13 @@
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
+
 ## v0.13.8 (2026-03-12)
 
 - Private notes with the network note attachment are no longer incorrectly considered as network notes (#[#1736](https://github.com/0xMiden/node/pull/1736)).
 - Fixed network monitor looping on stale wallet nonce after node restarts by re-syncing wallet state from RPC after repeated failures ([#1748](https://github.com/0xMiden/node/pull/1748)).
 - Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
+- Network transaction actors now share the same gRPC clients, limiting the number of file descriptors being used ([#1806](https://github.com/0xMiden/node/issues/1806)).
 
 ## v0.13.7 (2026-02-25)
 

@@ -13,3 +13,8 @@ CREATE TABLE validated_transactions (
 
 CREATE INDEX idx_validated_transactions_account_id ON validated_transactions(account_id);
 CREATE INDEX idx_validated_transactions_block_num ON validated_transactions(block_num);
+
+CREATE TABLE block_headers (
+    block_num    INTEGER PRIMARY KEY,
+    block_header BLOB NOT NULL
+) WITHOUT ROWID;
