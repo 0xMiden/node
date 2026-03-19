@@ -307,6 +307,7 @@ fn pass_through_txs_on_an_empty_account() {
         account_update.account_id(),
         account_update.initial_state_commitment(),
         account_update.final_state_commitment(),
+        tx_pass_through_a.store_account_state(),
     ));
     itertools::assert_equal(batch.account_updates(), expected);
 

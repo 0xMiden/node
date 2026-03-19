@@ -35,8 +35,7 @@ impl GraphNode for SelectedBatch {
     fn account_updates(
         &self,
     ) -> Box<dyn Iterator<Item = (AccountId, Word, Word, Option<Word>)> + '_> {
-        // TODO: store -- this is incorrect
-        Box::new(self.account_updates().map(|(account, from, to)| (account, from, to, None)))
+        Box::new(self.account_updates())
     }
 
     fn id(&self) -> Self::Id {
