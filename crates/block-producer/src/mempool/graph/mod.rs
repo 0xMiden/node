@@ -1,16 +1,18 @@
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::Hash;
 
-mod account_states;
 mod batch;
+mod edges;
+mod state;
 mod transaction;
 
-use account_states::AccountStates;
 pub use batch::BatchGraph;
+use edges::Edges;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::Nullifier;
+use state::State;
+pub use state::StateConflict;
 use thiserror::Error;
 pub use transaction::TransactionGraph;
 
@@ -52,29 +54,27 @@ trait GraphNode {
 struct Graph<N>
 where
     N: GraphNode,
-    N::Id: Eq + std::hash::Hash,
+    N::Id: Eq + std::hash::Hash + Copy,
 {
-    parents: HashMap<N::Id, HashSet<N::Id>>,
-    children: HashMap<N::Id, HashSet<N::Id>>,
+    /// The aggregate state of all nodes in the graph.
+    state: State<N::Id>,
+    /// The relation between the nodes formed by their dependencies on each others state.
+    edges: Edges<N::Id>,
+    /// Nodes that have been selected. Nodes are available for selection once _all_ their parents
+    /// have been selected.
     selected: HashSet<N::Id>,
-    nullifiers: HashSet<Nullifier>,
-    notes_created: HashMap<Word, N::Id>,
-    accounts: HashMap<AccountId, AccountStates<N::Id>>,
 }
 
 impl<N> Default for Graph<N>
 where
     N: GraphNode,
-    N::Id: Eq + std::hash::Hash,
+    N::Id: Eq + std::hash::Hash + Copy,
 {
     fn default() -> Self {
         Self {
-            children: HashMap::default(),
-            parents: HashMap::default(),
+            edges: Edges::default(),
             selected: HashSet::default(),
-            nullifiers: HashSet::default(),
-            notes_created: HashMap::default(),
-            accounts: HashMap::default(),
+            state: State::default(),
         }
     }
 }
@@ -96,111 +96,13 @@ where
     ///
     /// Returns an error if the node's state does not build on top of the current graph state.
     pub fn append(&mut self, node: &N) -> Result<(), StateConflict> {
-        self.validate_append(node)?;
-        self.apply_append(node);
-        Ok(())
-    }
+        self.state.validate_append(node)?;
 
-    /// Verifies that the node can be appended ontop of the existing graph state.
-    ///
-    /// This **only** performs the check -- it takes a non-exclusive reference (`&self`).
-    ///
-    /// This _must_ be called immediately prior to [`apply_append`], which performs the actual
-    /// node insertion (under the assumption that this check was already performed).
-    ///
-    /// # Errors
-    ///
-    /// See [`StateConflict`] for the error conditions.
-    fn validate_append(&self, node: &N) -> Result<(), StateConflict> {
-        let duplicate_nullifiers = node
-            .nullifiers()
-            .filter(|nullifier| self.nullifiers.contains(nullifier))
-            .collect::<Vec<_>>();
-        if !duplicate_nullifiers.is_empty() {
-            return Err(StateConflict::NullifiersAlreadyExist(duplicate_nullifiers));
-        }
-
-        let duplicate_output_notes = node
-            .output_notes()
-            .filter(|note| self.notes_created.contains_key(note))
-            .collect::<Vec<_>>();
-        if !duplicate_output_notes.is_empty() {
-            return Err(StateConflict::OutputNotesAlreadyExist(duplicate_output_notes));
-        }
-
-        let missing_input_notes = node
-            .unauthenticated_notes()
-            .filter(|note| !self.notes_created.contains_key(note))
-            .collect::<Vec<_>>();
-        if !missing_input_notes.is_empty() {
-            return Err(StateConflict::UnauthenticatedNotesMissing(missing_input_notes));
-        }
-
-        for (account_id, from, to, store) in node.account_updates() {
-            let current = self
-                .accounts
-                .get(&account_id)
-                .map(|account| account.commitment())
-                .or(store)
-                .unwrap_or_default();
-
-            if from != current {
-                return Err(StateConflict::AccountCommitmentMismatch {
-                    account: account_id,
-                    expected: from,
-                    current,
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Appends the node to the graph state.
-    ///
-    /// This method assumes that the node is valid and you **must** call [`validate_append`] prior
-    /// to this function.
-    fn apply_append(&mut self, node: &N) {
         let id = node.id();
+        let parents = self.state.apply_append(id, node);
+        self.edges.insert(id, parents);
 
-        self.children.entry(id).or_default();
-        let mut parents = self.parents.entry(id).or_default();
-
-        self.nullifiers.extend(node.nullifiers());
-        self.notes_created.extend(node.output_notes().map(|note| (note, id)));
-
-        parents.extend(
-            node.unauthenticated_notes()
-                .map(|note| self.notes_created.get(&note).expect("unauthenticated note must exist"))
-                .copied(),
-        );
-
-        for (account, from, to, store) in node.account_updates() {
-            // Create the account if it does not yet exist. Initialization should take the latest
-            // store state (or ZERO).
-            let mut account = self
-                .accounts
-                .entry(account)
-                .or_insert_with(|| AccountStates::empty(store.unwrap_or_default()));
-
-            // The owner (if any) of the current state is always a parent.
-            parents.extend(account.current_owner());
-
-            if from == to {
-                account.insert_pass_through(id);
-            } else {
-                parents.extend(account.current_pass_through());
-                account.append_state(to, id);
-            }
-        }
-
-        // Register this node as a child of all parents.
-        for parent in parents.iter() {
-            self.children
-                .get_mut(parent)
-                .expect("parent nodes should have a children entry")
-                .insert(id);
-        }
+        Ok(())
     }
 
     /// Returns the set of nodes which can be selected.
@@ -208,11 +110,11 @@ where
     /// These are nodes which have not been selected before, and who's parents have all been
     /// selected.
     pub fn selection_candidates(&self) -> HashSet<N::Id> {
-        self.parents
+        self.edges
             .iter()
             .filter(|(id, _)| !self.selected.contains(id))
             .filter(|(_, parents)| parents.iter().all(|parent| self.selected.contains(parent)))
-            .map(|(&id, _)| id)
+            .map(|(id, _)| *id)
             .collect()
     }
 
@@ -233,7 +135,7 @@ where
             "Cannot deselect node {node} which is not in selected set"
         );
 
-        let children = self.children.get(node).unwrap();
+        let children = self.edges.children_of(node);
         assert!(
             children.iter().all(|child| !self.is_selected(child)),
             "Cannot deselect node {node} which still has children selected",
@@ -249,13 +151,7 @@ where
     /// Panics if the given node is not a selection candidate.
     pub fn select_candidate(&mut self, node: N::Id) {
         assert!(!self.selected.contains(&node));
-        assert!(
-            self.parents
-                .get(&node)
-                .unwrap()
-                .iter()
-                .all(|parent| self.selected.contains(parent))
-        );
+        assert!(self.edges.parents_of(&node).iter().all(|parent| self.selected.contains(parent)));
 
         self.selected.insert(node);
     }
@@ -267,10 +163,12 @@ where
         let mut to_process = vec![*node];
         let mut descendents = HashSet::default();
 
+        // FIXME: this isn't correct.
         while let Some(node) = to_process.pop() {
-            let children = self.children.get(&node).unwrap();
+            let children = self.edges.children_of(&node);
             // Don't double process.
-            to_process.extend(children.iter().filter(|child| !descendents.contains(*child)));
+            let unprocessed = children.iter().filter(|child| !descendents.contains(*child));
+            to_process.extend(unprocessed);
             descendents.extend(children);
         }
 
@@ -279,7 +177,7 @@ where
 
     /// Returns `true` if the given node is a leaf node aka has no children.
     pub fn is_leaf(&self, node: &N::Id) -> bool {
-        self.children.get(node).unwrap().is_empty()
+        self.edges.children_of(node).is_empty()
     }
 
     /// Removes the leaf node from the graph.
@@ -302,7 +200,7 @@ where
     pub fn prune(&mut self, node: &N) {
         let id = node.id();
         assert!(
-            self.parents.get(&id).unwrap().is_empty(),
+            self.edges.parents_of(&id).is_empty(),
             "Cannot prune node {id} as it still has ancestors",
         );
 
@@ -314,69 +212,12 @@ where
     /// This is an _internal_ helper, caller is responsible for ensuring that the graph won't be
     /// corrupted by this removal. This is true if the node has either no parents, or no children.
     fn remove(&mut self, node: &N) {
-        let id = node.id();
-
-        // We destructure here so that we are reminded to clean up fields that get added in the
-        // future.
-        let Self {
-            children,
-            parents,
-            selected,
-            nullifiers,
-            notes_created,
-            accounts,
-        } = self;
-
-        // Remove state.
-        for nullifier in node.nullifiers() {
-            nullifiers.remove(&nullifier);
-        }
-
-        for note in node.output_notes() {
-            notes_created.remove(&note);
-        }
-
-        for (account, from, to, ..) in node.account_updates() {
-            let Entry::Occupied(mut account) = accounts.entry(account) else {
-                panic!("Cannot remove account {account} entry for node {id} as it does not exist");
-            };
-
-            account.get_mut().remove_node(&id, from, to);
-
-            if account.get().is_empty() {
-                account.remove();
-            }
-        }
-
-        selected.remove(&id);
-
-        // Remove edges.
-        parents.remove(&id);
-        let node_children = children.remove(&id).unwrap();
-        for child in node_children {
-            parents.get_mut(&child).unwrap().remove(&id);
-        }
+        self.state.remove(node);
+        self.selected.remove(&node.id());
+        self.edges.remove(&node.id());
     }
 
     pub fn selected_count(&self) -> usize {
         self.selected.len()
     }
-}
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum StateConflict {
-    #[error("nullifiers already exist in the mempool: {0:?}")]
-    NullifiersAlreadyExist(Vec<Nullifier>),
-    #[error("output note commitments already exist in the mempool: {0:?}")]
-    OutputNotesAlreadyExist(Vec<Word>),
-    #[error("unauthenticated input notes are unknown: {0:?}")]
-    UnauthenticatedNotesMissing(Vec<Word>),
-    #[error(
-        "node's initial account commitment {expected} does not match the current graph commitment {current} for account {account}"
-    )]
-    AccountCommitmentMismatch {
-        account: AccountId,
-        expected: Word,
-        current: Word,
-    },
 }
