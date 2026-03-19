@@ -103,6 +103,7 @@ impl BundledCommand {
                 crate::commands::validator::ValidatorCommand::bootstrap_genesis(
                     &data_directory,
                     &accounts_directory,
+                    &data_directory,
                     genesis_config_file.as_ref(),
                     validator_key,
                 )
