@@ -156,20 +156,21 @@ where
         self.selected.insert(node);
     }
 
-    /// Returns the node's descendents.
+    /// Returns the node and its descendents.
     ///
     /// That is, this returns the node's children, their children etc.
     pub fn descendents(&self, node: &N::Id) -> HashSet<N::Id> {
         let mut to_process = vec![*node];
         let mut descendents = HashSet::default();
 
-        // FIXME: this isn't correct.
         while let Some(node) = to_process.pop() {
-            let children = self.edges.children_of(&node);
             // Don't double process.
-            let unprocessed = children.iter().filter(|child| !descendents.contains(*child));
-            to_process.extend(unprocessed);
-            descendents.extend(children);
+            if descendents.contains(&node) {
+                continue;
+            }
+            let children = self.edges.children_of(&node);
+            to_process.extend(children);
+            descendents.insert(node);
         }
 
         descendents

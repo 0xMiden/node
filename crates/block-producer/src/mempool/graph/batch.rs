@@ -76,7 +76,6 @@ impl BatchGraph {
         }
 
         let mut descendents = self.inner.descendents(&batch);
-        descendents.insert(batch);
 
         let mut reverted = Vec::new();
         'outer: while !descendents.is_empty() {

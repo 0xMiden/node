@@ -128,7 +128,6 @@ impl TransactionGraph {
         }
 
         let mut descendents = self.inner.descendents(&transaction);
-        descendents.insert(transaction);
 
         let mut reverted = Vec::new();
         'outer: while !descendents.is_empty() {
