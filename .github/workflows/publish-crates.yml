@@ -37,6 +37,10 @@ jobs:
       - name: Install cargo-msrv
         run: cargo binstall --no-confirm --force cargo-msrv
       - name: Check MSRV for each workspace member
+        # Use stable toolchain instead of rust-toolchain.toml version to avoid
+        # issues where cargo-msrv requires a newer Rust than the pinned version.
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
           ./scripts/check-msrv.sh
