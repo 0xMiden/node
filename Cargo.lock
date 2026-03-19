@@ -2819,6 +2819,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-genesis"
+version = "0.14.0-alpha.5"
+dependencies = [
+ "anyhow",
+ "clap",
+ "fs-err",
+ "hex",
+ "miden-agglayer",
+ "miden-node-store",
+ "miden-node-utils",
+ "miden-protocol",
+ "miden-standards",
+ "rand",
+ "rand_chacha",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "miden-large-smt-backend-rocksdb"
 version = "0.14.0-alpha.5"
 dependencies = [

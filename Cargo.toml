@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "bin/genesis",
   "bin/network-monitor",
   "bin/node",
   "bin/remote-prover",

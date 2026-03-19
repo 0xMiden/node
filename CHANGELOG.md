@@ -4,6 +4,8 @@
 
 ### Enhancements
 
+- Added `miden-genesis` tool for generating canonical AggLayer genesis accounts and configuration ([#1797](https://github.com/0xMiden/node/pull/1797)).
+- Expose per-tree RocksDB tuning options ([#1782](https://github.com/0xMiden/node/pull/1782)).
 - Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/node/pull/1579)).
 - [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).
