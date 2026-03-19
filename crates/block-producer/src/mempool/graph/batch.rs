@@ -9,11 +9,13 @@ use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
-use super::{Graph, GraphNode, StateConflict};
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::mempool::BlockBudget;
 use crate::mempool::budget::BudgetStatus;
+use crate::mempool::graph::StateConflict;
+use crate::mempool::graph::graph::Graph;
+use crate::mempool::graph::node::GraphNode;
 
 impl GraphNode for SelectedBatch {
     type Id = BatchId;

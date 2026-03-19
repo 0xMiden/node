@@ -8,7 +8,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::note::Nullifier;
 use thiserror::Error;
 
-use super::GraphNode;
+use crate::mempool::graph::node::GraphNode;
 
 /// Tracks the shared state of the mempool graph that is required to validate and apply nodes.
 #[derive(Clone, Debug, PartialEq)]

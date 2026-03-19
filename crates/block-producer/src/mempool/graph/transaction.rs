@@ -11,7 +11,9 @@ use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::mempool::BatchBudget;
 use crate::mempool::budget::BudgetStatus;
-use crate::mempool::graph::{Graph, GraphNode, StateConflict};
+use crate::mempool::graph::StateConflict;
+use crate::mempool::graph::graph::Graph;
+use crate::mempool::graph::node::GraphNode;
 
 // TRANSACTION GRAPH NODE
 // ================================================================================================
