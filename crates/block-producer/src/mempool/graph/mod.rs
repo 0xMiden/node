@@ -103,7 +103,7 @@ where
     ///
     /// This **only** performs the check -- it takes a non-exclusive reference (`&self`).
     ///
-    /// This _must_ be called immedietely prior to [`apply_append`], which performs the actual
+    /// This _must_ be called immediately prior to [`apply_append`], which performs the actual
     /// node insertion (under the assumption that this check was already performed).
     ///
     /// # Errors
