@@ -2,9 +2,11 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+mod account_states;
 mod batch;
 mod transaction;
 
+use account_states::AccountStates;
 pub use batch::BatchGraph;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -138,7 +140,7 @@ where
             let current = self
                 .accounts
                 .get(&account_id)
-                .map(|account| account.commitment)
+                .map(|account| account.commitment())
                 .or(store)
                 .unwrap_or_default();
 
@@ -179,9 +181,9 @@ where
             let mut account = self
                 .accounts
                 .entry(account)
-                .or_insert_with(|| AccountStates::new(store.unwrap_or_default()));
+                .or_insert_with(|| AccountStates::empty(store.unwrap_or_default()));
 
-            // The owner of the current state is always a parent.
+            // The owner (if any) of the current state is always a parent.
             parents.extend(account.current_owner());
 
             if from == to {
@@ -377,106 +379,4 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct AccountStates<K>
-where
-    K: Eq + std::hash::Hash,
-{
-    commitment: Word,
-    nodes: HashMap<Word, CommitmentNodes<K>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct CommitmentNodes<K>
-where
-    K: Eq + std::hash::Hash,
-{
-    owner: Option<K>,
-    pass_through: HashSet<K>,
-}
-
-impl<K> Default for CommitmentNodes<K>
-where
-    K: Eq + std::hash::Hash,
-{
-    fn default() -> Self {
-        Self {
-            owner: None,
-            pass_through: HashSet::default(),
-        }
-    }
-}
-
-impl<K> AccountStates<K>
-where
-    K: Eq + std::hash::Hash,
-{
-    fn new(commitment: Word) -> Self {
-        Self {
-            commitment,
-            nodes: HashMap::from([(commitment, CommitmentNodes::default())]),
-        }
-    }
-
-    fn append_state(&mut self, commitment: Word, owner: K) {
-        let mut nodes = CommitmentNodes::default();
-        nodes.owner = Some(owner);
-
-        self.commitment = commitment;
-        self.nodes.insert(commitment, nodes);
-    }
-
-    fn remove_node(&mut self, node: &K, from: Word, to: Word) {
-        let Entry::Occupied(mut entry) = self.nodes.entry(to) else {
-            panic!("Account node could not be removed because its commitment does not exist");
-        };
-
-        entry.get_mut().remove(&node);
-        if entry.get().is_empty() {
-            entry.remove();
-            if self.commitment == to {
-                self.commitment = from;
-            }
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
-    }
-
-    fn current_owner(&self) -> Option<&K> {
-        self.current_nodes().owner.as_ref()
-    }
-
-    fn current_pass_through(&self) -> &HashSet<K> {
-        &self.current_nodes().pass_through
-    }
-
-    fn insert_pass_through(&mut self, node: K) {
-        self.current_nodes_mut().pass_through.insert(node);
-    }
-
-    fn current_nodes(&self) -> &CommitmentNodes<K> {
-        self.nodes.get(&self.commitment).as_ref().unwrap()
-    }
-
-    fn current_nodes_mut(&mut self) -> &mut CommitmentNodes<K> {
-        self.nodes.get_mut(&self.commitment).unwrap()
-    }
-}
-
-impl<K> CommitmentNodes<K>
-where
-    K: Eq + std::hash::Hash,
-{
-    fn remove(&mut self, node: &K) {
-        self.owner.take_if(|owner| owner == node);
-        self.pass_through.remove(node);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.owner.is_none() && self.pass_through.is_empty()
-    }
 }
