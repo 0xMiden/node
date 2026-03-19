@@ -4,11 +4,9 @@ mod inflight_note;
 mod note_state;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use account_state::{NetworkAccountState, TransactionCandidate};
 use futures::FutureExt;
-use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_utils::ErrorReport;
@@ -21,11 +19,11 @@ use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
 use tokio::sync::{AcquireError, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use crate::block_producer::BlockProducerClient;
 use crate::builder::ChainState;
 use crate::store::StoreClient;
+use crate::validator::ValidatorClient;
 
 // ACTOR SHUTDOWN REASON
 // ================================================================================================
@@ -53,13 +51,13 @@ pub enum ActorShutdownReason {
 pub struct AccountActorContext {
     /// Client for interacting with the store in order to load account state.
     pub store: StoreClient,
-    /// Address of the block producer gRPC server.
-    pub block_producer_url: Url,
-    /// Address of the Validator server.
-    pub validator_url: Url,
-    /// Address of the remote prover. If `None`, transactions will be proven locally, which is
-    // undesirable due to the performance impact.
-    pub tx_prover_url: Option<Url>,
+    /// Client for interacting with the block producer.
+    pub block_producer: BlockProducerClient,
+    /// Client for interacting with the validator.
+    pub validator: ValidatorClient,
+    /// Client for remote transaction proving. If `None`, transactions will be proven locally,
+    /// which is undesirable due to the performance impact.
+    pub prover: Option<RemoteTransactionProver>,
     /// The latest chain state that account all actors can rely on. A single chain state is shared
     /// among all actors.
     pub chain_state: Arc<RwLock<ChainState>>,
@@ -173,24 +171,15 @@ impl AccountActor {
         event_rx: mpsc::Receiver<Arc<MempoolEvent>>,
         cancel_token: CancellationToken,
     ) -> Self {
-        let block_producer = BlockProducerClient::new(actor_context.block_producer_url.clone());
-        let validator = Builder::new(actor_context.validator_url.clone())
-            .without_tls()
-            .with_timeout(Duration::from_secs(10))
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>();
-        let prover = actor_context.tx_prover_url.clone().map(RemoteTransactionProver::new);
         Self {
             origin,
             store: actor_context.store.clone(),
             mode: ActorMode::NoViableNotes,
             event_rx,
             cancel_token,
-            block_producer,
-            validator,
-            prover,
+            block_producer: actor_context.block_producer.clone(),
+            validator: actor_context.validator.clone(),
+            prover: actor_context.prover.clone(),
             chain_state: actor_context.chain_state.clone(),
             script_cache: actor_context.script_cache.clone(),
         }
