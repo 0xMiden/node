@@ -33,7 +33,7 @@ pub enum BlockProducerCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
-        #[clap(flatten)]
+        #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
     },
 }
