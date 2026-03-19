@@ -12,10 +12,9 @@ use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::PartialBlockchain;
+use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
-
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
 
 use crate::MAX_IN_PROGRESS_TXS;
 use crate::actor::{AccountActorContext, AccountOrigin};
