@@ -75,6 +75,8 @@ pub struct AccountActorContext {
     pub db: Db,
     /// Channel for sending requests to the coordinator (via the builder event loop).
     pub request_tx: mpsc::Sender<ActorRequest>,
+    /// Maximum number of VM execution cycles for network transactions.
+    pub max_cycles: u32,
 }
 
 #[cfg(test)]
@@ -110,6 +112,7 @@ impl AccountActorContext {
             idle_timeout: Duration::from_secs(60),
             db: db.clone(),
             request_tx,
+            max_cycles: 1 << 16,
         }
     }
 }
@@ -217,6 +220,8 @@ pub struct AccountActor {
     idle_timeout: Duration,
     /// Channel for sending requests to the coordinator.
     request_tx: mpsc::Sender<ActorRequest>,
+    /// Maximum number of VM execution cycles for network transactions.
+    max_cycles: u32,
 }
 
 impl AccountActor {
@@ -243,6 +248,7 @@ impl AccountActor {
             max_note_attempts: actor_context.max_note_attempts,
             idle_timeout: actor_context.idle_timeout,
             request_tx: actor_context.request_tx.clone(),
+            max_cycles: actor_context.max_cycles,
         }
     }
 
@@ -390,6 +396,7 @@ impl AccountActor {
             self.store.clone(),
             self.script_cache.clone(),
             self.db.clone(),
+            self.max_cycles,
         );
 
         let notes = tx_candidate.notes.clone();

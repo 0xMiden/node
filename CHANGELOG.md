@@ -16,7 +16,7 @@
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
 - Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
-- Network transaction actors now share the same gRPC clients, limiting the number of file descriptors being used ([#1806](https://github.com/0xMiden/node/issues/1806)).
+- Added limit to execution cycles for a transaction network, configurable through CLI args (`--ntx-builder.max-tx-cycles`) ([#1801](https://github.com/0xMiden/node/issues/1801)).
 
 ### Changes
 
@@ -47,6 +47,7 @@
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
+- Network transaction actors now share the same gRPC clients, limiting the number of file descriptors being used ([#1806](https://github.com/0xMiden/node/issues/1806)).
 
 ## v0.13.7 (2026-02-25)
 
