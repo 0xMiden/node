@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -51,12 +52,12 @@ where
     N: GraphNode,
     N::Id: Eq + std::hash::Hash,
 {
-    children: HashMap<N::Id, HashSet<N::Id>>,
     parents: HashMap<N::Id, HashSet<N::Id>>,
+    children: HashMap<N::Id, HashSet<N::Id>>,
     selected: HashSet<N::Id>,
     nullifiers: HashSet<Nullifier>,
     notes_created: HashMap<Word, N::Id>,
-    accounts: HashMap<AccountId, AccountState<N::Id>>,
+    accounts: HashMap<AccountId, AccountStates<N::Id>>,
 }
 
 impl<N> Default for Graph<N>
@@ -178,17 +179,16 @@ where
             let mut account = self
                 .accounts
                 .entry(account)
-                .or_insert_with(|| AccountState::new(store.unwrap_or_default()));
+                .or_insert_with(|| AccountStates::new(store.unwrap_or_default()));
 
             // The owner of the current state is always a parent.
-            parents.extend(account.owner);
+            parents.extend(account.current_owner());
 
             if from == to {
-                account.pass_through.insert(id);
+                account.insert_pass_through(id);
             } else {
-                parents.extend(&account.pass_through);
-                *account = AccountState::new(to);
-                account.owner = Some(id);
+                parents.extend(account.current_pass_through());
+                account.append_state(to, id);
             }
         }
 
@@ -313,13 +313,6 @@ where
             accounts,
         } = self;
 
-        // Remove edges.
-        parents.remove(&id);
-        let node_children = children.remove(&id).unwrap();
-        for child in node_children {
-            parents.get_mut(&child).unwrap().remove(&id);
-        }
-
         // Remove state.
         for nullifier in node.nullifiers() {
             nullifiers.remove(&nullifier);
@@ -329,13 +322,26 @@ where
             notes_created.remove(&note);
         }
 
-        for (account, ..) in node.account_updates() {
-            let mut account = accounts.get_mut(&account).unwrap();
-            account.owner.take_if(|owner| owner == &id);
-            account.pass_through.remove(&id);
+        for (account, from, to, ..) in node.account_updates() {
+            let Entry::Occupied(mut account) = accounts.entry(account) else {
+                panic!("Cannot remove account {account} entry for node {id} as it does not exist");
+            };
+
+            account.get_mut().remove_node(&id, from, to);
+
+            if account.get().is_empty() {
+                account.remove();
+            }
         }
 
         selected.remove(&id);
+
+        // Remove edges.
+        parents.remove(&id);
+        let node_children = children.remove(&id).unwrap();
+        for child in node_children {
+            parents.get_mut(&child).unwrap().remove(&id);
+        }
     }
 
     pub fn selected_count(&self) -> usize {
@@ -362,25 +368,100 @@ pub enum StateConflict {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct AccountState<K>
+struct AccountStates<K>
 where
     K: Eq + std::hash::Hash,
 {
     commitment: Word,
+    nodes: HashMap<Word, CommitmentNodes<K>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CommitmentNodes<K>
+where
+    K: Eq + std::hash::Hash,
+{
     owner: Option<K>,
     pass_through: HashSet<K>,
 }
 
-impl<K> AccountState<K>
+impl<K> Default for CommitmentNodes<K>
+where
+    K: Eq + std::hash::Hash,
+{
+    fn default() -> Self {
+        Self {
+            owner: None,
+            pass_through: HashSet::default(),
+        }
+    }
+}
+
+impl<K> AccountStates<K>
 where
     K: Eq + std::hash::Hash,
 {
     fn new(commitment: Word) -> Self {
         Self {
             commitment,
-            owner: None,
-            pass_through: HashSet::default(),
+            nodes: HashMap::from([(commitment, CommitmentNodes::default())]),
         }
+    }
+
+    fn append_state(&mut self, commitment: Word, owner: K) {
+        let mut nodes = CommitmentNodes::default();
+        nodes.owner = Some(owner);
+
+        self.commitment = commitment;
+        self.nodes.insert(commitment, nodes);
+    }
+
+    fn remove_node(&mut self, node: &K, from: Word, to: Word) {
+        let Entry::Occupied(mut entry) = self.nodes.entry(to) else {
+            panic!("Account node could not be removed because its commitment does not exist");
+        };
+
+        entry.get_mut().remove(&node);
+        if entry.get().is_empty() {
+            entry.remove();
+            if self.commitment == to {
+                self.commitment = from;
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    fn current_owner(&self) -> Option<&K> {
+        self.current_nodes().owner.as_ref()
+    }
+
+    fn current_pass_through(&self) -> &HashSet<K> {
+        &self.current_nodes().pass_through
+    }
+
+    fn insert_pass_through(&mut self, node: K) {
+        self.current_nodes_mut().pass_through.insert(node);
+    }
+
+    fn current_nodes(&self) -> &CommitmentNodes<K> {
+        self.nodes.get(&self.commitment).as_ref().unwrap()
+    }
+
+    fn current_nodes_mut(&mut self) -> &mut CommitmentNodes<K> {
+        self.nodes.get_mut(&self.commitment).unwrap()
+    }
+}
+
+impl<K> CommitmentNodes<K>
+where
+    K: Eq + std::hash::Hash,
+{
+    fn remove(&mut self, node: &K) {
+        self.owner.take_if(|owner| owner == node);
+        self.pass_through.remove(node);
     }
 
     fn is_empty(&self) -> bool {
