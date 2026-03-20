@@ -30,7 +30,7 @@ fn main() {
         .out_dir(dst_dir)
         .build_server(false) // this setting generates only the client side of the rpc api
         .compile_fds_with_config(prost_config, file_descriptors)
-        .context("compiling protobufs")?;
+        .expect("compiling protobufs");
 }
 ```
 
