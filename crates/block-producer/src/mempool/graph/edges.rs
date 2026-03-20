@@ -49,11 +49,6 @@ where
         }
     }
 
-    /// Returns an iterator over all nodes and their parent sets.
-    pub fn iter(&self) -> impl Iterator<Item = (&Id, &HashSet<Id>)> {
-        self.parents.iter()
-    }
-
     /// Returns the parents of `node`.
     ///
     /// # Panics

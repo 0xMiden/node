@@ -89,7 +89,7 @@ where
             let current = self
                 .accounts
                 .get(&account_id)
-                .map(|account| account.commitment())
+                .map(AccountStates::commitment)
                 .or(store)
                 .unwrap_or_default();
 
@@ -199,11 +199,8 @@ where
     }
 
     fn append_state(&mut self, commitment: Word, owner: K) {
-        let mut nodes = CommitmentNodes::default();
-        nodes.owner = Some(owner);
-
         self.commitment = commitment;
-        self.nodes.insert(commitment, nodes);
+        self.nodes.insert(commitment, CommitmentNodes::with_owner(owner));
     }
 
     fn remove_node(&mut self, node: &K, from: Word, to: Word) {
@@ -277,6 +274,13 @@ impl<K> CommitmentNodes<K>
 where
     K: Eq + Hash + Copy,
 {
+    fn with_owner(owner: K) -> Self {
+        Self {
+            owner: Some(owner),
+            pass_through: HashSet::default(),
+        }
+    }
+
     fn remove(&mut self, node: &K) {
         if self.owner.as_ref() == Some(node) {
             self.owner = None;

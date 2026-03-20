@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -12,7 +12,7 @@ use crate::domain::transaction::AuthenticatedTransaction;
 use crate::mempool::BatchBudget;
 use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::StateConflict;
-use crate::mempool::graph::graph::Graph;
+use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
 // TRANSACTION GRAPH NODE

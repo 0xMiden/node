@@ -1,6 +1,6 @@
 mod batch;
+mod dag;
 mod edges;
-mod graph;
 mod node;
 mod state;
 mod transaction;

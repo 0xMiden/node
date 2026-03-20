@@ -1,6 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
-use std::ops::Not;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -10,11 +8,10 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
 use crate::domain::batch::SelectedBatch;
-use crate::domain::transaction::AuthenticatedTransaction;
 use crate::mempool::BlockBudget;
 use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::StateConflict;
-use crate::mempool::graph::graph::Graph;
+use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
 impl GraphNode for SelectedBatch {

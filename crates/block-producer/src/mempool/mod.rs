@@ -50,9 +50,7 @@
 //! Recently committed batches are retained in `committed_blocks` according to the configured
 //! `state_retention`, giving the mempool enough local history to validate newly authenticated
 //! transactions even if the store and block producer momentarily disagree on the chain tip.
-#![allow(unused, clippy::all, clippy::pedantic, reason = "refactor wip")]
-
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -67,8 +65,7 @@ use tracing::{instrument, warn};
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, VerifyTxError};
-use crate::mempool::budget::BudgetStatus;
+use crate::errors::AddTransactionError;
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -432,6 +429,7 @@ impl Mempool {
     /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
     /// does not track fields added dynamically.
     fn inject_telemetry(&self) {
+        todo!();
         // use miden_node_utils::tracing::OpenTelemetrySpanExt;
 
         // span.set_attribute("mempool.transactions.uncommitted", self.uncommitted_tx_count());

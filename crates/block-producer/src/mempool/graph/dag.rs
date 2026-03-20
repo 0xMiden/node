@@ -1,18 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use miden_protocol::Word;
-use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
-use thiserror::Error;
 
 use crate::mempool::StateConflict;
-use crate::mempool::graph::batch::BatchGraph;
 use crate::mempool::graph::edges::Edges;
 use crate::mempool::graph::node::GraphNode;
 use crate::mempool::graph::state::State;
-use crate::mempool::graph::{edges, node};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graph<N>
@@ -202,7 +196,7 @@ where
     pub fn revert_expired_unselected(&mut self, chain_tip: BlockNumber) -> Vec<N> {
         let mut reverted = Vec::default();
 
-        let mut expired = self
+        let expired = self
             .nodes
             .iter()
             .filter(|(id, _)| !self.is_selected(id))
