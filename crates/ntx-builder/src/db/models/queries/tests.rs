@@ -1,13 +1,21 @@
 //! DB-level tests for NTX builder query functions.
 
+use std::sync::Arc;
+
 use diesel::prelude::*;
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 
 use super::*;
+use crate::NoteError;
 use crate::db::models::conv as conversions;
 use crate::db::{Db, schema};
 use crate::test_utils::*;
+
+/// Creates a [`NoteError`] from a string message, for use in tests.
+fn test_note_error(msg: &str) -> NoteError {
+    Arc::new(std::io::Error::other(msg.to_string()))
+}
 
 // TEST HELPERS
 // ================================================================================================
@@ -345,9 +353,24 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
 
     // Mark one note as failed many times (exceed max_attempts=3).
     let block_num = BlockNumber::from(100u32);
-    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note_failed.as_note().nullifier()], block_num).unwrap();
+    notes_failed(
+        conn,
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+        block_num,
+    )
+    .unwrap();
 
     // Query available notes with max_attempts=3.
     let result = available_notes(conn, account_id, block_num, 3).unwrap();
@@ -390,8 +413,18 @@ fn notes_failed_increments_attempt_count() {
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
 
     let block_num = BlockNumber::from(5u32);
-    notes_failed(conn, &[note.as_note().nullifier()], block_num).unwrap();
-    notes_failed(conn, &[note.as_note().nullifier()], block_num).unwrap();
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("execution failed"))],
+        block_num,
+    )
+    .unwrap();
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("execution failed 2"))],
+        block_num,
+    )
+    .unwrap();
 
     let (attempt_count, last_attempt): (i32, Option<i64>) = schema::notes::table
         .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
@@ -401,6 +434,60 @@ fn notes_failed_increments_attempt_count() {
 
     assert_eq!(attempt_count, 2);
     assert_eq!(last_attempt, Some(conversions::block_num_to_i64(block_num)));
+}
+
+// GET NOTE ERROR TESTS
+// ================================================================================================
+
+#[test]
+fn get_note_error_returns_latest_error() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 10);
+    let note_id = note.as_note().id();
+
+    // Insert as committed note.
+    insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
+
+    // Initially no error.
+    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    assert!(result.is_some());
+    let row = result.unwrap();
+    assert!(row.last_error.is_none());
+    assert_eq!(row.attempt_count, 0);
+
+    // Mark as failed.
+    let block_num = BlockNumber::from(5u32);
+    notes_failed(conn, &[(note.as_note().nullifier(), test_note_error("first error"))], block_num)
+        .unwrap();
+
+    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    let row = result.unwrap();
+    assert_eq!(row.last_error.as_deref(), Some("first error"));
+    assert_eq!(row.attempt_count, 1);
+
+    // Mark as failed again with different error, should overwrite.
+    notes_failed(
+        conn,
+        &[(note.as_note().nullifier(), test_note_error("second error"))],
+        block_num,
+    )
+    .unwrap();
+
+    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    let row = result.unwrap();
+    assert_eq!(row.last_error.as_deref(), Some("second error"));
+    assert_eq!(row.attempt_count, 2);
+}
+
+#[test]
+fn get_note_error_returns_none_for_unknown_note() {
+    let (conn, _dir) = &mut test_conn();
+
+    let unknown_id = vec![0u8; 32];
+    let result = get_note_error(conn, &unknown_id).unwrap();
+    assert!(result.is_none());
 }
 
 // CHAIN STATE TESTS

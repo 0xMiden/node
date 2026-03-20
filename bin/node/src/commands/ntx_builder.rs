@@ -4,25 +4,34 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::grpc::UrlExt;
+use tokio::net::TcpListener;
 use url::Url;
 
 use super::{
     DEFAULT_NTX_IDLE_TIMEOUT,
+    DEFAULT_NTX_MAX_CYCLES,
     DEFAULT_NTX_SCRIPT_CACHE_SIZE,
     DEFAULT_NTX_TICKER_INTERVAL,
     ENV_BLOCK_PRODUCER_URL,
     ENV_ENABLE_OTEL,
     ENV_NTX_DATA_DIRECTORY,
+    ENV_NTX_MAX_CYCLES,
     ENV_NTX_PROVER_URL,
     ENV_NTX_SCRIPT_CACHE_SIZE,
     ENV_STORE_NTX_BUILDER_URL,
     ENV_VALIDATOR_URL,
 };
+use crate::commands::ENV_NTX_BUILDER_URL;
 
 #[derive(clap::Subcommand)]
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
+        /// Url at which to serve the ntx-builder's gRPC API.
+        #[arg(long = "url", env = ENV_NTX_BUILDER_URL, value_name = "URL")]
+        url: Option<Url>,
+
         /// The store's ntx-builder service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
         store_url: Url,
@@ -78,6 +87,17 @@ pub enum NtxBuilderCommand {
         #[arg(long = "max-account-crashes", default_value_t = 10, value_name = "NUM")]
         max_account_crashes: usize,
 
+        /// Maximum number of VM execution cycles allowed for a single network transaction.
+        ///
+        /// Network transactions that exceed this limit will fail. Defaults to 2^16 (65536) cycles.
+        #[arg(
+            long = "max-cycles",
+            env = ENV_NTX_MAX_CYCLES,
+            default_value_t = DEFAULT_NTX_MAX_CYCLES,
+            value_name = "NUM",
+        )]
+        max_tx_cycles: u32,
+
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
@@ -94,6 +114,7 @@ pub enum NtxBuilderCommand {
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
+            url,
             store_url,
             block_producer_url,
             validator_url,
@@ -102,9 +123,23 @@ impl NtxBuilderCommand {
             script_cache_size,
             idle_timeout,
             max_account_crashes,
+            max_tx_cycles,
             data_directory,
             enable_otel: _,
         } = self;
+
+        let listener = if let Some(url) = url {
+            let addr = url
+                .to_socket()
+                .context("Failed to extract socket address from ntx-builder URL")?;
+            Some(
+                TcpListener::bind(addr)
+                    .await
+                    .context("Failed to bind to ntx-builder's gRPC URL")?,
+            )
+        } else {
+            None
+        };
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
@@ -117,13 +152,14 @@ impl NtxBuilderCommand {
         .with_tx_prover_url(tx_prover_url)
         .with_script_cache_size(script_cache_size)
         .with_idle_timeout(idle_timeout)
-        .with_max_account_crashes(max_account_crashes);
+        .with_max_account_crashes(max_account_crashes)
+        .with_max_cycles(max_tx_cycles);
 
         config
             .build()
             .await
             .context("failed to initialize ntx builder")?
-            .run()
+            .run(listener)
             .await
             .context("failed while running ntx builder component")
     }
