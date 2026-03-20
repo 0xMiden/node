@@ -25,7 +25,7 @@
 //! committed within the same block.
 //!
 //! While this is technically possible, the bookkeeping and implementation to allow this are
-//! infeasible, and both blocks and batches have constraints. This is also undersireable since if
+//! infeasible, and both blocks and batches have constraints. This is also undesirable since if
 //! one component of such a cycle fails or expires, then all others would likewise need to be
 //! reverted.
 //!
@@ -39,7 +39,17 @@
 //!   included in a batch (or are part of the currently proposed batch).
 //! - Similarly, batches are proposed for block inclusion once _all_ ancestors have been included in
 //!   a block (or are part of the currently proposed block).
-//! - Reverting a node reverts all descendents as well.
+//! - Reverting a node reverts all descendants as well.
+//!
+//! The mempool maintains two DAGs: one for authenticated transactions awaiting batching and one for
+//! batches awaiting inclusion in a block. As batches are selected, their constituent transactions
+//! are marked in the transaction graph while the batch itself is appended to the batch graph. When
+//! a block is proposed, the selected batches are staged in `pending_block` until the block is
+//! either committed or rolled back.
+//!
+//! Recently committed batches are retained in `committed_blocks` according to the configured
+//! `state_retention`, giving the mempool enough local history to validate newly authenticated
+//! transactions even if the store and block producer momentarily disagree on the chain tip.
 #![allow(unused, clippy::all, clippy::pedantic, reason = "refactor wip")]
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -108,6 +118,11 @@ pub struct MempoolConfig {
     /// mempool handling the authenticated data. Retaining the recent blocks locally therefore
     /// guarantees that the mempool can verify the data against the additional changes so long as
     /// the data was authenticated against one of the retained blocks.
+    ///
+    /// Practically, retaining `state_retention` blocks lets the mempool authenticate any
+    /// submission whose claimed height lies within `[chain_tip - state_retention + 1,
+    /// chain_tip]`. Inputs authenticated before this window are rejected as stale to prevent
+    /// gaps between the store and the locally retained history.
     pub state_retention: NonZeroUsize,
 
     /// The maximum number of uncommitted transactions allowed in the mempool at once.
@@ -134,6 +149,10 @@ impl Default for MempoolConfig {
 // ================================================================================================
 
 impl SharedMempool {
+    /// Acquires an asynchronous lock on the underlying [`Mempool`].
+    ///
+    /// Callers should minimise the amount of work performed while holding the lock to reduce
+    /// contention with other subsystems that need to access the pool.
     #[instrument(target = COMPONENT, name = "mempool.lock", skip_all)]
     pub async fn lock(&self) -> MutexGuard<'_, Mempool> {
         self.0.lock().await
@@ -154,7 +173,7 @@ pub struct Mempool {
     /// The most recently committed blocks in chronological order.
     ///
     /// Limited to the state retention amount defined in the config. Once a pending block is
-    /// committed it is appended here, and the oldest block's state is prunned.
+    /// committed it is appended here, and the oldest block's state is pruned.
     committed_blocks: VecDeque<Vec<Arc<ProvenBatch>>>,
 
     chain_tip: BlockNumber,
@@ -204,7 +223,8 @@ impl Mempool {
     ///
     /// # Errors
     ///
-    /// Returns an error if the transaction's initial conditions don't match the current state.
+    /// Returns an error if the transaction would exceed the mempool capacity or if its initial
+    /// conditions don't match the current state.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "Not impactful, and we may want ownership in the future"
@@ -247,7 +267,7 @@ impl Mempool {
     /// Transactions are re-queued.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
-        let reverted_batches = self.batches.revert_batch_and_descendents(batch);
+        let reverted_batches = self.batches.revert_batch_and_descendants(batch);
         for reverted in reverted_batches {
             self.transactions.requeue_transactions(reverted);
         }
@@ -294,10 +314,9 @@ impl Mempool {
     /// Sends a [`MempoolEvent::BlockCommitted`] event to subscribers, as well as a
     /// [`MempoolEvent::TransactionsReverted`] for transactions that are now considered expired.
     ///
-    /// # Returns
-    ///
-    /// Returns a set of transactions that were purged from the mempool because they can no longer
-    /// be included in the chain (e.g., expired transactions and their descendants).
+    /// On success the internal state is updated in place: the chain tip advances, expired data is
+    /// pruned, and subscribers are notified about the committed block and any reverted
+    /// transactions.
     ///
     /// # Panics
     ///
@@ -331,10 +350,8 @@ impl Mempool {
     ///
     /// Sends a [`MempoolEvent::TransactionsReverted`] event to subscribers.
     ///
-    /// # Returns
-    ///
-    /// Returns a set of transaction IDs that were reverted because they can no longer be
-    /// included in in the chain (e.g., expired transactions and their descendants)
+    /// The in-flight block state and all related transactions are discarded, and subscribers are
+    /// notified about the reverted transactions.
     ///
     /// # Panics
     ///
@@ -354,7 +371,7 @@ impl Mempool {
             return;
         }
 
-        // Remove all descendents _without_ reinserting the transactions.
+        // Remove all descendants _without_ reinserting the transactions.
         //
         // This is done to prevent a system bug from causing repeated failures if we keep retrying
         // the same transactions. Since we can't trivially identify the cause of the block
@@ -365,11 +382,11 @@ impl Mempool {
         let mut reverted_txs = HashSet::default();
         let (_, batches) = self.pending_block.take().unwrap();
         for batch in batches {
-            let reverted = self.batches.revert_batch_and_descendents(batch.id());
+            let reverted = self.batches.revert_batch_and_descendants(batch.id());
 
             for batch in reverted {
                 for tx in batch.into_transactions() {
-                    reverted_txs.extend(self.transactions.revert_tx_and_descendents(tx.id()));
+                    reverted_txs.extend(self.transactions.revert_tx_and_descendants(tx.id()));
                 }
             }
         }
@@ -460,9 +477,9 @@ impl Mempool {
 
     /// Reverts all batches and transactions that have expired.
     ///
-    /// Expired batch descendents are also reverted since these are now invalid.
+    /// Expired batch descendants are also reverted since these are now invalid.
     ///
-    /// Transactions from batches are requeued. Expired transactions and their descendents are then
+    /// Transactions from batches are requeued. Expired transactions and their descendants are then
     /// reverted as well.
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
         let batches = self.batches.revert_expired(self.chain_tip);
@@ -472,12 +489,11 @@ impl Mempool {
         self.transactions.revert_expired(self.chain_tip)
     }
 
-    /// Rejects authentication height's which we cannot guarantee are correct from the locally
+    /// Rejects authentication heights that fall outside the overlap guaranteed by the locally
     /// retained state.
     ///
-    /// In other words, this returns an error if the authentication height is more than one block
-    /// older than the locally retained state. One block is allowed because this means block `N-1`
-    /// was authenticated by the store, and we can check blocks `N..chain_tip`.
+    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below this
+    /// range are rejected as stale because the mempool no longer tracks the intermediate history.
     ///
     /// # Panics
     ///

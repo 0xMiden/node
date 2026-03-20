@@ -9,6 +9,10 @@ use tokio::sync::mpsc;
 
 use crate::domain::transaction::AuthenticatedTransaction;
 
+/// Coordinates mempool event delivery for a single subscriber.
+///
+/// Retains the active subscriber channel (if any) and an in-memory queue of uncommitted
+/// transaction events so new subscriptions can immediately replay pending updates.
 #[derive(Clone, Debug)]
 pub(crate) struct SubscriptionProvider {
     /// The latest event subscription, if any.
@@ -24,7 +28,7 @@ pub(crate) struct SubscriptionProvider {
 
     /// Tracks all uncommitted transaction events. These events must be resent on start
     /// of a new subscription since the subscriber will only have data up to the latest
-    /// committed block and would otherwise miss these uncommiited transactions.
+    /// committed block and would otherwise miss these uncommitted transactions.
     ///
     /// The size is bounded by removing events as they are committed or reverted, and as
     /// such this is always bound to the current amount of inflight transactions.
@@ -49,6 +53,7 @@ impl SubscriptionProvider {
     /// Creates a new [`MempoolEvent`] subscription.
     ///
     /// This replaces any existing subscription.
+    /// Any previous subscriber is dropped and must resubscribe to continue receiving events.
     pub fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
         // We should leave enough space to at least send the uncommitted events (plus some extra).
         let capacity = self.inflight_txs.len().mul(2).max(1024);
@@ -68,6 +73,8 @@ impl SubscriptionProvider {
         rx
     }
 
+    /// Records a newly added transaction in the inflight queue and forwards the event to the
+    /// subscriber.
     pub(super) fn transaction_added(&mut self, tx: &AuthenticatedTransaction) {
         let id = tx.id();
         let nullifiers = tx.nullifiers().collect();
@@ -91,6 +98,8 @@ impl SubscriptionProvider {
         Self::send_event(&mut self.subscription, event);
     }
 
+    /// Records a committed block, prunes replayed transactions, and forwards the event so future
+    /// subscribers continue from the latest chain tip.
     pub(super) fn block_committed(&mut self, header: BlockHeader, txs: Vec<TransactionId>) {
         self.chain_tip = header.block_num();
         for tx in &txs {
@@ -103,6 +112,8 @@ impl SubscriptionProvider {
         );
     }
 
+    /// Removes reverted transactions from the inflight queue and notifies the subscriber so they
+    /// can drop or retry the affected items.
     pub(super) fn txs_reverted(&mut self, txs: HashSet<TransactionId>) {
         for tx in &txs {
             self.inflight_txs.remove(tx);
@@ -112,7 +123,8 @@ impl SubscriptionProvider {
 
     /// Sends a [`MempoolEvent`] to the subscriber, if any.
     ///
-    /// If the send fails, then the subscription is cancelled.
+    /// If the send fails, the subscription is cancelled and the event is dropped, so callers must
+    /// resubscribe to continue receiving updates.
     ///
     /// This function does not take `&self` to work-around borrowing issues
     /// where both the sender and inflight events need to be borrowed at the same time.

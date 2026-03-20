@@ -80,8 +80,8 @@ where
 
     /// Returns the set of nodes which can be selected.
     ///
-    /// These are nodes which have not been selected before, and who's parents have all been
-    /// selected.
+    /// Candidates are nodes that are not currently selected, have all parents selected, and can be
+    /// handed directly to [`select_candidate`](Self::select_candidate).
     pub fn selection_candidates(&self) -> HashMap<&N::Id, &N> {
         self.selection_candidates
             .iter()
@@ -147,40 +147,45 @@ where
         }
     }
 
-    /// Returns the node and its descendents.
+    /// Returns the node and its descendants.
     ///
     /// That is, this returns the node's children, their children etc.
-    fn descendents(&self, node: &N::Id) -> HashSet<N::Id> {
+    fn descendants(&self, node: &N::Id) -> HashSet<N::Id> {
         let mut to_process = vec![*node];
-        let mut descendents = HashSet::default();
+        let mut descendants = HashSet::default();
 
         while let Some(node) = to_process.pop() {
             // Don't double process.
-            if descendents.contains(&node) {
+            if descendants.contains(&node) {
                 continue;
             }
             let children = self.edges.children_of(&node);
             to_process.extend(children);
-            descendents.insert(node);
+            descendants.insert(node);
         }
 
-        descendents
+        descendants
     }
 
-    /// Reverts the given node and all of its descendents.
+    /// Reverts the given node and all of its descendants, returning the reverted nodes.
+    ///
+    /// Nodes are reverted from leaves (nodes without children) backwards, and are returned in
+    /// that order. This is sort of a reverse chronological order i.e. this could be
+    /// reversed and re-inserted without error.
     ///
     /// # Panics
     ///
-    /// Panics if the node does not exist.
-    pub fn revert_node_and_descendents(&mut self, id: N::Id) -> Vec<N> {
-        let mut descendents = self.descendents(&id);
+    /// Panics if the node does not exist or if the graph invariants (such as acyclicity) are
+    /// violated while unwinding descendants. The latter indicates graph corruption.
+    pub fn revert_node_and_descendants(&mut self, id: N::Id) -> Vec<N> {
+        let mut descendants = self.descendants(&id);
 
         let mut reverted = Vec::new();
-        'outer: while !descendents.is_empty() {
-            for id in descendents.iter().copied() {
+        'outer: while !descendants.is_empty() {
+            for id in descendants.iter().copied() {
                 if self.is_leaf(&id) {
                     reverted.push(self.remove(id));
-                    descendents.remove(&id);
+                    descendants.remove(&id);
                     continue 'outer;
                 }
             }
@@ -191,7 +196,7 @@ where
         reverted
     }
 
-    /// Reverts nodes (and their descendents) which have expired and which are _not_ selected.
+    /// Reverts nodes (and their descendants) which have expired and which are _not_ selected.
     ///
     /// Returns the reverted nodes in **reverse** chronological order.
     pub fn revert_expired_unselected(&mut self, chain_tip: BlockNumber) -> Vec<N> {
@@ -208,7 +213,7 @@ where
         for id in expired {
             // Its possible the node is already reverted by a previous loop iteration.
             if self.contains(&id) {
-                reverted.extend(self.revert_node_and_descendents(id));
+                reverted.extend(self.revert_node_and_descendants(id));
             }
         }
 

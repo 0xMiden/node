@@ -69,21 +69,21 @@ impl BatchGraph {
         self.inner.append(batch)
     }
 
-    /// Reverts the given batch and _all_ its descendents _IFF_ it is present in the graph.
+    /// Reverts the given batch and _all_ its descendants _IFF_ it is present in the graph.
     ///
     /// This includes batches that have been marked as proven.
     ///
     /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
-    pub fn revert_batch_and_descendents(&mut self, batch: BatchId) -> Vec<SelectedBatch> {
+    pub fn revert_batch_and_descendants(&mut self, batch: BatchId) -> Vec<SelectedBatch> {
         // We need this check because `inner.revert..` panics if the node is unknown.
         if !self.inner.contains(&batch) {
             return Vec::default();
         }
 
-        self.inner.revert_node_and_descendents(batch)
+        self.inner.revert_node_and_descendants(batch)
     }
 
-    /// Reverts expired batches and their descendents.
+    /// Reverts expired batches and their descendants.
     ///
     /// Only unselected batches are considered, the assumption being that selected batches
     /// are in committed blocks and should not be reverted.

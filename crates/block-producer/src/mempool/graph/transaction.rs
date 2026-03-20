@@ -98,10 +98,12 @@ impl TransactionGraph {
         Some(selected)
     }
 
-    /// Reverts expired transactions and their descendents.
+    /// Reverts expired transactions and their descendants.
     ///
-    /// Only unselected transactions are considered, the assumption being that selected transactions
-    /// are in committed blocks and should not be reverted.
+    /// Only unselected transactions are considered; selected transactions are assumed to be in
+    /// committed blocks and should not be reverted.
+    ///
+    /// Returns the identifiers of transactions that were removed from the graph.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
         self.inner
             .revert_expired_unselected(chain_tip)
@@ -110,19 +112,19 @@ impl TransactionGraph {
             .collect()
     }
 
-    /// Reverts the given transaction and _all_ its descendents _IFF_ it is present in the graph.
+    /// Reverts the given transaction and _all_ its descendants _IFF_ it is present in the graph.
     ///
     /// This includes batches that have been marked as proven.
     ///
     /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
-    pub fn revert_tx_and_descendents(&mut self, transaction: TransactionId) -> Vec<TransactionId> {
+    pub fn revert_tx_and_descendants(&mut self, transaction: TransactionId) -> Vec<TransactionId> {
         // We need this check because `inner.revert..` panics if the node is unknown.
         if !self.inner.contains(&transaction) {
             return Vec::default();
         }
 
         self.inner
-            .revert_node_and_descendents(transaction)
+            .revert_node_and_descendants(transaction)
             .into_iter()
             .map(|tx| tx.id())
             .collect()
