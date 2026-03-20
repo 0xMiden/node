@@ -10,6 +10,7 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::block_producer::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -66,10 +67,8 @@ pub struct BlockProducer {
     pub max_txs_per_batch: usize,
     /// The maximum number of batches per block.
     pub max_batches_per_block: usize,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    /// Server-side gRPC options.
+    pub grpc_options: GrpcOptionsInternal,
 
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
@@ -155,7 +154,7 @@ impl BlockProducer {
                 let mempool = mempool.clone();
                 async move {
                     BlockProducerRpcServer::new(mempool, store)
-                        .serve(listener, self.grpc_timeout)
+                        .serve(listener, self.grpc_options)
                         .await
                 }
             })
@@ -238,7 +237,11 @@ impl BlockProducerRpcServer {
     // SERVER STARTUP
     // --------------------------------------------------------------------------------------------
 
-    async fn serve(self, listener: TcpListener, timeout: Duration) -> anyhow::Result<()> {
+    async fn serve(
+        self,
+        listener: TcpListener,
+        grpc_options: GrpcOptionsInternal,
+    ) -> anyhow::Result<()> {
         // Start background task to periodically update cached mempool stats
         self.spawn_mempool_stats_updater().await;
 
@@ -247,23 +250,15 @@ impl BlockProducerRpcServer {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        // This is currently required for postman to work properly because
-        // it doesn't support the new version yet.
-        //
-        // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
-        let reflection_service_alpha = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(block_producer_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         // Build the gRPC server with the API service and trace layer.
+
         tonic::transport::Server::builder()
+            .accept_http1(true)
+            .timeout(grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            .timeout(timeout)
             .add_service(api_server::ApiServer::new(self))
             .add_service(reflection_service)
-            .add_service(reflection_service_alpha)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .context("failed to serve block producer API")
@@ -409,22 +404,9 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn mempool_subscription(
         &self,
-        request: tonic::Request<proto::block_producer::MempoolSubscriptionRequest>,
+        _request: tonic::Request<()>,
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
-        let chain_tip = BlockNumber::from(request.into_inner().chain_tip);
-
-        let subscription =
-            self.mempool
-                .lock()
-                .await
-                .lock()
-                .await
-                .subscribe(chain_tip)
-                .map_err(|mempool_tip| {
-                    tonic::Status::invalid_argument(format!(
-                        "Mempool's chain tip {mempool_tip} does not match request's {chain_tip}"
-                    ))
-                })?;
+        let subscription = self.mempool.lock().await.lock().await.subscribe();
         let subscription = ReceiverStream::new(subscription);
 
         Ok(tonic::Response::new(MempoolEventSubscription { inner: subscription }))

@@ -1117,3 +1117,217 @@ fn test_select_account_vault_at_block_with_deletion() {
     assert_eq!(assets_at_block_3.len(), 1, "Should have 1 asset at block 3");
     assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount() == 2000);
 }
+
+// ACCOUNT CODE PRUNING TESTS
+// ================================================================================================
+
+/// Counts the number of rows in `account_codes`.
+fn count_account_codes(conn: &mut SqliteConnection) -> usize {
+    use schema::account_codes;
+
+    let val =
+        SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
+            .get_result::<i64>(conn)
+            .expect("Failed to count account_codes");
+    usize::try_from(u64::try_from(val).unwrap()).unwrap()
+}
+
+/// Returns whether a specific code commitment exists in `account_codes`.
+fn account_code_exists(conn: &mut SqliteConnection, code_commitment: Word) -> bool {
+    use schema::account_codes;
+
+    let n =
+        SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
+            .filter(account_codes::code_commitment.eq(code_commitment.to_bytes()))
+            .get_result::<i64>(conn)
+            .expect("Failed to query account_codes");
+
+    n == 1
+}
+
+/// Creates a full-state [`BlockAccountUpdate`] for the given account.
+fn make_full_state_update(account: &Account) -> BlockAccountUpdate {
+    let delta = AccountDelta::try_from(account.clone()).unwrap();
+    assert!(delta.is_full_state(), "expected full-state delta");
+    BlockAccountUpdate::new(
+        account.id(),
+        account.to_commitment(),
+        AccountUpdateDetails::Delta(delta),
+    )
+}
+
+/// Builds a public account using a fixed account ID seed but a different component code.
+///
+/// All accounts produced here share the same [`AccountId`] because the same seed is used.
+/// The `push_value` must be different for each variant to produce a distinct MAST root and thus a
+/// distinct [`AccountCode::commitment`].
+fn build_account_with_code(push_value: u32) -> Account {
+    let code_src = format!("pub proc variant push.{push_value} end");
+    let component_code = CodeBuilder::default()
+        .compile_component_code("test::code_prune", &code_src)
+        .unwrap();
+    let component = AccountComponent::new(
+        component_code,
+        vec![StorageSlot::with_value(
+            StorageSlotName::mock(0),
+            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        )],
+        AccountComponentMetadata::new("code_prune_test")
+            .with_supported_type(AccountType::RegularAccountUpdatableCode),
+    )
+    .unwrap();
+
+    // Seed [2u8; 32] keeps the account ID distinct from the other test helpers.
+    AccountBuilder::new([2u8; 32])
+        .account_type(AccountType::RegularAccountUpdatableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_component(component)
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Rpo,
+        ))
+        .build_existing()
+        .unwrap()
+}
+
+/// Prune test 2: when an account's code changes, the old code must be pruned after the retention
+/// window, while the new (latest) code is retained.
+#[test]
+fn test_prune_account_code_retains_latest_after_code_change() {
+    let mut conn = setup_test_db();
+
+    // Block 0: account created with code A.
+    // Block RETENTION+1 (=51): account updated to code B — within the retention window at prune
+    //   time.
+    // Block 2*RETENTION+1 (=101): prune → cutoff is block 51; code A (last at block 0) is outside
+    //   the window → pruned; code B (last at block 51) is within the window → retained.
+    let block_0 = BlockNumber::from(0u32);
+    let block_code_b = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 1);
+    let block_prunable = BlockNumber::from(2 * HISTORICAL_BLOCK_RETENTION + 1);
+
+    insert_block_header(&mut conn, block_0);
+    insert_block_header(&mut conn, block_code_b);
+    insert_block_header(&mut conn, block_prunable);
+
+    let account_a = build_account_with_code(1);
+    let account_b = build_account_with_code(2);
+
+    // Both accounts must have the same ID for this to test code replacement.
+    assert_eq!(account_a.id(), account_b.id(), "accounts must share the same ID");
+    assert_ne!(
+        account_a.code().commitment(),
+        account_b.code().commitment(),
+        "accounts must have different codes"
+    );
+
+    let account_id = account_a.id();
+    let code_commitment_a = account_a.code().commitment();
+    let code_commitment_b = account_b.code().commitment();
+
+    // Block 0: insert account with code A.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_a)], block_0)
+        .expect("initial upsert failed");
+
+    // Block RETENTION+1: update the same account ID to code B via a full-state delta.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_b)], block_code_b)
+        .expect("code-change upsert failed");
+
+    assert_eq!(count_account_codes(&mut conn), 2, "both codes must exist before pruning");
+
+    // Advance past retention window and prune.
+    // cutoff = block_prunable - RETENTION = 2*RETENTION+1 - RETENTION = RETENTION+1 = block_code_b
+    let (_, _, codes_deleted) =
+        prune_history(&mut conn, block_prunable).expect("prune_history failed");
+
+    // Only code A was dropped; code B is still referenced by the latest accounts row.
+    assert_eq!(codes_deleted, 1, "exactly one code (A) must be pruned");
+    assert!(!account_code_exists(&mut conn, code_commitment_a), "old code A must be pruned");
+    assert!(
+        account_code_exists(&mut conn, code_commitment_b),
+        "current code B must be retained"
+    );
+
+    // Confirm the latest account row still points to code B.
+    let (latest_header, _) =
+        select_account_header_with_storage_header_at_block(&mut conn, account_id, block_prunable)
+            .expect("query failed")
+            .expect("account must still exist");
+    assert_eq!(
+        latest_header.code_commitment(),
+        account_b.code().commitment(),
+        "latest account must reference code B"
+    );
+}
+
+/// Prune test 3: code A → code B → code A; after the retention window, code B must be pruned
+/// but code A must be retained because it is still the latest.
+#[test]
+fn test_prune_account_code_retains_revisited_code() {
+    let mut conn = setup_test_db();
+
+    // Block 0:           code A.
+    // Block RETENTION+1: code B (will be outside retention window at prune time).
+    // Block RETENTION+2: back to code A (within the retention window at prune time).
+    // Block 2*RETENTION+2: prune.
+    //   cutoff = 2*RETENTION+2 - RETENTION = RETENTION+2.
+    //   Code A: last referenced at block RETENTION+2 >= cutoff → retained.
+    //   Code B: last referenced at block RETENTION+1 < cutoff → pruned.
+    let block_0 = BlockNumber::from(0u32);
+    let block_code_b = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 1);
+    let block_code_a_again = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
+    let block_prunable = BlockNumber::from(2 * HISTORICAL_BLOCK_RETENTION + 2);
+
+    insert_block_header(&mut conn, block_0);
+    insert_block_header(&mut conn, block_code_b);
+    insert_block_header(&mut conn, block_code_a_again);
+    insert_block_header(&mut conn, block_prunable);
+
+    let account_a = build_account_with_code(1);
+    let account_b = build_account_with_code(2);
+
+    assert_eq!(account_a.id(), account_b.id(), "accounts must share the same ID");
+    assert_ne!(
+        account_a.code().commitment(),
+        account_b.code().commitment(),
+        "accounts must have different codes"
+    );
+
+    let account_id = account_a.id();
+    let code_commitment_a = account_a.code().commitment();
+    let code_commitment_b = account_b.code().commitment();
+
+    // Block 0: code A.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_a)], block_0)
+        .expect("block 0 upsert failed");
+    // Block RETENTION+1: code B.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_b)], block_code_b)
+        .expect("block code_b upsert failed");
+    // Block RETENTION+2: back to code A.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_a)], block_code_a_again)
+        .expect("block code_a_again upsert failed");
+
+    // Before pruning: both codes must be in account_codes (code A inserted once via ON CONFLICT DO
+    // NOTHING, code B inserted once).
+    assert_eq!(count_account_codes(&mut conn), 2, "both codes must exist before pruning");
+
+    // Advance past retention window and prune.
+    let (_, _, codes_deleted) =
+        prune_history(&mut conn, block_prunable).expect("prune_history failed");
+
+    // Code B is no longer referenced by any account row within the retention window → pruned.
+    // Code A is still referenced by the block_code_a_again accounts row (within cutoff) → retained.
+    assert_eq!(codes_deleted, 1, "exactly one code (B) must be pruned");
+    assert!(account_code_exists(&mut conn, code_commitment_a), "code A must be retained");
+    assert!(!account_code_exists(&mut conn, code_commitment_b), "code B must be pruned");
+
+    // Confirm the latest account row still points to code A.
+    let (latest_header, _) =
+        select_account_header_with_storage_header_at_block(&mut conn, account_id, block_prunable)
+            .expect("query failed")
+            .expect("account must still exist");
+    assert_eq!(
+        latest_header.code_commitment(),
+        account_a.code().commitment(),
+        "latest account must reference code A"
+    );
+}
