@@ -1150,8 +1150,10 @@ fn build_account_with_code(push_value: u32) -> Account {
             StorageSlotName::mock(0),
             Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
         )],
-        AccountComponentMetadata::new("code_prune_test")
-            .with_supported_type(AccountType::RegularAccountUpdatableCode),
+        AccountComponentMetadata::new(
+            "code_prune_test",
+            [AccountType::RegularAccountUpdatableCode],
+        ),
     )
     .unwrap();
 
@@ -1162,7 +1164,7 @@ fn build_account_with_code(push_value: u32) -> Account {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()

@@ -16,6 +16,7 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::serde::{Deserializable, Serializable};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -23,7 +24,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{info_span, instrument};
 
 use crate::block_validation::validate_block;
-use crate::db::{insert_transaction, load};
+use crate::db::{insert_transaction, load, load_chain_tip, upsert_block_header};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
 
@@ -92,11 +93,18 @@ impl Validator {
 struct ValidatorServer {
     signer: ValidatorSigner,
     db: Arc<Db>,
+    /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
+    /// ensuring consistent chain tip reads and preventing race conditions.
+    sign_block_semaphore: Semaphore,
 }
 
 impl ValidatorServer {
     fn new(signer: ValidatorSigner, db: Db) -> Self {
-        Self { signer, db: db.into() }
+        Self {
+            signer,
+            db: db.into(),
+            sign_block_semaphore: Semaphore::new(1),
+        }
     }
 }
 
@@ -151,7 +159,8 @@ impl api_server::Api for ValidatorServer {
         Ok(tonic::Response::new(()))
     }
 
-    /// Validates a proposed block and returns the block header and body.
+    /// Validates a proposed block, verifies chain continuity, signs the block header, and updates
+    /// the chain tip.
     async fn sign_block(
         &self,
         request: tonic::Request<proto::blockchain::ProposedBlock>,
@@ -166,19 +175,45 @@ impl api_server::Api for ValidatorServer {
             })
         })?;
 
-        // Validate the block.
-        let signature =
-            validate_block(proposed_block, &self.signer, &self.db).await.map_err(|err| {
+        // Serialize sign_block requests to prevent race conditions between loading the
+        // chain tip and persisting the validated block header.
+        let _permit = self.sign_block_semaphore.acquire().await.map_err(|err| {
+            tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
+        })?;
+
+        // Load the current chain tip from the database.
+        let chain_tip = self
+            .db
+            .query("load_chain_tip", load_chain_tip)
+            .await
+            .map_err(|err| {
+                tonic::Status::internal(format!("Failed to load chain tip: {}", err.as_report()))
+            })?
+            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
+
+        // Validate the block against the current chain tip.
+        let (signature, header) = validate_block(proposed_block, &self.signer, &self.db, chain_tip)
+            .await
+            .map_err(|err| {
                 tonic::Status::invalid_argument(format!(
                     "Failed to validate block: {}",
                     err.as_report()
                 ))
             })?;
 
+        // Persist the validated block header.
+        self.db
+            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
+            .await
+            .map_err(|err| {
+                tonic::Status::internal(format!(
+                    "Failed to persist block header: {}",
+                    err.as_report()
+                ))
+            })?;
+
         // Send the signature.
-        info_span!("serialize").in_scope(|| {
-            let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
-            Ok(tonic::Response::new(response))
-        })
+        let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
+        Ok(tonic::Response::new(response))
     }
 }

@@ -7,7 +7,9 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
+use tokio::net::TcpListener;
 use tokio::sync::{RwLock, mpsc};
+use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tonic::Status;
 
@@ -17,6 +19,7 @@ use crate::chain_state::ChainState;
 use crate::clients::StoreClient;
 use crate::coordinator::Coordinator;
 use crate::db::Db;
+use crate::server::NtxBuilderRpcServer;
 
 // NETWORK TRANSACTION BUILDER
 // ================================================================================================
@@ -86,9 +89,13 @@ impl NetworkTransactionBuilder {
 
     /// Runs the network transaction builder event loop until a fatal error occurs.
     ///
+    /// If a `TcpListener` is provided, a gRPC server is also spawned to expose the
+    /// `GetNoteError` endpoint.
+    ///
     /// This method:
-    /// 1. Spawns a background task to load existing network accounts from the store
-    /// 2. Runs the main event loop, processing mempool events and managing actors
+    /// 1. Optionally starts a gRPC server for note error queries
+    /// 2. Spawns a background task to load existing network accounts from the store
+    /// 3. Runs the main event loop, processing mempool events and managing actors
     ///
     /// # Errors
     ///
@@ -96,7 +103,31 @@ impl NetworkTransactionBuilder {
     /// - The mempool event stream ends unexpectedly
     /// - An actor encounters a fatal error
     /// - The account loader task fails
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    /// - The gRPC server fails
+    pub async fn run(self, listener: Option<TcpListener>) -> anyhow::Result<()> {
+        let mut join_set = JoinSet::new();
+
+        // Start the gRPC server if a listener is provided.
+        if let Some(listener) = listener {
+            let server = NtxBuilderRpcServer::new(self.db.clone());
+            join_set.spawn(async move {
+                server.serve(listener).await.context("ntx-builder gRPC server failed")
+            });
+        }
+
+        join_set.spawn(self.run_event_loop());
+
+        // Wait for either the event loop or the gRPC server to complete.
+        // Any completion is treated as fatal.
+        if let Some(result) = join_set.join_next().await {
+            result.context("ntx-builder task panicked")??;
+        }
+
+        Ok(())
+    }
+
+    /// Runs the main event loop.
+    async fn run_event_loop(mut self) -> anyhow::Result<()> {
         // Spawn a background task to load network accounts from the store.
         // Accounts are sent through a channel and processed in the main event loop.
         let (account_tx, mut account_rx) =
@@ -245,9 +276,9 @@ impl NetworkTransactionBuilder {
     /// Processes a request from an account actor.
     async fn handle_actor_request(&mut self, request: ActorRequest) -> Result<(), anyhow::Error> {
         match request {
-            ActorRequest::NotesFailed { nullifiers, block_num, ack_tx } => {
+            ActorRequest::NotesFailed { failed_notes, block_num, ack_tx } => {
                 self.db
-                    .notes_failed(nullifiers, block_num)
+                    .notes_failed(failed_notes, block_num)
                     .await
                     .context("failed to mark notes as failed")?;
                 let _ = ack_tx.send(());

@@ -148,8 +148,10 @@ pub fn add_transaction(
                     .expect("network note's target account must be a network account"),
             ),
             note_data: note.as_note().to_bytes(),
+            note_id: Some(conversions::note_id_to_bytes(&note.as_note().id())),
             attempt_count: 0,
             last_attempt: None,
+            last_error: None,
             created_by: Some(tx_id_bytes.clone()),
             consumed_by: None,
         };

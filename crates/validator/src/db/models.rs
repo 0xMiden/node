@@ -5,6 +5,14 @@ use miden_tx::utils::serde::Serializable;
 use crate::db::schema;
 use crate::tx_validation::ValidatedTransaction;
 
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = schema::block_headers)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct BlockHeaderRowInsert {
+    pub block_num: i64,
+    pub block_header: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Insertable)]
 #[diesel(table_name = schema::validated_transactions)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]

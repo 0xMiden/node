@@ -1,0 +1,34 @@
+[package]
+authors.workspace      = true
+description            = "A tool for generating canonical Miden genesis accounts and configuration"
+edition.workspace      = true
+exclude.workspace      = true
+homepage.workspace     = true
+keywords               = ["genesis", "miden"]
+license.workspace      = true
+name                   = "miden-genesis"
+publish                = false
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow          = { workspace = true }
+clap            = { workspace = true }
+fs-err          = { workspace = true }
+hex             = { workspace = true }
+miden-agglayer  = { version = "=0.14.0-beta.4" }
+miden-protocol  = { features = ["std"], workspace = true }
+miden-standards = { workspace = true }
+rand            = { workspace = true }
+rand_chacha     = { workspace = true }
+
+[dev-dependencies]
+miden-node-store = { workspace = true }
+miden-node-utils = { workspace = true }
+tempfile         = { workspace = true }
+tokio            = { features = ["macros", "rt-multi-thread"], workspace = true }

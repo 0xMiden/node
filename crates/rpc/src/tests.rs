@@ -437,6 +437,7 @@ async fn start_rpc_with_options(
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
+            ntx_builder_url: None,
             grpc_options,
         }
         .serve()

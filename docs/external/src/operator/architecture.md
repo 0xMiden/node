@@ -62,3 +62,7 @@ argument (default: 5 minutes).
 Accounts whose actors crash repeatedly (due to database errors) are automatically deactivated after a configurable
 number of failures, preventing resource exhaustion. The threshold can be set with
 `--ntx-builder.max-account-crashes` (default: 10).
+
+The builder also exposes an internal gRPC server that the RPC component uses to proxy debugging endpoints such as
+`GetNoteError`. In bundled mode this is wired automatically; in distributed mode operators must set
+`--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`) on the RPC component.
