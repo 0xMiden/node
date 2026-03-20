@@ -20,7 +20,8 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{info_span, instrument};
+use miden_node_tracing::instrument;
+use tracing::info_span;
 
 use crate::block_validation::validate_block;
 use crate::db::{insert_transaction, load};
@@ -124,7 +125,7 @@ impl api_server::Api for ValidatorServer {
     }
 
     /// Receives a proven transaction, then validates and stores it.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn submit_proven_transaction(
         &self,
         request: tonic::Request<proto::transaction::ProvenTransaction>,

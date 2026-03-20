@@ -51,9 +51,9 @@ use miden_tx::{
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinError;
-use tracing::{Instrument, instrument};
+use miden_node_tracing::instrument;
+use tracing::Instrument;
 
-use crate::COMPONENT;
 use crate::actor::account_state::TransactionCandidate;
 use crate::block_producer::BlockProducerClient;
 use crate::db::Db;
@@ -156,7 +156,7 @@ impl NtxContext {
     /// - Transaction execution.
     /// - Proof generation.
     /// - Submission to the network.
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction", skip_all, err)]
+    #[instrument(COMPONENT:)]
     pub fn execute_transaction(
         self,
         tx: TransactionCandidate,
@@ -232,7 +232,7 @@ impl NtxContext {
     /// Returns an [`NtxError`] if:
     /// - The consumability check fails unexpectedly.
     /// - All notes fail the check (i.e., no note is consumable).
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction.filter_notes", skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
@@ -267,7 +267,7 @@ impl NtxContext {
     }
 
     /// Creates an executes a transaction with the network account and the given set of notes.
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction.execute", skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn execute(
         &self,
         data_store: &NtxDataStore,
@@ -288,7 +288,7 @@ impl NtxContext {
 
     /// Delegates the transaction proof to the remote prover if configured, otherwise performs the
     /// proof locally.
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
         if let Some(remote) = &self.prover {
             remote.prove(tx_inputs).await
@@ -303,7 +303,7 @@ impl NtxContext {
     }
 
     /// Submits the transaction to the block producer.
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn submit(&self, proven_tx: &ProvenTransaction) -> NtxResult<()> {
         self.block_producer
             .submit_proven_transaction(proven_tx)
@@ -312,7 +312,7 @@ impl NtxContext {
     }
 
     /// Validates the transaction against the Validator.
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction.validate", skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn validate(
         &self,
         proven_tx: &ProvenTransaction,

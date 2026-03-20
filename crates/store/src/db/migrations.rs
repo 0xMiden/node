@@ -10,7 +10,7 @@ use crate::db::schema_hash::verify_schema;
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/migrations");
 
 // TODO we have not tested this in practice!
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[instrument(COMPONENT: err)]
 pub fn apply_migrations(
     conn: &mut SqliteConnection,
 ) -> std::result::Result<(), miden_node_db::DatabaseError> {

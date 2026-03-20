@@ -10,7 +10,7 @@ use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db};
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::Serializable;
-use tracing::instrument;
+use miden_node_tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
@@ -18,7 +18,7 @@ use crate::db::models::ValidatedTransactionRowInsert;
 use crate::tx_validation::ValidatedTransaction;
 
 /// Open a connection to the DB and apply any pending migrations.
-#[instrument(target = COMPONENT, skip_all)]
+#[instrument(COMPONENT:)]
 pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
     let db = Db::new(&database_filepath)?;
     tracing::info!(
@@ -32,7 +32,7 @@ pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
 }
 
 /// Inserts a new validated transaction into the database.
-#[instrument(target = COMPONENT, skip_all, fields(tx_id = %tx_info.tx_id()), err)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
     tx_info: &ValidatedTransaction,
@@ -58,7 +58,7 @@ pub(crate) fn insert_transaction(
 ///   WHERE id = ?
 /// );
 /// ```
-#[instrument(target = COMPONENT, skip(conn), err)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn find_unvalidated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],

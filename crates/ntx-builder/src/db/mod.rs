@@ -10,7 +10,8 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
-use tracing::{info, instrument};
+use miden_node_tracing::instrument;
+use tracing::info;
 
 use crate::COMPONENT;
 use crate::actor::inflight_note::InflightNetworkNote;
@@ -34,13 +35,7 @@ pub struct Db {
 
 impl Db {
     /// Creates and initializes the database, then opens an async connection pool.
-    #[instrument(
-        target = COMPONENT,
-        name = "ntx_builder.database.setup",
-        skip_all,
-        fields(path=%database_filepath.display()),
-        err,
-    )]
+    #[instrument(COMPONENT: err)]
     pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
         let inner = miden_node_db::Db::new(&database_filepath)
             .context("failed to build connection pool")?;

@@ -52,7 +52,8 @@ use miden_protocol::note::{
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
-use crate::COMPONENT;
+use miden_node_tracing::instrument;
+
 use crate::db::models::conv::{
     SqlTypeConvert,
     idx_to_raw_sql,
@@ -790,11 +791,7 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_notes(
     conn: &mut SqliteConnection,
     notes: &[(NoteRecord, Option<Nullifier>)],
@@ -820,11 +817,7 @@ pub(crate) fn insert_notes(
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_scripts<'a>(
     conn: &mut SqliteConnection,
     notes: impl IntoIterator<Item = &'a NoteRecord>,

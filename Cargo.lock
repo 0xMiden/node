@@ -3188,6 +3188,7 @@ dependencies = [
 name = "miden-node-tracing"
 version = "0.14.0-alpha.1"
 dependencies = [
+ "async-trait",
  "miden-node-tracing-macro",
  "miden-node-utils",
  "opentelemetry",
@@ -3245,6 +3246,7 @@ dependencies = [
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",

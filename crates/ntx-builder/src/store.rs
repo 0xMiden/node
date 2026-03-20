@@ -29,7 +29,8 @@ use miden_protocol::transaction::AccountInputs;
 use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::utils::{Deserializable, Serializable};
 use thiserror::Error;
-use tracing::{info, instrument};
+use miden_node_tracing::instrument;
+use tracing::info;
 use url::Url;
 
 use crate::COMPONENT;
@@ -62,7 +63,7 @@ impl StoreClient {
     }
 
     /// Returns the block header and MMR peaks at the current chain tip.
-    #[instrument(target = COMPONENT, name = "store.client.get_latest_blockchain_data_with_retry", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_latest_blockchain_data_with_retry(
         &self,
     ) -> Result<Option<(BlockHeader, PartialMmr)>, StoreError> {
@@ -90,7 +91,7 @@ impl StoreClient {
         }
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_latest_blockchain_data", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn get_latest_blockchain_data(
         &self,
     ) -> Result<Option<(BlockHeader, PartialMmr)>, StoreError> {
@@ -121,7 +122,7 @@ impl StoreClient {
         }
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_network_account", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_network_account(
         &self,
         account_id: NetworkAccountId,
@@ -155,7 +156,7 @@ impl StoreClient {
     /// Retrieves account details from the store. The retrieved details are limited to the account
     /// code, account header, and storage header. The vault and storage slots are not required for
     /// the purposes of the NTX Builder.
-    #[instrument(target = COMPONENT, name = "store.client.get_account_inputs", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_account_inputs(
         &self,
         account_id: AccountId,
@@ -192,7 +193,7 @@ impl StoreClient {
 
     /// Returns the list of unconsumed network notes for a specific network account up to a
     /// specified block.
-    #[instrument(target = COMPONENT, name = "store.client.get_unconsumed_network_notes", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_unconsumed_network_notes(
         &self,
         network_account_id: NetworkAccountId,
@@ -249,7 +250,7 @@ impl StoreClient {
     /// Loads a single page of network accounts and submits them to the sender.
     ///
     /// Returns the next block number to fetch from, or `None` if the chain tip has been reached.
-    #[instrument(target = COMPONENT, name = "store.client.load_accounts_page", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn load_accounts_page(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -269,7 +270,7 @@ impl StoreClient {
         }
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.fetch_network_account_ids_page", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn fetch_network_account_ids_page(
         &self,
         block_range: std::ops::RangeInclusive<BlockNumber>,
@@ -340,11 +341,7 @@ impl StoreClient {
         Ok((accounts, pagination_info))
     }
 
-    #[instrument(
-        target = COMPONENT,
-        name = "store.client.send_accounts_to_channel",
-        skip_all
-    )]
+    #[instrument(COMPONENT:)]
     async fn send_accounts_to_channel(
         &self,
         accounts: Vec<NetworkAccountId>,
@@ -361,7 +358,7 @@ impl StoreClient {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_note_script_by_root", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_note_script_by_root(
         &self,
         root: Word,
@@ -376,7 +373,7 @@ impl StoreClient {
             .map_err(StoreError::DeserializationError)
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_vault_asset_witnesses", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
@@ -417,7 +414,7 @@ impl StoreClient {
         Ok(asset_witnesses)
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_storage_map_witness", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_storage_map_witness(
         &self,
         account_id: AccountId,

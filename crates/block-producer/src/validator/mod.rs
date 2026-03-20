@@ -48,7 +48,7 @@ impl BlockProducerValidatorClient {
         Self { client: validator }
     }
 
-    #[instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,

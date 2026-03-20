@@ -17,7 +17,8 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
-use tracing::{info, instrument};
+use miden_node_tracing::instrument;
+use tracing::info;
 use url::Url;
 
 use crate::blocks::BlockStore;
@@ -48,12 +49,7 @@ pub struct Store {
 
 impl Store {
     /// Bootstraps the Store, creating the database state and inserting the genesis block data.
-    #[instrument(
-        target = COMPONENT,
-        name = "store.bootstrap",
-        skip_all,
-        err,
-    )]
+    #[instrument(COMPONENT: err)]
     pub async fn bootstrap<S: BlockSigner>(
         genesis: GenesisState<S>,
         data_directory: &Path,

@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -126,7 +128,7 @@ impl Parse for Field {
 
 /// A single comma-separated element inside the `#[instrument(…)]` attribute.
 ///
-/// Parsing priority: the three reserved keywords (`ret`, `err`, `report`) are
+/// Parsing priority: the reserved keywords (`ret`, `root`, `err`, `report`) are
 /// recognised by peeking at the leading identifier before attempting a full
 /// `Field` parse.  Any other leading identifier is treated as the start of a
 /// `name = value` field entry.
@@ -135,6 +137,8 @@ enum Element {
     Field(Field),
     /// `ret` – record the function's return value inside the span.
     Ret,
+    /// `root` – force the span to be a root span (`parent = None`) and tag it with `root = true`.
+    Root,
     /// `err` – on `Err`, emit a tracing event with the top-level error message.
     /// Delegates to `tracing::instrument`'s built-in `err`.  Requires `Result`.
     Err,
@@ -150,6 +154,10 @@ impl Parse for Element {
             "ret" => {
                 let _: Ident = input.parse()?;
                 Ok(Element::Ret)
+            },
+            "root" => {
+                let _: Ident = input.parse()?;
+                Ok(Element::Root)
             },
             "err" => {
                 let _: Ident = input.parse()?;
@@ -222,7 +230,7 @@ impl ComponentName {
 ///                  | element ("," element)*
 ///
 /// COMPONENT  ::= ident | string-literal
-/// element    ::= field-entry | "ret" | "err" | "report"
+/// element    ::= field-entry | "ret" | "root" | "err" | "report"
 /// field-entry::= dotted-name "=" ["%"] expr
 /// ```
 struct InstrumentArgs {
@@ -369,24 +377,32 @@ fn type_contains_dyn(ty: &Type) -> bool {
 
 /// Converts the collected `Field` entries into a `fields(…),` token fragment.
 ///
-/// Each field is emitted as `"dotted.name" = [%] expr`.  The string-literal form
-/// is used for the key so that dotted names (which are not valid Rust identifiers)
-/// survive the `tracing::instrument` macro's own field-name parsing.
-fn fields_tokens(fields: &[&Field]) -> TokenStream2 {
-    if fields.is_empty() {
-        return quote! {};
-    }
+/// Each field is emitted as `dotted.name = [%] expr`.
+fn fields_tokens(fields: &[&Field], has_root: bool) -> TokenStream2 {
     let mut parts = Vec::new();
+
+    if has_root {
+        parts.push(quote! { root = true });
+    }
+
     for f in fields {
-        let name_lit = LitStr::new(&f.name.dotted, f.name.span);
+        // Emit the dotted name as a raw token sequence so `tracing::instrument`
+        // sees it as `block.number` (a dotted identifier path).
+        let name_tokens = TokenStream2::from_str(&f.name.dotted)
+            .unwrap_or_else(|_| panic!("invalid field name: {}", f.name.dotted));
         let expr = &f.value.expr;
         if f.value.display_modifier.is_some() {
-            parts.push(quote! { #name_lit = %#expr });
+            parts.push(quote! { #name_tokens = %#expr });
         } else {
-            parts.push(quote! { #name_lit = #expr });
+            parts.push(quote! { #name_tokens = #expr });
         }
     }
-    quote! { fields(#(#parts),*), }
+
+    if parts.is_empty() {
+        quote! {}
+    } else {
+        quote! { fields(#(#parts),*), }
+    }
 }
 
 // ── public entry point ────────────────────────────────────────────────────────
@@ -429,7 +445,7 @@ fn fields_tokens(fields: &[&Field]) -> TokenStream2 {
 ///
 /// **Neither `err` nor `report`**
 /// ```rust,ignore
-/// #[::tracing::instrument(target = …, skip_all?, fields(…)?, ret?)]
+/// #[::tracing::instrument(target = …, skip_all, parent = None?, fields(root = true)?, fields(…)?, ret?)]
 /// fn foo(…) { /* original body */ }
 /// ```
 pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
@@ -451,6 +467,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
     let mut has_ret = false;
     let mut has_err = false;
     let mut has_report = false;
+    let mut has_root = false;
     let mut fields: Vec<&Field> = Vec::new();
 
     let elements = args.elements;
@@ -458,6 +475,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
     for elem in &elements {
         match elem {
             Element::Ret => has_ret = true,
+            Element::Root => has_root = true,
             Element::Err => has_err = true,
             Element::Report => has_report = true,
             Element::Field(f) => fields.push(f),
@@ -492,15 +510,11 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
     // ── code generation ───────────────────────────────────────────────────────
 
     let target_tokens = args.component.as_ref().map(ComponentName::to_span_target_tokens);
-    let fields_tok = fields_tokens(&fields);
+    let fields_tok = fields_tokens(&fields, has_root);
 
-    // When explicit fields are present, skip all implicit fn arguments to avoid
-    // accidentally recording sensitive values.
-    let skip_all = if !fields.is_empty() {
-        quote! { skip_all, }
-    } else {
-        quote! {}
-    };
+    // Always skip all implicit fn arguments to avoid accidentally recording sensitive values.
+    // Explicit OTel fields declared in the attribute are still emitted via `fields(…)`.
+    let skip_all = quote! { skip_all, };
 
     let ret_tok = if has_ret {
         quote! { ret, }

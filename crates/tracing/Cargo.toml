@@ -21,4 +21,5 @@ opentelemetry            = { version = "0.31" }
 tracing                  = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 trybuild = { workspace = true }

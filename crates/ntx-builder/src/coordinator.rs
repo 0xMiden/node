@@ -11,6 +11,8 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use miden_node_tracing::instrument;
+
 use crate::actor::{AccountActor, AccountActorContext, AccountOrigin, ActorShutdownReason};
 use crate::db::Db;
 
@@ -111,7 +113,7 @@ impl Coordinator {
     /// This method creates a new [`AccountActor`] instance for the specified account origin
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
-    #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self, origin, actor_context))]
+    #[instrument(COMPONENT:)]
     pub async fn spawn_actor(
         &mut self,
         origin: AccountOrigin,
@@ -149,10 +151,7 @@ impl Coordinator {
     /// message channel and can process it accordingly.
     ///
     /// If an actor fails to receive the event, it will be canceled.
-    #[tracing::instrument(name = "ntx.coordinator.broadcast", skip_all, fields(
-        actor.count = self.actor_registry.len(),
-        event.kind = %event.kind()
-    ))]
+    #[instrument(COMPONENT:)]
     pub async fn broadcast(&mut self, event: Arc<MempoolEvent>) {
         let mut failed_actors = Vec::new();
 

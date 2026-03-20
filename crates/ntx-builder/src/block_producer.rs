@@ -11,7 +11,8 @@ use miden_tx::utils::Serializable;
 use tokio_stream::StreamExt;
 use tonic::Status;
 // Use standard tracing for Status errors (which don't impl std::error::Error)
-use tracing::{info, instrument};
+use miden_node_tracing::instrument;
+use tracing::info;
 use url::Url;
 
 use crate::COMPONENT;
@@ -43,7 +44,7 @@ impl BlockProducerClient {
         Self { client: block_producer }
     }
 
-    #[instrument(target = COMPONENT, name = "ntx.block_producer.client.submit_proven_transaction", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn submit_proven_transaction(
         &self,
         proven_tx: &ProvenTransaction,
@@ -59,7 +60,7 @@ impl BlockProducerClient {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "ntx.block_producer.client.subscribe_to_mempool", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn subscribe_to_mempool_with_retry(
         &self,
         chain_tip: BlockNumber,

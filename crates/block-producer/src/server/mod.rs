@@ -22,7 +22,8 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::Status;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, instrument};
+use miden_node_tracing::instrument;
+use tracing::{debug, error, info};
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
@@ -306,12 +307,7 @@ impl BlockProducerRpcServer {
     // RPC ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.server.submit_proven_transaction",
-         skip_all,
-         err
-     )]
+    #[instrument(COMPONENT: err)]
     async fn submit_proven_transaction(
         &self,
         request: proto::transaction::ProvenTransaction,
@@ -350,12 +346,7 @@ impl BlockProducerRpcServer {
             .map(|block_height| proto::blockchain::BlockNumber { block_num: block_height.as_u32() })
     }
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.server.submit_proven_batch",
-         skip_all,
-         err
-     )]
+    #[instrument(COMPONENT: err)]
     async fn submit_proven_batch(
         &self,
         request: proto::transaction::ProvenTransactionBatch,

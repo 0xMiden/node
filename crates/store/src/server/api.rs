@@ -10,7 +10,8 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber};
 use miden_protocol::note::Nullifier;
 use tonic::{Request, Response, Status};
-use tracing::{info, instrument};
+use miden_node_tracing::instrument;
+use tracing::info;
 
 use crate::errors::GetBlockInputsError;
 use crate::state::State;
@@ -175,13 +176,7 @@ where
     .map_err(Into::into)
 }
 
-#[instrument(
-    level = "debug",
-    target = COMPONENT,
-    skip_all,
-    fields(nullifiers = nullifiers.len()),
-    err
-)]
+#[instrument(COMPONENT: err)]
 pub fn validate_nullifiers<E>(nullifiers: &[proto::primitives::Digest]) -> Result<Vec<Nullifier>, E>
 where
     E: From<ConversionError> + std::fmt::Display,
@@ -194,13 +189,7 @@ where
         .map_err(Into::into)
 }
 
-#[instrument(
-    level = "debug",
-    target = COMPONENT,
-    skip_all,
-    fields(notes = notes.len()),
-    err
-)]
+#[instrument(COMPONENT: err)]
 pub fn validate_note_commitments(notes: &[proto::primitives::Digest]) -> Result<Vec<Word>, Status> {
     notes
         .iter()
@@ -209,12 +198,7 @@ pub fn validate_note_commitments(notes: &[proto::primitives::Digest]) -> Result<
         .map_err(|_| invalid_argument("Digest field is not in the modulus range"))
 }
 
-#[instrument(
-    level = "debug",
-    target = COMPONENT,
-    skip_all,
-    fields(block_numbers = block_numbers.len())
-)]
+#[instrument(COMPONENT:)]
 pub fn read_block_numbers(block_numbers: &[u32]) -> BTreeSet<BlockNumber> {
     BTreeSet::from_iter(block_numbers.iter().map(|raw_number| BlockNumber::from(*raw_number)))
 }

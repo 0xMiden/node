@@ -23,8 +23,9 @@ use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionId};
 use miden_protocol::utils::{Deserializable, Serializable};
 
+use miden_node_tracing::instrument;
+
 use super::DatabaseError;
-use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
 use crate::db::schema;
@@ -79,11 +80,7 @@ impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_transactions(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,

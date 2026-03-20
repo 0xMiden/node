@@ -7,6 +7,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use miden_node_tracing::instrument;
+
 use account_state::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
@@ -349,7 +351,7 @@ impl AccountActor {
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Updates the state of the actor based on the execution result.
-    #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
+    #[instrument(COMPONENT:)]
     async fn execute_transactions(
         &mut self,
         account_id: NetworkAccountId,

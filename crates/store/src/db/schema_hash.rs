@@ -12,7 +12,7 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use diesel_migrations::MigrationHarness;
 use miden_node_db::SchemaVerificationError;
-use tracing::instrument;
+use miden_node_tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::MIGRATIONS;
@@ -83,7 +83,7 @@ fn compute_expected_schema() -> Result<Vec<SchemaObject>, SchemaVerificationErro
 /// # Errors
 ///
 /// Returns `SchemaVerificationError::Mismatch` if schemas differ.
-#[instrument(level = "info", target = COMPONENT, skip_all, err)]
+#[instrument(COMPONENT: err)]
 pub fn verify_schema(conn: &mut SqliteConnection) -> Result<(), SchemaVerificationError> {
     let expected = compute_expected_schema()?;
     let actual = extract_schema(conn)?;

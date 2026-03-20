@@ -2,9 +2,7 @@ use miden_block_prover::{BlockProverError, LocalBlockProver};
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof};
 use miden_remote_prover_client::{RemoteBlockProver, RemoteProverClientError};
-use tracing::instrument;
-
-use crate::COMPONENT;
+use miden_node_tracing::instrument;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreProverError {
@@ -35,7 +33,7 @@ impl BlockProver {
         Self::Remote(RemoteBlockProver::new(endpoint))
     }
 
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,
