@@ -5,13 +5,12 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_tracing::instrument;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-
-use miden_node_tracing::instrument;
 
 use crate::actor::{AccountActor, AccountActorContext, AccountOrigin, ActorShutdownReason};
 use crate::db::Db;

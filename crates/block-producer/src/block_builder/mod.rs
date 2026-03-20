@@ -3,20 +3,20 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use futures::FutureExt;
+use miden_node_tracing::instrument;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
-use miden_node_tracing::instrument;
 use tracing::Span;
 
+use crate::TelemetryInjectorExt;
 use crate::errors::BuildBlockError;
 use crate::mempool::SharedMempool;
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{TelemetryInjectorExt};
 
 // BLOCK BUILDER
 // =================================================================================================

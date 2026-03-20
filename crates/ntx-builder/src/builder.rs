@@ -5,6 +5,7 @@ use anyhow::Context;
 use futures::Stream;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_tracing::instrument;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
@@ -12,8 +13,6 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{RwLock, mpsc};
 use tokio_stream::StreamExt;
 use tonic::Status;
-
-use miden_node_tracing::instrument;
 
 use crate::NtxBuilderConfig;
 use crate::actor::{AccountActorContext, AccountOrigin, ActorNotification};

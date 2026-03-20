@@ -8,6 +8,7 @@ use miden_node_db::Db;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
+use miden_node_tracing::instrument;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -20,7 +21,6 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
-use miden_node_tracing::instrument;
 use tracing::info_span;
 
 use crate::block_validation::validate_block;

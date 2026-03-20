@@ -22,10 +22,11 @@
 //! 2. **`report` keyword** – a richer alternative to `tracing`'s `err` that walks the full
 //!    [`ErrorReport`] chain, emits a structured `error!` event *and* sets the OpenTelemetry span
 //!    status to `Error`.
-//! 3. **OpenTelemetry field allowlist** – only names declared in `allowlist.txt` may appear as field keys,
-//!    preventing accidental cardinality explosions in the metrics / trace backend.
+//! 3. **OpenTelemetry field allowlist** – only names declared in `allowlist.txt` may appear as
+//!    field keys, preventing accidental cardinality explosions in the metrics / trace backend.
 //! 4. **Log macros** – `warn!`, `error!`, etc. mirror `tracing::<level>!` syntax but additionally
-//!    enforce the same `COMPONENT:` target shorthand and OpenTelemetry field allowlist as `#[instrument]`.
+//!    enforce the same `COMPONENT:` target shorthand and OpenTelemetry field allowlist as
+//!    `#[instrument]`.
 //!
 //! # `#[instrument]` – complete reference
 //!

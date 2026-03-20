@@ -46,12 +46,12 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_tracing::instrument;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::TransactionId;
 use subscription::SubscriptionProvider;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
-use miden_node_tracing::instrument;
 use tracing::warn;
 
 use crate::domain::batch::SelectedBatch;

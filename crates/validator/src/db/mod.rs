@@ -8,9 +8,9 @@ use diesel::SqliteConnection;
 use diesel::dsl::exists;
 use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db};
+use miden_node_tracing::instrument;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::Serializable;
-use miden_node_tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;

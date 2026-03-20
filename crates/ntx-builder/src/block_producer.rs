@@ -4,14 +4,14 @@ use futures::{TryStream, TryStreamExt};
 use miden_node_proto::clients::{BlockProducerClient as InnerBlockProducerClient, Builder};
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::{self as proto};
+// Use standard tracing for Status errors (which don't impl std::error::Error)
+use miden_node_tracing::instrument;
 use miden_node_utils::FlattenResult;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_tx::utils::Serializable;
 use tokio_stream::StreamExt;
 use tonic::Status;
-// Use standard tracing for Status errors (which don't impl std::error::Error)
-use miden_node_tracing::instrument;
 use tracing::info;
 use url::Url;
 

@@ -25,6 +25,7 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -51,8 +52,6 @@ use miden_protocol::note::{
 };
 use miden_protocol::utils::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
-
-use miden_node_tracing::instrument;
 
 use crate::db::models::conv::{
     SqlTypeConvert,

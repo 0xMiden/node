@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
+use miden_node_tracing::instrument;
 use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -10,7 +11,6 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
-use miden_node_tracing::instrument;
 use tracing::info;
 
 use crate::COMPONENT;

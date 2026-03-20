@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
 use miden_node_proto::domain::account::AccountStorageMapDetails;
+use miden_node_tracing::instrument;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
@@ -29,7 +30,6 @@ use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::utils::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
-use miden_node_tracing::instrument;
 
 pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
 

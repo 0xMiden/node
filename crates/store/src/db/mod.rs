@@ -7,6 +7,7 @@ use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -25,7 +26,6 @@ use miden_protocol::note::{
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::{Deserializable, Serializable};
 use tokio::sync::oneshot;
-use miden_node_tracing::instrument;
 use tracing::info;
 
 use crate::COMPONENT;

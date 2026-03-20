@@ -1,9 +1,9 @@
 use std::ops::RangeInclusive;
 
+use miden_node_tracing::instrument;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
-use miden_node_tracing::instrument;
 
 use super::State;
 use crate::db::models::queries::StorageMapValuesPage;

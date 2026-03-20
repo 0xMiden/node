@@ -18,12 +18,12 @@ use tokio::time;
 use tracing::{Instrument, Span};
 use url::Url;
 
+use crate::TelemetryInjectorExt;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::BuildBatchError;
 use crate::mempool::SharedMempool;
 use crate::store::StoreClient;
-use crate::{TelemetryInjectorExt};
 
 // BATCH BUILDER
 // ================================================================================================

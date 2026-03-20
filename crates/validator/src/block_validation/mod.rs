@@ -1,13 +1,13 @@
 use miden_node_db::{DatabaseError, Db};
+use miden_node_tracing::instrument;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
-use miden_node_tracing::instrument;
 use tracing::info_span;
 
-use crate::db::find_unvalidated_transactions;
 use crate::ValidatorSigner;
+use crate::db::find_unvalidated_transactions;
 
 // BLOCK VALIDATION ERROR
 // ================================================================================================

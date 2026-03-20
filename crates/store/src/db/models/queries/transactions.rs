@@ -12,6 +12,7 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamAccountIdLimit,
@@ -22,8 +23,6 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionId};
 use miden_protocol::utils::{Deserializable, Serializable};
-
-use miden_node_tracing::instrument;
 
 use super::DatabaseError;
 use crate::db::models::conv::SqlTypeConvert;

@@ -7,6 +7,7 @@ use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_proto::errors::{ConversionError, MissingFieldHelper};
 use miden_node_proto::{AccountState, generated as proto};
+use miden_node_tracing::instrument;
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -15,7 +16,6 @@ use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::Serializable;
-use miden_node_tracing::instrument;
 use tracing::{debug, info};
 use url::Url;
 

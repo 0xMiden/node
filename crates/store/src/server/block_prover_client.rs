@@ -1,8 +1,8 @@
 use miden_block_prover::{BlockProverError, LocalBlockProver};
+use miden_node_tracing::instrument;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof};
 use miden_remote_prover_client::{RemoteBlockProver, RemoteProverClientError};
-use miden_node_tracing::instrument;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreProverError {

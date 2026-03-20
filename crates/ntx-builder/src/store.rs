@@ -8,6 +8,7 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
+use miden_node_tracing::instrument;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -29,7 +30,6 @@ use miden_protocol::transaction::AccountInputs;
 use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::utils::{Deserializable, Serializable};
 use thiserror::Error;
-use miden_node_tracing::instrument;
 use tracing::info;
 use url::Url;
 
