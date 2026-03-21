@@ -721,17 +721,20 @@ pub(crate) fn select_account_storage_map_values_paged(
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
         && raw.len() > limit
     {
-        // NOTE: If the query contains at least one more row than the amount of storage map updates
-        // allowed in a single block for an account, then the response is guaranteed to have at
-        // least two blocks
-
         let values = raw
             .into_iter()
             .take_while(|(bn, ..)| *bn != last_block_num)
             .map(StorageMapValue::from_raw_row)
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        (BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?, values)
+        if values.is_empty() {
+            // All entries are in the same block and exceed the limit.
+            // Return the range start to signal no progress was made,
+            // which the caller interprets as limit_exceeded.
+            (*block_range.start(), values)
+        } else {
+            (BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?, values)
+        }
     } else {
         (
             *block_range.end(),
