@@ -716,25 +716,27 @@ pub(crate) fn select_account_storage_map_values_paged(
             .limit(i64::try_from(limit + 1).expect("limit fits within i64"))
             .load(conn)?;
 
-    // Discard the last block in the response (assumes more than one block may be present)
-
+    // If we got more rows than the limit, the last block may be incomplete so we
+    // drop it entirely and derive last_block_included from the remaining rows.
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
         && raw.len() > limit
     {
-        let values = raw
+        let values: Vec<_> = raw.into_iter().take_while(|(bn, ..)| *bn != last_block_num).collect();
+
+        let last_block_included = match values.last() {
+            Some(&(bn, ..)) => BlockNumber::from_raw_sql(bn)?,
+            // All rows are in the same block and exceed the limit.
+            // Return the range start to signal no progress was made,
+            // which the caller interprets as limit_exceeded.
+            None => *block_range.start(),
+        };
+
+        let values = values
             .into_iter()
-            .take_while(|(bn, ..)| *bn != last_block_num)
             .map(StorageMapValue::from_raw_row)
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        if values.is_empty() {
-            // All entries are in the same block and exceed the limit.
-            // Return the range start to signal no progress was made,
-            // which the caller interprets as limit_exceeded.
-            (*block_range.start(), values)
-        } else {
-            (BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?, values)
-        }
+        (last_block_included, values)
     } else {
         (
             *block_range.end(),
