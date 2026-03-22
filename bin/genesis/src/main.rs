@@ -14,7 +14,7 @@ use miden_protocol::account::{
     AccountType,
 };
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{self, SecretKey as FalconSecretKey};
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::AuthMethod;
@@ -159,7 +159,7 @@ path = "bridge.mac"
 fn generate_falcon_keypair() -> (falcon512_poseidon2::PublicKey, FalconSecretKey) {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let auth_seed: [u64; 4] = rng.random();
-    let mut coin = RpoRandomCoin::new(Word::from(auth_seed.map(Felt::new)));
+    let mut coin = RandomCoin::new(Word::from(auth_seed.map(Felt::new)));
     let secret_key = FalconSecretKey::with_rng(&mut coin);
     let public_key = secret_key.public_key();
     (public_key, secret_key)
