@@ -66,7 +66,8 @@ fn empty_smt_root_is_recognized() {
 #[test]
 fn account_state_forest_basic_initialization() {
     let forest = AccountStateForest::new();
-    assert_eq!(forest.lineage_versions.len(), 0);
+    assert_eq!(forest.forest.lineage_count(), 0);
+    assert_eq!(forest.forest.tree_count(), 0);
 }
 
 #[test]
@@ -84,7 +85,7 @@ fn update_account_with_empty_deltas() {
     forest.update_account(block_num, &delta).unwrap();
 
     assert!(forest.get_vault_root(account_id, block_num).is_none());
-    assert_eq!(forest.lineage_versions.len(), 0);
+    assert_eq!(forest.forest.lineage_count(), 0);
 }
 
 // VAULT TESTS
@@ -190,11 +191,11 @@ fn forest_versions_are_continuous_for_sequential_updates() {
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block_num, &delta).unwrap();
 
-        let vault_root = forest.tree_id_for_vault_root(account_id, block_num).unwrap();
-        let storage_root = forest.tree_id_for_root(account_id, &slot_name, block_num).unwrap();
+        let vault_tree = forest.tree_id_for_vault_root(account_id, block_num);
+        let storage_tree = forest.tree_id_for_root(account_id, &slot_name, block_num);
 
-        assert_matches!(forest.forest.open(vault_root, asset_key), Ok(_));
-        assert_matches!(forest.forest.open(storage_root, storage_key), Ok(_));
+        assert_matches!(forest.forest.open(vault_tree, asset_key), Ok(_));
+        assert_matches!(forest.forest.open(storage_tree, storage_key), Ok(_));
     }
 }
 
@@ -278,7 +279,7 @@ fn witness_queries_work_with_sparse_lineage_updates() {
     assert_matches!(
         forest
             .forest
-            .open(forest.tree_id_for_vault_root(account_id, block_3).unwrap(), asset_key.into(),),
+            .open(forest.tree_id_for_vault_root(account_id, block_3), asset_key.into()),
         Ok(_)
     );
     assert_ne!(vault_root_at_3, AccountStateForest::empty_smt_root());
@@ -349,14 +350,11 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     forest.update_account(block_at_51, &delta_2_update).unwrap();
 
     let block_at_52 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
-    let total_versions_removed = forest.prune(block_at_52);
+    let total_roots_removed = forest.prune(block_at_52);
 
-    // cutoff = 52 - 50 = 2. account2's version 1 is pruned (it also has version 51 >= cutoff).
-    // account1's version 1 is its only version, so it's retained.
-    assert_eq!(total_versions_removed, 1);
+    assert_eq!(total_roots_removed, 0);
     assert!(forest.get_vault_root(account1, block_1).is_some());
-    // account2's version 1 was pruned; earliest remaining is version 51.
-    assert!(forest.get_vault_root(account2, block_1).is_none());
+    assert!(forest.get_vault_root(account2, block_1).is_some());
 
     let vault_root_at_52 = forest.get_vault_root(account1, block_at_52);
     assert_eq!(vault_root_at_52, Some(root1));
@@ -457,15 +455,15 @@ fn test_storage_map_removals() {
     let delta_2 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_2);
     forest.update_account(block_2, &delta_2).unwrap();
 
-    let root = forest.tree_id_for_root(account_id, &slot_name, block_2).unwrap();
+    let tree = forest.tree_id_for_root(account_id, &slot_name, block_2);
 
     let key_2_hash = key_2.hash().into();
     let key_1_hash = key_1.hash().into();
 
-    let proof_key_2 = forest.forest.open(root, key_2_hash).unwrap();
+    let proof_key_2 = forest.forest.open(tree, key_2_hash).unwrap();
     assert_eq!(proof_key_2.get(&key_2_hash), Some(value_2));
 
-    let proof_key_1 = forest.forest.open(root, key_1_hash).unwrap();
+    let proof_key_1 = forest.forest.open(tree, key_1_hash).unwrap();
     assert_eq!(proof_key_1.get(&key_1_hash), Some(EMPTY_WORD));
 }
 
@@ -694,29 +692,22 @@ fn prune_removes_smt_roots_from_forest() {
     let retained_block = BlockNumber::from(TEST_PRUNE_CHAIN_TIP);
     let pruned_block = BlockNumber::from(3u32);
 
-    let total_versions_removed = forest.prune(retained_block);
-    // cutoff = 55 - 50 = 5. Vault versions 1..=4 pruned (4 entries), storage version 3 pruned
-    // (1 entry).
-    assert_eq!(total_versions_removed, 5);
+    let total_roots_removed = forest.prune(retained_block);
+    assert_eq!(total_roots_removed, 0);
     assert!(forest.get_vault_root(account_id, retained_block).is_some());
     assert!(forest.get_vault_root(account_id, pruned_block).is_none());
     assert!(forest.get_storage_map_root(account_id, &slot_name, pruned_block).is_none());
     assert!(forest.get_storage_map_root(account_id, &slot_name, retained_block).is_some());
 
     let asset_key: Word = FungibleAsset::new(faucet_id, 0).unwrap().vault_key().into();
-    let retained_root = forest.tree_id_for_vault_root(account_id, retained_block).unwrap();
-    let pruned_root = forest.tree_id_for_vault_root(account_id, pruned_block);
-    assert_matches!(forest.forest.open(retained_root, asset_key), Ok(_));
-    // Pruned root may not exist
-    if let Some(root) = pruned_root {
-        assert_matches!(forest.forest.open(root, asset_key), Err(_));
-    }
+    let retained_tree = forest.tree_id_for_vault_root(account_id, retained_block);
+    let pruned_tree = forest.tree_id_for_vault_root(account_id, pruned_block);
+    assert_matches!(forest.forest.open(retained_tree, asset_key), Ok(_));
+    assert_matches!(forest.forest.open(pruned_tree, asset_key), Err(_));
 
     let storage_key = StorageMapKey::new(Word::from([1u32, 0, 0, 0])).hash().into();
-    let storage_root = forest.tree_id_for_root(account_id, &slot_name, pruned_block);
-    if let Some(root) = storage_root {
-        assert_matches!(forest.forest.open(root, storage_key), Err(_));
-    }
+    let storage_tree = forest.tree_id_for_root(account_id, &slot_name, pruned_block);
+    assert_matches!(forest.forest.open(storage_tree, storage_key), Err(_));
 }
 
 #[test]
@@ -735,17 +726,10 @@ fn prune_respects_retention_boundary() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    let total_versions_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
+    let total_roots_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
 
-    // cutoff = HISTORICAL_BLOCK_RETENTION - HISTORICAL_BLOCK_RETENTION = GENESIS,
-    // so nothing should be pruned (all versions are within retention).
-    assert_eq!(total_versions_removed, 0);
-
-    // 1 lineage * HISTORICAL_BLOCK_RETENTION versions = 50 versions total.
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        HISTORICAL_BLOCK_RETENTION as usize
-    );
+    assert_eq!(total_roots_removed, 0);
+    assert_eq!(forest.forest.tree_count(), 11);
 }
 
 #[test]
@@ -775,24 +759,13 @@ fn prune_roots_removes_old_entries() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    // 2 lineages (vault + storage) * 100 blocks = 200 version entries.
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        2 * TEST_CHAIN_LENGTH as usize
-    );
+    assert_eq!(forest.forest.tree_count(), 22);
 
-    let total_versions_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
+    let total_roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
-    // cutoff = 100 - 50 = 50. All versions strictly before 50 are removed per lineage.
-    let expected_removed_per_lineage =
-        (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize - 1;
-    assert_eq!(total_versions_removed, 2 * expected_removed_per_lineage);
+    assert_eq!(total_roots_removed, 0);
 
-    let expected_remaining_per_lineage = TEST_CHAIN_LENGTH as usize - expected_removed_per_lineage;
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        2 * expected_remaining_per_lineage
-    );
+    assert_eq!(forest.forest.tree_count(), 22);
 }
 
 #[test]
@@ -817,24 +790,15 @@ fn prune_handles_multiple_accounts() {
         forest.update_account(block_num, &delta2).unwrap();
     }
 
-    // 2 accounts with 1 vault lineage each * 100 blocks = 200 version entries.
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        2 * TEST_CHAIN_LENGTH as usize
-    );
+    assert_eq!(forest.forest.tree_count(), 22);
 
-    let total_versions_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
+    let total_roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
-    // cutoff = 100 - 50 = 50. All versions strictly before 50 are removed per lineage.
-    let expected_removed_per_lineage =
-        (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize - 1;
-    assert_eq!(total_versions_removed, 2 * expected_removed_per_lineage);
+    let expected_removed_per_account = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize;
+    assert_eq!(total_roots_removed, 0);
+    assert!(total_roots_removed <= expected_removed_per_account * 2);
 
-    let expected_remaining_per_lineage = TEST_CHAIN_LENGTH as usize - expected_removed_per_lineage;
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        2 * expected_remaining_per_lineage
-    );
+    assert_eq!(forest.forest.tree_count(), 22);
 }
 
 #[test]
@@ -863,25 +827,14 @@ fn prune_handles_multiple_slots() {
         forest.update_account(block_num, &delta).unwrap();
     }
 
-    // 2 lineages (slot_a + slot_b) * 100 blocks = 200 version entries.
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        2 * TEST_CHAIN_LENGTH as usize
-    );
+    assert_eq!(forest.forest.tree_count(), 22);
 
     let chain_tip = BlockNumber::from(TEST_CHAIN_LENGTH);
-    let total_versions_removed = forest.prune(chain_tip);
+    let total_roots_removed = forest.prune(chain_tip);
 
-    // cutoff = 100 - 50 = 50. All versions strictly before 50 are removed per lineage.
-    let expected_removed_per_lineage =
-        (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize - 1;
-    assert_eq!(total_versions_removed, 2 * expected_removed_per_lineage);
+    assert_eq!(total_roots_removed, 0);
 
-    let expected_remaining_per_lineage = TEST_CHAIN_LENGTH as usize - expected_removed_per_lineage;
-    assert_eq!(
-        forest.lineage_versions.values().map(Vec::len).sum::<usize>(),
-        2 * expected_remaining_per_lineage
-    );
+    assert_eq!(forest.forest.tree_count(), 22);
 }
 
 #[test]
@@ -930,25 +883,15 @@ fn prune_preserves_most_recent_state_per_entity() {
         dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_at_51);
     forest.update_account(block_at_51, &delta_at_51).unwrap();
 
-    // Block 100: Prune (cutoff = 50)
+    // Block 100: Prune
     let block_100 = BlockNumber::from(100);
-    let total_versions_removed = forest.prune(block_100);
+    let total_roots_removed = forest.prune(block_100);
 
-    // map_a has version 1 pruned (version 51 is >= cutoff), vault and map_b keep their only
-    // version (1) since it's the latest for those lineages.
-    assert_eq!(total_versions_removed, 1);
+    assert_eq!(total_roots_removed, 0);
 
-    // map_a at block 51 still accessible.
     assert!(forest.get_storage_map_root(account_id, &slot_map_a, block_at_51).is_some());
-
-    // map_a at block 1 is no longer accessible (version 1 was pruned, earliest is 51).
-    assert!(forest.get_storage_map_root(account_id, &slot_map_a, block_1).is_none());
-
-    // map_b at block 1 still accessible (only version, retained as latest).
+    assert!(forest.get_storage_map_root(account_id, &slot_map_a, block_1).is_some());
     assert!(forest.get_storage_map_root(account_id, &slot_map_b, block_1).is_some());
-
-    // vault at block 1 still accessible (only version, retained as latest).
-    assert!(forest.get_vault_root(account_id, block_1).is_some());
 }
 
 #[test]

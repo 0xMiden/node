@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use miden_crypto::hash::rpo::Rpo256;
-use miden_crypto::merkle::smt::{SMT_DEPTH, SmtForest};
+use miden_crypto::merkle::smt::ForestInMemoryBackend;
 use miden_node_proto::domain::account::AccountStorageMapDetails;
+use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
@@ -13,6 +14,16 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::smt::{
+    ForestOperation,
+    LargeSmtForest,
+    LargeSmtForestError,
+    LineageId,
+    RootInfo,
+    SMT_DEPTH,
+    SmtUpdateBatch,
+    TreeId,
+};
 use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::utils::serde::Serializable;
@@ -34,7 +45,7 @@ pub enum AccountStateForestError {
     #[error(transparent)]
     Asset(#[from] AssetError),
     #[error(transparent)]
-    Merkle(#[from] MerkleError),
+    Forest(#[from] LargeSmtForestError),
 }
 
 #[derive(Debug, Error)]
@@ -52,37 +63,21 @@ pub enum WitnessError {
 // ACCOUNT STATE FOREST
 // ================================================================================================
 
-/// A lineage identifier for trees in the forest.
-///
-/// This is a local replacement for the removed `LineageId` type. It uniquely identifies
-/// a lineage of SMT trees (e.g., per-account vault or per-account-slot storage map).
-#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct LineageId([u8; 32]);
-
-impl LineageId {
-    fn new(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-}
-
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct AccountStateForest {
-    /// `SmtForest` for efficient account storage reconstruction.
+    /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
-    forest: SmtForest,
-
-    /// Maps lineage IDs to a version-ordered list of (version, root) pairs.
-    /// This replaces the lineage/version tracking that was previously internal to
-    /// `LargeSmtForest`.
-    lineage_versions: BTreeMap<LineageId, Vec<(u64, Word)>>,
+    forest: LargeSmtForest<ForestInMemoryBackend>,
 }
 
 impl AccountStateForest {
     pub(crate) fn new() -> Self {
-        Self {
-            forest: SmtForest::new(),
-            lineage_versions: BTreeMap::new(),
-        }
+        Self { forest: Self::create_forest() }
+    }
+
+    fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
+        let backend = ForestInMemoryBackend::new();
+        LargeSmtForest::new(backend).expect("in-memory backend should initialize")
     }
 
     // HELPERS
@@ -99,19 +94,20 @@ impl AccountStateForest {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-    ) -> Option<Word> {
+    ) -> TreeId {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.get_root_at_block(lineage, block_num)
+        self.lookup_tree_id(lineage, block_num)
     }
 
     #[cfg(test)]
-    fn tree_id_for_vault_root(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-    ) -> Option<Word> {
+    fn tree_id_for_vault_root(&self, account_id: AccountId, block_num: BlockNumber) -> TreeId {
         let lineage = Self::vault_lineage_id(account_id);
-        self.get_root_at_block(lineage, block_num)
+        self.lookup_tree_id(lineage, block_num)
+    }
+
+    #[expect(clippy::unused_self)]
+    fn lookup_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> TreeId {
+        TreeId::new(lineage, block_num.as_u64())
     }
 
     fn storage_lineage_id(account_id: AccountId, slot_name: &StorageSlotName) -> LineageId {
@@ -125,67 +121,85 @@ impl AccountStateForest {
         LineageId::new(Rpo256::hash(&account_id.to_bytes()).as_bytes())
     }
 
-    /// Returns the latest root for a lineage, or `None` if the lineage is not tracked.
-    fn latest_root(&self, lineage: LineageId) -> Option<Word> {
-        self.lineage_versions
-            .get(&lineage)
-            .and_then(|versions| versions.last().map(|(_, root)| *root))
+    fn build_forest_operations(
+        entries: impl IntoIterator<Item = (Word, Word)>,
+    ) -> Vec<ForestOperation> {
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                if value == EMPTY_WORD {
+                    ForestOperation::remove(key)
+                } else {
+                    ForestOperation::insert(key, value)
+                }
+            })
+            .collect()
     }
 
-    /// Returns the latest version number for a lineage, or `None` if not tracked.
-    fn latest_version(&self, lineage: LineageId) -> Option<u64> {
-        self.lineage_versions
-            .get(&lineage)
-            .and_then(|versions| versions.last().map(|(v, _)| *v))
-    }
-
-    /// Applies forest updates for a lineage at a given block number.
-    ///
-    /// Returns the new root.
     fn apply_forest_updates(
         &mut self,
         lineage: LineageId,
         block_num: BlockNumber,
-        entries: Vec<(Word, Word)>,
+        operations: Vec<ForestOperation>,
     ) -> Word {
+        let updates = if operations.is_empty() {
+            SmtUpdateBatch::empty()
+        } else {
+            SmtUpdateBatch::new(operations.into_iter())
+        };
         let version = block_num.as_u64();
-
-        // Get the current root for this lineage (or empty root).
-        let current_root = self.latest_root(lineage).unwrap_or_else(Self::empty_smt_root);
-
-        // Apply all entries via batch_insert on the SmtForest.
-        let new_root = if entries.is_empty() {
-            current_root
+        let tree = if self.forest.latest_version(lineage).is_some() {
+            self.forest
+                .update_tree(lineage, version, updates)
+                .expect("forest update should succeed")
         } else {
             self.forest
-                .batch_insert(current_root, entries)
+                .add_lineage(lineage, version, updates)
                 .expect("forest update should succeed")
         };
-
-        // Record the new version.
-        self.lineage_versions.entry(lineage).or_default().push((version, new_root));
-
-        new_root
+        tree.root()
     }
 
-    /// Finds the root for a lineage at or before the given block number.
-    fn get_root_at_block(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
-        let versions = self.lineage_versions.get(&lineage)?;
-        let target = block_num.as_u64();
-        // Find the latest version <= target.
-        let mut result = None;
-        for &(v, root) in versions {
-            if v <= target {
-                result = Some(root);
-            } else {
-                break;
-            }
+    fn map_forest_error(error: LargeSmtForestError) -> MerkleError {
+        match error {
+            LargeSmtForestError::Merkle(merkle) => merkle,
+            other => MerkleError::InternalError(other.as_report()),
         }
-        result
+    }
+
+    fn map_forest_error_to_witness(error: LargeSmtForestError) -> WitnessError {
+        match error {
+            LargeSmtForestError::Merkle(merkle) => WitnessError::MerkleError(merkle),
+            other => WitnessError::MerkleError(MerkleError::InternalError(other.as_report())),
+        }
     }
 
     // ACCESSORS
     // --------------------------------------------------------------------------------------------
+
+    fn get_tree_id(&self, lineage: LineageId, block_num: BlockNumber) -> Option<TreeId> {
+        let tree = self.lookup_tree_id(lineage, block_num);
+        match self.forest.root_info(tree) {
+            RootInfo::LatestVersion(_) | RootInfo::HistoricalVersion(_) => Some(tree),
+            RootInfo::Missing => {
+                let latest_version = self.forest.latest_version(lineage)?;
+                if latest_version <= block_num.as_u64() {
+                    Some(TreeId::new(lineage, latest_version))
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn get_tree_root(&self, lineage: LineageId, block_num: BlockNumber) -> Option<Word> {
+        let tree = self.get_tree_id(lineage, block_num)?;
+        match self.forest.root_info(tree) {
+            RootInfo::LatestVersion(root) | RootInfo::HistoricalVersion(root) => Some(root),
+            RootInfo::Missing => None,
+        }
+    }
 
     /// Retrieves a vault root for the specified account and block.
     #[cfg(test)]
@@ -195,7 +209,7 @@ impl AccountStateForest {
         block_num: BlockNumber,
     ) -> Option<Word> {
         let lineage = Self::vault_lineage_id(account_id);
-        self.get_root_at_block(lineage, block_num)
+        self.get_tree_root(lineage, block_num)
     }
 
     /// Retrieves the storage map root for an account slot at the specified block.
@@ -207,7 +221,7 @@ impl AccountStateForest {
         block_num: BlockNumber,
     ) -> Option<Word> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.get_root_at_block(lineage, block_num)
+        self.get_tree_root(lineage, block_num)
     }
 
     // WITNESSES and PROOFS
@@ -225,9 +239,9 @@ impl AccountStateForest {
         raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        let root = self.get_root_at_block(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let key = raw_key.hash().into();
-        let proof = self.forest.open(root, key)?;
+        let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
 
         Ok(StorageMapWitness::new(proof, vec![raw_key])?)
     }
@@ -241,10 +255,13 @@ impl AccountStateForest {
         asset_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
-        let root = self.get_root_at_block(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
         let witnessees: Result<Vec<_>, WitnessError> =
             Result::from_iter(asset_keys.into_iter().map(|key| {
-                let proof = self.forest.open(root, key.into())?;
+                let proof = self
+                    .forest
+                    .open(tree, key.into())
+                    .map_err(Self::map_forest_error_to_witness)?;
                 let asset = AssetWitness::new(proof)?;
                 Ok(asset)
             }));
@@ -263,11 +280,11 @@ impl AccountStateForest {
         raw_keys: &[StorageMapKey],
     ) -> Option<Result<AccountStorageMapDetails, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, &slot_name);
-        let root = self.get_root_at_block(lineage, block_num)?;
+        let tree = self.get_tree_id(lineage, block_num)?;
 
         let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
             let key_hashed = raw_key.hash().into();
-            self.forest.open(root, key_hashed)
+            self.forest.open(tree, key_hashed).map_err(Self::map_forest_error)
         }));
 
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
@@ -356,7 +373,7 @@ impl AccountStateForest {
     /// account, returns an empty SMT root.
     fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
         let lineage = Self::vault_lineage_id(account_id);
-        self.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
+        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
     }
 
     /// Inserts asset vault data into the forest for the specified account. Assumes that asset
@@ -370,7 +387,10 @@ impl AccountStateForest {
         let prev_root = self.get_latest_vault_root(account_id);
         let lineage = Self::vault_lineage_id(account_id);
         assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
-        assert!(self.latest_version(lineage).is_none(), "account should not be in the forest");
+        assert!(
+            self.forest.latest_version(lineage).is_none(),
+            "account should not be in the forest"
+        );
 
         if vault_delta.is_empty() {
             let lineage = Self::vault_lineage_id(account_id);
@@ -389,10 +409,10 @@ impl AccountStateForest {
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
-        for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
+        for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let amount =
                 (*amount_delta).try_into().expect("full-state amount should be non-negative");
-            let asset = FungibleAsset::new(*faucet_id, amount)?;
+            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?;
             entries.push((asset.to_key_word(), asset.to_value_word()));
         }
 
@@ -410,7 +430,8 @@ impl AccountStateForest {
         let num_entries = entries.len();
 
         let lineage = Self::vault_lineage_id(account_id);
-        let new_root = self.apply_forest_updates(lineage, block_num, entries);
+        let operations = Self::build_forest_operations(entries);
+        let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -458,8 +479,12 @@ impl AccountStateForest {
             );
 
             let lineage = Self::storage_lineage_id(account_id, slot_name);
-            assert!(self.latest_version(lineage).is_none(), "account should not be in the forest");
-            let new_root = self.apply_forest_updates(lineage, block_num, hashed_entries);
+            assert!(
+                self.forest.latest_version(lineage).is_none(),
+                "account should not be in the forest"
+            );
+            let operations = Self::build_forest_operations(hashed_entries);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             let num_entries = raw_map_entries.len();
 
@@ -483,11 +508,6 @@ impl AccountStateForest {
     /// Processes both fungible and non-fungible asset changes, building entries for the vault SMT
     /// and tracking the new root.
     ///
-    /// # Arguments
-    ///
-    /// * `is_full_state` - If `true`, delta values are absolute (new account or DB reconstruction).
-    ///   If `false`, delta values are relative changes applied to previous state.
-    ///
     /// # Returns
     ///
     /// The new vault root after applying the delta.
@@ -505,24 +525,23 @@ impl AccountStateForest {
 
         // get the previous vault root; the root could be for an empty or non-empty SMT
         let lineage = Self::vault_lineage_id(account_id);
-        let prev_root = self.latest_root(lineage);
+        let prev_tree =
+            self.forest.latest_version(lineage).map(|version| TreeId::new(lineage, version));
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
         // Process fungible assets
-        for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
+        for (vault_key, amount_delta) in vault_delta.fungible().iter() {
+            let faucet_id = vault_key.faucet_id();
             let delta_abs = amount_delta.unsigned_abs();
-            let delta = FungibleAsset::new(*faucet_id, delta_abs)?;
-            let key = delta.to_key_word();
+            let delta = FungibleAsset::new(faucet_id, delta_abs)?;
+            let key = Word::from(delta.vault_key());
 
-            let empty = FungibleAsset::new(*faucet_id, 0)?;
-            let asset = if let Some(root) = prev_root {
-                // Open the proof at the key to get the current value
-                let proof = self.forest.open(root, key)?;
-                let (_path, leaf) = proof.into_parts();
-                let value = leaf.entries().iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
-                value
-                    .map(|v| FungibleAsset::from_key_value_words(key, v))
+            let empty = FungibleAsset::new(faucet_id, 0)?;
+            let asset = if let Some(tree) = prev_tree {
+                self.forest
+                    .get(tree, key)?
+                    .map(|value| FungibleAsset::from_key_value_words(key, value))
                     .transpose()?
                     .unwrap_or(empty)
             } else {
@@ -555,7 +574,8 @@ impl AccountStateForest {
         let vault_entries = entries.len();
 
         let lineage = Self::vault_lineage_id(account_id);
-        let new_root = self.apply_forest_updates(lineage, block_num, entries);
+        let operations = Self::build_forest_operations(entries);
+        let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
             target: crate::COMPONENT,
@@ -578,15 +598,10 @@ impl AccountStateForest {
         slot_name: &StorageSlotName,
     ) -> Word {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
+        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
     }
 
     /// Updates the forest with storage map changes from a delta.
-    ///
-    /// # Arguments
-    ///
-    /// * `is_full_state` - If `true`, delta values are absolute (new account or DB reconstruction).
-    ///   If `false`, delta values are relative changes applied to previous state.
     ///
     /// # Returns
     ///
@@ -613,7 +628,8 @@ impl AccountStateForest {
                 delta_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),
             );
 
-            let new_root = self.apply_forest_updates(lineage, block_num, hashed_entries);
+            let operations = Self::build_forest_operations(hashed_entries);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -640,45 +656,11 @@ impl AccountStateForest {
         let cutoff_block = chain_tip
             .checked_sub(HISTORICAL_BLOCK_RETENTION)
             .unwrap_or(BlockNumber::GENESIS);
-        let cutoff_version = cutoff_block.as_u64();
+        let before = self.forest.roots().count();
 
-        let mut pruned_count = 0;
-        let mut roots_to_prune = Vec::new();
+        self.forest.truncate(cutoff_block.as_u64());
 
-        for versions in self.lineage_versions.values_mut() {
-            // Remove all versions strictly before the cutoff, but always keep at least one
-            // version (the latest at or before cutoff) so the lineage's current state is
-            // preserved.
-            let split_idx = versions.partition_point(|(v, _)| *v < cutoff_version);
-
-            // If all versions are before the cutoff, keep the last one as the current state.
-            let drain_end = if split_idx >= versions.len() {
-                split_idx.saturating_sub(1)
-            } else {
-                split_idx
-            };
-
-            if drain_end > 0 {
-                let removed: Vec<_> = versions.drain(..drain_end).collect();
-                for (_, root) in &removed {
-                    roots_to_prune.push(*root);
-                }
-                pruned_count += removed.len();
-            }
-        }
-
-        // Collect all roots still in use across all lineages.
-        let active_roots: BTreeSet<Word> = self
-            .lineage_versions
-            .values()
-            .flat_map(|versions| versions.iter().map(|(_, root)| *root))
-            .collect();
-
-        // Only pop roots that are no longer referenced by any lineage.
-        let orphaned_roots: Vec<Word> =
-            roots_to_prune.into_iter().filter(|r| !active_roots.contains(r)).collect();
-        self.forest.pop_smts(orphaned_roots);
-
-        pruned_count
+        let after = self.forest.roots().count();
+        before.saturating_sub(after)
     }
 }
