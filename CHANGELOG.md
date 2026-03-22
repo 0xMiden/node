@@ -49,6 +49,7 @@
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
+- Fixed `GetAccount` returning an internal error for `AllEntries` requests on storage maps where all entries are in a single block (e.g. genesis accounts) ([#1816](https://github.com/0xMiden/node/pull/1816)).
 
 ## v0.13.8 (2026-03-12)
 
