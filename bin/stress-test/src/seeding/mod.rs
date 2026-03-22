@@ -33,7 +33,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
 use miden_protocol::note::{Note, NoteHeader, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
@@ -164,7 +164,7 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
         SecretKey::with_rng(&mut *rng)
@@ -294,7 +294,7 @@ fn create_accounts_and_notes(
     num_accounts: usize,
     storage_mode: AccountStorageMode,
     key_pair: &SecretKey,
-    rng: &Arc<Mutex<RpoRandomCoin>>,
+    rng: &Arc<Mutex<RandomCoin>>,
     faucet_id: AccountId,
     index_offset: usize,
 ) -> (Vec<Account>, Vec<Note>) {
@@ -317,7 +317,7 @@ fn create_accounts_and_notes(
 
 /// Creates a public P2ID note containing 10 tokens of the fungible asset associated with the
 /// specified `faucet_id` and sent to the specified target account.
-fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RpoRandomCoin) -> Note {
+fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RandomCoin) -> Note {
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
     P2idNote::create(
         faucet_id,
@@ -348,7 +348,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
 /// Creates a new faucet account.
 fn create_faucet() -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RpoRandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed = [0_u8; 32];
 

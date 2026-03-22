@@ -48,7 +48,7 @@ fn parsing_yields_expected_default_values() -> TestResult {
 
         assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
         assert_eq!(faucet.decimals(), 6);
-        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // check account balance, and ensure ordering is retained
@@ -328,7 +328,7 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     // Verify native faucet symbol
     {
         let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
-        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // Bridge account is a regular account (not a faucet)

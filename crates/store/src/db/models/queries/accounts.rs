@@ -1081,18 +1081,19 @@ fn prepare_partial_account_update(
     // --- Process asset updates. ---------------------------------
     // Only query balances for faucet_ids that are being updated.
     let faucet_ids =
-        Vec::from_iter(delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id));
+        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| vault_key.faucet_id()));
     let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
 
     // Encode `Some` as update and `None` as removal.
     let mut assets = Vec::new();
 
     // Update fungible assets.
-    for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
-        let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
-        let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
+    for (vault_key, amount_delta) in delta.vault().fungible().iter() {
+        let faucet_id = vault_key.faucet_id();
+        let prev_amount = prev_balances.get(&faucet_id).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?;
         let amount_abs = amount_delta.unsigned_abs();
-        let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
+        let delta = FungibleAsset::new(faucet_id, amount_abs)?;
         let new_balance = if *amount_delta < 0 {
             prev_asset.sub(delta)?
         } else {

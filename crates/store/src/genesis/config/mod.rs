@@ -395,7 +395,7 @@ impl NativeFaucetConfig {
 
                 let faucet = BasicFungibleFaucet::try_from(&account)
                     .expect("validated as fungible faucet above");
-                let symbol = TokenSymbolStr::from(faucet.symbol());
+                let symbol = TokenSymbolStr::from(faucet.symbol().clone());
                 Ok((account, symbol, None))
             },
         }
@@ -438,7 +438,7 @@ impl FungibleFaucetConfig {
         let max_supply = Felt::try_from(max_supply)
             .expect("The `Felt::MODULUS` is _always_ larger than the `max_supply`");
 
-        let component = BasicFungibleFaucet::new(*symbol.as_ref(), decimals, max_supply)?;
+        let component = BasicFungibleFaucet::new(symbol.as_ref().clone(), decimals, max_supply)?;
 
         // It's similar to `fn create_basic_fungible_faucet`, but we need to cover more cases.
         let faucet_account = AccountBuilder::new(init_seed)
@@ -569,8 +569,9 @@ fn prepare_fungible_asset_update(
         .into_iter()
         .try_for_each(|fungible_asset| wallet_asset_delta.add(fungible_asset))?;
 
-    wallet_asset_delta.iter().try_for_each(|(faucet_id, amount)| {
-        let issuance: &mut u64 = faucet_issuance.entry(*faucet_id).or_default();
+    wallet_asset_delta.iter().try_for_each(|(vault_key, amount)| {
+        let faucet_id = vault_key.faucet_id();
+        let issuance: &mut u64 = faucet_issuance.entry(faucet_id).or_default();
         tracing::debug!(
             "Updating faucet issuance {faucet} with {issuance} += {amount}",
             faucet = faucet_id.to_hex()
@@ -636,7 +637,7 @@ impl From<TokenSymbolStr> for TokenSymbol {
 impl From<TokenSymbol> for TokenSymbolStr {
     fn from(symbol: TokenSymbol) -> Self {
         // SAFETY: TokenSymbol guarantees valid format, so to_string should not fail
-        let raw = symbol.to_string().expect("TokenSymbol should always produce valid string");
+        let raw = symbol.to_string();
         Self { raw, encoded: symbol }
     }
 }

@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use miden_agglayer::{
     EthAddressFormat,
+    MetadataHash,
     create_existing_agglayer_faucet,
     create_existing_bridge_account,
 };
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountCode, AccountFile, AccountStorageMode, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -52,9 +53,9 @@ fn generate_agglayer_sample_accounts() {
     // Create bridge admin and GER manager as proper wallet accounts.
     // WARNING: DO NOT USE THESE IN PRODUCTION
     let bridge_admin_key =
-        SecretKey::with_rng(&mut RpoRandomCoin::new(Word::new([Felt::new(4u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(4u64); 4])));
     let ger_manager_key =
-        SecretKey::with_rng(&mut RpoRandomCoin::new(Word::new([Felt::new(5u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(5u64); 4])));
 
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
@@ -102,6 +103,7 @@ fn generate_agglayer_sample_accounts() {
         &eth_origin_address,
         0u32,
         10u8,
+        MetadataHash::from_token_info("Ether", "ETH", 8),
     );
 
     // USDC: 6 decimals, max supply of 10 billion tokens
@@ -115,6 +117,7 @@ fn generate_agglayer_sample_accounts() {
         &usdc_origin_address,
         0u32,
         10u8,
+        MetadataHash::from_token_info("USD Coin", "USDC", 6),
     );
 
     // Strip source location decorators from account code to ensure deterministic output.
