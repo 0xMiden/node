@@ -15,6 +15,7 @@ version.workspace      = true
 workspace = true
 
 [features]
+dial9          = ["dep:dial9-tokio-telemetry"]
 tracing-forest = ["miden-node-block-producer/tracing-forest"]
 
 [dependencies]
@@ -30,7 +31,8 @@ miden-node-store          = { workspace = true }
 miden-node-utils          = { workspace = true }
 miden-node-validator      = { workspace = true }
 miden-protocol            = { workspace = true }
-tokio                     = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+dial9-tokio-telemetry     = { workspace = true, optional = true }
+tokio                     = { features = ["macros", "net", "rt-multi-thread", "signal"], workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]

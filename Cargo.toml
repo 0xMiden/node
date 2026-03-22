@@ -110,6 +110,7 @@ rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
 tempfile           = { version = "3.12" }
 thiserror          = { default-features = false, version = "2.0" }
+dial9-tokio-telemetry = { git = "https://github.com/dial9-rs/dial9-tokio-telemetry.git" }
 tokio              = { features = ["rt-multi-thread"], version = "1.46" }
 tokio-stream       = { version = "0.1" }
 tokio-util         = { version = "0.7" }

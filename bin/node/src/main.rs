@@ -76,12 +76,56 @@ impl Command {
 // MAIN
 // ================================================================================================
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Configure tracing with optional OpenTelemetry exporting support.
-    let _otel_guard = miden_node_utils::logging::setup_tracing(cli.command.open_telemetry())?;
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
 
-    cli.command.execute().await
+    #[cfg(feature = "dial9")]
+    let (runtime, dial9_guard) = {
+        use dial9_tokio_telemetry::telemetry::{RotatingWriter, TracedRuntime};
+
+        let trace_dir =
+            std::env::var("DIAL9_TRACE_DIR").unwrap_or_else(|_| "/tmp/miden-node-traces".into());
+        std::fs::create_dir_all(&trace_dir)?;
+        let trace_path = std::path::Path::new(&trace_dir).join("trace.bin");
+
+        let writer = RotatingWriter::new(
+            &trace_path,
+            20 * 1024 * 1024,  // rotate after 20 MiB
+            100 * 1024 * 1024, // keep at most 100 MiB on disk
+        )?;
+
+        TracedRuntime::builder()
+            .with_trace_path(&trace_path)
+            .build_and_start(builder, writer)?
+    };
+
+    #[cfg(not(feature = "dial9"))]
+    let runtime = builder.build()?;
+
+    let result = runtime.block_on(async {
+        // Configure tracing with optional OpenTelemetry exporting support.
+        let _otel_guard = miden_node_utils::logging::setup_tracing(cli.command.open_telemetry())?;
+
+        #[cfg(feature = "dial9")]
+        {
+            tokio::select! {
+                result = cli.command.execute() => result,
+                _ = tokio::signal::ctrl_c() => {
+                    eprintln!("Ctrl+C received, shutting down...");
+                    Ok(())
+                }
+            }
+        }
+
+        #[cfg(not(feature = "dial9"))]
+        cli.command.execute().await
+    });
+
+    #[cfg(feature = "dial9")]
+    runtime.block_on(dial9_guard.graceful_shutdown(std::time::Duration::from_secs(5)))?;
+
+    result
 }
