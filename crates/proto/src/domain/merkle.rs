@@ -130,7 +130,7 @@ impl From<SmtLeaf> for proto::primitives::SmtLeaf {
         use proto::primitives::smt_leaf::Leaf;
 
         let leaf = match smt_leaf {
-            SmtLeaf::Empty(leaf_index) => Leaf::EmptyLeafIndex(leaf_index.value()),
+            SmtLeaf::Empty(leaf_index) => Leaf::EmptyLeafIndex(leaf_index.position()),
             SmtLeaf::Single(entry) => Leaf::Single(entry.into()),
             SmtLeaf::Multiple(entries) => Leaf::Multiple(proto::primitives::SmtLeafEntryList {
                 entries: convert(entries).collect(),

@@ -30,7 +30,7 @@ mod account_tree_with_history_tests {
     fn assert_verify(root: Word, witness: AccountWitness) {
         let proof = witness.into_proof();
         let (path, leaf) = proof.into_parts();
-        path.verify(leaf.index().value(), leaf.hash(), &root).unwrap();
+        path.verify(leaf.index().position(), leaf.hash(), &root).unwrap();
     }
 
     #[test]
@@ -491,7 +491,7 @@ mod account_tree_with_history_tests {
         let (path, leaf) = proof.into_parts();
 
         // Verify the Merkle proof - this tests the historical reconstruction code path
-        path.verify(leaf.index().value(), leaf.hash(), &root)
+        path.verify(leaf.index().position(), leaf.hash(), &root)
             .expect("Proof verification should succeed");
     }
 
@@ -516,7 +516,7 @@ mod account_tree_with_history_tests {
         let (path, leaf) = proof.into_parts();
 
         // Verify the Merkle proof
-        path.verify(leaf.index().value(), leaf.hash(), &root)
+        path.verify(leaf.index().position(), leaf.hash(), &root)
             .expect("Proof verification should succeed");
     }
 }
