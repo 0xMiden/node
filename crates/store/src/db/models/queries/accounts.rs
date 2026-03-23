@@ -727,7 +727,7 @@ pub(crate) fn select_account_storage_map_values_paged(
             .map(StorageMapValue::from_raw_row)
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        let last_block_included = values.last().unwrap_or_else(|| *block_range.start());
+        let last_block_included = values.last().map_or(*block_range.start(), |v| v.block_num);
 
         (last_block_included, values)
     } else {
