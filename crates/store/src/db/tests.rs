@@ -1219,6 +1219,155 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     assert_eq!(page.values.len(), 1, "should include block 1 only");
 }
 
+/// Tests that `select_account_storage_map_values_paged` does not panic when all entries
+/// exceed the limit and are in genesis block (block 0). Previously, this caused
+/// `last_block_num.saturating_sub(1) = -1` which failed `BlockNumber::from_raw_sql`.
+#[test]
+fn select_storage_map_sync_values_all_entries_in_genesis_block() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(8);
+
+    let genesis = BlockNumber::GENESIS;
+    create_block(&mut conn, genesis);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], genesis)
+        .unwrap();
+
+    // Insert 3 entries, all in genesis block
+    for i in 0..3 {
+        queries::insert_account_storage_map_value(
+            &mut conn,
+            account_id,
+            genesis,
+            slot_name.clone(),
+            StorageMapKey::from_index(i),
+            num_to_word(u64::from(i) + 100),
+        )
+        .unwrap();
+    }
+
+    // Query with limit=1 so that raw.len() (3) > limit (1), triggering the
+    // pagination branch. All entries are in block 0, so take_while produces
+    // nothing and last_block_num.saturating_sub(1) = -1.
+    let result = queries::select_account_storage_map_values_paged(
+        &mut conn,
+        account_id,
+        genesis..=genesis,
+        1,
+    );
+
+    // Should not error - should return a valid page (possibly with empty values
+    // indicating no progress, which the caller interprets as limit_exceeded)
+    let page = result.expect("should not return an internal error for genesis block entries");
+    // The page should indicate no progress was made (stuck at genesis)
+    assert!(
+        page.values.is_empty() || page.last_block_included == genesis,
+        "should indicate pagination did not make progress"
+    );
+}
+
+/// Tests that single-block overflow works for non-genesis blocks too.
+/// All entries are in block 5 and exceed the limit. The function should
+/// signal no progress rather than returning incorrect data.
+#[test]
+fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(10);
+
+    let block5 = BlockNumber::from(5);
+    create_block(&mut conn, block5);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block5)
+        .unwrap();
+
+    for i in 0..3 {
+        queries::insert_account_storage_map_value(
+            &mut conn,
+            account_id,
+            block5,
+            slot_name.clone(),
+            StorageMapKey::from_index(i),
+            num_to_word(u64::from(i) + 200),
+        )
+        .unwrap();
+    }
+
+    // limit=1, so 3 rows > 1 triggers pagination. All in block 5.
+    let page =
+        queries::select_account_storage_map_values_paged(&mut conn, account_id, block5..=block5, 1)
+            .unwrap();
+
+    assert!(page.values.is_empty(), "should have no values when single block exceeds limit");
+    assert_eq!(page.last_block_included, block5, "should signal no progress at block 5");
+}
+
+/// Tests that normal multi-block pagination still works correctly:
+/// entries in blocks 1, 2, 3 with limit causing block 3 to be dropped.
+#[test]
+fn select_storage_map_sync_values_multi_block_pagination() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(11);
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block1)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block2)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 2)], block3)
+        .unwrap();
+
+    // 1 entry in block 1, 1 in block 2, 1 in block 3
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block1,
+        slot_name.clone(),
+        StorageMapKey::from_index(1),
+        num_to_word(11),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block2,
+        slot_name.clone(),
+        StorageMapKey::from_index(2),
+        num_to_word(22),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block3,
+        slot_name.clone(),
+        StorageMapKey::from_index(3),
+        num_to_word(33),
+    )
+    .unwrap();
+
+    // limit=2: query fetches 3 rows (limit+1), drops block 3, keeps blocks 1-2
+    let page = queries::select_account_storage_map_values_paged(
+        &mut conn,
+        account_id,
+        BlockNumber::GENESIS..=block3,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(page.values.len(), 2, "should include entries from blocks 1 and 2");
+    assert_eq!(page.last_block_included, block2, "last included block should be 2");
+}
+
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
 async fn reconstruct_storage_map_from_db_pages_until_latest() {
