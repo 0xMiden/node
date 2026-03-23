@@ -4,6 +4,8 @@
 
 ### Enhancements
 
+- Added `miden-genesis` tool for generating canonical AggLayer genesis accounts and configuration ([#1797](https://github.com/0xMiden/node/pull/1797)).
+- Expose per-tree RocksDB tuning options ([#1782](https://github.com/0xMiden/node/pull/1782)).
 - Expose per-tree RocksDB tuning options ([#1782](https://github.com/0xMiden/node/pull/1782)).
 - Added a gRPC server to the NTX builder, configurable via `--ntx-builder.url` / `MIDEN_NODE_NTX_BUILDER_URL` (https://github.com/0xMiden/node/issues/1758).
 - Added `GetNoteError` gRPC endpoint to query the latest execution error for network notes (https://github.com/0xMiden/node/issues/1758).
