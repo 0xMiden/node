@@ -727,13 +727,7 @@ pub(crate) fn select_account_storage_map_values_paged(
             .map(StorageMapValue::from_raw_row)
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        let last_block_included = match values.last() {
-            Some(v) => v.block_num,
-            // All rows are in the same block and exceed the limit.
-            // Return the range start to signal no progress was made,
-            // which the caller interprets as limit_exceeded.
-            None => *block_range.start(),
-        };
+        let last_block_included = values.last().unwrap_or_else(|| *block_range.start());
 
         (last_block_included, values)
     } else {
