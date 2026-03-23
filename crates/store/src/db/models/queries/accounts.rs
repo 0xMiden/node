@@ -591,6 +591,14 @@ pub(crate) fn select_all_network_account_ids(
         // SAFETY: We just checked that len > MAX_ROWS, so the vec is not empty.
         let last_created_at_block = account_ids_raw.last().expect("vec is not empty").1;
 
+        // Find the last kept block by scanning backward to the first row that won't be
+        // dropped. This avoids an extra allocation (AccountId has no block_num field).
+        let last_kept_block = account_ids_raw
+            .iter()
+            .rev()
+            .find(|(_, created_at_block)| *created_at_block != last_created_at_block)
+            .map(|(_, bn)| *bn);
+
         let account_ids = account_ids_raw
             .into_iter()
             .take_while(|(_, created_at_block)| *created_at_block != last_created_at_block)
@@ -599,8 +607,10 @@ pub(crate) fn select_all_network_account_ids(
             })
             .collect::<Result<Vec<AccountId>, DatabaseError>>()?;
 
-        let last_block_included =
-            BlockNumber::from_raw_sql(last_created_at_block.saturating_sub(1))?;
+        let last_block_included = match last_kept_block {
+            Some(bn) => BlockNumber::from_raw_sql(bn)?,
+            None => *block_range.start(),
+        };
 
         Ok((account_ids, last_block_included))
     } else {
