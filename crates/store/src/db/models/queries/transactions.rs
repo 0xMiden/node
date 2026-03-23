@@ -296,13 +296,17 @@ pub fn select_transactions_records(
         let last_block_num = last_block_num.expect(
             "guaranteed to have processed at least one transaction when size limit is reached",
         );
-        let filtered_transactions = vec_raw_try_into(
-            all_transactions.into_iter().take_while(|row| row.block_num != last_block_num),
-        )?;
+        let filtered: Vec<_> = all_transactions
+            .into_iter()
+            .take_while(|row| row.block_num != last_block_num)
+            .collect();
 
-        // SAFETY: block_num came from the database and was previously validated
-        let last_included_block = BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?;
-        Ok((last_included_block, filtered_transactions))
+        let last_included_block = match filtered.last() {
+            Some(row) => BlockNumber::from_raw_sql(row.block_num)?,
+            None => *block_range.start(),
+        };
+
+        Ok((last_included_block, vec_raw_try_into(filtered)?))
     } else {
         Ok((*block_range.end(), vec_raw_try_into(all_transactions)?))
     }
