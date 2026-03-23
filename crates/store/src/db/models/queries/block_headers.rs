@@ -335,6 +335,10 @@ pub(crate) fn select_unproven_blocks(
 /// A block is considered proven when its `proving_inputs` are `NULL`. This includes the genesis
 /// block, which is not technically proven, but treated as such.
 ///
+/// This function is expected to only ever be called after a genesis block has been inserted into
+/// the database. As such, if a proven block is not returned by this query, it is treated as an
+/// error.
+///
 /// # Raw SQL
 ///
 /// ```sql
@@ -346,13 +350,12 @@ pub(crate) fn select_unproven_blocks(
 /// ```
 pub(crate) fn select_latest_proven_block_num(
     conn: &mut SqliteConnection,
-) -> Result<Option<BlockNumber>, DatabaseError> {
-    let block_num: Option<i64> =
+) -> Result<BlockNumber, DatabaseError> {
+    let block_num: i64 =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
             .filter(schema::block_headers::proving_inputs.is_null())
             .order(schema::block_headers::block_num.desc())
-            .first(conn)
-            .optional()?;
+            .first(conn)?;
 
-    block_num.map(BlockNumber::from_raw_sql).transpose().map_err(Into::into)
+    BlockNumber::from_raw_sql(block_num).map_err(Into::into)
 }

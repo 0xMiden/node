@@ -640,7 +640,7 @@ impl Db {
     ///
     /// This includes the genesis block, which is not technically proven, but treated as such.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_latest_proven_block_num(&self) -> Result<Option<BlockNumber>> {
+    pub async fn select_latest_proven_block_num(&self) -> Result<BlockNumber> {
         self.transact("select latest proven block num", |conn| {
             models::queries::select_latest_proven_block_num(conn)
         })

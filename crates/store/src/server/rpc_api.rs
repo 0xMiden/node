@@ -174,8 +174,7 @@ impl rpc_server::Rpc for StoreApi {
                 .db()
                 .select_latest_proven_block_num()
                 .await
-                .map_err(SyncChainMmrError::DatabaseError)?
-                .ok_or(SyncChainMmrError::NoProvenBlocks)?,
+                .map_err(SyncChainMmrError::DatabaseError)?,
         };
 
         let block_from = BlockNumber::from(block_range.block_from);

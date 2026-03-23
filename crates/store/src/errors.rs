@@ -267,8 +267,6 @@ pub enum SyncChainMmrError {
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),
-    #[error("no proven blocks available")]
-    NoProvenBlocks,
     #[error("database error")]
     #[grpc(internal)]
     DatabaseError(#[source] DatabaseError),
