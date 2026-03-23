@@ -99,15 +99,6 @@ impl BlockStore {
     // PROOF STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[expect(dead_code)]
-    pub async fn load_proof(&self, block_num: BlockNumber) -> std::io::Result<Option<Vec<u8>>> {
-        match tokio::fs::read(self.proof_path(block_num)).await {
-            Ok(data) => Ok(Some(data)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
     #[instrument(
         target = COMPONENT,
         name = "store.block_store.save_proof",
