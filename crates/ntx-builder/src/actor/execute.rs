@@ -138,9 +138,14 @@ impl NtxContext {
         &self,
         data_store: &'a NtxDataStore,
     ) -> TransactionExecutor<'a, 'b, NtxDataStore, UnreachableAuth> {
-        let exec_options =
-            ExecutionOptions::new(Some(self.max_cycles), self.max_cycles, 0, false, false)
-                .expect("max_cycles should be within valid range");
+        let exec_options = ExecutionOptions::new(
+            Some(self.max_cycles),
+            self.max_cycles,
+            ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
+            false,
+            false,
+        )
+        .expect("max_cycles should be within valid range");
 
         TransactionExecutor::new(data_store)
             .with_options(exec_options)

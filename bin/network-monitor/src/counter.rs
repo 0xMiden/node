@@ -122,7 +122,7 @@ async fn fetch_counter_value(
         .find(|slot| slot.slot_name == COUNTER_SLOT_NAME.as_str())
         .context(format!("counter slot '{}' not found", COUNTER_SLOT_NAME.as_str()))?;
 
-    // The counter value is stored as a Word, with the actual u64 value in the last element
+    // The counter value is stored as a Word, with the actual u64 value in the first element
     let slot_value: Word = counter_slot
         .commitment
         .as_ref()
@@ -130,7 +130,11 @@ async fn fetch_counter_value(
         .try_into()
         .context("failed to convert slot value to word")?;
 
-    let value = slot_value.as_elements().last().expect("Word has 4 elements").as_canonical_u64();
+    let value = slot_value
+        .as_elements()
+        .first()
+        .expect("Word has 4 elements")
+        .as_canonical_u64();
 
     Ok(Some(value))
 }
