@@ -1434,6 +1434,57 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     });
 }
 
+/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when the first
+/// block in the range has more entries than the limit allows. Previously this returned
+/// `AllEntries([])` because the pagination loop exited immediately (`last_block_included` ==
+/// `block_num`) without checking that no values were actually returned.
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block_overflow() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(12);
+
+    let block5 = BlockNumber::from(5);
+
+    let db = crate::db::Db::load(db_path).await.unwrap();
+    let slot_name_for_db = slot_name.clone();
+    db.query("insert entries in single block", move |db_conn| {
+        db_conn.transaction(|db_conn| {
+            apply_migrations(db_conn)?;
+            create_block(db_conn, block5);
+
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 0)], block5)?;
+
+            // Insert 3 entries, all in the same block
+            for i in 1..=3 {
+                queries::insert_account_storage_map_value(
+                    db_conn,
+                    account_id,
+                    block5,
+                    slot_name_for_db.clone(),
+                    num_to_storage_map_key(i),
+                    num_to_word(i * 10),
+                )?;
+            }
+            Ok::<_, DatabaseError>(())
+        })
+    })
+    .await
+    .unwrap();
+
+    // Use limit=1 so that 3 entries in a single block exceed the limit.
+    // block_range_start is block5 (the first block with data), and the target is also block5.
+    let details = db
+        .reconstruct_storage_map_from_db(account_id, slot_name.clone(), block5, Some(1))
+        .await
+        .unwrap();
+
+    assert_matches!(details.entries, StorageMapEntries::LimitExceeded);
+}
+
 // UTILITIES
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
