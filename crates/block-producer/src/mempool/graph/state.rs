@@ -159,6 +159,18 @@ where
             }
         }
     }
+
+    pub fn account_count(&self) -> usize {
+        self.accounts.len()
+    }
+
+    pub fn nullifier_count(&self) -> usize {
+        self.nullifiers.len()
+    }
+
+    pub fn output_note_count(&self) -> usize {
+        self.notes_created.len()
+    }
 }
 
 /// Tracks the per-account state transitions that are in-flight within the mempool graph.

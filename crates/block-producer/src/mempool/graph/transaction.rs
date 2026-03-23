@@ -154,4 +154,21 @@ impl TransactionGraph {
     pub fn unselected_count(&self) -> usize {
         self.inner.node_count() - self.inner.selected_count()
     }
+
+    /// Total number of transactions in the graph.
+    pub fn count(&self) -> usize {
+        self.inner.node_count()
+    }
+
+    pub fn accounts_count(&self) -> usize {
+        self.inner.account_count()
+    }
+
+    pub fn nullifier_count(&self) -> usize {
+        self.inner.nullifier_count()
+    }
+
+    pub fn output_note_count(&self) -> usize {
+        self.inner.output_note_count()
+    }
 }

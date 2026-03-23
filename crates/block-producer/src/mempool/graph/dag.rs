@@ -266,6 +266,18 @@ where
         self.nodes.len()
     }
 
+    pub fn account_count(&self) -> usize {
+        self.state.account_count()
+    }
+
+    pub fn nullifier_count(&self) -> usize {
+        self.state.nullifier_count()
+    }
+
+    pub fn output_note_count(&self) -> usize {
+        self.state.output_note_count()
+    }
+
     pub fn contains(&self, node: &N::Id) -> bool {
         self.nodes.contains_key(node)
     }

@@ -430,17 +430,26 @@ impl Mempool {
     /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
     /// does not track fields added dynamically.
     fn inject_telemetry(&self) {
-        // todo!();
-        // use miden_node_utils::tracing::OpenTelemetrySpanExt;
+        use miden_node_utils::tracing::OpenTelemetrySpanExt;
+        let span = tracing::Span::current();
 
-        // span.set_attribute("mempool.transactions.uncommitted", self.uncommitted_tx_count());
-        // span.set_attribute("mempool.transactions.unbatched", self.txs.len());
-        // span.set_attribute("mempool.batches.proposed", self.proposed_batches.len());
-        // span.set_attribute("mempool.batches.proven", self.proven_batches.len());
-        //
-        // span.set_attribute("mempool.accounts", self.accounts.len());
-        // span.set_attribute("mempool.nullifiers", self.nullifiers.len());
-        // span.set_attribute("mempool.output_notes", self.output_notes.len());
+        let committed_txs = self
+            .committed_blocks
+            .iter()
+            .flat_map(|block| block.iter())
+            .map(|batch| batch.transactions().as_slice().len())
+            .sum::<usize>();
+        span.set_attribute(
+            "mempool.transactions.uncommitted",
+            self.transactions.count() - committed_txs,
+        );
+        span.set_attribute("mempool.transactions.unbatched", self.unbatched_transactions_count());
+        span.set_attribute("mempool.batches.proposed", self.proposed_batches_count());
+        span.set_attribute("mempool.batches.proven", self.proven_batches_count());
+
+        span.set_attribute("mempool.accounts", self.transactions.accounts_count());
+        span.set_attribute("mempool.nullifiers", self.transactions.nullifier_count());
+        span.set_attribute("mempool.output_notes", self.transactions.output_note_count());
     }
 
     /// Prunes the oldest locally retained block if the number of blocks exceeds the configured
