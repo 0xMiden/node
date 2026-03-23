@@ -48,6 +48,10 @@ impl ProofTaskJoinSet {
         Self(JoinSet::new())
     }
 
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
     fn spawn(
         &mut self,
         db: &Arc<Db>,
@@ -118,19 +122,16 @@ async fn run(
 
     // In-flight proving tasks.
     let mut join_set = ProofTaskJoinSet::new();
-    // Number of blocks currently being proven.
-    let mut inflight_count: usize = 0;
     // Highest block number that is inflight or has been proven. Used to avoid re-querying
     // blocks we've already scheduled.
     let mut highest_scheduled = BlockNumber::GENESIS;
 
     loop {
         // Query the DB for unproven blocks beyond what we've already scheduled.
-        let capacity = max_concurrent_proofs.get() - inflight_count;
+        let capacity = max_concurrent_proofs.get() - join_set.len();
         if capacity > 0 {
             let unproven = db.select_unproven_blocks(highest_scheduled, capacity).await?;
 
-            inflight_count += unproven.len();
             if let Some(&last) = unproven.last() {
                 highest_scheduled = last;
             }
@@ -144,7 +145,6 @@ async fn run(
         tokio::select! {
             // Proving task completed.
             result = join_set.join_next() => {
-                inflight_count = inflight_count.saturating_sub(1);
                 info!(target=COMPONENT, block.number=%result?, "Block proven");
             },
 
