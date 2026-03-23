@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 use miden_protocol::block::BlockNumber;
@@ -25,7 +25,7 @@ where
     /// Nodes that are available for selection.
     ///
     /// These are nodes who's parents have all been selected.
-    selection_candidates: HashSet<N::Id>,
+    selection_candidates: BTreeSet<N::Id>,
 }
 
 impl<N> Default for Graph<N>
@@ -38,7 +38,7 @@ where
             nodes: HashMap::default(),
             edges: Edges::default(),
             selected: HashSet::default(),
-            selection_candidates: HashSet::default(),
+            selection_candidates: BTreeSet::default(),
             state: State::default(),
         }
     }
@@ -47,7 +47,7 @@ where
 impl<N> Graph<N>
 where
     N: GraphNode,
-    N::Id: Eq + Hash + Copy + std::fmt::Display,
+    N::Id: Eq + Hash + Copy + std::fmt::Display + Ord,
 {
     /// Appends a node to the graph.
     ///
@@ -76,7 +76,7 @@ where
     ///
     /// Candidates are nodes that are not currently selected, have all parents selected, and can be
     /// handed directly to [`select_candidate`](Self::select_candidate).
-    pub fn selection_candidates(&self) -> HashMap<&N::Id, &N> {
+    pub fn selection_candidates(&self) -> BTreeMap<&N::Id, &N> {
         self.selection_candidates
             .iter()
             .map(|id| (id, self.nodes.get(id).unwrap()))
@@ -115,11 +115,11 @@ where
         );
 
         self.selected.remove(&node);
-        // This makes the node a selection candidate by definition, and all its parents should be
+        // This makes the node a selection candidate by definition, and all its children should be
         // removed as candidates.
         self.selection_candidates.insert(node);
-        for parent in self.edges.parents_of(&node) {
-            self.selection_candidates.remove(parent);
+        for child in self.edges.children_of(&node) {
+            self.selection_candidates.remove(child);
         }
     }
 
@@ -133,6 +133,7 @@ where
         assert!(self.edges.parents_of(&node).iter().all(|parent| self.selected.contains(parent)));
 
         self.selected.insert(node);
+        self.selection_candidates.remove(&node);
 
         // Its children are now potential new candidates.
         let children = self.edges.children_of(&node).clone();

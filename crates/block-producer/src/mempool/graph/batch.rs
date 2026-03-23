@@ -77,7 +77,12 @@ impl BatchGraph {
             return Vec::default();
         }
 
-        self.inner.revert_node_and_descendants(batch)
+        let reverted = self.inner.revert_node_and_descendants(batch);
+        for batch in &reverted {
+            self.proven.remove(&batch.id());
+        }
+
+        reverted
     }
 
     /// Reverts expired batches and their descendants.

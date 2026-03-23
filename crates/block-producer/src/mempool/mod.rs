@@ -505,10 +505,8 @@ impl Mempool {
     ) -> Result<(), AddTransactionError> {
         let limit = self
             .chain_tip
-            .as_usize()
-            .checked_sub(self.committed_blocks.len())
+            .checked_sub(self.committed_blocks.len() as u32)
             .expect("amount of committed blocks cannot exceed the chain tip");
-        let limit = BlockNumber::from(limit as u32).parent().unwrap_or_default();
 
         if authentication_height < limit {
             return Err(AddTransactionError::StaleInputs {

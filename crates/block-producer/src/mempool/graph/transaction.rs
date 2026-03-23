@@ -80,7 +80,7 @@ impl TransactionGraph {
     pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
         let mut selected = SelectedBatch::builder();
 
-        while let Some((id, tx)) = self.inner.selection_candidates().into_iter().next() {
+        while let Some((id, tx)) = self.inner.selection_candidates().pop_first() {
             if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
                 break;
             }

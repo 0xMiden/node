@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::hash::Hash;
 
@@ -105,23 +105,25 @@ where
                 .expect("unauthenticated note must exist in the state")
         }));
 
-        for (account_id, from, to, store) in node.account_updates() {
-            let account = self
-                .accounts
-                .entry(account_id)
-                .or_insert_with(|| AccountStates::new(store.unwrap_or_default()));
-
-            if let Some(owner) = account.current_owner() {
-                parents.insert(owner);
-            }
+        for (account_id, from, to, _store) in node.account_updates() {
+            let account = self.accounts.entry(account_id);
 
             if from == to {
-                account.insert_pass_through(node_id);
+                account
+                    .and_modify(|account| {
+                        parents.extend(account.current_owner());
+                        account.insert_pass_through(node_id);
+                    })
+                    .or_insert_with(|| AccountStates::with_pass_through(to, node_id))
             } else {
-                let passthrough_parents: Vec<_> = account.current_pass_through().collect();
-                parents.extend(passthrough_parents);
-                account.append_state(to, node_id);
-            }
+                account
+                    .and_modify(|account| {
+                        parents.extend(account.current_owner());
+                        parents.extend(account.current_pass_through());
+                        account.append_state(to, node_id);
+                    })
+                    .or_insert_with(|| AccountStates::with_owner(to, node_id))
+            };
         }
 
         parents
@@ -166,37 +168,47 @@ where
     K: Eq + Hash + Copy,
 {
     commitment: Word,
-    nodes: HashMap<Word, CommitmentNodes<K>>,
+    nodes: VecDeque<CommitmentNodes<K>>,
 }
 
 impl<K> AccountStates<K>
 where
     K: Eq + Hash + Copy,
 {
-    fn new(commitment: Word) -> Self {
-        let mut nodes = HashMap::new();
-        nodes.insert(commitment, CommitmentNodes::default());
+    fn with_owner(commitment: Word, owner: K) -> Self {
+        let nodes = CommitmentNodes::with_owner(owner);
+        let nodes = VecDeque::from([nodes]);
+
+        Self { commitment, nodes }
+    }
+
+    fn with_pass_through(commitment: Word, node: K) -> Self {
+        let nodes = CommitmentNodes::with_pass_through(node);
+        let nodes = VecDeque::from([nodes]);
 
         Self { commitment, nodes }
     }
 
     fn append_state(&mut self, commitment: Word, owner: K) {
         self.commitment = commitment;
-        self.nodes.insert(commitment, CommitmentNodes::with_owner(owner));
+        self.nodes.push_back(CommitmentNodes::with_owner(owner));
     }
 
     fn remove_node(&mut self, node: &K, from: Word, to: Word) {
-        let Entry::Occupied(mut entry) = self.nodes.entry(to) else {
-            panic!("Account node could not be removed because its commitment does not exist");
-        };
+        if to == self.commitment {
+            let nodes = self.nodes.back_mut().unwrap();
+            nodes.remove(node);
 
-        entry.get_mut().remove(node);
-
-        if entry.get().is_empty() {
-            entry.remove();
-
-            if self.commitment == to {
+            if nodes.is_empty() {
+                self.nodes.pop_back();
                 self.commitment = from;
+            }
+        } else {
+            let nodes = self.nodes.front_mut().unwrap();
+            nodes.remove(node);
+
+            if nodes.is_empty() {
+                self.nodes.pop_front();
             }
         }
     }
@@ -214,7 +226,11 @@ where
     }
 
     fn insert_pass_through(&mut self, node: K) {
-        self.current_nodes_mut().pass_through.insert(node);
+        self.nodes
+            .back_mut()
+            .expect("current commitment must exist")
+            .pass_through
+            .insert(node);
     }
 
     fn commitment(&self) -> Word {
@@ -222,11 +238,7 @@ where
     }
 
     fn current_nodes(&self) -> &CommitmentNodes<K> {
-        self.nodes.get(&self.commitment).expect("current commitment must exist")
-    }
-
-    fn current_nodes_mut(&mut self) -> &mut CommitmentNodes<K> {
-        self.nodes.get_mut(&self.commitment).expect("current commitment must exist")
+        self.nodes.back().expect("current commitment must exist")
     }
 }
 
@@ -260,6 +272,13 @@ where
         Self {
             owner: Some(owner),
             pass_through: HashSet::default(),
+        }
+    }
+
+    fn with_pass_through(node: K) -> Self {
+        Self {
+            owner: None,
+            pass_through: HashSet::from([node]),
         }
     }
 
