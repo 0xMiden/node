@@ -132,6 +132,14 @@ make compose-genesis
 
 ### Running components individually
 
+A convenience script is provided that bootstraps and starts all components as separate processes:
+
+```sh
+export AWS_REGION=eu-north-1
+export KMS_KEY_ID=<your-kms-key-id>
+./scripts/run-node.sh
+```
+
 Each component can also be started as a standalone process. For example:
 
 ```sh
@@ -140,11 +148,11 @@ miden-node store start \
   --rpc.url http://0.0.0.0:50001 \
   --ntx-builder.url http://0.0.0.0:50002 \
   --block-producer.url http://0.0.0.0:50003 \
-  --data-directory store-data
+  --data-directory /tmp/store
 
 # Start the validator
 miden-node validator start http://0.0.0.0:50101 \
-  --data-directory validator-data
+  --data-directory /tmp/validator
 
 # Start the block producer
 miden-node block-producer start http://0.0.0.0:50201 \
@@ -163,7 +171,7 @@ miden-node ntx-builder start \
   --store.url http://127.0.0.1:50002 \
   --block-producer.url http://127.0.0.1:50201 \
   --validator.url http://127.0.0.1:50101 \
-  --data-directory ntx-builder-data
+  --data-directory /tmp/ntx-builder
 ```
 
 ### gRPC server limits and timeouts
