@@ -9,9 +9,9 @@ use miden_protocol::transaction::TransactionId;
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
+use crate::errors::StateConflict;
 use crate::mempool::BatchBudget;
 use crate::mempool::budget::BudgetStatus;
-use crate::mempool::graph::StateConflict;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
@@ -74,8 +74,7 @@ pub struct TransactionGraph {
 
 impl TransactionGraph {
     pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) -> Result<(), StateConflict> {
-        self.inner.append(tx)?;
-        Ok(())
+        self.inner.append(tx)
     }
 
     pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {

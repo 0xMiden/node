@@ -29,13 +29,7 @@ use url::Url;
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{
-    AddTransactionError,
-    BlockProducerError,
-    StoreError,
-    SubmitProvenBatchError,
-    VerifyTxError,
-};
+use crate::errors::{AddTransactionError, BlockProducerError, StoreError, SubmitProvenBatchError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
@@ -341,10 +335,16 @@ impl BlockProducerRpcServer {
         );
         debug!(target: COMPONENT, proof = ?tx.proof());
 
-        let inputs = self.store.get_tx_inputs(&tx).await.map_err(VerifyTxError::from)?;
+        let inputs = self
+            .store
+            .get_tx_inputs(&tx)
+            .await
+            .map_err(AddTransactionError::StoreConnectionFailed)?;
 
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
-        let tx = AuthenticatedTransaction::new_unchecked(tx, inputs).map(Arc::new)?;
+        let tx = AuthenticatedTransaction::new_unchecked(tx, inputs)
+            .map(Arc::new)
+            .map_err(AddTransactionError::StateConflict)?;
 
         self.mempool
             .lock()

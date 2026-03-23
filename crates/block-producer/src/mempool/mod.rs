@@ -61,11 +61,11 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use subscription::SubscriptionProvider;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
-use tracing::{instrument, warn};
+use tracing::instrument;
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::AddTransactionError;
+use crate::errors::{AddTransactionError, StateConflict};
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -77,7 +77,6 @@ mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
 mod graph;
-pub use graph::StateConflict;
 mod subscription;
 
 #[cfg(test)]
@@ -237,7 +236,9 @@ impl Mempool {
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
-        self.transactions.append(Arc::clone(&tx))?;
+        self.transactions
+            .append(Arc::clone(&tx))
+            .map_err(AddTransactionError::StateConflict)?;
         self.subscription.transaction_added(&tx);
         self.inject_telemetry();
 
@@ -429,7 +430,7 @@ impl Mempool {
     /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
     /// does not track fields added dynamically.
     fn inject_telemetry(&self) {
-        todo!();
+        // todo!();
         // use miden_node_utils::tracing::OpenTelemetrySpanExt;
 
         // span.set_attribute("mempool.transactions.uncommitted", self.uncommitted_tx_count());

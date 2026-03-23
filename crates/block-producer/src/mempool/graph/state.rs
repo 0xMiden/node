@@ -6,8 +6,8 @@ use std::hash::Hash;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::Nullifier;
-use thiserror::Error;
 
+use crate::errors::StateConflict;
 use crate::mempool::graph::node::GraphNode;
 
 /// Tracks the shared state of the mempool graph that is required to validate and apply nodes.
@@ -32,24 +32,6 @@ where
             accounts: HashMap::default(),
         }
     }
-}
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum StateConflict {
-    #[error("nullifiers already exist in the mempool: {0:?}")]
-    NullifiersAlreadyExist(Vec<Nullifier>),
-    #[error("output note commitments already exist in the mempool: {0:?}")]
-    OutputNotesAlreadyExist(Vec<Word>),
-    #[error("unauthenticated input notes are unknown: {0:?}")]
-    UnauthenticatedNotesMissing(Vec<Word>),
-    #[error(
-        "node's initial account commitment {expected} does not match the current graph commitment {current} for account {account}"
-    )]
-    AccountCommitmentMismatch {
-        account: AccountId,
-        expected: Word,
-        current: Word,
-    },
 }
 
 impl<K> State<K>

@@ -11,7 +11,6 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::task::JoinError;
 
-use crate::mempool::StateConflict;
 use crate::validator::ValidatorError;
 
 // Block-producer errors
@@ -35,77 +34,14 @@ pub enum BlockProducerError {
     },
 }
 
-// Transaction verification errors
-// =================================================================================================
-
-#[derive(Debug, Error)]
-pub enum VerifyTxError {
-    /// Another transaction already consumed the notes with given nullifiers
-    #[error(
-        "input notes with given nullifiers were already consumed by another transaction: {0:?}"
-    )]
-    InputNotesAlreadyConsumed(Vec<Nullifier>),
-
-    /// Unauthenticated transaction notes were not found in the store or in outputs of in-flight
-    /// transactions
-    #[error(
-        "unauthenticated transaction note commitments were not found in the store or in outputs of in-flight transactions: {0:?}"
-    )]
-    UnauthenticatedNotesNotFound(Vec<Word>),
-
-    #[error("output note commitments already used: {0:?}")]
-    OutputNotesAlreadyExist(Vec<Word>),
-
-    /// The account's initial commitment did not match the current account's commitment
-    #[error(
-        "transaction's initial state commitment {tx_initial_account_commitment} does not match the account's current value of {current_account_commitment}"
-    )]
-    IncorrectAccountInitialCommitment {
-        tx_initial_account_commitment: Word,
-        current_account_commitment: Word,
-    },
-
-    /// Failed to retrieve transaction inputs from the store
-    ///
-    /// TODO: Make this an "internal error". Q: Should we have a single `InternalError` enum for
-    /// all internal errors that can occur across the system?
-    #[error("failed to retrieve transaction inputs from the store")]
-    StoreConnectionFailed(#[from] StoreError),
-
-    /// Failed to verify the transaction execution proof
-    #[error("invalid transaction proof error for transaction: {0}")]
-    InvalidTransactionProof(TransactionId),
-}
-
 // Transaction adding errors
 // =================================================================================================
 
 #[derive(Debug, Error, GrpcError)]
 pub enum AddTransactionError {
-    #[error(
-        "input notes with given nullifiers were already consumed by another transaction: {0:?}"
-    )]
-    InputNotesAlreadyConsumed(Vec<Nullifier>),
-
-    #[error(
-        "unauthenticated transaction note commitments were not found in the store or in outputs of in-flight transactions: {0:?}"
-    )]
-    UnauthenticatedNotesNotFound(Vec<Word>),
-
-    #[error("output note commitments already used: {0:?}")]
-    OutputNotesAlreadyExist(Vec<Word>),
-
-    #[error(
-        "transaction's initial state commitment {tx_initial_account_commitment} does not match the account's current value of {current_account_commitment}"
-    )]
-    IncorrectAccountInitialCommitment {
-        tx_initial_account_commitment: Word,
-        current_account_commitment: Word,
-    },
-
     #[error("failed to retrieve transaction inputs from the store")]
     #[grpc(internal)]
-    StoreConnectionFailed(#[from] StoreError),
+    StoreConnectionFailed(#[source] StoreError),
 
     #[error("invalid transaction proof error for transaction: {0}")]
     InvalidTransactionProof(TransactionId),
@@ -130,38 +66,31 @@ pub enum AddTransactionError {
         limit: BlockNumber,
     },
 
-    #[error("mempool graph state conflict: {0}")]
-    GraphStateConflict(#[from] StateConflict),
+    #[error("transaction conflicts with current mempool state")]
+    StateConflict(#[source] StateConflict),
 
     #[error("the mempool is at capacity")]
     CapacityExceeded,
 }
 
-impl From<VerifyTxError> for AddTransactionError {
-    fn from(err: VerifyTxError) -> Self {
-        match err {
-            VerifyTxError::InputNotesAlreadyConsumed(nullifiers) => {
-                Self::InputNotesAlreadyConsumed(nullifiers)
-            },
-            VerifyTxError::UnauthenticatedNotesNotFound(note_commitments) => {
-                Self::UnauthenticatedNotesNotFound(note_commitments)
-            },
-            VerifyTxError::OutputNotesAlreadyExist(note_commitments) => {
-                Self::OutputNotesAlreadyExist(note_commitments)
-            },
-            VerifyTxError::IncorrectAccountInitialCommitment {
-                tx_initial_account_commitment,
-                current_account_commitment,
-            } => Self::IncorrectAccountInitialCommitment {
-                tx_initial_account_commitment,
-                current_account_commitment,
-            },
-            VerifyTxError::StoreConnectionFailed(store_err) => {
-                Self::StoreConnectionFailed(store_err)
-            },
-            VerifyTxError::InvalidTransactionProof(tx_id) => Self::InvalidTransactionProof(tx_id),
-        }
-    }
+// Submitted transaction conflicts with current state
+// =================================================================================================
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum StateConflict {
+    #[error("nullifiers already exist: {0:?}")]
+    NullifiersAlreadyExist(Vec<Nullifier>),
+    #[error("output notes already exist: {0:?}")]
+    OutputNotesAlreadyExist(Vec<Word>),
+    #[error("unauthenticated input notes are unknown: {0:?}")]
+    UnauthenticatedNotesMissing(Vec<Word>),
+    #[error(
+        "initial account commitment {expected} does not match the current commitment {current} for account {account}"
+    )]
+    AccountCommitmentMismatch {
+        account: AccountId,
+        expected: Word,
+        current: Word,
+    },
 }
 
 // Submit proven batch by user errors

@@ -8,9 +8,9 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
 use crate::domain::batch::SelectedBatch;
+use crate::errors::StateConflict;
 use crate::mempool::BlockBudget;
 use crate::mempool::budget::BudgetStatus;
-use crate::mempool::graph::StateConflict;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
