@@ -282,3 +282,68 @@ where
         self.nodes.contains_key(node)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::block::BlockNumber;
+
+    use super::*;
+    use crate::mempool::graph::node::test_node::TestNode;
+
+    #[test]
+    fn child_becomes_candidate_after_parent_selection() {
+        let mut graph = Graph::<TestNode>::default();
+
+        graph
+            .append(
+                TestNode::new(1)
+                    .with_output_notes([1])
+                    .with_expires_at(BlockNumber::from(10u32)),
+            )
+            .unwrap();
+        graph
+            .append(
+                TestNode::new(2)
+                    .with_output_notes([2])
+                    .with_unauthenticated_notes([1])
+                    .with_expires_at(BlockNumber::from(10u32)),
+            )
+            .unwrap();
+
+        let initial_candidates: Vec<u32> =
+            graph.selection_candidates().keys().map(|id| **id).collect();
+        assert_eq!(initial_candidates, vec![1]);
+
+        graph.select_candidate(1);
+
+        let candidates_after_parent: Vec<u32> =
+            graph.selection_candidates().keys().map(|id| **id).collect();
+        assert_eq!(candidates_after_parent, vec![2]);
+    }
+
+    #[test]
+    fn revert_expired_unselected_removes_descendants() {
+        let mut graph = Graph::<TestNode>::default();
+
+        graph
+            .append(
+                TestNode::new(1).with_output_notes([1]).with_expires_at(BlockNumber::from(2u32)),
+            )
+            .unwrap();
+        graph
+            .append(
+                TestNode::new(2)
+                    .with_output_notes([2])
+                    .with_unauthenticated_notes([1])
+                    .with_expires_at(BlockNumber::from(3u32)),
+            )
+            .unwrap();
+
+        let reverted = graph.revert_expired_unselected(BlockNumber::from(3u32));
+        let reverted_ids: Vec<u32> = reverted.into_iter().map(|node| node.id).collect();
+
+        assert_eq!(reverted_ids, vec![2, 1]);
+        assert_eq!(graph.node_count(), 0);
+        assert_eq!(graph.selection_candidates().len(), 0);
+    }
+}

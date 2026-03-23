@@ -91,3 +91,44 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::Edges;
+
+    #[test]
+    fn insert_adds_parent_child_relationships() {
+        let mut edges = Edges::<u32>::default();
+
+        edges.insert(1, HashSet::new());
+        assert!(edges.parents_of(&1).is_empty());
+        assert!(edges.children_of(&1).is_empty());
+
+        edges.insert(2, HashSet::from([1]));
+
+        assert_eq!(edges.parents_of(&2), &HashSet::from([1]));
+        assert_eq!(edges.children_of(&1), &HashSet::from([2]));
+        assert!(edges.children_of(&2).is_empty());
+    }
+
+    #[test]
+    fn remove_updates_inverse_relationships() {
+        let mut edges = Edges::<u32>::default();
+
+        edges.insert(1, HashSet::new());
+        edges.insert(2, HashSet::from([1]));
+        edges.insert(3, HashSet::from([2]));
+
+        edges.remove(&2);
+
+        assert!(edges.children_of(&1).is_empty());
+        assert!(edges.parents_of(&3).is_empty());
+
+        edges.insert(4, HashSet::from([3]));
+
+        assert_eq!(edges.parents_of(&4), &HashSet::from([3]));
+        assert_eq!(edges.children_of(&3), &HashSet::from([4]));
+    }
+}

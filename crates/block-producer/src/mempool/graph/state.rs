@@ -305,3 +305,163 @@ where
         self.owner.is_none() && self.pass_through.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use miden_protocol::note::Nullifier;
+    use miden_protocol::{Felt, FieldElement, Word};
+
+    use super::*;
+    use crate::errors::StateConflict;
+    use crate::mempool::graph::node::test_node::TestNode;
+    use crate::test_utils::mock_account_id;
+
+    fn word(value: u32) -> Word {
+        Word::from([Felt::from(value), Felt::ZERO, Felt::ZERO, Felt::ZERO])
+    }
+
+    fn nullifier(value: u32) -> Nullifier {
+        Nullifier::from_raw(word(value))
+    }
+
+    #[test]
+    fn validate_append_rejects_duplicate_nullifiers() {
+        let mut state = State::<u32>::default();
+        let account_id = mock_account_id(1);
+
+        let node_a = TestNode::new(1)
+            .with_nullifiers([1])
+            .with_output_notes([11])
+            .with_account_update((account_id, 0, 2, None));
+
+        state.validate_append(&node_a).unwrap();
+        state.apply_append(node_a.id, &node_a);
+
+        let node_b = TestNode::new(2)
+            .with_nullifiers([1])
+            .with_output_notes([22])
+            .with_unauthenticated_notes([11])
+            .with_account_update((account_id, 2, 3, None));
+
+        match state.validate_append(&node_b) {
+            Err(StateConflict::NullifiersAlreadyExist(duplicates)) => {
+                assert_eq!(duplicates, vec![nullifier(1)]);
+            },
+            other => panic!("expected duplicate nullifier error, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_append_registers_parents_and_counts() {
+        let mut state = State::<u32>::default();
+        let account_id = mock_account_id(2);
+
+        let node_a = TestNode::new(10)
+            .with_nullifiers([10])
+            .with_output_notes([42])
+            .with_account_update((account_id, 0, 5, None));
+
+        state.validate_append(&node_a).unwrap();
+        state.apply_append(node_a.id, &node_a);
+
+        let node_b = TestNode::new(11)
+            .with_output_notes([43])
+            .with_unauthenticated_notes([42])
+            .with_account_update((account_id, 5, 6, None));
+
+        state.validate_append(&node_b).unwrap();
+        let parents = state.apply_append(node_b.id, &node_b);
+
+        assert_eq!(parents, HashSet::from([node_a.id]));
+        assert_eq!(state.account_count(), 1);
+        assert_eq!(state.nullifier_count(), 1);
+        assert_eq!(state.output_note_count(), 2);
+    }
+
+    #[test]
+    fn validate_append_rejects_duplicate_output_notes() {
+        let mut state = State::<u32>::default();
+        let account_id = mock_account_id(4);
+
+        let node_a = TestNode::new(30)
+            .with_output_notes([200])
+            .with_account_update((account_id, 0, 5, None));
+        state.validate_append(&node_a).unwrap();
+        state.apply_append(node_a.id, &node_a);
+
+        let node_b = TestNode::new(31)
+            .with_output_notes([200])
+            .with_account_update((account_id, 5, 6, None));
+
+        match state.validate_append(&node_b) {
+            Err(StateConflict::OutputNotesAlreadyExist(duplicates)) => {
+                assert_eq!(duplicates, vec![word(200)]);
+            },
+            other => panic!("expected duplicate output note error, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_append_rejects_unknown_unauthenticated_notes() {
+        let state = State::<u32>::default();
+        let account_id = mock_account_id(5);
+
+        let node = TestNode::new(40)
+            .with_unauthenticated_notes([300])
+            .with_account_update((account_id, 0, 0, None));
+
+        match state.validate_append(&node) {
+            Err(StateConflict::UnauthenticatedNotesMissing(missing)) => {
+                assert_eq!(missing, vec![word(300)]);
+            },
+            other => panic!("expected missing unauthenticated note error, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_append_rejects_account_commitment_mismatch() {
+        let state = State::<u32>::default();
+        let account_id = mock_account_id(6);
+
+        let node = TestNode::new(50).with_account_update((account_id, 400, 401, None));
+
+        match state.validate_append(&node) {
+            Err(StateConflict::AccountCommitmentMismatch { expected, current, .. }) => {
+                assert_eq!(expected, word(400));
+                assert_eq!(current, Word::default());
+            },
+            other => panic!("expected account commitment mismatch error, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_cleans_up_account_state() {
+        let mut state = State::<u32>::default();
+        let account_id = mock_account_id(3);
+
+        let node_a = TestNode::new(21)
+            .with_nullifiers([21])
+            .with_output_notes([100])
+            .with_account_update((account_id, 0, 7, None));
+        state.validate_append(&node_a).unwrap();
+        state.apply_append(node_a.id, &node_a);
+
+        let node_b = TestNode::new(22)
+            .with_output_notes([101])
+            .with_account_update((account_id, 7, 8, None));
+        state.validate_append(&node_b).unwrap();
+        state.apply_append(node_b.id, &node_b);
+
+        state.remove(&node_b);
+        assert_eq!(state.nullifier_count(), 1);
+        assert_eq!(state.output_note_count(), 1);
+        assert_eq!(state.account_count(), 1);
+
+        state.remove(&node_a);
+        assert_eq!(state.nullifier_count(), 0);
+        assert_eq!(state.output_note_count(), 0);
+        assert_eq!(state.account_count(), 0);
+    }
+}
