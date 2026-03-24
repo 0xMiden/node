@@ -76,13 +76,11 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
         LargeSmtError::Storage(err) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
         },
-        LargeSmtError::RootMismatch { expected, actual } => {
-            StateInitializationError::AccountTreeIoError(format!(
-                "root mismatch: expected {expected:?}, got {actual:?}"
-            ))
+        err @ LargeSmtError::RootMismatch { .. } => {
+            StateInitializationError::AccountTreeIoError(err.as_report())
         },
-        LargeSmtError::StorageNotEmpty => {
-            StateInitializationError::AccountTreeIoError("storage is not empty".to_string())
+        err @ LargeSmtError::StorageNotEmpty => {
+            StateInitializationError::AccountTreeIoError(err.as_report())
         },
     }
 }
