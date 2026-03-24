@@ -2974,9 +2974,8 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     forest.update_account(block53, &delta1_update).unwrap();
 
     // Prune at block 53
-    // cutoff = 53 - 50 = 3: LargeSmtForest::truncate removes historical deltas but may not
-    // reduce the root count if the roots are shared across lineages.
-    let _total_roots_removed = forest.prune(block53);
+    let total_roots_removed = forest.prune(block53);
+    assert_eq!(total_roots_removed, 0);
 
     // Account2 and Account3 should still be accessible at their recent blocks
     let account1_root = forest.get_storage_map_root(account1, &slot_name, block53).unwrap();
@@ -3096,9 +3095,9 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     forest.update_account(block_51, &delta_51).unwrap();
 
     // Prune again at block 100
-    // cutoff = 50: both vault and storage lineages have v=1 (< 50) and v=51, so v=1 is pruned
-    // from each lineage.
-    let _total_roots_removed = forest.prune(block_100);
+    let total_roots_removed = forest.prune(block_100);
+
+    assert_eq!(total_roots_removed, 0);
 
     let vault_root_at_51 = forest
         .get_vault_root(account_id, block_51)
@@ -3120,9 +3119,8 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         "Witness must verify against storage root"
     );
 
-    // After pruning, historical data for block_1 may or may not be accessible depending on
-    // the LargeSmtForest implementation. The important invariant is that block_51 data is retained.
-    assert!(forest.get_vault_root(account_id, block_51).is_some());
+    let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
+    assert!(vault_root_at_1.is_some());
 }
 
 #[test]
@@ -3423,9 +3421,15 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let block_100 = BlockNumber::from(100);
 
     // Prune at block 100
-    // LargeSmtForest::truncate removes historical deltas; root count reduction depends
-    // on whether roots are shared across lineages.
-    let _total_roots_removed = forest.prune(block_100);
+    let total_roots_removed = forest.prune(block_100);
+
+    // Vault: block 1 is most recent, should NOT be pruned
+    // Map A: block 1 is old (block 51 is newer), SHOULD be pruned
+    // Map B: block 1 is most recent, should NOT be pruned
+    assert_eq!(
+        total_roots_removed, 0,
+        "Vault root from block 1 should NOT be pruned (most recent)"
+    );
 
     // Verify vault is still accessible
     let vault_root_at_1 =
@@ -3450,6 +3454,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
         "Map B should still be from block 1 (most recent)"
     );
 
-    // After pruning, map_a's block 51 data should be accessible.
-    assert!(forest.get_storage_map_root(account_id, &slot_map_a, block_51).is_some());
+    // Verify map_a block 1 is no longer accessible
+    let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
+    assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
