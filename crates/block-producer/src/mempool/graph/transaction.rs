@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -70,9 +70,17 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionGraph {
     inner: Graph<Arc<AuthenticatedTransaction>>,
+    /// The number of failures a transaction has participated in.
+    ///
+    /// These are batch or block proving errors in which the transaction was a part of. This is
+    /// used to identify potentially buggy transactions that should be evicted.
+    failures: HashMap<TransactionId, u32>,
 }
 
 impl TransactionGraph {
+    /// The maximum number of times a transaction is allowed to fail before being evicted.
+    const FAILURE_LIMIT: u32 = 3;
+
     pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) -> Result<(), StateConflict> {
         self.inner.append(tx)
     }
@@ -104,11 +112,15 @@ impl TransactionGraph {
     ///
     /// Returns the identifiers of transactions that were removed from the graph.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
-        self.inner
-            .revert_expired_unselected(chain_tip)
-            .into_iter()
-            .map(|tx| tx.id())
-            .collect()
+        let expired = self.inner.expired_and_unselected(chain_tip);
+
+        let mut reverted = HashSet::default();
+
+        for tx in expired {
+            reverted.extend(self.revert_tx_and_descendants(tx));
+        }
+
+        reverted
     }
 
     /// Reverts the given transaction and _all_ its descendants _IFF_ it is present in the graph.
@@ -122,11 +134,18 @@ impl TransactionGraph {
             return Vec::default();
         }
 
-        self.inner
+        let reverted = self
+            .inner
             .revert_node_and_descendants(transaction)
             .into_iter()
             .map(|tx| tx.id())
-            .collect()
+            .collect();
+
+        for tx in &reverted {
+            self.failures.remove(tx);
+        }
+
+        reverted
     }
 
     /// Marks the batch's transactions are ready for selection again.
@@ -134,10 +153,38 @@ impl TransactionGraph {
     /// # Panics
     ///
     /// Panics if the given batch has any child batches which are still in flight.
-    pub fn requeue_transactions(&mut self, batch: SelectedBatch) {
-        for tx in batch.into_transactions().iter().rev() {
+    pub fn requeue_transactions(&mut self, batch: &SelectedBatch) {
+        for tx in batch.transactions().iter().rev() {
             self.inner.deselect(tx.id());
         }
+    }
+
+    /// Increments each transaction's failure counter, and reverts transactions which exceed the
+    /// failure limit.
+    ///
+    /// This weeds out transactions which participate in batch and block failures, and might be the
+    /// root cause.
+    pub fn increment_failure_count(
+        &mut self,
+        txs: impl Iterator<Item = TransactionId>,
+    ) -> HashSet<TransactionId> {
+        let mut to_revert = Vec::default();
+
+        for tx in txs {
+            let count = self.failures.entry(tx).or_default();
+            *count += 1;
+
+            if *count > Self::FAILURE_LIMIT {
+                to_revert.push(tx);
+            }
+        }
+
+        let mut reverted = HashSet::default();
+        for tx in to_revert {
+            reverted.extend(self.revert_tx_and_descendants(tx));
+        }
+
+        reverted
     }
 
     /// Prunes the given transaction.

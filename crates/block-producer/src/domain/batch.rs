@@ -42,6 +42,10 @@ impl SelectedBatch {
         self.txs
     }
 
+    pub(crate) fn transactions(&self) -> &[Arc<AuthenticatedTransaction>] {
+        &self.txs
+    }
+
     /// The aggregated list of account transitions this batch causes given as tuples of `(AccountId,
     /// initial commitment, final commitment, Option<store commitment>)`.
     ///
