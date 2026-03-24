@@ -57,9 +57,13 @@ use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta,
-    select_latest_vault_assets,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
+};
+pub(crate) use delta::{
+    select_latest_storage_map_entries_batch,
+    select_latest_vault_assets,
+    select_latest_vault_assets_batch,
 };
 
 #[cfg(test)]
@@ -334,6 +338,23 @@ pub(crate) fn select_account_commitments_paged(
     };
 
     Ok(AccountCommitmentsPage { commitments, next_cursor })
+}
+
+/// Returns the total number of accounts in the database with `is_latest = true`.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT COUNT(*) FROM accounts WHERE is_latest = 1
+/// ```
+pub(crate) fn count_accounts(conn: &mut SqliteConnection) -> Result<usize, DatabaseError> {
+    use diesel::dsl::count_star;
+
+    let n: i64 = SelectDsl::select(schema::accounts::table, count_star())
+        .filter(schema::accounts::is_latest.eq(true))
+        .get_result(conn)?;
+
+    Ok(n as usize)
 }
 
 /// Page of public account IDs returned by [`select_public_account_ids_paged`].

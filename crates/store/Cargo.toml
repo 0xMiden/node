@@ -21,7 +21,9 @@ deadpool-diesel                 = { features = ["sqlite"], version = "0.6" }
 diesel                          = { features = ["numeric", "sqlite"], version = "2.3" }
 diesel_migrations               = { features = ["sqlite"], version = "2.3" }
 fs-err                          = { workspace = true }
+async-stream                    = { workspace = true }
 futures                         = { workspace = true }
+indicatif                       = { workspace = true }
 hex                             = { version = "0.4" }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }
@@ -39,6 +41,7 @@ miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
 rand              = { workspace = true }
 rand_chacha       = { workspace = true }
+rayon = { workspace = true }
 serde             = { features = ["derive"], version = "1" }
 thiserror         = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
@@ -66,9 +69,12 @@ miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = 
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
+
+rayon                 = { workspace = true }
 regex                 = { version = "1.11" }
 tempfile              = { workspace = true }
 termtree              = "1.0"
+tracing-subscriber    = { workspace = true }
 
 [features]
 default = ["rocksdb"]
@@ -78,6 +84,10 @@ rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-node-utils/rocksdb"]
 harness           = false
 name              = "account_tree"
 required-features = ["rocksdb"]
+
+[[bench]]
+harness = false
+name    = "state_load"
 
 [package.metadata.cargo-machete]
 # This is an indirect dependency for which we need to enable optimisations/features

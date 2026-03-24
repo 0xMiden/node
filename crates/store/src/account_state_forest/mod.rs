@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
@@ -21,6 +21,7 @@ use miden_protocol::crypto::merkle::smt::{
     LineageId,
     RootInfo,
     SMT_DEPTH,
+    SmtForestUpdateBatch,
     SmtUpdateBatch,
     TreeId,
 };
@@ -341,6 +342,172 @@ impl AccountStateForest {
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
+    /// Inserts a brand-new account into the forest directly from raw DB data, without going
+    /// through a full `Account` or `AccountDelta`.
+    ///
+    /// This is the fast path used during `load_smt_forest` at startup: the vault assets and
+    /// storage map entries are fetched directly from their respective tables and inserted here,
+    /// avoiding the expensive full-account load + `AccountDelta::try_from` conversion.
+    ///
+    /// Semantics are identical to calling `update_account` with a full-state delta:
+    /// - `insert_account_vault` is called unconditionally (empty vault is still recorded)
+    /// - `insert_account_storage` is called for every map slot with its entries
+    /// Inserts a batch of brand-new accounts into the forest.
+    pub(crate) fn insert_accounts_batch(
+        &mut self,
+        block_num: BlockNumber,
+        batch: BTreeMap<
+            AccountId,
+            (Vec<Asset>, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>),
+        >,
+    ) -> Result<(), AccountStateForestError> {
+        let prepared: SmtForestUpdateBatch = batch
+            .into_iter()
+            .map(|(account_id, (assets, map_entries))| {
+                let mut forest_batch = SmtForestUpdateBatch::empty();
+
+                // vault
+                {
+                    let entries: Vec<(Word, Word)> = assets
+                        .iter()
+                        .map(|asset| match asset {
+                            Asset::Fungible(f) => (f.vault_key().into(), (*f).into()),
+                            Asset::NonFungible(nf) => (nf.vault_key().into(), (*nf).into()),
+                        })
+                        .collect();
+                    let ops = Self::build_forest_operations(entries);
+                    forest_batch
+                        .add_operations(Self::vault_lineage_id(account_id), ops.into_iter());
+                }
+
+                // storage maps
+                for (slot_name, entries) in map_entries {
+                    let hashed: Vec<(Word, Word)> = entries
+                        .iter()
+                        .filter(|&(_, v)| *v != EMPTY_WORD)
+                        .map(|(&k, &v)| (k.hash().into(), v))
+                        .collect();
+                    let ops = Self::build_forest_operations(hashed);
+                    forest_batch.add_operations(
+                        Self::storage_lineage_id(account_id, &slot_name),
+                        ops.into_iter(),
+                    );
+                }
+
+                forest_batch
+            })
+            .fold(SmtForestUpdateBatch::empty(), |mut a, b| {
+                for (lineage, batch) in b {
+                    a.add_operations(lineage, batch.into_iter());
+                }
+                a
+            });
+
+        // --- sequential application -----------------------------------------
+        self.update_forest(block_num, prepared);
+
+        Ok(())
+    }
+
+    /// Applies a pre-computed [`SmtForestUpdateBatch`] to the forest in a single sequential pass.
+    ///
+    /// Every lineage must be new (no prior version). This is the only method that mutates
+    /// `self.forest` during bulk loading; all CPU-bound preparation happens before this call.
+    fn update_forest(&mut self, block_num: BlockNumber, updates: SmtForestUpdateBatch) {
+        let version = block_num.as_u64();
+        // TODO FIXME
+        for (lineage, batch) in updates.into_iter() {
+            self.forest
+                .add_lineage(lineage, version, SmtUpdateBatch::new(batch.into_iter()))
+                .expect("forest update should succeed");
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_account(
+        &mut self,
+        block_num: BlockNumber,
+        account_id: AccountId,
+        assets: &[Asset],
+        map_entries: &BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
+    ) -> Result<(), AccountStateForestError> {
+        // --- vault -----------------------------------------------------------
+        {
+            let prev_root = self.get_latest_vault_root(account_id);
+            let lineage = Self::vault_lineage_id(account_id);
+            assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+            assert!(
+                self.forest.latest_version(lineage).is_none(),
+                "account should not be in the forest"
+            );
+
+            let mut entries: Vec<(Word, Word)> = Vec::new();
+            for asset in assets {
+                match asset {
+                    Asset::Fungible(f) => entries.push((f.vault_key().into(), (*f).into())),
+                    Asset::NonFungible(nf) => entries.push((nf.vault_key().into(), (*nf).into())),
+                }
+            }
+
+            let num_entries = entries.len();
+            let lineage = Self::vault_lineage_id(account_id);
+            let operations = Self::build_forest_operations(entries);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                %account_id,
+                %block_num,
+                %new_root,
+                vault_entries = num_entries,
+                "Inserted vault into forest"
+            );
+        }
+
+        // --- storage maps ----------------------------------------------------
+        for (slot_name, entries) in map_entries {
+            let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
+            assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+
+            let raw_map_entries: Vec<(StorageMapKey, Word)> = entries
+                .iter()
+                .filter(|&(_, v)| *v != EMPTY_WORD)
+                .map(|(&k, &v)| (k, v))
+                .collect();
+
+            if raw_map_entries.is_empty() {
+                let lineage = Self::storage_lineage_id(account_id, slot_name);
+                let _new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
+                continue;
+            }
+
+            let hashed_entries: Vec<(Word, Word)> = raw_map_entries
+                .iter()
+                .map(|(raw_key, value)| (raw_key.hash().into(), *value))
+                .collect();
+
+            let lineage = Self::storage_lineage_id(account_id, slot_name);
+            assert!(
+                self.forest.latest_version(lineage).is_none(),
+                "account should not be in the forest"
+            );
+            let operations = Self::build_forest_operations(hashed_entries);
+            let new_root = self.apply_forest_updates(lineage, block_num, operations);
+
+            tracing::debug!(
+                target: crate::COMPONENT,
+                %account_id,
+                %block_num,
+                ?slot_name,
+                %new_root,
+                delta_entries = raw_map_entries.len(),
+                "Inserted storage map into forest"
+            );
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn update_account(
         &mut self,
         block_num: BlockNumber,

@@ -361,43 +361,80 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 /// Loads SMT forest with storage map and vault Merkle paths for all public accounts.
 #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
 pub async fn load_smt_forest(
-    db: &mut Db,
+    db: &Db,
     block_num: BlockNumber,
 ) -> Result<AccountStateForest, StateInitializationError> {
-    use miden_protocol::account::delta::AccountDelta;
+    use futures::StreamExt;
+    use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
+    // How many DB fetches to drive concurrently.
+    const CONCURRENCY: usize = 64;
+
+    let total = db.count_accounts().await? as u64;
+
+    let multi = MultiProgress::new();
+    let style =
+        ProgressStyle::with_template("{msg:12} [{bar:50.cyan/blue}] {pos}/{len} ({eta} remaining)")
+            .unwrap()
+            .progress_chars("=> ");
+
+    let pb_page = multi.add(ProgressBar::new(total));
+    pb_page.set_style(style.clone());
+    pb_page.set_message("paging");
+
+    let pb_fetch = multi.add(ProgressBar::new(total));
+    pb_fetch.set_style(style.clone());
+    pb_fetch.set_message("fetching");
+
+    let pb_insert = multi.add(ProgressBar::new(total));
+    pb_insert.set_style(style);
+    pb_insert.set_message("inserting");
+
+    // Build a stream of (account_id, assets, map_entries) by paging through IDs and
+    // mapping each one to a fetch future, then running up to CONCURRENCY futures at once.
+    // Each item in the stream is a full page of account IDs.
+    let page_stream = async_stream::stream! {
+        let mut cursor = None;
+        loop {
+            let page = db
+                .select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor)
+                .await?;
+            let done = page.next_cursor.is_none();
+            let n = page.account_ids.len() as u64;
+            yield Ok::<_, StateInitializationError>(page.account_ids);
+            pb_page.inc(n);
+            if done {
+                break;
+            }
+            cursor = page.next_cursor;
+        }
+        pb_page.finish_with_message("paged");
+    };
+
+    // Map each page to a single batch fetch future.
+    let fetch_stream = page_stream.map(|res| {
+        let pb_fetch = pb_fetch.clone();
+        async move {
+            let account_ids = res?;
+            let n = account_ids.len() as u64;
+            let batch = db.select_account_forest_data_batch(account_ids).await?;
+            pb_fetch.inc(n);
+            Ok::<_, StateInitializationError>(batch)
+        }
+    });
+
+    let buffered = fetch_stream.buffered(CONCURRENCY);
 
     let mut forest = AccountStateForest::new();
-    let mut cursor = None;
-
-    loop {
-        let page = db.select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor).await?;
-
-        if page.account_ids.is_empty() {
-            break;
-        }
-
-        // Process each account in this page
-        for account_id in page.account_ids {
-            // TODO: Loading the full account from the database is inefficient and will need to
-            // go away. <https://github.com/0xMiden/node/issues/1556>
-            let account_info = db.select_account(account_id).await?;
-            let account = account_info
-                .details
-                .ok_or(StateInitializationError::PublicAccountMissingDetails(account_id))?;
-
-            // Convert the full account to a full-state delta
-            let delta = AccountDelta::try_from(account).map_err(|e| {
-                StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
-            })?;
-
-            forest.update_account(block_num, &delta)?;
-        }
-
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
+    tokio::pin!(buffered);
+    while let Some(result) = buffered.next().await {
+        let batch = result?;
+        let n = batch.len() as u64;
+        forest.insert_accounts_batch(block_num, batch)?;
+        pb_insert.inc(n);
     }
+    pb_fetch.finish_with_message("fetched");
+    pb_insert.finish_with_message("inserted");
 
     Ok(forest)
 }
