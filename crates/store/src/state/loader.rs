@@ -76,10 +76,7 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
         LargeSmtError::Storage(err) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
         },
-        err @ LargeSmtError::RootMismatch { .. } => {
-            StateInitializationError::AccountTreeIoError(err.as_report())
-        },
-        err @ LargeSmtError::StorageNotEmpty => {
+        err @ (LargeSmtError::RootMismatch { .. } | LargeSmtError::StorageNotEmpty) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
         },
     }
