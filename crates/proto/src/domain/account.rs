@@ -115,7 +115,6 @@ impl From<&AccountInfo> for proto::account::AccountDetails {
 // ACCOUNT STORAGE HEADER
 //================================================================================================
 
-#[grpc_decode]
 impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
     type Error = ConversionError;
 
@@ -125,9 +124,10 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
         let slot_headers = slots
             .into_iter()
             .map(|slot| {
+                let decoder = slot.decoder();
                 let slot_name = StorageSlotName::new(slot.slot_name)?;
                 let slot_type = storage_slot_type_from_raw(slot.slot_type)?;
-                let commitment = slot.commitment.decode()?;
+                let commitment = decoder.decode_field("commitment", slot.commitment)?;
                 Ok(StorageSlotHeader::new(slot_name, slot_type, commitment))
             })
             .collect::<Result<Vec<_>, ConversionError>>()
@@ -348,7 +348,6 @@ impl AccountVaultDetails {
     }
 }
 
-#[grpc_decode]
 impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
     type Error = ConversionError;
 
@@ -360,7 +359,8 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         } else {
             let parsed_assets =
                 Result::<Vec<_>, ConversionError>::from_iter(assets.into_iter().map(|asset| {
-                    let word: Word = asset.asset.decode()?;
+                    let decoder = asset.decoder();
+                    let word: Word = decoder.decode_field("asset", asset.asset)?;
                     Asset::try_from(word).map_err(ConversionError::from)
                 }))
                 .context("assets")?;
@@ -496,7 +496,6 @@ impl AccountStorageMapDetails {
     }
 }
 
-#[grpc_decode]
 impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
     for AccountStorageMapDetails
 {
@@ -532,8 +531,9 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     let entries = entries
                         .into_iter()
                         .map(|entry| {
-                            let key = StorageMapKey::new(entry.key.decode()?);
-                            let value = entry.value.decode()?;
+                            let decoder = entry.decoder();
+                            let key = StorageMapKey::new(decoder.decode_field("key", entry.key)?);
+                            let value = decoder.decode_field("value", entry.value)?;
                             Ok((key, value))
                         })
                         .collect::<Result<Vec<_>, ConversionError>>()
@@ -543,7 +543,10 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                 Some(ProtoEntries::EntriesWithProofs(MapEntriesWithProofs { entries })) => {
                     let proofs = entries
                         .into_iter()
-                        .map(|entry| entry.proof.decode())
+                        .map(|entry| {
+                            let decoder = entry.decoder();
+                            decoder.decode_field("proof", entry.proof)
+                        })
                         .collect::<Result<Vec<_>, ConversionError>>()
                         .context("entries")?;
                     StorageMapEntries::EntriesWithProofs(proofs)

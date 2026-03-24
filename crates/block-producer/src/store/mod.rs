@@ -80,7 +80,8 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
 
         let mut nullifiers = HashMap::new();
         for nullifier_record in response.nullifiers {
-            let nullifier = nullifier_record.nullifier.decode()?;
+            let decoder = nullifier_record.decoder();
+            let nullifier = decoder.decode_field("nullifier", nullifier_record.nullifier)?;
 
             // Note that this intentionally maps 0 to None as this is the definition used in
             // protobuf.
