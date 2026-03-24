@@ -279,6 +279,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use miden_protocol::block::BlockNumber;
 
     use super::*;
@@ -313,5 +315,36 @@ mod tests {
         let candidates_after_parent: Vec<u32> =
             graph.selection_candidates().keys().map(|id| **id).collect();
         assert_eq!(candidates_after_parent, vec![2]);
+    }
+
+    #[test]
+    fn expired_and_unselected_returns_only_expired_unselected_nodes() {
+        let mut graph = Graph::<TestNode>::default();
+
+        graph
+            .append(
+                TestNode::new(1).with_output_notes([1]).with_expires_at(BlockNumber::from(5u32)),
+            )
+            .unwrap();
+        graph
+            .append(
+                TestNode::new(2).with_output_notes([2]).with_expires_at(BlockNumber::from(6u32)),
+            )
+            .unwrap();
+        graph
+            .append(
+                TestNode::new(3)
+                    .with_output_notes([3])
+                    .with_expires_at(BlockNumber::from(10u32)),
+            )
+            .unwrap();
+
+        graph.select_candidate(1);
+
+        let expired = graph.expired_and_unselected(BlockNumber::from(6u32));
+        let mut expected = HashSet::new();
+        expected.insert(2u32);
+
+        assert_eq!(expired, expected);
     }
 }

@@ -266,14 +266,19 @@ impl Mempool {
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         let reverted_batches = self.batches.revert_batch_and_descendants(batch);
-        let mut txs = Vec::new();
-        for reverted in reverted_batches {
-            self.transactions.requeue_transactions(&reverted);
-            txs.extend(reverted.transactions().iter().map(|tx| tx.id()));
+        for reverted in &reverted_batches {
+            self.transactions.requeue_transactions(reverted);
         }
 
-        let reverted_txs = self.transactions.increment_failure_count(txs.into_iter());
-        self.subscription.txs_reverted(reverted_txs);
+        // Find rolled back batch to mark the txs as failed.
+        //
+        // Note that its possible it doesn't exist, since this batch could have already been
+        // reverted as part of a separate rollback.
+        if let Some(batch) = reverted_batches.iter().find(|reverted| reverted.id() == batch) {
+            let failed_txs = batch.transactions().iter().map(|tx| tx.id());
+            let reverted_txs = self.transactions.increment_failure_count(failed_txs);
+            self.subscription.txs_reverted(reverted_txs);
+        }
 
         self.inject_telemetry();
     }
@@ -378,18 +383,18 @@ impl Mempool {
         // Revert the batches, and requeue the transactions for batch selection.
         //
         // Transactions which have failed excessively are also reverted.
-        let (_, batches) = self.pending_block.take().expect("we just checked it is some");
-        let mut txs = Vec::new();
-        for batch in batches {
+        let (_, block) = self.pending_block.take().expect("we just checked it is some");
+        for batch in &block {
             let reverted = self.batches.revert_batch_and_descendants(batch.id());
 
             for batch in reverted {
                 self.transactions.requeue_transactions(&batch);
-                txs.extend(batch.transactions().iter().map(|tx| tx.id()));
             }
         }
-
-        let reverted_txs = self.transactions.increment_failure_count(txs.into_iter());
+        let failed_txs = block
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
+        let reverted_txs = self.transactions.increment_failure_count(failed_txs);
 
         self.subscription.txs_reverted(reverted_txs);
         self.inject_telemetry();

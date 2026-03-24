@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::transaction::TransactionHeader;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -114,6 +115,9 @@ fn failed_batch_transactions_are_requeued() {
     reference.select_batch().unwrap();
     reference.add_transaction(txs[1].clone()).unwrap();
     reference.add_transaction(txs[2].clone()).unwrap();
+    reference
+        .transactions
+        .increment_failure_count(failed_batch.txs().iter().map(|tx| tx.id()));
 
     assert_eq!(uut, reference);
 }
@@ -185,11 +189,9 @@ fn cannot_have_multiple_inflight_blocks() {
 // BLOCK FAILED TESTS
 // ================================================================================================
 
-/// A failed block should have all of its transactions reverted.
 #[test]
-fn block_failure_reverts_its_transactions() {
-    // We will revert everything so the reference should be the empty mempool.
-    let (mut uut, reference) = Mempool::for_tests();
+fn block_failure_increments_tx_failures() {
+    let (mut uut, mut reference) = Mempool::for_tests();
 
     let reverted_txs = MockProvenTxBuilder::sequential();
 
@@ -200,7 +202,7 @@ fn block_failure_reverts_its_transactions() {
     ])));
 
     // Block 1 will contain just the first batch.
-    let (number, _batches) = uut.select_block();
+    let (number, block) = uut.select_block();
 
     // Create another dependent batch.
     uut.add_transaction(reverted_txs[1].clone()).unwrap();
@@ -208,10 +210,41 @@ fn block_failure_reverts_its_transactions() {
     // Create another dependent transaction.
     uut.add_transaction(reverted_txs[2].clone()).unwrap();
 
-    // Fail the block which should result in everything reverting.
     uut.rollback_block(number);
 
+    // Reference should contain all transactions, no batches, with tx failure from just that block.
+    reference.add_transaction(reverted_txs[0].clone()).unwrap();
+    reference.add_transaction(reverted_txs[1].clone()).unwrap();
+    reference.add_transaction(reverted_txs[2].clone()).unwrap();
+
+    reference.transactions.increment_failure_count(
+        block
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id)),
+    );
+
     assert_eq!(uut, reference);
+}
+
+#[test]
+fn transactions_exceeding_failure_limit_are_removed() {
+    let (mut uut, _) = Mempool::for_tests();
+
+    let failing_tx = MockProvenTxBuilder::with_account_index(0).build();
+    let failing_tx = Arc::new(AuthenticatedTransaction::from_inner(failing_tx));
+    let tx_id = failing_tx.id();
+
+    uut.add_transaction(failing_tx).unwrap();
+
+    for _ in 0..3 {
+        let reverted = uut.transactions.increment_failure_count(std::iter::once(tx_id));
+        assert!(reverted.is_empty());
+        assert_eq!(uut.unbatched_transactions_count(), 1);
+    }
+
+    let reverted = uut.transactions.increment_failure_count(std::iter::once(tx_id));
+    assert!(reverted.contains(&tx_id));
+    assert_eq!(uut.unbatched_transactions_count(), 0);
 }
 
 /// We've decided that transactions from a rolled back batch should be requeued.
@@ -244,6 +277,9 @@ fn transactions_from_reverted_batches_are_requeued() {
     reference.add_transaction(tx_set_a[1].clone()).unwrap();
     reference.add_transaction(tx_set_b[2].clone()).unwrap();
     reference.add_transaction(tx_set_a[2].clone()).unwrap();
+    reference
+        .transactions
+        .increment_failure_count([tx_set_a[1].id(), tx_set_b[1].id()].into_iter());
 
     assert_eq!(uut, reference);
 }
@@ -339,6 +375,9 @@ fn pass_through_txs_with_note_dependencies() {
     uut.rollback_batch(batch_a.id());
     reference.add_transaction(tx_pass_through_a).unwrap();
     reference.add_transaction(tx_pass_through_b).unwrap();
+    reference
+        .transactions
+        .increment_failure_count(batch_a.txs().iter().map(|tx| tx.id()));
 
     assert_eq!(uut, reference);
 }
