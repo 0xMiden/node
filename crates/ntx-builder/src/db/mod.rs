@@ -7,15 +7,15 @@ use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{NoteScript, Nullifier};
+use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
-use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
 use crate::inflight_note::InflightNetworkNote;
+use crate::{COMPONENT, NoteError};
 
 pub(crate) mod models;
 
@@ -101,16 +101,25 @@ impl Db {
             .await
     }
 
-    /// Marks notes as failed by incrementing `attempt_count` and setting `last_attempt`.
+    /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
+    /// the latest error message.
     pub async fn notes_failed(
         &self,
-        nullifiers: Vec<Nullifier>,
+        failed_notes: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
     ) -> Result<()> {
         self.inner
             .transact("notes_failed", move |conn| {
-                queries::notes_failed(conn, &nullifiers, block_num)
+                queries::notes_failed(conn, &failed_notes, block_num)
             })
+            .await
+    }
+
+    /// Returns the latest execution error for a note identified by its note ID.
+    pub async fn get_note_error(&self, note_id: NoteId) -> Result<Option<queries::NoteErrorRow>> {
+        let note_id_bytes = models::conv::note_id_to_bytes(&note_id);
+        self.inner
+            .query("get_note_error", move |conn| queries::get_note_error(conn, &note_id_bytes))
             .await
     }
 

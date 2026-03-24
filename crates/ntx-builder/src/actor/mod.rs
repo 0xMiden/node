@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Context;
 use candidate::TransactionCandidate;
 use futures::FutureExt;
-use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
@@ -18,14 +17,14 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
+use miden_tx::FailedNote;
 use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
+use crate::NoteError;
 use crate::chain_state::ChainState;
-use crate::clients::{BlockProducerClient, StoreClient};
+use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use crate::db::Db;
-use crate::inflight_note::InflightNetworkNote;
 
 // ACTOR REQUESTS
 // ================================================================================================
@@ -37,7 +36,7 @@ pub enum ActorRequest {
     /// the oneshot channel, preventing race conditions where the actor could re-select the same
     /// notes before the failure is persisted.
     NotesFailed {
-        nullifiers: Vec<Nullifier>,
+        failed_notes: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
         ack_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -53,13 +52,13 @@ pub enum ActorRequest {
 pub struct AccountActorContext {
     /// Client for interacting with the store in order to load account state.
     pub store: StoreClient,
-    /// Address of the block producer gRPC server.
-    pub block_producer_url: Url,
-    /// Address of the Validator server.
-    pub validator_url: Url,
-    /// Address of the remote prover. If `None`, transactions will be proven locally, which is
-    // undesirable due to the performance impact.
-    pub tx_prover_url: Option<Url>,
+    /// Client for interacting with the block producer.
+    pub block_producer: BlockProducerClient,
+    /// Client for interacting with the validator.
+    pub validator: ValidatorClient,
+    /// Client for remote transaction proving. If `None`, transactions will be proven locally,
+    /// which is undesirable due to the performance impact.
+    pub prover: Option<RemoteTransactionProver>,
     /// The latest chain state that account all actors can rely on. A single chain state is shared
     /// among all actors.
     pub chain_state: Arc<RwLock<ChainState>>,
@@ -76,6 +75,8 @@ pub struct AccountActorContext {
     pub db: Db,
     /// Channel for sending requests to the coordinator (via the builder event loop).
     pub request_tx: mpsc::Sender<ActorRequest>,
+    /// Maximum number of VM execution cycles for network transactions.
+    pub max_cycles: u32,
 }
 
 #[cfg(test)]
@@ -100,9 +101,9 @@ impl AccountActorContext {
         let (request_tx, _request_rx) = mpsc::channel(1);
 
         Self {
-            block_producer_url: url.clone(),
-            validator_url: url.clone(),
-            tx_prover_url: None,
+            block_producer: BlockProducerClient::new(url.clone()),
+            validator: ValidatorClient::new(url.clone()),
+            prover: None,
             chain_state,
             store: StoreClient::new(url),
             script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
@@ -111,6 +112,7 @@ impl AccountActorContext {
             idle_timeout: Duration::from_secs(60),
             db: db.clone(),
             request_tx,
+            max_cycles: 1 << 16,
         }
     }
 }
@@ -218,6 +220,8 @@ pub struct AccountActor {
     idle_timeout: Duration,
     /// Channel for sending requests to the coordinator.
     request_tx: mpsc::Sender<ActorRequest>,
+    /// Maximum number of VM execution cycles for network transactions.
+    max_cycles: u32,
 }
 
 impl AccountActor {
@@ -228,15 +232,6 @@ impl AccountActor {
         notify: Arc<Notify>,
         cancel_token: CancellationToken,
     ) -> Self {
-        let block_producer = BlockProducerClient::new(actor_context.block_producer_url.clone());
-        let validator = Builder::new(actor_context.validator_url.clone())
-            .without_tls()
-            .with_timeout(Duration::from_secs(10))
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>();
-        let prover = actor_context.tx_prover_url.clone().map(RemoteTransactionProver::new);
         Self {
             origin,
             store: actor_context.store.clone(),
@@ -244,15 +239,16 @@ impl AccountActor {
             mode: ActorMode::NoViableNotes,
             notify,
             cancel_token,
-            block_producer,
-            validator,
-            prover,
+            block_producer: actor_context.block_producer.clone(),
+            validator: actor_context.validator.clone(),
+            prover: actor_context.prover.clone(),
             chain_state: actor_context.chain_state.clone(),
             script_cache: actor_context.script_cache.clone(),
             max_notes_per_tx: actor_context.max_notes_per_tx,
             max_note_attempts: actor_context.max_note_attempts,
             idle_timeout: actor_context.idle_timeout,
             request_tx: actor_context.request_tx.clone(),
+            max_cycles: actor_context.max_cycles,
         }
     }
 
@@ -400,6 +396,7 @@ impl AccountActor {
             self.store.clone(),
             self.script_cache.clone(),
             self.db.clone(),
+            self.max_cycles,
         );
 
         let notes = tx_candidate.notes.clone();
@@ -423,23 +420,43 @@ impl AccountActor {
                 );
                 self.cache_note_scripts(scripts_to_cache).await;
                 if !failed.is_empty() {
-                    let nullifiers: Vec<_> =
-                        failed.into_iter().map(|note| note.note.nullifier()).collect();
-                    self.mark_notes_failed(&nullifiers, block_num).await;
+                    let failed_notes = log_failed_notes(failed);
+                    self.mark_notes_failed(&failed_notes, block_num).await;
                 }
                 self.mode = ActorMode::TransactionInflight(tx_id);
             },
             // Transaction execution failed.
             Err(err) => {
+                let error_msg = err.as_report();
                 tracing::error!(
                     %account_id,
                     ?note_ids,
-                    err = err.as_report(),
+                    err = %error_msg,
                     "network transaction failed",
                 );
                 self.mode = ActorMode::NoViableNotes;
-                let nullifiers: Vec<_> = notes.iter().map(InflightNetworkNote::nullifier).collect();
-                self.mark_notes_failed(&nullifiers, block_num).await;
+
+                // For `AllNotesFailed`, use the per-note errors which contain the
+                // specific reason each note failed (e.g. consumability check details).
+                let failed_notes: Vec<_> = match err {
+                    execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
+                    other => {
+                        let error: NoteError = Arc::new(other);
+                        notes
+                            .iter()
+                            .map(|note| {
+                                tracing::info!(
+                                    note.id = %note.to_inner().as_note().id(),
+                                    nullifier = %note.nullifier(),
+                                    err = %error_msg,
+                                    "note failed: transaction execution error",
+                                );
+                                (note.nullifier(), error.clone())
+                            })
+                            .collect()
+                    },
+                };
+                self.mark_notes_failed(&failed_notes, block_num).await;
             },
         }
     }
@@ -461,12 +478,16 @@ impl AccountActor {
     /// Sends a request to the coordinator to mark notes as failed and waits for the DB write to
     /// complete. This prevents a race condition where the actor could re-select the same notes
     /// before the failure counts are updated in the database.
-    async fn mark_notes_failed(&self, nullifiers: &[Nullifier], block_num: BlockNumber) {
+    async fn mark_notes_failed(
+        &self,
+        failed_notes: &[(Nullifier, NoteError)],
+        block_num: BlockNumber,
+    ) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         if self
             .request_tx
             .send(ActorRequest::NotesFailed {
-                nullifiers: nullifiers.to_vec(),
+                failed_notes: failed_notes.to_vec(),
                 block_num,
                 ack_tx,
             })
@@ -478,4 +499,21 @@ impl AccountActor {
         // Wait for the coordinator to confirm the DB write.
         let _ = ack_rx.await;
     }
+}
+
+/// Logs each failed note and returns a vec of `(nullifier, error)` pairs.
+fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
+    failed
+        .into_iter()
+        .map(|f| {
+            let error_msg = f.error.as_report();
+            tracing::info!(
+                note.id = %f.note.id(),
+                nullifier = %f.note.nullifier(),
+                err = %error_msg,
+                "note failed: consumability check",
+            );
+            (f.note.nullifier(), Arc::new(f.error) as NoteError)
+        })
+        .collect()
 }

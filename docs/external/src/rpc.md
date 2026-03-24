@@ -26,6 +26,7 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [SyncChainMmr](#syncchainmmr)
 - [SyncTransactions](#synctransactions)
 - [Status](#status)
+- [GetNoteError](#getnoteerror)
 
 <!--toc:end-->
 
@@ -230,6 +231,32 @@ Returns transaction records for specific accounts within a block range.
 ### Status
 
 Request the status of the node components. The response contains the current version of the RPC component and the connection status of the other components, including their versions and the number of the most recent block in the chain (chain tip).
+
+### GetNoteError
+
+Returns the latest execution error for a network note, if any. This is useful for debugging notes that are failing to be consumed by the network transaction builder.
+
+This endpoint is only available when the network transaction builder is enabled and connected. If it is not configured, the endpoint returns `UNAVAILABLE`.
+
+#### Request
+
+```protobuf
+message NoteId {
+    Digest id = 1;  // The note ID
+}
+```
+
+#### Response
+
+```protobuf
+message GetNoteErrorResponse {
+    optional string error = 1;                  // The latest error message, if any
+    uint32 attempt_count = 2;                   // Number of failed execution attempts
+    optional fixed32 last_attempt_block_num = 3; // Block number of the last failed attempt, if any
+}
+```
+
+If the note is not found in the network transaction builder's database, the endpoint returns `NOT_FOUND`.
 
 ## Error Handling
 

@@ -4,7 +4,13 @@ use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{ENV_BLOCK_PRODUCER_URL, ENV_RPC_URL, ENV_STORE_RPC_URL, ENV_VALIDATOR_URL};
+use super::{
+    ENV_BLOCK_PRODUCER_URL,
+    ENV_NTX_BUILDER_URL,
+    ENV_RPC_URL,
+    ENV_STORE_RPC_URL,
+    ENV_VALIDATOR_URL,
+};
 use crate::commands::ENV_ENABLE_OTEL;
 
 #[derive(clap::Subcommand)]
@@ -28,6 +34,11 @@ pub enum RpcCommand {
         #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
         validator_url: Url,
 
+        /// The network transaction builder's gRPC url. If unset, the `GetNoteError` endpoint
+        /// will be unavailable.
+        #[arg(long = "ntx-builder.url", env = ENV_NTX_BUILDER_URL, value_name = "URL")]
+        ntx_builder_url: Option<Url>,
+
         /// Enables the exporting of traces for OpenTelemetry.
         ///
         /// This can be further configured using environment variables as defined in the official
@@ -47,6 +58,7 @@ impl RpcCommand {
             store_url,
             block_producer_url,
             validator_url,
+            ntx_builder_url,
             enable_otel: _,
             grpc_options,
         } = self;
@@ -61,6 +73,7 @@ impl RpcCommand {
             store_url,
             block_producer_url,
             validator_url,
+            ntx_builder_url,
             grpc_options,
         }
         .serve()

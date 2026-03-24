@@ -2,7 +2,13 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::clients::{BlockProducerClient, Builder, StoreRpcClient, ValidatorClient};
+use miden_node_proto::clients::{
+    BlockProducerClient,
+    Builder,
+    NtxBuilderClient,
+    StoreRpcClient,
+    ValidatorClient,
+};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
@@ -37,11 +43,17 @@ pub struct RpcService {
     store: StoreRpcClient,
     block_producer: Option<BlockProducerClient>,
     validator: ValidatorClient,
+    ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
 }
 
 impl RpcService {
-    pub(super) fn new(store_url: Url, block_producer_url: Option<Url>, validator_url: Url) -> Self {
+    pub(super) fn new(
+        store_url: Url,
+        block_producer_url: Option<Url>,
+        validator_url: Url,
+        ntx_builder_url: Option<Url>,
+    ) -> Self {
         let store = {
             info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
             Builder::new(store_url)
@@ -83,10 +95,26 @@ impl RpcService {
                 .connect_lazy::<ValidatorClient>()
         };
 
+        let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
+            info!(
+                target: COMPONENT,
+                ntx_builder_endpoint = %ntx_builder_url,
+                "Initializing ntx-builder client",
+            );
+            Builder::new(ntx_builder_url)
+                .without_tls()
+                .without_timeout()
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<NtxBuilderClient>()
+        });
+
         Self {
             store,
             block_producer,
             validator,
+            ntx_builder,
             genesis_commitment: None,
         }
     }
@@ -486,6 +514,27 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request);
 
         Ok(Response::new(RPC_LIMITS.clone()))
+    }
+
+    // -- Note debugging endpoints ----------------------------------------------------------------
+
+    async fn get_note_error(
+        &self,
+        request: Request<proto::note::NoteId>,
+    ) -> Result<Response<proto::rpc::GetNoteErrorResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request.get_ref());
+
+        let Some(ntx_builder) = &self.ntx_builder else {
+            return Err(Status::unavailable("Network transaction builder is not enabled"));
+        };
+
+        let response = ntx_builder.clone().get_note_error(request).await?.into_inner();
+
+        Ok(Response::new(proto::rpc::GetNoteErrorResponse {
+            error: response.error,
+            attempt_count: response.attempt_count,
+            last_attempt_block_num: response.last_attempt_block_num,
+        }))
     }
 }
 
