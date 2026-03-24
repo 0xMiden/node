@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
-use miden_protocol::account::{Account, AccountId, PartialAccount, PartialStorage, StorageMapKey};
+use miden_protocol::account::{Account, AccountId, PartialAccount, StorageMapKey};
 use miden_protocol::assembly::{
     DefaultSourceManager,
     Library,
@@ -19,7 +19,7 @@ use miden_protocol::assembly::{
     ModuleKind,
     Path as MidenPath,
 };
-use miden_protocol::asset::{AssetVaultKey, AssetWitness, PartialVault};
+use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
 use miden_protocol::note::NoteScript;
@@ -288,18 +288,8 @@ impl DataStore for MonitorDataStore {
         account_id: AccountId,
         mut _block_refs: BTreeSet<BlockNumber>,
     ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
-        let account = self.get_account(account_id)?.clone();
-        let partial_storage = PartialStorage::new_full(account.storage().clone());
-        let assert_vault = PartialVault::new_full(account.vault().clone());
-        let partial_account = PartialAccount::new(
-            account_id,
-            account.nonce(),
-            account.code().clone(),
-            partial_storage,
-            assert_vault,
-            account.seed(),
-        )
-        .expect("Partial account be valid");
+        let account = self.get_account(account_id)?;
+        let partial_account = PartialAccount::from(account);
 
         Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
     }

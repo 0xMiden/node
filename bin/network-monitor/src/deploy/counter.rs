@@ -46,7 +46,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
 
     let owner_id_slot = StorageSlot::with_value(
         OWNER_SLOT_NAME.clone(),
-        Word::from([Felt::ZERO, Felt::ZERO, owner_account_id_suffix, owner_account_id_prefix]),
+        Word::from([owner_account_id_suffix, owner_account_id_prefix, Felt::ZERO, Felt::ZERO]),
     );
 
     let counter_slot = StorageSlot::with_value(COUNTER_SLOT_NAME.clone(), Word::empty());
