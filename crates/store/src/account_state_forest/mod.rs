@@ -541,7 +541,7 @@ impl AccountStateForest {
             let asset = if let Some(tree) = prev_tree {
                 self.forest
                     .get(tree, key)?
-                    .map(|value| FungibleAsset::from_key_value(vault_key.clone(), value))
+                    .map(|value| FungibleAsset::from_key_value(*vault_key, value))
                     .transpose()?
                     .unwrap_or(empty)
             } else {
