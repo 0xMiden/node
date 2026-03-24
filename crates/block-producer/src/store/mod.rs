@@ -5,12 +5,7 @@ use std::num::NonZeroU32;
 use itertools::Itertools;
 use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::errors::{
-    ConversionError,
-    ConversionResultExt,
-    GrpcDecodeExt as _,
-    grpc_decode,
-};
+use miden_node_proto::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
 use miden_node_proto::{AccountState, generated as proto};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
@@ -71,12 +66,13 @@ impl Display for TransactionInputs {
     }
 }
 
-#[grpc_decode]
 impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
     type Error = ConversionError;
 
     fn try_from(response: proto::store::TransactionInputs) -> Result<Self, Self::Error> {
-        let AccountState { account_id, account_commitment } = response.account_state.decode()?;
+        let decoder = response.decoder();
+        let AccountState { account_id, account_commitment } =
+            decoder.decode_field("account_state", response.account_state)?;
 
         let mut nullifiers = HashMap::new();
         for nullifier_record in response.nullifiers {
