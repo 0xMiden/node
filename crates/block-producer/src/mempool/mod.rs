@@ -378,7 +378,7 @@ impl Mempool {
         // A more refined approach could be to tag the offending transactions and then evict them
         // once a certain failure threshold has been met.
         let mut reverted_txs = HashSet::default();
-        let (_, batches) = self.pending_block.take().unwrap();
+        let (_, batches) = self.pending_block.take().expect("we just checked it is some");
         for batch in batches {
             let reverted = self.batches.revert_batch_and_descendants(batch.id());
 

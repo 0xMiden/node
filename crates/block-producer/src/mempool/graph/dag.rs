@@ -12,7 +12,7 @@ use crate::mempool::graph::state::State;
 pub struct Graph<N>
 where
     N: GraphNode,
-    N::Id: Eq + std::hash::Hash + Copy,
+    N::Id: Eq + Hash + Copy,
 {
     /// All nodes present in the graph.
     nodes: HashMap<N::Id, N>,
@@ -24,14 +24,14 @@ where
     selected: HashSet<N::Id>,
     /// Nodes that are available for selection.
     ///
-    /// These are nodes who's parents have all been selected.
+    /// These are nodes whose parents have all been selected.
     selection_candidates: BTreeSet<N::Id>,
 }
 
 impl<N> Default for Graph<N>
 where
     N: GraphNode,
-    N::Id: Eq + std::hash::Hash + Copy,
+    N::Id: Eq + Hash + Copy,
 {
     fn default() -> Self {
         Self {
@@ -79,7 +79,7 @@ where
     pub fn selection_candidates(&self) -> BTreeMap<&N::Id, &N> {
         self.selection_candidates
             .iter()
-            .map(|id| (id, self.nodes.get(id).unwrap()))
+            .map(|id| (id, self.nodes.get(id).expect("selection_candidates is a subset of nodes")))
             .collect()
     }
 
@@ -175,6 +175,11 @@ where
     pub fn revert_node_and_descendants(&mut self, id: N::Id) -> Vec<N> {
         let mut descendants = self.descendants(&id);
 
+        // This implementation is O(n^2) and could be improved by tracking the chronological order
+        // in which nodes are appended to the graph. This would let us revert in
+        // reverse-chronological order which _must_ succeed by definition.
+        //
+        // However that is quite a bit more code, and won't be worth doing for quite some time.
         let mut reverted = Vec::new();
         'outer: while !descendants.is_empty() {
             for id in descendants.iter().copied() {

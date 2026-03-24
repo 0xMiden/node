@@ -106,7 +106,7 @@ impl BatchGraph {
     pub fn select_block(&mut self, mut budget: BlockBudget) -> Vec<Arc<ProvenBatch>> {
         let mut selected = Vec::default();
 
-        // Only root's which are proven can be selected for inclusion in a block.
+        // Only batches which are proven can be selected for inclusion in a block.
         while let Some(candidate) =
             self.inner.selection_candidates().iter().find_map(|(id, _)| self.proven.get(id))
         {
@@ -137,6 +137,9 @@ impl BatchGraph {
     }
 
     pub fn proposed_count(&self) -> usize {
-        self.inner.node_count() - self.proven_count()
+        self.inner
+            .node_count()
+            .checked_sub(self.proven_count())
+            .expect("proven batches cannot exceed total batches")
     }
 }
