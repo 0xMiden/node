@@ -24,6 +24,7 @@ miden-node-proto-build = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { default-features = true, workspace = true }
 miden-tx               = { default-features = true, workspace = true }
+miden-tx-batch-prover  = { workspace = true }
 semver                 = { version = "1.0" }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }

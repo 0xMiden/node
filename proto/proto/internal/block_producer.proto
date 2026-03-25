@@ -2,45 +2,38 @@
 syntax = "proto3";
 package block_producer;
 
+import "google/protobuf/empty.proto";
 import "rpc.proto";
-import "types/note.proto";
 import "types/blockchain.proto";
+import "types/note.proto";
 import "types/primitives.proto";
 import "types/transaction.proto";
-import "google/protobuf/empty.proto";
 
 // BLOCK PRODUCER SERVICE
 // ================================================================================================
 
 service Api {
-    // Returns the status info.
-    rpc Status(google.protobuf.Empty) returns (rpc.BlockProducerStatus) {}
+  // Returns the status info.
+  rpc Status(google.protobuf.Empty) returns (rpc.BlockProducerStatus) {}
 
-    // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
+  // Submits proven transaction to the Miden network. Returns the node's current block height.
+  rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
-    // Submits a proven batch to the Miden network.
-    //
-    // The batch may include transactions which were are:
-    //
-    //   - already in the mempool i.e. previously successfully submitted
-    //   - will be submitted to the mempool in the future
-    //   - won't be submitted to the mempool at all
-    //
-    // All transactions in the batch but not in the mempool must build on the current mempool
-    // state following normal transaction submission rules.
-    //
-    // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
+  // Submits a batch of transactions to the Miden network.
+  //
+  // All transactions in this batch will be considered atomic, and be committed together or not all.
+  //
+  // Returns the node's current block height.
+  rpc SubmitBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
-    // Subscribe to mempool events.
-    //
-    // The event stream will contain all events after the current chain tip. This includes all
-    // currently inflight events that have not yet been committed to the chain.
-    //
-    // Currently only a single active subscription is supported. Subscription requests will cancel
-    // the active subscription, if any.
-    rpc MempoolSubscription(google.protobuf.Empty) returns (stream MempoolEvent) {}
+  // Subscribe to mempool events.
+  //
+  // The event stream will contain all events after the current chain tip. This includes all
+  // currently inflight events that have not yet been committed to the chain.
+  //
+  // Currently only a single active subscription is supported. Subscription requests will cancel
+  // the active subscription, if any.
+  rpc MempoolSubscription(google.protobuf.Empty) returns (stream MempoolEvent) {}
 }
 
 // MEMPOOL SUBSCRIPTION
@@ -51,41 +44,41 @@ message MempoolSubscriptionRequest {}
 
 // Event from the mempool.
 message MempoolEvent {
-    // A block was committed.
-    //
-    // This event is sent when a block is committed to the chain.
-    message BlockCommitted {
-        blockchain.BlockHeader block_header = 1;
-        repeated transaction.TransactionId transactions = 2;
-    }
+  // A block was committed.
+  //
+  // This event is sent when a block is committed to the chain.
+  message BlockCommitted {
+    blockchain.BlockHeader block_header = 1;
+    repeated transaction.TransactionId transactions = 2;
+  }
 
-    // A transaction was added to the mempool.
+  // A transaction was added to the mempool.
+  //
+  // This event is sent when a transaction is added to the mempool.
+  message TransactionAdded {
+    // The ID of the transaction.
+    transaction.TransactionId id = 1;
+    // Nullifiers consumed by the transaction.
+    repeated primitives.Digest nullifiers = 2;
+    // Network notes created by the transaction.
+    repeated note.NetworkNote network_notes = 3;
+    // Changes to a network account, if any. This includes creation of new network accounts.
     //
-    // This event is sent when a transaction is added to the mempool.
-    message TransactionAdded {
-        // The ID of the transaction.
-        transaction.TransactionId id = 1;
-        // Nullifiers consumed by the transaction.
-        repeated primitives.Digest nullifiers = 2;
-        // Network notes created by the transaction.
-        repeated note.NetworkNote network_notes = 3;
-        // Changes to a network account, if any. This includes creation of new network accounts.
-        //
-        // The account delta is encoded using [winter_utils::Serializable] implementation
-        // for [miden_protocol::account::delta::AccountDelta].
-        optional bytes network_account_delta = 4;
-    }
+    // The account delta is encoded using [winter_utils::Serializable] implementation
+    // for [miden_protocol::account::delta::AccountDelta].
+    optional bytes network_account_delta = 4;
+  }
 
-    // A set of transactions was reverted and dropped from the mempool.
-    //
-    // This event is sent when a set of transactions are reverted and dropped from the mempool.
-    message TransactionsReverted {
-        repeated transaction.TransactionId reverted = 1;
-    }
+  // A set of transactions was reverted and dropped from the mempool.
+  //
+  // This event is sent when a set of transactions are reverted and dropped from the mempool.
+  message TransactionsReverted {
+    repeated transaction.TransactionId reverted = 1;
+  }
 
-    oneof event {
-        TransactionAdded transaction_added = 1;
-        BlockCommitted block_committed = 2;
-        TransactionsReverted transactions_reverted = 3;
-    };
+  oneof event {
+    TransactionAdded transaction_added = 1;
+    BlockCommitted block_committed = 2;
+    TransactionsReverted transactions_reverted = 3;
+  }
 }

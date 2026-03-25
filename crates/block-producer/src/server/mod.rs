@@ -14,7 +14,6 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::batch::ProvenBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
@@ -361,12 +360,12 @@ impl BlockProducerRpcServer {
          skip_all,
          err
      )]
-    async fn submit_proven_batch(
+    async fn submit_batch(
         &self,
-        request: proto::transaction::ProvenTransactionBatch,
+        _request: proto::transaction::TransactionBatch,
     ) -> Result<proto::blockchain::BlockNumber, SubmitProvenBatchError> {
-        let _batch = ProvenBatch::read_from_bytes(&request.encoded)
-            .map_err(SubmitProvenBatchError::Deserialization)?;
+        // let _batch = ProvenBatch::read_from_bytes(&request.encoded)
+        //     .map_err(SubmitProvenBatchError::Deserialization)?;
 
         todo!();
     }
@@ -387,11 +386,11 @@ impl api_server::Api for BlockProducerRpcServer {
              .map_err(Into::into)
     }
 
-    async fn submit_proven_batch(
+    async fn submit_batch(
         &self,
-        request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
+        request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        self.submit_proven_batch(request.into_inner())
+        self.submit_batch(request.into_inner())
              .await
              .map(tonic::Response::new)
              // This Status::from mapping takes care of hiding internal errors.

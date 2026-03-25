@@ -3128,6 +3128,7 @@ dependencies = [
  "miden-protocol",
  "miden-standards",
  "miden-tx",
+ "miden-tx-batch-prover",
  "reqwest",
  "rstest",
  "semver 1.0.27",

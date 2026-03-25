@@ -2,109 +2,102 @@
 syntax = "proto3";
 package rpc;
 
+import "google/protobuf/empty.proto";
 import "types/account.proto";
 import "types/blockchain.proto";
 import "types/note.proto";
 import "types/primitives.proto";
 import "types/transaction.proto";
-import "google/protobuf/empty.proto";
 
 // RPC API
 // ================================================================================================
 
 // RPC API for the RPC component
 service Api {
-    // Returns the status info of the node.
-    rpc Status(google.protobuf.Empty) returns (RpcStatus) {}
+  // Returns the status info of the node.
+  rpc Status(google.protobuf.Empty) returns (RpcStatus) {}
 
-    // Returns the query parameter limits configured for RPC methods.
-    //
-    // These define the maximum number of each parameter a method will accept.
-    // Exceeding the limit will result in the request being rejected and you should instead send
-    // multiple smaller requests.
-    rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
+  // Returns the query parameter limits configured for RPC methods.
+  //
+  // These define the maximum number of each parameter a method will accept.
+  // Exceeding the limit will result in the request being rejected and you should instead send
+  // multiple smaller requests.
+  rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
 
-    // Returns a Sparse Merkle Tree opening proof for each requested nullifier
-    //
-    // Each proof demonstrates either:
-    // - **Inclusion**: Nullifier exists in the tree (note was consumed)
-    // - **Non-inclusion**: Nullifier does not exist (note was not consumed)
-    //
-    // The `leaf` field indicates the status:
-    // * `empty_leaf_index`: Non-inclusion proof (nullifier not in tree)
-    // * `single` or `multiple`: Inclusion proof only if the requested nullifier appears as a key.
-    //
-    // Verify proofs against the nullifier tree root in the latest block header.
-    rpc CheckNullifiers(NullifierList) returns (CheckNullifiersResponse) {}
+  // Returns a Sparse Merkle Tree opening proof for each requested nullifier
+  //
+  // Each proof demonstrates either:
+  // - **Inclusion**: Nullifier exists in the tree (note was consumed)
+  // - **Non-inclusion**: Nullifier does not exist (note was not consumed)
+  //
+  // The `leaf` field indicates the status:
+  // * `empty_leaf_index`: Non-inclusion proof (nullifier not in tree)
+  // * `single` or `multiple`: Inclusion proof only if the requested nullifier appears as a key.
+  //
+  // Verify proofs against the nullifier tree root in the latest block header.
+  rpc CheckNullifiers(NullifierList) returns (CheckNullifiersResponse) {}
 
-    // Returns the latest details of the specified account.
-    rpc GetAccount(AccountRequest) returns (AccountResponse) {}
+  // Returns the latest details of the specified account.
+  rpc GetAccount(AccountRequest) returns (AccountResponse) {}
 
-    // Returns raw block data for the specified block number.
-    rpc GetBlockByNumber(blockchain.BlockNumber) returns (blockchain.MaybeBlock) {}
+  // Returns raw block data for the specified block number.
+  rpc GetBlockByNumber(blockchain.BlockNumber) returns (blockchain.MaybeBlock) {}
 
-    // Retrieves block header by given block number. Optionally, it also returns the MMR path
-    // and current chain length to authenticate the block's inclusion.
-    rpc GetBlockHeaderByNumber(BlockHeaderByNumberRequest) returns (BlockHeaderByNumberResponse) {}
+  // Retrieves block header by given block number. Optionally, it also returns the MMR path
+  // and current chain length to authenticate the block's inclusion.
+  rpc GetBlockHeaderByNumber(BlockHeaderByNumberRequest) returns (BlockHeaderByNumberResponse) {}
 
-    // Returns a list of notes matching the provided note IDs.
-    rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
+  // Returns a list of notes matching the provided note IDs.
+  rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
 
-    // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (MaybeNoteScript) {}
+  // Returns the script for a note by its root.
+  rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (MaybeNoteScript) {}
 
-    // TRANSACTION SUBMISSION ENDPOINTS
-    // --------------------------------------------------------------------------------------------
+  // TRANSACTION SUBMISSION ENDPOINTS
+  // --------------------------------------------------------------------------------------------
 
-    // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
+  // Submits proven transaction to the Miden network. Returns the node's current block height.
+  rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
-    // Submits a proven batch of transactions to the Miden network.
-    //
-    // The batch may include transactions which were are:
-    //
-    //   - already in the mempool i.e. previously successfully submitted
-    //   - will be submitted to the mempool in the future
-    //   - won't be submitted to the mempool at all
-    //
-    // All transactions in the batch but not in the mempool must build on the current mempool
-    // state following normal transaction submission rules.
-    //
-    // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
+  // Submits a batch of transactions to the Miden network.
+  //
+  // All transactions in this batch will be considered atomic, and be committed together or not all.
+  //
+  // Returns the node's current block height.
+  rpc SubmitBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
-    // STATE SYNCHRONIZATION ENDPOINTS
-    // --------------------------------------------------------------------------------------------
+  // STATE SYNCHRONIZATION ENDPOINTS
+  // --------------------------------------------------------------------------------------------
 
-    // Returns transactions records for specific accounts within a block range.
-    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
+  // Returns transactions records for specific accounts within a block range.
+  rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
 
-    // Returns info which can be used by the client to sync up to the tip of chain for the notes
-    // they are interested in.
-    //
-    // Client specifies the `note_tags` they are interested in, and the block height from which to
-    // search for new for matching notes for. The request will then return the next block containing
-    // any note matching the provided tags.
-    //
-    // The response includes each note's metadata and inclusion proof.
-    //
-    // A basic note sync can be implemented by repeatedly requesting the previous response's block
-    // until reaching the tip of the chain.
-    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
+  // Returns info which can be used by the client to sync up to the tip of chain for the notes
+  // they are interested in.
+  //
+  // Client specifies the `note_tags` they are interested in, and the block height from which to
+  // search for new for matching notes for. The request will then return the next block containing
+  // any note matching the provided tags.
+  //
+  // The response includes each note's metadata and inclusion proof.
+  //
+  // A basic note sync can be implemented by repeatedly requesting the previous response's block
+  // until reaching the tip of the chain.
+  rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
 
-    // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
-    //
-    // Note that only 16-bit prefixes are supported at this time.
-    rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {}
+  // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
+  //
+  // Note that only 16-bit prefixes are supported at this time.
+  rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {}
 
-    // Returns account vault updates for specified account within a block range.
-    rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
+  // Returns account vault updates for specified account within a block range.
+  rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
-    // Returns storage map updates for specified account and storage slots within a block range.
-    rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
+  // Returns storage map updates for specified account and storage slots within a block range.
+  rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
-    // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
-    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
+  // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
+  rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 }
 
 // RPC STATUS
@@ -112,52 +105,50 @@ service Api {
 
 // Represents the status of the node.
 message RpcStatus {
-    // The rpc component's running version.
-    string version = 1;
+  // The rpc component's running version.
+  string version = 1;
 
-    // The genesis commitment.
-    primitives.Digest genesis_commitment = 2;
+  // The genesis commitment.
+  primitives.Digest genesis_commitment = 2;
 
-    // The store status.
-    StoreStatus store = 3;
+  // The store status.
+  StoreStatus store = 3;
 
-    // The block producer status.
-    BlockProducerStatus block_producer = 4;
+  // The block producer status.
+  BlockProducerStatus block_producer = 4;
 }
-
 
 // BLOCK PRODUCER STATUS
 // ================================================================================================
 
-
 // Represents the status of the block producer.
 message BlockProducerStatus {
-    // The block producer's running version.
-    string version = 1;
+  // The block producer's running version.
+  string version = 1;
 
-    // The block producer's status.
-    string status = 2;
+  // The block producer's status.
+  string status = 2;
 
-    // The block producer's current view of the chain tip height.
-    //
-    // This is the height of the latest block that the block producer considers
-    // to be part of the canonical chain.
-    fixed32 chain_tip = 4;
+  // The block producer's current view of the chain tip height.
+  //
+  // This is the height of the latest block that the block producer considers
+  // to be part of the canonical chain.
+  fixed32 chain_tip = 4;
 
-    // Statistics about the mempool.
-    MempoolStats mempool_stats = 3;
+  // Statistics about the mempool.
+  MempoolStats mempool_stats = 3;
 }
 
 // Statistics about the mempool.
 message MempoolStats {
-    // Number of transactions currently in the mempool waiting to be batched.
-    uint64 unbatched_transactions = 1;
+  // Number of transactions currently in the mempool waiting to be batched.
+  uint64 unbatched_transactions = 1;
 
-    // Number of batches currently being proven.
-    uint64 proposed_batches = 2;
+  // Number of batches currently being proven.
+  uint64 proposed_batches = 2;
 
-    // Number of proven batches waiting for block inclusion.
-    uint64 proven_batches = 3;
+  // Number of proven batches waiting for block inclusion.
+  uint64 proven_batches = 3;
 }
 
 // STORE STATUS
@@ -165,14 +156,14 @@ message MempoolStats {
 
 // Represents the status of the store.
 message StoreStatus {
-    // The store's running version.
-    string version = 1;
+  // The store's running version.
+  string version = 1;
 
-    // The store's status.
-    string status = 2;
+  // The store's status.
+  string status = 2;
 
-    // Number of the latest block in the chain.
-    fixed32 chain_tip = 3;
+  // Number of the latest block in the chain.
+  fixed32 chain_tip = 3;
 }
 
 // GET BLOCK HEADER BY NUMBER
@@ -183,22 +174,22 @@ message StoreStatus {
 //
 // The Merkle path is an MMR proof for the block's leaf, based on the current chain length.
 message BlockHeaderByNumberRequest {
-    // The target block height, defaults to latest if not provided.
-    optional uint32 block_num = 1;
-    // Whether or not to return authentication data for the block header.
-    optional bool include_mmr_proof = 2;
+  // The target block height, defaults to latest if not provided.
+  optional uint32 block_num = 1;
+  // Whether or not to return authentication data for the block header.
+  optional bool include_mmr_proof = 2;
 }
 
 // Represents the result of getting a block header by block number.
 message BlockHeaderByNumberResponse {
-    // The requested block header.
-    blockchain.BlockHeader block_header = 1;
+  // The requested block header.
+  blockchain.BlockHeader block_header = 1;
 
-    // Merkle path to verify the block's inclusion in the MMR at the returned `chain_length`.
-    optional primitives.MerklePath mmr_path = 2;
+  // Merkle path to verify the block's inclusion in the MMR at the returned `chain_length`.
+  optional primitives.MerklePath mmr_path = 2;
 
-    // Current chain length.
-    optional fixed32 chain_length = 3;
+  // Current chain length.
+  optional fixed32 chain_length = 3;
 }
 
 // GET NOTE SCRIPT BY ROOT
@@ -206,8 +197,8 @@ message BlockHeaderByNumberResponse {
 
 // Represents a note script or nothing.
 message MaybeNoteScript {
-    // The script for a note by its root.
-    optional note.NoteScript script = 1;
+  // The script for a note by its root.
+  optional note.NoteScript script = 1;
 }
 
 // GET ACCOUNT PROOF
@@ -215,147 +206,146 @@ message MaybeNoteScript {
 
 // Defines the request for account details.
 message AccountRequest {
-    // Request the details for a public account.
-    message AccountDetailRequest {
-        // Represents a storage slot index and the associated map keys.
-        message StorageMapDetailRequest {
-            // Indirection required for use in `oneof {..}` block.
-            message MapKeys {
-                // A list of map keys associated with this storage slot.
-                repeated primitives.Digest map_keys = 1;
-            }
-            // Storage slot name.
-            string slot_name = 1;
+  // Request the details for a public account.
+  message AccountDetailRequest {
+    // Represents a storage slot index and the associated map keys.
+    message StorageMapDetailRequest {
+      // Indirection required for use in `oneof {..}` block.
+      message MapKeys {
+        // A list of map keys associated with this storage slot.
+        repeated primitives.Digest map_keys = 1;
+      }
+      // Storage slot name.
+      string slot_name = 1;
 
-            oneof slot_data {
-                // Request to return all storage map data. If the number exceeds a threshold of 1000 entries,
-                // the response will not contain them but must be requested separately.
-                bool all_entries = 2;
+      oneof slot_data {
+        // Request to return all storage map data. If the number exceeds a threshold of 1000 entries,
+        // the response will not contain them but must be requested separately.
+        bool all_entries = 2;
 
-                // A list of map keys associated with the given storage slot identified by `slot_name`.
-                MapKeys map_keys = 3;
-            }
-        }
-
-        // Last known code commitment to the requester. The response will include account code
-        // only if its commitment is different from this value.
-        //
-        // If the field is ommiteed, the response will not include the account code.
-        optional primitives.Digest code_commitment = 1;
-
-        // Last known asset vault commitment to the requester. The response will include asset vault data
-        // only if its commitment is different from this value. If the value is not present in the
-        // request, the response will not contain one either.
-        // If the number of to-be-returned asset entries exceed a threshold, they have to be requested
-        // separately, which is signaled in the response message with dedicated flag.
-        optional primitives.Digest asset_vault_commitment = 2;
-
-        // Additional request per storage map.
-        repeated StorageMapDetailRequest storage_maps = 3;
+        // A list of map keys associated with the given storage slot identified by `slot_name`.
+        MapKeys map_keys = 3;
+      }
     }
 
-    // ID of the account for which we want to get data
-    account.AccountId account_id = 1;
-
-    // Optional block height at which to return the proof.
+    // Last known code commitment to the requester. The response will include account code
+    // only if its commitment is different from this value.
     //
-    // Defaults to current chain tip if unspecified.
-    optional blockchain.BlockNumber block_num = 2;
+    // If the field is ommiteed, the response will not include the account code.
+    optional primitives.Digest code_commitment = 1;
 
-    // Request for additional account details; valid only for public accounts.
-    optional AccountDetailRequest details = 3;
+    // Last known asset vault commitment to the requester. The response will include asset vault data
+    // only if its commitment is different from this value. If the value is not present in the
+    // request, the response will not contain one either.
+    // If the number of to-be-returned asset entries exceed a threshold, they have to be requested
+    // separately, which is signaled in the response message with dedicated flag.
+    optional primitives.Digest asset_vault_commitment = 2;
+
+    // Additional request per storage map.
+    repeated StorageMapDetailRequest storage_maps = 3;
+  }
+
+  // ID of the account for which we want to get data
+  account.AccountId account_id = 1;
+
+  // Optional block height at which to return the proof.
+  //
+  // Defaults to current chain tip if unspecified.
+  optional blockchain.BlockNumber block_num = 2;
+
+  // Request for additional account details; valid only for public accounts.
+  optional AccountDetailRequest details = 3;
 }
 
 // Represents the result of getting account proof.
 message AccountResponse {
+  message AccountDetails {
+    // Account header.
+    account.AccountHeader header = 1;
 
-    message AccountDetails {
-        // Account header.
-        account.AccountHeader header = 1;
+    // Account storage data
+    AccountStorageDetails storage_details = 2;
 
-        // Account storage data
-        AccountStorageDetails storage_details = 2;
+    // Account code; empty if code commitments matched or none was requested.
+    optional bytes code = 3;
 
-        // Account code; empty if code commitments matched or none was requested.
-        optional bytes code = 3;
+    // Account asset vault data; empty if vault commitments matched or the requester
+    // omitted it in the request.
+    optional AccountVaultDetails vault_details = 4;
+  }
 
-        // Account asset vault data; empty if vault commitments matched or the requester
-        // omitted it in the request.
-        optional AccountVaultDetails vault_details = 4;
-    }
+  // The block number at which the account witness was created and the account details were observed.
+  blockchain.BlockNumber block_num = 1;
 
-    // The block number at which the account witness was created and the account details were observed.
-    blockchain.BlockNumber block_num = 1;
+  // Account ID, current state commitment, and SMT path.
+  account.AccountWitness witness = 2;
 
-    // Account ID, current state commitment, and SMT path.
-    account.AccountWitness witness = 2;
-
-    // Additional details for public accounts.
-    optional AccountDetails details = 3;
+  // Additional details for public accounts.
+  optional AccountDetails details = 3;
 }
 
 // Account vault details for AccountResponse
 message AccountVaultDetails {
-    // A flag that is set to true if the account contains too many assets. This indicates
-    // to the user that `SyncAccountVault` endpoint should be used to retrieve the
-    // account's assets
-    bool too_many_assets = 1;
+  // A flag that is set to true if the account contains too many assets. This indicates
+  // to the user that `SyncAccountVault` endpoint should be used to retrieve the
+  // account's assets
+  bool too_many_assets = 1;
 
-    // When too_many_assets == false, this will contain the list of assets in the
-    // account's vault
-    repeated primitives.Asset assets = 2;
+  // When too_many_assets == false, this will contain the list of assets in the
+  // account's vault
+  repeated primitives.Asset assets = 2;
 }
 
 // Account storage details for AccountResponse
 message AccountStorageDetails {
-    message AccountStorageMapDetails {
-        // Wrapper for repeated storage map entries including their proofs.
-        // Used when specific keys are requested to enable client-side verification.
-        message MapEntriesWithProofs {
-            // Definition of individual storage entries including a proof.
-            message StorageMapEntryWithProof {
-                primitives.Digest key = 1;
-                primitives.Digest value = 2;
-                primitives.SmtOpening proof = 3;
-            }
+  message AccountStorageMapDetails {
+    // Wrapper for repeated storage map entries including their proofs.
+    // Used when specific keys are requested to enable client-side verification.
+    message MapEntriesWithProofs {
+      // Definition of individual storage entries including a proof.
+      message StorageMapEntryWithProof {
+        primitives.Digest key = 1;
+        primitives.Digest value = 2;
+        primitives.SmtOpening proof = 3;
+      }
 
-            repeated StorageMapEntryWithProof entries = 1;
-        }
-
-        // Wrapper for repeated storage map entries (without proofs).
-        // Used when all entries are requested for small maps.
-        message AllMapEntries {
-            // Definition of individual storage entries.
-            message StorageMapEntry {
-                primitives.Digest key = 1;
-                primitives.Digest value = 2;
-            }
-
-            repeated StorageMapEntry entries = 1;
-        }
-
-        // Storage slot name.
-        string slot_name = 1;
-
-        // True when the number of entries exceeds the response limit.
-        // When set, clients should use the `SyncAccountStorageMaps` endpoint.
-        bool too_many_entries = 2;
-
-        // The map entries (with or without proofs). Empty when too_many_entries is true.
-        oneof entries {
-            // All storage entries without proofs (for small maps or full requests).
-            AllMapEntries all_entries = 3;
-
-            // Specific entries with their SMT proofs (for partial requests).
-            MapEntriesWithProofs entries_with_proofs = 4;
-        }
+      repeated StorageMapEntryWithProof entries = 1;
     }
 
-    // Account storage header (storage slot info for up to 256 slots)
-    account.AccountStorageHeader header = 1;
+    // Wrapper for repeated storage map entries (without proofs).
+    // Used when all entries are requested for small maps.
+    message AllMapEntries {
+      // Definition of individual storage entries.
+      message StorageMapEntry {
+        primitives.Digest key = 1;
+        primitives.Digest value = 2;
+      }
 
-    // Additional data for the requested storage maps
-    repeated AccountStorageMapDetails map_details = 2;
+      repeated StorageMapEntry entries = 1;
+    }
+
+    // Storage slot name.
+    string slot_name = 1;
+
+    // True when the number of entries exceeds the response limit.
+    // When set, clients should use the `SyncAccountStorageMaps` endpoint.
+    bool too_many_entries = 2;
+
+    // The map entries (with or without proofs). Empty when too_many_entries is true.
+    oneof entries {
+      // All storage entries without proofs (for small maps or full requests).
+      AllMapEntries all_entries = 3;
+
+      // Specific entries with their SMT proofs (for partial requests).
+      MapEntriesWithProofs entries_with_proofs = 4;
+    }
+  }
+
+  // Account storage header (storage slot info for up to 256 slots)
+  account.AccountStorageHeader header = 1;
+
+  // Additional data for the requested storage maps
+  repeated AccountStorageMapDetails map_details = 2;
 }
 
 // CHECK NULLIFIERS
@@ -363,14 +353,14 @@ message AccountStorageDetails {
 
 // List of nullifiers to return proofs for.
 message NullifierList {
-    // List of nullifiers to return proofs for.
-    repeated primitives.Digest nullifiers = 1;
+  // List of nullifiers to return proofs for.
+  repeated primitives.Digest nullifiers = 1;
 }
 
 // Represents the result of checking nullifiers.
 message CheckNullifiersResponse {
-    // Each requested nullifier has its corresponding nullifier proof at the same position.
-    repeated primitives.SmtOpening proofs = 1;
+  // Each requested nullifier has its corresponding nullifier proof at the same position.
+  repeated primitives.SmtOpening proofs = 1;
 }
 
 // SYNC NULLIFIERS
@@ -378,33 +368,33 @@ message CheckNullifiersResponse {
 
 // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
 message SyncNullifiersRequest {
-    // Block number from which the nullifiers are requested (inclusive).
-    BlockRange block_range = 1;
+  // Block number from which the nullifiers are requested (inclusive).
+  BlockRange block_range = 1;
 
-    // Number of bits used for nullifier prefix. Currently the only supported value is 16.
-    uint32 prefix_len = 2;
+  // Number of bits used for nullifier prefix. Currently the only supported value is 16.
+  uint32 prefix_len = 2;
 
-    // List of nullifiers to check. Each nullifier is specified by its prefix with length equal
-    // to `prefix_len`.
-    repeated uint32 nullifiers = 3;
+  // List of nullifiers to check. Each nullifier is specified by its prefix with length equal
+  // to `prefix_len`.
+  repeated uint32 nullifiers = 3;
 }
 
 // Represents the result of syncing nullifiers.
 message SyncNullifiersResponse {
-    // Represents a single nullifier update.
-    message NullifierUpdate {
-        // Nullifier ID.
-        primitives.Digest nullifier = 1;
+  // Represents a single nullifier update.
+  message NullifierUpdate {
+    // Nullifier ID.
+    primitives.Digest nullifier = 1;
 
-        // Block number.
-        fixed32 block_num = 2;
-    }
+    // Block number.
+    fixed32 block_num = 2;
+  }
 
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
+  // Pagination information.
+  PaginationInfo pagination_info = 1;
 
-    // List of nullifiers matching the prefixes specified in the request.
-    repeated NullifierUpdate nullifiers = 2;
+  // List of nullifiers matching the prefixes specified in the request.
+  repeated NullifierUpdate nullifiers = 2;
 }
 
 // SYNC ACCOUNT VAULT
@@ -414,37 +404,37 @@ message SyncNullifiersResponse {
 //
 // Allows requesters to sync asset values for specific public accounts within a block range.
 message SyncAccountVaultRequest {
-    // Block range from which to start synchronizing.
-    //
-    // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
-    // otherwise an error will be returned.
-    BlockRange block_range = 1;
+  // Block range from which to start synchronizing.
+  //
+  // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
+  // otherwise an error will be returned.
+  BlockRange block_range = 1;
 
-    // Account for which we want to sync asset vault.
-    account.AccountId account_id = 2;
+  // Account for which we want to sync asset vault.
+  account.AccountId account_id = 2;
 }
 
 message SyncAccountVaultResponse {
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
+  // Pagination information.
+  PaginationInfo pagination_info = 1;
 
-    // List of asset updates for the account.
-    //
-    // Multiple updates can be returned for a single asset, and the one with a higher `block_num`
-    // is expected to be retained by the caller.
-    repeated AccountVaultUpdate updates = 2;
+  // List of asset updates for the account.
+  //
+  // Multiple updates can be returned for a single asset, and the one with a higher `block_num`
+  // is expected to be retained by the caller.
+  repeated AccountVaultUpdate updates = 2;
 }
 
 message AccountVaultUpdate {
-    // Vault key associated with the asset.
-    primitives.Digest vault_key = 1;
+  // Vault key associated with the asset.
+  primitives.Digest vault_key = 1;
 
-    // Asset value related to the vault key.
-    // If not present, the asset was removed from the vault.
-    optional primitives.Asset asset = 2;
+  // Asset value related to the vault key.
+  // If not present, the asset was removed from the vault.
+  optional primitives.Asset asset = 2;
 
-    // Block number at which the above asset was updated in the account vault.
-    fixed32 block_num = 3;
+  // Block number at which the above asset was updated in the account vault.
+  fixed32 block_num = 3;
 }
 
 // SYNC NOTES
@@ -455,29 +445,29 @@ message AccountVaultUpdate {
 // Specifies note tags that requester is interested in. The server will return the first block which
 // contains a note matching `note_tags` or the chain tip.
 message SyncNotesRequest {
-    // Block range from which to start synchronizing.
-    BlockRange block_range = 1;
+  // Block range from which to start synchronizing.
+  BlockRange block_range = 1;
 
-    // Specifies the tags which the requester is interested in.
-    repeated fixed32 note_tags = 2;
+  // Specifies the tags which the requester is interested in.
+  repeated fixed32 note_tags = 2;
 }
 
 // Represents the result of syncing notes request.
 message SyncNotesResponse {
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
+  // Pagination information.
+  PaginationInfo pagination_info = 1;
 
-    // Block header of the block with the first note matching the specified criteria.
-    blockchain.BlockHeader block_header = 2;
+  // Block header of the block with the first note matching the specified criteria.
+  blockchain.BlockHeader block_header = 2;
 
-    // Merkle path to verify the block's inclusion in the MMR at the returned `chain_tip`.
-    //
-    // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
-    // an MMR of forest `chain_tip` with this path.
-    primitives.MerklePath mmr_path = 3;
+  // Merkle path to verify the block's inclusion in the MMR at the returned `chain_tip`.
+  //
+  // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
+  // an MMR of forest `chain_tip` with this path.
+  primitives.MerklePath mmr_path = 3;
 
-    // List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    repeated note.NoteSyncRecord notes = 4;
+  // List of all notes together with the Merkle paths from `response.block_header.note_root`.
+  repeated note.NoteSyncRecord notes = 4;
 }
 
 // SYNC CHAIN MMR
@@ -485,21 +475,21 @@ message SyncNotesResponse {
 
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
-    // Block range from which to synchronize the chain MMR.
-    //
-    // The response will contain MMR delta starting after `block_range.block_from` up to
-    // `block_range.block_to` or the chain tip (whichever is lower). Set `block_from` to the last
-    // block already present in the caller's MMR so the delta begins at the next block.
-    BlockRange block_range = 1;
+  // Block range from which to synchronize the chain MMR.
+  //
+  // The response will contain MMR delta starting after `block_range.block_from` up to
+  // `block_range.block_to` or the chain tip (whichever is lower). Set `block_from` to the last
+  // block already present in the caller's MMR so the delta begins at the next block.
+  BlockRange block_range = 1;
 }
 
 // Represents the result of syncing chain MMR.
 message SyncChainMmrResponse {
-    // For which block range the MMR delta is returned.
-    BlockRange block_range = 1;
-    // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    // `response.block_range.block_to` or the chain tip.
-    primitives.MmrDelta mmr_delta = 2;
+  // For which block range the MMR delta is returned.
+  BlockRange block_range = 1;
+  // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
+  // `response.block_range.block_to` or the chain tip.
+  primitives.MmrDelta mmr_delta = 2;
 }
 
 // SYNC ACCOUNT STORAGE MAP
@@ -510,40 +500,40 @@ message SyncChainMmrResponse {
 // Allows requesters to sync storage map values for specific public accounts within a block range,
 // with support for cursor-based pagination to handle large storage maps.
 message SyncAccountStorageMapsRequest {
-    // Block range from which to start synchronizing.
-    //
-    // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
-    // otherwise an error will be returned.
-    BlockRange block_range = 1;
+  // Block range from which to start synchronizing.
+  //
+  // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
+  // otherwise an error will be returned.
+  BlockRange block_range = 1;
 
-    // Account for which we want to sync storage maps.
-    account.AccountId account_id = 3;
+  // Account for which we want to sync storage maps.
+  account.AccountId account_id = 3;
 }
 
 message SyncAccountStorageMapsResponse {
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
+  // Pagination information.
+  PaginationInfo pagination_info = 1;
 
-    // The list of storage map updates.
-    //
-    // Multiple updates can be returned for a single slot index and key combination, and the one
-    // with a higher `block_num` is expected to be retained by the caller.
-    repeated StorageMapUpdate updates = 2;
+  // The list of storage map updates.
+  //
+  // Multiple updates can be returned for a single slot index and key combination, and the one
+  // with a higher `block_num` is expected to be retained by the caller.
+  repeated StorageMapUpdate updates = 2;
 }
 
 // Represents a single storage map update.
 message StorageMapUpdate {
-    // Block number in which the slot was updated.
-    fixed32 block_num = 1;
+  // Block number in which the slot was updated.
+  fixed32 block_num = 1;
 
-    // Storage slot name.
-    string slot_name = 2;
+  // Storage slot name.
+  string slot_name = 2;
 
-    // The storage map key.
-    primitives.Digest key = 3;
+  // The storage map key.
+  primitives.Digest key = 3;
 
-    // The storage map value.
-    primitives.Digest value = 4;
+  // The storage map value.
+  primitives.Digest value = 4;
 }
 
 // BLOCK RANGE
@@ -551,11 +541,11 @@ message StorageMapUpdate {
 
 // Represents a block range.
 message BlockRange {
-    // Block number from which to start (inclusive).
-    fixed32 block_from = 1;
+  // Block number from which to start (inclusive).
+  fixed32 block_from = 1;
 
-    // Block number up to which to check (inclusive). If not specified, checks up to the latest block.
-    optional fixed32 block_to = 2;
+  // Block number up to which to check (inclusive). If not specified, checks up to the latest block.
+  optional fixed32 block_to = 2;
 }
 
 // PAGINATION INFO
@@ -570,15 +560,15 @@ message BlockRange {
 // To request the next chunk, the requester should use `block_num + 1` from the previous response
 // as the `block_from` for the next request.
 message PaginationInfo {
-    // Current chain tip
-    fixed32 chain_tip = 1;
+  // Current chain tip
+  fixed32 chain_tip = 1;
 
-    // The block number of the last check included in this response.
-    //
-    // For chunked responses, this may be less than `request.block_range.block_to`.
-    // If it is less than request.block_range.block_to, the user is expected to make a subsequent request
-    // starting from the next block to this one (ie, request.block_range.block_from = block_num + 1).
-    fixed32 block_num = 2;
+  // The block number of the last check included in this response.
+  //
+  // For chunked responses, this may be less than `request.block_range.block_to`.
+  // If it is less than request.block_range.block_to, the user is expected to make a subsequent request
+  // starting from the next block to this one (ie, request.block_range.block_from = block_num + 1).
+  fixed32 block_num = 2;
 }
 
 // SYNC TRANSACTIONS
@@ -588,29 +578,29 @@ message PaginationInfo {
 //
 // Allows requesters to sync transactions for specific accounts within a block range.
 message SyncTransactionsRequest {
-    // Block range from which to start synchronizing.
-    BlockRange block_range = 1;
+  // Block range from which to start synchronizing.
+  BlockRange block_range = 1;
 
-    // Accounts to sync transactions for.
-    repeated account.AccountId account_ids = 2;
+  // Accounts to sync transactions for.
+  repeated account.AccountId account_ids = 2;
 }
 
 // Represents the result of syncing transactions request.
 message SyncTransactionsResponse {
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
+  // Pagination information.
+  PaginationInfo pagination_info = 1;
 
-    // List of transaction records.
-    repeated TransactionRecord transactions = 2;
+  // List of transaction records.
+  repeated TransactionRecord transactions = 2;
 }
 
 // Represents a transaction record.
 message TransactionRecord {
-    // Block number in which the transaction was included.
-    fixed32 block_num = 1;
+  // Block number in which the transaction was included.
+  fixed32 block_num = 1;
 
-    // A transaction header.
-    transaction.TransactionHeader header = 2;
+  // A transaction header.
+  transaction.TransactionHeader header = 2;
 }
 
 // RPC LIMITS
@@ -618,16 +608,16 @@ message TransactionRecord {
 
 // Represents the query parameter limits for RPC endpoints.
 message RpcLimits {
-    // Maps RPC endpoint names to their parameter limits.
-    // Key: endpoint name (e.g., "CheckNullifiers")
-    // Value: map of parameter names to their limit values
-    map<string, EndpointLimits> endpoints = 1;
+  // Maps RPC endpoint names to their parameter limits.
+  // Key: endpoint name (e.g., "CheckNullifiers")
+  // Value: map of parameter names to their limit values
+  map<string, EndpointLimits> endpoints = 1;
 }
 
 // Represents the parameter limits for a single endpoint.
 message EndpointLimits {
-    // Maps parameter names to their limit values.
-    // Key: parameter name (e.g., "nullifier", "account_id")
-    // Value: limit value
-    map<string, uint32> parameters = 1;
+  // Maps parameter names to their limit values.
+  // Key: parameter name (e.g., "nullifier", "account_id")
+  // Value: limit value
+  map<string, uint32> parameters = 1;
 }
