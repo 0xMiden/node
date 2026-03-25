@@ -128,6 +128,10 @@ impl AuthenticatedTransaction {
     pub fn expires_at(&self) -> BlockNumber {
         self.inner.expiration_block_num()
     }
+
+    pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
+        &self.inner
+    }
 }
 
 #[cfg(test)]
@@ -170,9 +174,5 @@ impl AuthenticatedTransaction {
     pub fn with_empty_store_state(mut self) -> Self {
         self.store_account_state = None;
         self
-    }
-
-    pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
-        &self.inner
     }
 }

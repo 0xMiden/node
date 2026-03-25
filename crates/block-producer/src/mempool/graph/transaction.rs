@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
@@ -89,7 +91,27 @@ impl TransactionGraph {
         &mut self,
         batch: Vec<Arc<AuthenticatedTransaction>>,
     ) -> Result<(), StateConflict> {
-        todo!();
+        let batch_id =
+            BatchId::from_transactions(batch.iter().map(|tx| tx.raw_proven_transaction()));
+
+        // Append each transaction, but revert atomically on error.
+        for (idx, tx) in batch.iter().enumerate() {
+            if let Err(err) = self.append(Arc::clone(tx)) {
+                // We revert in reverse order because inner.revert panics if the node doesn't exist.
+                for tx in batch.iter().take(idx).rev() {
+                    let reverted = self.inner.revert_node_and_descendants(tx.id());
+                    assert_eq!(reverted.len(), 1);
+                    assert_eq!(&reverted[0], tx);
+                }
+
+                return Err(err);
+            }
+        }
+
+        // TODO: Create a bidirectional batch <-> transactions mapping.
+        // TODO: Use mapping to never select these independently.
+        // TODO: Use mapping when reverting to also revert the rest.
+        Ok(())
     }
 
     pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
