@@ -14,7 +14,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
-use miden_tx::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
