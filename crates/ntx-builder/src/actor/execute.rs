@@ -49,7 +49,6 @@ use miden_tx::{
     TransactionProverError,
 };
 use tokio::sync::Mutex;
-use tokio::task::JoinError;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
@@ -71,8 +70,6 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
-    #[error("the ntx task panicked")]
-    Panic(#[source] JoinError),
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -141,9 +138,14 @@ impl NtxContext {
         &self,
         data_store: &'a NtxDataStore,
     ) -> TransactionExecutor<'a, 'b, NtxDataStore, UnreachableAuth> {
-        let exec_options =
-            ExecutionOptions::new(Some(self.max_cycles), self.max_cycles, false, false)
-                .expect("max_cycles should be within valid range");
+        let exec_options = ExecutionOptions::new(
+            Some(self.max_cycles),
+            self.max_cycles,
+            ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
+            false,
+            false,
+        )
+        .expect("max_cycles should be within valid range");
 
         TransactionExecutor::new(data_store)
             .with_options(exec_options)
@@ -317,11 +319,9 @@ impl NtxContext {
         if let Some(remote) = &self.prover {
             remote.prove(tx_inputs).await
         } else {
-            // Only perform tx inptus clone for local proving.
+            // Only perform tx inputs clone for local proving.
             let tx_inputs = tx_inputs.clone();
-            tokio::task::spawn_blocking(move || LocalTransactionProver::default().prove(tx_inputs))
-                .await
-                .map_err(NtxError::Panic)?
+            LocalTransactionProver::default().prove(tx_inputs).await
         }
         .map_err(NtxError::Proving)
     }

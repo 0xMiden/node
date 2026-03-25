@@ -48,7 +48,7 @@ fn parsing_yields_expected_default_values() -> TestResult {
 
         assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
         assert_eq!(faucet.decimals(), 6);
-        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // check account balance, and ensure ordering is retained
@@ -96,11 +96,11 @@ fn parsing_account_from_file() -> TestResult {
     // Create a test wallet account and save it to a .mac file
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
-    let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
+    let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
     let test_account = create_basic_wallet(
@@ -154,10 +154,10 @@ fn parsing_native_faucet_from_file() -> TestResult {
     // Create a faucet account and save it to a .mac file
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
-    let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
+    let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
-    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Rpo);
+    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let faucet_component =
         BasicFungibleFaucet::new(TokenSymbol::new("MIDEN").unwrap(), 6, Felt::new(1_000_000_000))?;
@@ -216,11 +216,11 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     // Create a regular wallet account (not a faucet) and try to use it as native faucet
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
-    let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
+    let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
     let regular_account = create_basic_wallet(
@@ -328,7 +328,7 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     // Verify native faucet symbol
     {
         let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
-        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // Bridge account is a regular account (not a faucet)

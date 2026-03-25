@@ -22,7 +22,7 @@ instead simply serve to enforce code organisation and decoupling.
 
 ---
 
-> [!NOTE] > [`miden-base`](https://github.com/0xMiden/miden-base) is an important dependency which
+> [!NOTE] > [`miden-protocol`](https://github.com/0xMiden/miden-protocol) is an important dependency which
 > contains the core Miden protocol definitions e.g. accounts, notes, transactions etc.
 
 [![workspace dependency tree](assets/workspace_tree.svg)](assets/workspace_tree.svg)

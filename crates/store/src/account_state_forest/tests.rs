@@ -1,14 +1,14 @@
 use assert_matches::assert_matches;
 use miden_node_proto::domain::account::StorageMapEntries;
+use miden_protocol::Felt;
 use miden_protocol::account::{AccountCode, StorageMapKey};
-use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
-use miden_protocol::{Felt, FieldElement};
 
 use super::*;
 
@@ -324,7 +324,7 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     let asset_amount = u64::from(HISTORICAL_BLOCK_RETENTION);
     let amount_increment = asset_amount / u64::from(HISTORICAL_BLOCK_RETENTION);
     let asset = dummy_fungible_asset(faucet_id, asset_amount);
-    let asset_key = AssetVaultKey::new_unchecked(asset.vault_key().into());
+    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
@@ -545,7 +545,7 @@ fn storage_map_empty_entries_query() {
     let account_component = AccountComponent::new(
         component_code,
         component_storage,
-        AccountComponentMetadata::new("test").with_supports_all_types(),
+        AccountComponentMetadata::new("test", AccountType::all()),
     )
     .unwrap();
 
@@ -555,7 +555,7 @@ fn storage_map_empty_entries_query() {
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -953,7 +953,7 @@ fn shared_vault_root_retained_when_one_account_changes() {
     let block_1 = BlockNumber::GENESIS.child();
     let initial_amount = 1000u64;
     let asset = dummy_fungible_asset(faucet_id, initial_amount);
-    let asset_key = AssetVaultKey::new_unchecked(asset.vault_key().into());
+    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();

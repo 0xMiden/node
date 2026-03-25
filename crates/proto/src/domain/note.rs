@@ -13,7 +13,7 @@ use miden_protocol::note::{
     NoteTag,
     NoteType,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
@@ -156,7 +156,7 @@ impl From<(&NoteId, &NoteInclusionProof)> for proto::note::NoteInclusionInBlockP
         Self {
             note_id: Some(note_id.into()),
             block_num: proof.location().block_num().as_u32(),
-            note_index_in_block: proof.location().node_index_in_block().into(),
+            note_index_in_block: proof.location().block_note_tree_index().into(),
             inclusion_path: Some(proof.note_path().clone().into()),
         }
     }

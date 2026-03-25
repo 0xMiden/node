@@ -49,7 +49,7 @@ use miden_protocol::note::{
     NoteType,
     Nullifier,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
 use crate::COMPONENT;
