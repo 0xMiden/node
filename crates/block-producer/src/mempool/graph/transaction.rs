@@ -85,6 +85,13 @@ impl TransactionGraph {
         self.inner.append(tx)
     }
 
+    pub fn append_user_batch(
+        &mut self,
+        batch: Vec<Arc<AuthenticatedTransaction>>,
+    ) -> Result<(), StateConflict> {
+        todo!();
+    }
+
     pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
         let mut selected = SelectedBatch::builder();
 

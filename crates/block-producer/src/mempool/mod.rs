@@ -245,6 +245,34 @@ impl Mempool {
         Ok(self.chain_tip)
     }
 
+    #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
+    pub fn add_user_batch(
+        &mut self,
+        txs: &[Arc<AuthenticatedTransaction>],
+    ) -> Result<BlockNumber, AddTransactionError> {
+        assert!(!txs.is_empty(), "Cannot have a batch with no transactions");
+
+        if self.unbatched_transactions_count() + txs.len() >= self.config.tx_capacity.get() {
+            return Err(AddTransactionError::CapacityExceeded);
+        }
+
+        for tx in txs {
+            self.authentication_staleness_check(tx.authentication_height())?;
+            self.expiration_check(tx.expires_at())?;
+        }
+
+        self.transactions
+            .append_user_batch(txs.to_vec())
+            .map_err(AddTransactionError::StateConflict)?;
+
+        for tx in txs {
+            self.subscription.transaction_added(tx);
+        }
+        self.inject_telemetry();
+
+        Ok(self.chain_tip)
+    }
+
     /// Returns a set of transactions for the next batch.
     ///
     /// Transactions are returned in a valid execution ordering.

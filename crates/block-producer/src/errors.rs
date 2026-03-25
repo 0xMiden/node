@@ -93,16 +93,6 @@ pub enum StateConflict {
     },
 }
 
-// Submit proven batch by user errors
-// =================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-#[grpc(internal)]
-pub enum SubmitProvenBatchError {
-    #[error("batch deserialization failed")]
-    Deserialization(#[source] miden_protocol::utils::DeserializationError),
-}
-
 // Batch building errors
 // =================================================================================================
 

@@ -46,7 +46,7 @@ impl AuthenticatedTransaction {
     ///
     /// Returns an error if any of the transaction's nullifiers are marked as spent by the inputs.
     pub fn new_unchecked(
-        tx: ProvenTransaction,
+        tx: Arc<ProvenTransaction>,
         inputs: TransactionInputs,
     ) -> Result<AuthenticatedTransaction, StateConflict> {
         let nullifiers_already_spent = tx
@@ -58,7 +58,7 @@ impl AuthenticatedTransaction {
         }
 
         Ok(AuthenticatedTransaction {
-            inner: Arc::new(tx),
+            inner: tx,
             notes_authenticated_by_store: inputs.found_unauthenticated_notes,
             authentication_height: inputs.current_block_height,
             store_account_state: inputs.account_commitment,
@@ -151,7 +151,7 @@ impl AuthenticatedTransaction {
             current_block_height: 0.into(),
         };
         // SAFETY: nullifiers were set to None aka are definitely unspent.
-        Self::new_unchecked(inner, inputs).unwrap()
+        Self::new_unchecked(Arc::new(inner), inputs).unwrap()
     }
 
     /// Overrides the authentication height with the given value.
