@@ -47,6 +47,7 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
+miden-agglayer                  = { version = "0.14" }
 miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.14" }
 miden-node-block-producer       = { path = "crates/block-producer", version = "0.14" }
 miden-node-db                   = { path = "crates/db", version = "0.14" }
