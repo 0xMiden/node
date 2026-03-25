@@ -11,7 +11,7 @@
 - Added `GetNoteError` gRPC endpoint to query the latest execution error for network notes (https://github.com/0xMiden/node/issues/1758).
 - Added verbose `info!`-level logging to the network transaction builder for transaction execution, note filtering failures, and transaction outcomes ([#1770](https://github.com/0xMiden/node/pull/1770)).
 - [BREAKING] Move block proving from Blocker Producer to the Store ([#1579](https://github.com/0xMiden/node/pull/1579)).
-- [BREAKING] Updated miden-base dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).
+- [BREAKING] Updated miden-protocol dependencies to use `next` branch; renamed `NoteInputs` to `NoteStorage`, `.inputs()` to `.storage()`, and database `inputs` column to `storage` ([#1595](https://github.com/0xMiden/node/pull/1595)).
 - Validator now persists validated transactions ([#1614](https://github.com/0xMiden/node/pull/1614)).
 - [BREAKING] Remove `SynState` and introduce `SyncChainMmr` ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).

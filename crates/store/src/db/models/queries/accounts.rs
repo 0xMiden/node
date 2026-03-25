@@ -441,7 +441,7 @@ pub(crate) fn select_account_vault_assets(
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
     use schema::account_vault_assets as t;
     // TODO: These limits should be given by the protocol.
-    // See miden-base/issues/1770 for more details
+    // See miden-protocol/issues/1770 for more details
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 

@@ -72,7 +72,7 @@ miden-testing         = { version = "0.14" }
 miden-tx              = { default-features = false, version = "0.14" }
 miden-tx-batch-prover = { version = "0.14" }
 
-# Other miden dependencies. These should align with those expected by miden-base.
+# Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto = { version = "0.23" }
 
 # External dependencies
