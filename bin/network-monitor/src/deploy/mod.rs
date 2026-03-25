@@ -30,9 +30,9 @@ use miden_protocol::transaction::{
     TransactionArgs,
     TransactionKernel,
 };
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, Word};
 use miden_tx::auth::BasicAuthenticator;
-use miden_tx::utils::serde::Serializable;
 use miden_tx::{
     DataStore,
     DataStoreError,

@@ -298,8 +298,6 @@ pub(crate) fn select_account_commitments_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<AccountCommitmentsPage, DatabaseError> {
-    use miden_protocol::utils::serde::Serializable;
-
     // Fetch one extra to determine if there are more results
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
@@ -374,8 +372,6 @@ pub(crate) fn select_public_account_ids_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
-    use miden_protocol::utils::serde::Serializable;
-
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
@@ -441,7 +437,7 @@ pub(crate) fn select_account_vault_assets(
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
     use schema::account_vault_assets as t;
     // TODO: These limits should be given by the protocol.
-    // See miden-base/issues/1770 for more details
+    // See miden-protocol/issues/1770 for more details
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
@@ -1121,7 +1117,7 @@ fn prepare_partial_account_update(
     let mut storage = Vec::new();
     for (slot_name, map_delta) in delta.storage().maps() {
         for (key, value) in map_delta.entries() {
-            storage.push((account_id, slot_name.clone(), (*key).into_inner(), *value));
+            storage.push((account_id, slot_name.clone(), *key, *value));
         }
     }
 

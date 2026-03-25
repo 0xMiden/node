@@ -460,11 +460,7 @@ impl AccountStateForest {
 
             let raw_map_entries: Vec<(StorageMapKey, Word)> =
                 Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
-                    if value == EMPTY_WORD {
-                        None
-                    } else {
-                        Some((key.into_inner(), value))
-                    }
+                    if value == EMPTY_WORD { None } else { Some((key, value)) }
                 }));
 
             if raw_map_entries.is_empty() {
@@ -620,9 +616,8 @@ impl AccountStateForest {
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let lineage = Self::storage_lineage_id(account_id, slot_name);
-            let delta_entries: Vec<(StorageMapKey, Word)> = Vec::from_iter(
-                map_delta.entries().iter().map(|(key, value)| (key.into_inner(), *value)),
-            );
+            let delta_entries: Vec<(StorageMapKey, Word)> =
+                Vec::from_iter(map_delta.entries().iter().map(|(key, value)| (*key, *value)));
 
             let hashed_entries = Vec::from_iter(
                 delta_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),

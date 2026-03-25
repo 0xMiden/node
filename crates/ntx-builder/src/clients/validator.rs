@@ -3,7 +3,7 @@ use std::time::Duration;
 use miden_node_proto::clients::{Builder, ValidatorClient as InnerValidatorClient};
 use miden_node_proto::generated::{self as proto};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
-use miden_tx::utils::serde::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tonic::Status;
 use tracing::{info, instrument};
 use url::Url;

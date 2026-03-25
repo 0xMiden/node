@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use miden_agglayer::{
-    EthAddressFormat,
+    EthAddress,
     MetadataHash,
     create_existing_agglayer_faucet,
     create_existing_bridge_account,
@@ -88,8 +88,8 @@ fn generate_agglayer_sample_accounts() {
 
     // Placeholder Ethereum addresses for sample faucets.
     // WARNING: DO NOT USE THESE ADDRESSES IN PRODUCTION
-    let eth_origin_address = EthAddressFormat::new([1u8; 20]);
-    let usdc_origin_address = EthAddressFormat::new([2u8; 20]);
+    let eth_origin_address = EthAddress::new([1u8; 20]);
+    let usdc_origin_address = EthAddress::new([2u8; 20]);
 
     // Create AggLayer faucets using "existing" variant
     // ETH: 8 decimals (protocol max is 12), max supply of 1 billion tokens

@@ -478,7 +478,7 @@ struct AssetEntry {
 // STORAGE MODE
 // ================================================================================================
 
-/// See the [full description](https://0xmiden.github.io/miden-base/account.html?highlight=Accoun#account-storage-mode)
+/// See the [full description](https://0xmiden.github.io/miden-protocol/account.html?highlight=Accoun#account-storage-mode)
 /// for details
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Default)]
 pub enum StorageMode {
@@ -636,7 +636,6 @@ impl From<TokenSymbolStr> for TokenSymbol {
 
 impl From<TokenSymbol> for TokenSymbolStr {
     fn from(symbol: TokenSymbol) -> Self {
-        // SAFETY: TokenSymbol guarantees valid format, so to_string should not fail
         let raw = symbol.to_string();
         Self { raw, encoded: symbol }
     }

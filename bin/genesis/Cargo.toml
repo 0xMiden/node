@@ -21,7 +21,7 @@ anyhow          = { workspace = true }
 clap            = { workspace = true }
 fs-err          = { workspace = true }
 hex             = { workspace = true }
-miden-agglayer  = { version = "=0.14.0-rc.1" }
+miden-agglayer  = { workspace = true }
 miden-protocol  = { features = ["std"], workspace = true }
 miden-standards = { workspace = true }
 rand            = { workspace = true }

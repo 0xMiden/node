@@ -28,13 +28,12 @@ use miden_protocol::note::{
     NoteType,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
-use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
-use miden_tx::utils::serde::Serializable;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
