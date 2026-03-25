@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_crypto::utils::Serializable;
 use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::Serializable;
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
