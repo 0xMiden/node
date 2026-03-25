@@ -15,26 +15,26 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-anyhow           = { workspace = true }
-axum             = { version = "0.8" }
-clap             = { features = ["env"], workspace = true }
-hex              = { version = "0.4" }
-humantime        = { workspace = true }
-miden-node-proto = { workspace = true }
-miden-node-utils = { workspace = true }
-miden-protocol   = { features = ["std", "testing"], workspace = true }
-miden-standards  = { workspace = true }
-miden-testing    = { workspace = true }
-miden-tx         = { features = ["std"], workspace = true }
-rand             = { workspace = true }
-rand_chacha      = { workspace = true }
-reqwest          = { features = ["json", "query"], workspace = true }
-serde            = { features = ["derive"], version = "1.0" }
-serde_json       = { version = "1.0" }
+anyhow             = { workspace = true }
+axum               = { version = "0.8" }
+clap               = { features = ["env"], workspace = true }
+hex                = { version = "0.4" }
+humantime          = { workspace = true }
+miden-node-proto   = { workspace = true }
+miden-node-tracing = { workspace = true }
+miden-node-utils   = { workspace = true }
+miden-protocol     = { features = ["std", "testing"], workspace = true }
+miden-standards    = { workspace = true }
+miden-testing      = { workspace = true }
+miden-tx           = { features = ["std"], workspace = true }
+rand               = { workspace = true }
+rand_chacha        = { workspace = true }
+reqwest            = { features = ["json", "query"], workspace = true }
+serde              = { features = ["derive"], version = "1.0" }
+serde_json         = { version = "1.0" }
 sha2               = { version = "0.10" }
 tokio              = { features = ["full"], workspace = true }
 tonic              = { features = ["codegen", "tls-native-roots", "transport"], workspace = true }
 tonic-health       = { workspace = true }
 tracing            = { workspace = true }
-miden-node-tracing = { workspace = true }
 url                = { features = ["serde"], workspace = true }

@@ -23,6 +23,7 @@ humantime              = { workspace = true }
 miden-block-prover     = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
+miden-node-tracing     = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { features = ["std"], workspace = true }
 miden-tx               = { features = ["concurrent", "std"], workspace = true }
@@ -38,7 +39,6 @@ tonic-reflection       = { workspace = true }
 tonic-web              = { version = "0.14" }
 tower-http             = { features = ["trace"], workspace = true }
 tracing                = { workspace = true }
-miden-node-tracing     = { workspace = true }
 
 [dev-dependencies]
 assert_matches  = { workspace = true }

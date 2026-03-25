@@ -24,8 +24,8 @@ diesel                 = { workspace = true }
 diesel_migrations      = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-proto       = { workspace = true }
-miden-node-tracing     = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
+miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { workspace = true }

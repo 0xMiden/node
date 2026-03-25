@@ -9,8 +9,6 @@ members = [
   "crates/db",
   "crates/grpc-error-macro",
   "crates/large-smt-backend-rocksdb",
-  "crates/tracing",
-  "crates/tracing-macro",
   "crates/ntx-builder",
   "crates/proto",
   "crates/remote-prover-client",
@@ -18,9 +16,11 @@ members = [
   "crates/rpc",
   "crates/store",
   "crates/test-macro",
+  "crates/tracing",
+  "crates/tracing-macro",
   "crates/utils",
   "crates/validator",
-  "proto"
+  "proto",
 ]
 
 resolver = "2"
@@ -51,12 +51,12 @@ miden-node-block-producer       = { path = "crates/block-producer", version = "0
 miden-node-db                   = { path = "crates/db", version = "0.14" }
 miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.14" }
 miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "0.14" }
-miden-node-tracing              = { path = "crates/tracing", version = "0.14" }
 miden-node-proto                = { path = "crates/proto", version = "0.14" }
 miden-node-proto-build          = { path = "proto", version = "0.14" }
 miden-node-rpc                  = { path = "crates/rpc", version = "0.14" }
 miden-node-store                = { path = "crates/store", version = "0.14" }
 miden-node-test-macro           = { path = "crates/test-macro" }
+miden-node-tracing              = { path = "crates/tracing", version = "0.14" }
 miden-node-utils                = { path = "crates/utils", version = "0.14" }
 miden-node-validator            = { path = "crates/validator", version = "0.14" }
 miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.14" }
@@ -64,7 +64,7 @@ miden-remote-prover-client      = { path = "crates/remote-prover-client", versio
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
 miden-node-tracing-macro           = { path = "crates/tracing-macro", version = "0.14" }
-trybuild                           = { version = "1.0", features = ["diff"] }
+trybuild                           = { features = ["diff"], version = "1.0" }
 
 # miden-protocol dependencies. These should be updated in sync.
 miden-block-prover    = { version = "0.14" }

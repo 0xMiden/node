@@ -18,8 +18,7 @@ workspace = true
 proc-macro = true
 
 [dependencies]
+fuzzy-search = "0.1.0"
 proc-macro2  = "1.0"
 quote        = "1.0"
 syn          = { features = ["extra-traits", "full", "parsing"], version = "2.0" }
-fuzzy-search = "0.1.0"
-
