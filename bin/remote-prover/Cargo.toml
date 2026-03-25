@@ -38,6 +38,7 @@ tonic-reflection       = { workspace = true }
 tonic-web              = { version = "0.14" }
 tower-http             = { features = ["trace"], workspace = true }
 tracing                = { workspace = true }
+miden-node-tracing     = { workspace = true }
 
 [dev-dependencies]
 assert_matches  = { workspace = true }

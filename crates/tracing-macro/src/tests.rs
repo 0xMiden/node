@@ -64,6 +64,29 @@ fn instrument_empty_parens_succeeds() {
     assert!(result.is_ok(), "{result:?}");
 }
 
+#[test]
+fn instrument_component_prefixes_span_name() {
+    let result = instrument2(quote! { rpc: }, item_bare_fn()).expect("expansion should succeed");
+    let tokens = result.to_string();
+    assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
+}
+
+#[test]
+fn instrument_component_prefixes_span_name_for_report() {
+    let result =
+        instrument2(quote! { rpc: report }, item_result_unit_fn()).expect("expansion should succeed");
+    let tokens = result.to_string();
+    assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
+}
+
+#[test]
+fn instrument_component_prefixes_span_name_for_err() {
+    let result =
+        instrument2(quote! { rpc: err }, item_result_unit_fn()).expect("expansion should succeed");
+    let tokens = result.to_string();
+    assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
+}
+
 // ── report ────────────────────────────────────────────────────────────────────
 
 #[test]

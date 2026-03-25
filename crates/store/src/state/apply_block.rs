@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use miden_node_tracing::instrument;
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::SignedBlock;
@@ -8,7 +8,7 @@ use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::Serializable;
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, info_span};
+use tracing::{Instrument, info_span};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, InvalidBlockError};

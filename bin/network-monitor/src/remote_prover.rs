@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::clients::{Builder as ClientBuilder, RemoteProverClient};
 use miden_node_proto::generated as proto;
+use miden_node_tracing::info;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::note::NoteType;
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tonic::Request;
-use tracing::{info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::status::{ServiceDetails, ServiceStatus, Status};

@@ -6,13 +6,13 @@ use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
+use miden_node_tracing::debug;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::{StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetVaultKey;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Note;
 use tonic::{Request, Response, Status};
-use tracing::debug;
 
 use crate::COMPONENT;
 use crate::db::models::Page;

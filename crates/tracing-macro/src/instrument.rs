@@ -20,7 +20,7 @@ pub(crate) struct Name {
 impl Name {
     /// Returns the dotted string representation, e.g. `"account.id"`.
     pub(crate) fn to_dotted_string(&self) -> String {
-        self.segments.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(".")
+        self.segments.iter().map(ToString::to_string).collect::<Vec<_>>().join(".")
     }
 
     /// Span for the full name.
@@ -134,7 +134,7 @@ impl Parse for Field {
 /// `name = value` field entry.
 enum Element {
     /// A `dotted-name = [%] expr` field (validated against the OpenTelemetry allowlist).
-    Field(Field),
+    Field(Box<Field>),
     /// `ret` – record the function's return value inside the span.
     Ret,
     /// `root` – force the span to be a root span (`parent = None`) and tag it with `root = true`.
@@ -169,7 +169,7 @@ impl Parse for Element {
             },
             _ => {
                 let field: Field = input.parse()?;
-                Ok(Element::Field(field))
+                Ok(Element::Field(Box::new(field)))
             },
         }
     }
@@ -194,6 +194,13 @@ pub(crate) enum ComponentName {
 }
 
 impl ComponentName {
+    fn as_string(&self) -> String {
+        match self {
+            ComponentName::Literal(lit) => lit.value(),
+            ComponentName::Ident(ident) => ident.to_string(),
+        }
+    }
+
     /// Emits `target = "…",` for use in `#[tracing::instrument(…)]`.
     pub(crate) fn to_span_target_tokens(&self) -> TokenStream2 {
         match self {
@@ -204,6 +211,12 @@ impl ComponentName {
                 quote! { target = #lit, }
             },
         }
+    }
+
+    pub(crate) fn to_span_name_tokens(&self, fn_ident: &Ident) -> TokenStream2 {
+        let name = format!("{}.{}", self.as_string(), fn_ident);
+        let lit = LitStr::new(&name, fn_ident.span());
+        quote! { name = #lit, }
     }
 
     /// Emits `target: "…",` for use in `tracing::<level>!(…)` event macros.
@@ -298,8 +311,7 @@ fn has_result_return_type(item: &ItemFn) -> bool {
         .path
         .segments
         .last()
-        .map(|PathSegment { ident, .. }| ident == "Result")
-        .unwrap_or(false)
+        .is_some_and(|PathSegment { ident, .. }| ident == "Result")
 }
 
 /// Returns an error when the return type is an `impl Future` or `Pin<Box<dyn
@@ -478,7 +490,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
             Element::Root => has_root = true,
             Element::Err => has_err = true,
             Element::Report => has_report = true,
-            Element::Field(f) => fields.push(f),
+            Element::Field(f) => fields.push(f.as_ref()),
         }
     }
 
@@ -510,6 +522,10 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
     // ── code generation ───────────────────────────────────────────────────────
 
     let target_tokens = args.component.as_ref().map(ComponentName::to_span_target_tokens);
+    let name_tokens = args
+        .component
+        .as_ref()
+        .map(|component| component.to_span_name_tokens(&func.sig.ident));
     let fields_tok = fields_tokens(&fields, has_root);
 
     // Always skip all implicit fn arguments to avoid accidentally recording sensitive values.
@@ -533,7 +549,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         // On Err: emit the full error chain and mark the OpenTelemetry span as failed.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #skip_all #fields_tok #ret_tok)]
+            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #fields_tok #ret_tok)]
             #vis #sig {
                 let __result: #result_ty = #block;
                 if let ::core::result::Result::Err(ref __err) = __result {
@@ -550,14 +566,14 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         // Delegate to tracing::instrument's built-in err support.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #skip_all #fields_tok #ret_tok err)]
+            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #fields_tok #ret_tok err)]
             #vis #sig #block
         })
     } else {
         // No error-reporting variant – plain span wrapper.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #skip_all #fields_tok #ret_tok)]
+            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #fields_tok #ret_tok)]
             #vis #sig #block
         })
     }

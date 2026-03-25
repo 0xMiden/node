@@ -3,6 +3,7 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::MissingFieldHelper;
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
+use miden_node_tracing::{debug, info};
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -15,7 +16,6 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteId;
 use tonic::{Request, Response, Status};
-use tracing::{debug, info};
 
 use crate::COMPONENT;
 use crate::errors::{

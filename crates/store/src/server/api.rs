@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
-use miden_node_tracing::instrument;
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -11,7 +11,6 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber};
 use miden_protocol::note::Nullifier;
 use tonic::{Request, Response, Status};
-use tracing::info;
 
 use crate::errors::GetBlockInputsError;
 use crate::state::State;

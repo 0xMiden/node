@@ -353,7 +353,7 @@ impl AccountActor {
     #[instrument(COMPONENT:)]
     async fn execute_transactions(
         &mut self,
-        account_id: NetworkAccountId,
+        _account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
     ) {
         let block_num = tx_candidate.chain_tip_header.block_num();

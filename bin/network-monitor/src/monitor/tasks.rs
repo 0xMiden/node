@@ -11,10 +11,11 @@ use miden_node_proto::clients::{
     RemoteProverProxyStatusClient,
     RpcClient,
 };
+use miden_node_tracing::debug;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
 use tokio::task::{Id, JoinSet};
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;

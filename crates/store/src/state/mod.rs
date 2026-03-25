@@ -21,7 +21,7 @@ use miden_node_proto::domain::account::{
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_tracing::instrument;
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
@@ -35,7 +35,6 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
-use tracing::info;
 
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;

@@ -32,11 +32,12 @@ reqwest          = { features = ["json", "query"], workspace = true }
 serde            = { features = ["derive"], version = "1.0" }
 serde_json       = { version = "1.0" }
 sha2             = { version = "0.10" }
-tokio            = { features = ["full"], workspace = true }
-tonic            = { features = ["codegen", "tls-native-roots", "transport"], workspace = true }
-tonic-health     = { workspace = true }
-tracing          = { workspace = true }
-url              = { features = ["serde"], workspace = true }
+tokio              = { features = ["full"], workspace = true }
+tonic              = { features = ["codegen", "tls-native-roots", "transport"], workspace = true }
+tonic-health       = { workspace = true }
+tracing            = { workspace = true }
+miden-node-tracing = { workspace = true }
+url                = { features = ["serde"], workspace = true }
 
 [build-dependencies]
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }

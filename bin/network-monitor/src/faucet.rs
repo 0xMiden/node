@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use hex;
+use miden_node_tracing::{debug, info, warn};
 use miden_protocol::account::AccountId;
 use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
 use reqwest::Client;
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, info, instrument, warn};
+use tracing::instrument;
 use url::Url;
 
 use crate::status::{ServiceDetails, ServiceStatus, Status};

@@ -3,12 +3,13 @@
 
 use std::time::Duration;
 
+use miden_node_tracing::info;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, health_check_response};
-use tracing::{info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::status::{NoteTransportStatusDetails, ServiceDetails, ServiceStatus, Status};

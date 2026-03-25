@@ -4,6 +4,7 @@ use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
+use miden_node_tracing::info;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -12,7 +13,6 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
 use tower_http::trace::TraceLayer;
-use tracing::info;
 use url::Url;
 
 use crate::COMPONENT;

@@ -12,10 +12,11 @@ use miden_node_proto::clients::{
 };
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus, StoreStatus};
+use miden_node_tracing::{debug, info};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::faucet::FaucetTestDetails;

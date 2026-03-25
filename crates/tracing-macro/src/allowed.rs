@@ -18,7 +18,7 @@ static ALLOWED_OPENTELEMETRY_NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(
     Vec::from_iter(
         ALLOW_LIST
             .lines()
-            .map(|line| line.trim())
+            .map(str::trim)
             .filter(|trimmed| !trimmed.is_empty() && !trimmed.starts_with('#')),
     )
 });
@@ -32,7 +32,10 @@ pub(crate) fn check(dotted: &str) -> Result<(), Vec<String>> {
         return Ok(());
     }
 
-    let owned: Vec<String> = ALLOWED_OPENTELEMETRY_NAMES.iter().map(|s| s.to_string()).collect();
+    let owned: Vec<String> = ALLOWED_OPENTELEMETRY_NAMES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
     let suggestions = fuzzy_search(dotted, &owned, 5, fuzzy_search::distance::levenshtein);
     Err(suggestions)
 }

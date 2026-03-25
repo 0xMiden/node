@@ -21,6 +21,7 @@ http                   = { workspace = true }
 mediatype              = { version = "0.21" }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { workspace = true }
+miden-node-tracing     = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { default-features = true, workspace = true }
 miden-tx               = { default-features = true, workspace = true }
