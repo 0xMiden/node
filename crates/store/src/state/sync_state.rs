@@ -80,11 +80,14 @@ impl State {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(NoteSyncUpdate, MmrProof, BlockNumber), NoteSyncError> {
         let inner = self.inner.read().await;
+        let checkpoint = *block_range.end();
 
         let (note_sync, last_included_block) =
             self.db.get_note_sync(block_range, note_tags).await?;
 
-        let mmr_proof = inner.blockchain.open(note_sync.block_header.block_num())?;
+        let mmr_proof = inner
+            .blockchain
+            .open_at(note_sync.block_header.block_num(), checkpoint)?;
 
         Ok((note_sync, mmr_proof, last_included_block))
     }
