@@ -26,11 +26,9 @@
 //! considered unnecessary boilerplate by default.
 
 use diesel::SqliteConnection;
-use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::BlockProofRequest;
-use miden_protocol::block::{BlockAccountUpdate, BlockHeader};
+use miden_protocol::block::SignedBlock;
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::OrderedTransactionHeaders;
 
 use super::DatabaseError;
 use crate::db::NoteRecord;
@@ -47,35 +45,28 @@ pub(crate) use nullifiers::*;
 mod notes;
 pub(crate) use notes::*;
 
-/// All data needed to apply a new block to the database.
-pub(crate) struct ApplyBlockData<'a> {
-    pub block_header: &'a BlockHeader,
-    pub signature: &'a Signature,
-    pub notes: &'a [(NoteRecord, Option<Nullifier>)],
-    pub nullifiers: &'a [Nullifier],
-    pub accounts: &'a [BlockAccountUpdate],
-    pub transactions: &'a OrderedTransactionHeaders,
-    pub proving_inputs: Option<BlockProofRequest>,
-}
-
-/// Apply a new block to the state
-///
-/// # Arguments
+/// Apply a new block to the state.
 ///
 /// # Returns
 ///
 /// Number of records inserted and/or updated.
 pub(crate) fn apply_block(
     conn: &mut SqliteConnection,
-    data: ApplyBlockData<'_>,
+    block: &SignedBlock,
+    notes: &[(NoteRecord, Option<Nullifier>)],
+    proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     // Note: ordering here is important as the relevant tables have FK dependencies.
-    count += insert_block_header(conn, data.block_header, data.signature, data.proving_inputs)?;
-    count += upsert_accounts(conn, data.accounts, data.block_header.block_num())?;
-    count += insert_scripts(conn, data.notes.iter().map(|(note, _)| note))?;
-    count += insert_notes(conn, data.notes)?;
-    count += insert_transactions(conn, data.block_header.block_num(), data.transactions)?;
-    count += insert_nullifiers_for_block(conn, data.nullifiers, data.block_header.block_num())?;
+    count += insert_block_header(conn, block.header(), block.signature(), proving_inputs)?;
+    count += upsert_accounts(conn, block.body().updated_accounts(), block.header().block_num())?;
+    count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
+    count += insert_notes(conn, notes)?;
+    count += insert_transactions(conn, block.header().block_num(), block.body().transactions())?;
+    count += insert_nullifiers_for_block(
+        conn,
+        block.body().created_nullifiers(),
+        block.header().block_num(),
+    )?;
     Ok(count)
 }

@@ -180,5 +180,5 @@ pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyh
     let genesis_block =
         GenesisBlock::try_from(proven_block).context("genesis block validation failed")?;
 
-    Store::bootstrap(&genesis_block, data_directory)
+    Store::bootstrap(genesis_block, data_directory)
 }

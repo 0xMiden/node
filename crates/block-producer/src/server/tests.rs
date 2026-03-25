@@ -136,7 +136,7 @@ async fn start_store(
         .into_block()
         .await
         .expect("genesis block should be created");
-    Store::bootstrap(&genesis_block, data_directory).expect("store should bootstrap");
+    Store::bootstrap(genesis_block, data_directory).expect("store should bootstrap");
 
     let dir = data_directory.to_path_buf();
     let rpc_listener =

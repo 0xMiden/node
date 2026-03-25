@@ -1607,7 +1607,7 @@ async fn genesis_with_account_assets() {
         GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
     let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
@@ -1662,7 +1662,7 @@ async fn genesis_with_account_storage_map() {
         GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
     let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
@@ -1715,7 +1715,7 @@ async fn genesis_with_account_assets_and_storage() {
         GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
     let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types.
@@ -1811,7 +1811,7 @@ async fn genesis_with_multiple_accounts() {
     );
     let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 #[test]

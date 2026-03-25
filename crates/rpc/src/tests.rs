@@ -457,7 +457,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
         .into_block()
         .await
         .expect("genesis block should be created");
-    Store::bootstrap(&genesis_block, data_directory.path()).expect("store should bootstrap");
+    Store::bootstrap(genesis_block, data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let store_addr =
         store_listener.local_addr().expect("store listener should get a local address");

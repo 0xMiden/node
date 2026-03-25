@@ -99,7 +99,7 @@ pub async fn seed_store(
         .into_block()
         .await
         .expect("genesis block should be created");
-    Store::bootstrap(&genesis_block, &data_directory).expect("store should bootstrap");
+    Store::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
 
     // start the store
     let (_, store_url) = start_store(data_directory.clone()).await;

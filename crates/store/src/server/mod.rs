@@ -57,7 +57,7 @@ impl Store {
         skip_all,
         err,
     )]
-    pub fn bootstrap(genesis: &GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
+    pub fn bootstrap(genesis: GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(data_directory.to_path_buf()).with_context(|| {
                 format!("failed to load data directory at {}", data_directory.display())
@@ -66,7 +66,7 @@ impl Store {
 
         let block_store = data_directory.block_store_dir();
         let block_store =
-            BlockStore::bootstrap(block_store.clone(), genesis).with_context(|| {
+            BlockStore::bootstrap(block_store.clone(), &genesis).with_context(|| {
                 format!("failed to bootstrap block store at {}", block_store.display())
             })?;
         tracing::info!(target=COMPONENT, path=%block_store.display(), "Block store created");

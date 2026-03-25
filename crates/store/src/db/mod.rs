@@ -258,7 +258,7 @@ impl Db {
         fields(path=%database_filepath.display())
         err,
     )]
-    pub fn bootstrap(database_filepath: PathBuf, genesis: &GenesisBlock) -> anyhow::Result<()> {
+    pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
         // Create database.
         //
         // This will create the file if it does not exist, but will also happily open it if already
@@ -274,23 +274,11 @@ impl Db {
         // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
-        // Insert genesis block data.
-        let genesis = genesis.inner();
-        conn.transaction(move |conn| {
-            models::queries::apply_block(
-                conn,
-                models::queries::ApplyBlockData {
-                    block_header: genesis.header(),
-                    signature: genesis.signature(),
-                    notes: &[],
-                    nullifiers: &[],
-                    accounts: genesis.body().updated_accounts(),
-                    transactions: genesis.body().transactions(),
-                    proving_inputs: None, // Genesis block is never proven.
-                },
-            )
-        })
-        .context("failed to insert genesis block")?;
+        // Insert genesis block data. Deconstruct into signed block.
+        let (header, body, signature, _proof) = genesis.into_inner().into_parts();
+        let genesis_block = SignedBlock::new_unchecked(header, body, signature);
+        conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[], None))
+            .context("failed to insert genesis block")?;
         Ok(())
     }
 
@@ -570,18 +558,7 @@ impl Db {
         proving_inputs: Option<BlockProofRequest>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
-            models::queries::apply_block(
-                conn,
-                models::queries::ApplyBlockData {
-                    block_header: signed_block.header(),
-                    signature: signed_block.signature(),
-                    notes: &notes,
-                    nullifiers: signed_block.body().created_nullifiers(),
-                    accounts: signed_block.body().updated_accounts(),
-                    transactions: signed_block.body().transactions(),
-                    proving_inputs,
-                },
-            )?;
+            models::queries::apply_block(conn, &signed_block, &notes, proving_inputs)?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
             // it doesn't bind it properly to the data locked!
