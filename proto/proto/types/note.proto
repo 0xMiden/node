@@ -17,6 +17,18 @@ enum NoteType {
     NOTE_TYPE_PRIVATE = 2;
 }
 
+// The kind of a note attachment.
+enum NoteAttachmentKind {
+    // Unspecified attachment kind (default value, should not be used).
+    NOTE_ATTACHMENT_KIND_UNSPECIFIED = 0;
+    // No attachment.
+    NOTE_ATTACHMENT_KIND_NONE = 1;
+    // A single word attachment.
+    NOTE_ATTACHMENT_KIND_WORD = 2;
+    // An array attachment.
+    NOTE_ATTACHMENT_KIND_ARRAY = 3;
+}
+
 // Represents a note's ID.
 message NoteId {
     // A unique identifier of the note which is a 32-byte commitment to the underlying note data.
@@ -27,6 +39,29 @@ message NoteId {
 message NoteIdList {
     // List of note IDs to be queried from the database.
     repeated NoteId ids = 1;
+}
+
+// Represents the header of a note's metadata.
+//
+// Contains the sender, note type, tag and attachment type information, but not the full
+// attachment data. See `miden_protocol::note::NoteMetadataHeader` for more info.
+message NoteMetadataHeader {
+    // The account which sent the note.
+    account.AccountId sender = 1;
+
+    // The type of the note.
+    NoteType note_type = 2;
+
+    // A value which can be used by the recipient to identify notes intended for them.
+    //
+    // See `miden_protocol::note::note_tag` for more info.
+    fixed32 tag = 3;
+
+    // The kind of the note attachment.
+    NoteAttachmentKind attachment_kind = 4;
+
+    // The scheme identifier of the note attachment.
+    fixed32 attachment_scheme = 5;
 }
 
 // Represents a note's metadata.
@@ -105,19 +140,16 @@ message NoteInclusionInBlockProof {
     primitives.SparseMerklePath inclusion_path = 4;
 }
 
-// Represents proof of a note inclusion in the block.
+// Represents a note's metadata header together with proof of inclusion in a block.
+//
+// To get the full `NoteMetadata` (including
+// attachment), use `GetNotesById`.
 message NoteSyncRecord {
-    // A unique identifier of the note which is a 32-byte commitment to the underlying note data.
-    NoteId note_id = 1;
+    // The fixed-size metadata header of the note.
+    NoteMetadataHeader metadata_header = 1;
 
-    // The index of the note in the block.
-    uint32 note_index_in_block = 2;
-
-    // The note's metadata.
-    NoteMetadata metadata = 3;
-
-    // The note's inclusion proof in the block.
-    primitives.SparseMerklePath inclusion_path = 4;
+    // Proof of the note's inclusion in a block.
+    NoteInclusionInBlockProof inclusion_proof = 2;
 }
 
 // Represents a note header.
