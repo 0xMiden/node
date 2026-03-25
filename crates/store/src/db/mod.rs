@@ -24,7 +24,7 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
@@ -117,7 +117,7 @@ impl AccountVaultValue {
         let vault_key = Word::read_from_bytes(&vault_key)?;
         Ok(Self {
             block_num: BlockNumber::from_raw_sql(block_num)?,
-            vault_key: AssetVaultKey::new_unchecked(vault_key),
+            vault_key: AssetVaultKey::try_from(vault_key)?,
             asset: asset.map(|b| Asset::read_from_bytes(&b)).transpose()?,
         })
     }

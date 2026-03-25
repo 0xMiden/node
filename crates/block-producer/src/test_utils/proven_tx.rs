@@ -4,14 +4,17 @@ use std::sync::Arc;
 use itertools::Itertools;
 use miden_node_utils::fee::test_fee;
 use miden_protocol::account::AccountId;
+use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::transaction::{
     InputNote,
+    InputNoteCommitment,
     OutputNote,
+    PrivateNoteHeader,
     ProvenTransaction,
-    ProvenTransactionBuilder,
+    TxAccountUpdate,
 };
 use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
@@ -131,7 +134,7 @@ impl MockProvenTxBuilder {
             .map(|note_index| {
                 let note = Note::mock_noop(Word::from([0, 0, 0, note_index]));
 
-                OutputNote::Header(note.header().clone())
+                OutputNote::Private(PrivateNoteHeader::new(note.header().clone()).unwrap())
             })
             .collect();
 
@@ -139,21 +142,31 @@ impl MockProvenTxBuilder {
     }
 
     pub fn build(self) -> ProvenTransaction {
-        ProvenTransactionBuilder::new(
+        let account_update = TxAccountUpdate::new(
             self.account_id,
             self.initial_account_commitment,
             self.final_account_commitment,
             Word::empty(),
+            AccountUpdateDetails::Private,
+        )
+        .unwrap();
+        let input_notes: Vec<InputNoteCommitment> = self
+            .input_notes
+            .unwrap_or_default()
+            .into_iter()
+            .map(InputNoteCommitment::from)
+            .chain(self.nullifiers.unwrap_or_default().into_iter().map(InputNoteCommitment::from))
+            .collect();
+        ProvenTransaction::new(
+            account_update,
+            input_notes,
+            self.output_notes.unwrap_or_default(),
             BlockNumber::GENESIS,
             Word::empty(),
             self.fee,
             self.expiration_block_num,
             ExecutionProof::new_dummy(),
         )
-        .add_input_notes(self.input_notes.unwrap_or_default())
-        .add_input_notes(self.nullifiers.unwrap_or_default())
-        .add_output_notes(self.output_notes.unwrap_or_default())
-        .build()
         .unwrap()
     }
 }

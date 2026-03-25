@@ -44,8 +44,8 @@ impl StoreApi {
 
         Ok(Response::new(proto::rpc::BlockHeaderByNumberResponse {
             block_header: block_header.map(Into::into),
-            chain_length: mmr_proof.as_ref().map(|p| p.forest.num_leaves() as u32),
-            mmr_path: mmr_proof.map(|p| Into::into(&p.merkle_path)),
+            chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
+            mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),
         }))
     }
 
@@ -67,7 +67,7 @@ impl StoreApi {
 
             for note in batch.input_notes().iter() {
                 if let Some(header) = note.header() {
-                    unauthenticated_note_commitments.insert(header.commitment());
+                    unauthenticated_note_commitments.insert(header.to_commitment());
                 }
             }
         }

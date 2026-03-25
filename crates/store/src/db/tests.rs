@@ -26,7 +26,7 @@ use miden_protocol::account::{
     StorageSlotDelta,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
@@ -37,7 +37,7 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
@@ -52,6 +52,9 @@ use miden_protocol::note::{
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
@@ -63,8 +66,8 @@ use miden_protocol::transaction::{
     TransactionHeader,
     TransactionId,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
-use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
@@ -193,7 +196,7 @@ fn sql_select_nullifiers() {
 
 pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
     let mut rng = rng.lock().unwrap();
     P2idNote::create(
         account_id,
@@ -478,11 +481,12 @@ fn sync_account_vault_basic_validation() {
             .unwrap();
     }
 
-    // Create some test vault assets
-    let vault_key_1 = AssetVaultKey::new_unchecked(num_to_word(100));
-    let vault_key_2 = AssetVaultKey::new_unchecked(num_to_word(200));
+    // Create test vault assets from two different faucets to get different vault keys.
+    let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
     let fungible_asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let fungible_asset_2 = Asset::Fungible(FungibleAsset::new(public_account_id, 2000).unwrap());
+    let fungible_asset_2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 2000).unwrap());
+    let vault_key_1 = fungible_asset_1.vault_key();
+    let vault_key_2 = fungible_asset_2.vault_key();
 
     // Insert vault assets for the public account at different blocks
     queries::insert_account_vault_asset(
@@ -923,7 +927,7 @@ fn insert_account_delta(
                 account_id,
                 block_number,
                 slot_name.clone(),
-                *k.inner(),
+                *k,
                 *v,
             )
             .unwrap();
@@ -1319,8 +1323,7 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountUpdatableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountUpdatableCode]),
     )
     .unwrap();
 
@@ -1330,7 +1333,7 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()
@@ -1353,19 +1356,21 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
     )];
 
+    let fee = test_fee();
     TransactionHeader::new_unchecked(
         TransactionId::new(
             initial_state_commitment,
             final_account_commitment,
             input_notes_commitment,
             output_notes_commitment,
+            fee,
         ),
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
-        test_fee(),
+        fee,
     )
 }
 
@@ -1420,7 +1425,7 @@ fn mock_account_code_and_storage(
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("counter_contract").with_supports_all_types(),
+        AccountComponentMetadata::new("counter_contract", AccountType::all()),
     )
     .unwrap();
 
@@ -1431,7 +1436,7 @@ fn mock_account_code_and_storage(
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()
@@ -1584,7 +1589,7 @@ async fn genesis_with_account_assets() {
     let account_component = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("foo").with_supports_all_types(),
+        AccountComponentMetadata::new("foo", AccountType::all()),
     )
     .unwrap();
 
@@ -1598,7 +1603,7 @@ async fn genesis_with_account_assets() {
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -1643,7 +1648,7 @@ async fn genesis_with_account_storage_map() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("foo").with_supports_all_types(),
+        AccountComponentMetadata::new("foo", AccountType::all()),
     )
     .unwrap();
 
@@ -1653,7 +1658,7 @@ async fn genesis_with_account_storage_map() {
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -1695,7 +1700,7 @@ async fn genesis_with_account_assets_and_storage() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("foo").with_supports_all_types(),
+        AccountComponentMetadata::new("foo", AccountType::all()),
     )
     .unwrap();
 
@@ -1706,7 +1711,7 @@ async fn genesis_with_account_assets_and_storage() {
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -1733,7 +1738,7 @@ async fn genesis_with_multiple_accounts() {
     let account_component1 = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("foo").with_supports_all_types(),
+        AccountComponentMetadata::new("foo", AccountType::all()),
     )
     .unwrap();
 
@@ -1743,7 +1748,7 @@ async fn genesis_with_multiple_accounts() {
         .with_component(account_component1)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -1757,7 +1762,7 @@ async fn genesis_with_multiple_accounts() {
     let account_component2 = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("bar").with_supports_all_types(),
+        AccountComponentMetadata::new("bar", AccountType::all()),
     )
     .unwrap();
 
@@ -1768,7 +1773,7 @@ async fn genesis_with_multiple_accounts() {
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -1787,7 +1792,7 @@ async fn genesis_with_multiple_accounts() {
     let account_component3 = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("baz").with_supports_all_types(),
+        AccountComponentMetadata::new("baz", AccountType::all()),
     )
     .unwrap();
 
@@ -1797,7 +1802,7 @@ async fn genesis_with_multiple_accounts() {
         .with_component(account_component3)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -1887,7 +1892,13 @@ fn serialization_symmetry_core_types() {
     assert_eq!(nullifier, restored, "Nullifier serialization must be symmetric");
 
     // TransactionId
-    let tx_id = TransactionId::new(num_to_word(1), num_to_word(2), num_to_word(3), num_to_word(4));
+    let tx_id = TransactionId::new(
+        num_to_word(1),
+        num_to_word(2),
+        num_to_word(3),
+        num_to_word(4),
+        test_fee(),
+    );
     let bytes = tx_id.to_bytes();
     let restored = TransactionId::read_from_bytes(&bytes).unwrap();
     assert_eq!(tx_id, restored, "TransactionId serialization must be symmetric");
@@ -2255,7 +2266,7 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test").with_supports_all_types(),
+        AccountComponentMetadata::new("test", AccountType::all()),
     )
     .unwrap();
 
@@ -2265,7 +2276,7 @@ fn db_roundtrip_account_storage_with_maps() {
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -2418,13 +2429,15 @@ fn test_prune_history() {
             .unwrap();
     }
 
-    // Insert vault assets at different blocks
-    let vault_key_old = AssetVaultKey::new_unchecked(num_to_word(100));
-    let vault_key_cutoff = AssetVaultKey::new_unchecked(num_to_word(200));
-    let vault_key_recent = AssetVaultKey::new_unchecked(num_to_word(300));
+    // Insert vault assets at different blocks - use different faucets for different vault keys.
+    let faucet_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let faucet_3 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
     let asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let asset_2 = Asset::Fungible(FungibleAsset::new(public_account_id, 2000).unwrap());
-    let asset_3 = Asset::Fungible(FungibleAsset::new(public_account_id, 3000).unwrap());
+    let asset_2 = Asset::Fungible(FungibleAsset::new(faucet_2, 2000).unwrap());
+    let asset_3 = Asset::Fungible(FungibleAsset::new(faucet_3, 3000).unwrap());
+    let vault_key_old = asset_1.vault_key();
+    let vault_key_cutoff = asset_2.vault_key();
+    let vault_key_recent = asset_3.vault_key();
 
     // Old entry at block_old (should be deleted when cutoff is at block_cutoff for
     // chain_tip=block_tip)
@@ -2610,8 +2623,9 @@ fn test_prune_history() {
 
     // Test that is_latest=true entries are never deleted, even if old
     // Insert an old entry marked as latest
-    let vault_key_old_latest = AssetVaultKey::new_unchecked(num_to_word(999));
-    let asset_old = Asset::Fungible(FungibleAsset::new(public_account_id, 9999).unwrap());
+    let faucet_4 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
+    let asset_old = Asset::Fungible(FungibleAsset::new(faucet_4, 9999).unwrap());
+    let vault_key_old_latest = asset_old.vault_key();
     queries::insert_account_vault_asset(
         conn,
         public_account_id,
@@ -3154,11 +3168,7 @@ fn account_state_forest_preserves_most_recent_vault_only() {
 
     // Verify we can get witnesses for the vault and verify against vault root
     let witnesses = forest
-        .get_vault_asset_witnesses(
-            account_id,
-            block_1,
-            [AssetVaultKey::new_unchecked(asset.vault_key().into())].into(),
-        )
+        .get_vault_asset_witnesses(account_id, block_1, [asset.vault_key()].into())
         .expect("Should be able to get vault witness after pruning");
 
     assert_eq!(witnesses.len(), 1, "Should have one witness");

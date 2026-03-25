@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
+use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use url::Url;
@@ -32,6 +33,7 @@ pub struct Rpc {
     pub store_url: Url,
     pub block_producer_url: Option<Url>,
     pub validator_url: Url,
+    pub ntx_builder_url: Option<Url>,
     pub grpc_options: GrpcOptionsExternal,
 }
 
@@ -45,6 +47,7 @@ impl Rpc {
             self.store_url.clone(),
             self.block_producer_url.clone(),
             self.validator_url,
+            self.ntx_builder_url.clone(),
         );
 
         let genesis = api
@@ -72,7 +75,17 @@ impl Rpc {
             .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(grpc::connect_info_layer())
-            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .layer(
+                TraceLayer::new(SharedClassifier::new(
+                    GrpcErrorsAsFailures::new()
+                        .with_success(GrpcCode::InvalidArgument)
+                        .with_success(GrpcCode::NotFound)
+                        .with_success(GrpcCode::ResourceExhausted)
+                        .with_success(GrpcCode::Unimplemented)
+                        .with_success(GrpcCode::Unknown),
+                ))
+                .make_span_with(grpc_trace_fn),
+            )
             .layer(HealthCheckLayer)
             .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
             .layer(grpc::rate_limit_per_ip(self.grpc_options)?)

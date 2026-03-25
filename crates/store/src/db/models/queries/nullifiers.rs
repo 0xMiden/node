@@ -20,7 +20,7 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
 use crate::COMPONENT;
