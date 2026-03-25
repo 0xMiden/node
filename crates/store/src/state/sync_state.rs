@@ -78,18 +78,19 @@ impl State {
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(NoteSyncUpdate, MmrProof, BlockNumber), NoteSyncError> {
+    ) -> Result<Option<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
         let inner = self.inner.read().await;
         let checkpoint = *block_range.end();
 
-        let (note_sync, last_included_block) =
-            self.db.get_note_sync(block_range, note_tags).await?;
+        let note_sync = self.db.get_note_sync(block_range, note_tags).await?;
 
-        let mmr_proof = inner
-            .blockchain
-            .open_at(note_sync.block_header.block_num(), checkpoint)?;
+        if note_sync.notes.is_empty() {
+            return Ok(None);
+        }
 
-        Ok((note_sync, mmr_proof, last_included_block))
+        let mmr_proof = inner.blockchain.open_at(note_sync.block_header.block_num(), checkpoint)?;
+
+        Ok(Some((note_sync, mmr_proof)))
     }
 
     pub async fn sync_nullifiers(

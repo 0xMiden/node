@@ -196,11 +196,9 @@ Returns info which can be used by the client to sync up to the tip of chain for 
 
 **Limits:** `note_tag` (1000)
 
-Client specifies the `note_tags` they are interested in, and the block range from which to search for matching notes. The request will then return the next block containing any note matching the provided tags within the specified range.
+Client specifies the `note_tags` they are interested in, and the block range to search. The response contains all blocks with matching notes that fit within the response payload limit, along with each note's metadata, inclusion proof, and MMR authentication path.
 
-The response includes each note's metadata and inclusion proof.
-
-A basic note sync can be implemented by repeatedly requesting the previous response's block until reaching the tip of the chain.
+If `response.block_range.block_to` is less than the requested range end, make another request starting from `response.block_range.block_to + 1` to continue syncing.
 
 #### Error Handling
 

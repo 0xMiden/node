@@ -912,6 +912,122 @@ fn notes() {
     assert_eq!(note_1.details, None);
 }
 
+/// Creates notes across 3 blocks with different tags, then iterates
+/// `select_notes_since_block_by_tag_and_sender` advancing the cursor each time,
+/// verifying that each call returns the next block's notes.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_across_multiple_blocks() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+
+    // Create 3 blocks with notes.
+    let tag = 42u32;
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+
+    for block_num_raw in 1..=3u32 {
+        let block_num = BlockNumber::from(block_num_raw);
+        create_block(conn, block_num);
+        queries::upsert_accounts(
+            conn,
+            &[mock_block_account_update(sender, block_num_raw.into())],
+            block_num,
+        )
+        .unwrap();
+
+        let new_note = create_note(sender);
+        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
+        let values = [(note_index, new_note.id(), &note_metadata)];
+        let notes_db = BlockNoteTree::with_entries(values).unwrap();
+        let inclusion_path = notes_db.open(note_index);
+
+        let note = NoteRecord {
+            block_num,
+            note_index,
+            note_id: new_note.id().as_word(),
+            note_commitment: new_note.commitment(),
+            metadata: note_metadata,
+            details: Some(NoteDetails::from(&new_note)),
+            inclusion_path,
+        };
+        queries::insert_scripts(conn, [&note]).unwrap();
+        queries::insert_notes(conn, &[(note, None)]).unwrap();
+    }
+
+    // Simulate the RPC batching loop: repeatedly query with advancing block_from.
+    let full_range = BlockNumber::GENESIS..=BlockNumber::from(3);
+    let mut collected_block_nums = Vec::new();
+    let mut current_from = *full_range.start();
+
+    loop {
+        let range = current_from..=*full_range.end();
+        let (notes, _last_included) =
+            queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], range).unwrap();
+
+        if notes.is_empty() {
+            break;
+        }
+
+        // All notes in a single response come from the same block.
+        let block_num = notes[0].block_num;
+        assert!(notes.iter().all(|n| n.block_num == block_num));
+        collected_block_nums.push(block_num);
+
+        // The query uses `committed_at > block_range.start()` (exclusive), so
+        // advancing to the found block_num is sufficient to skip it.
+        current_from = block_num;
+    }
+
+    assert_eq!(
+        collected_block_nums,
+        vec![BlockNumber::from(1), BlockNumber::from(2), BlockNumber::from(3)],
+        "should iterate through all 3 blocks with matching notes"
+    );
+}
+
+/// Tests that note sync returns an empty result when no notes match the requested tags.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_no_matching_tags() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let block_num = BlockNumber::from(1);
+    create_block(conn, block_num);
+    queries::upsert_accounts(conn, &[mock_block_account_update(sender, 0)], block_num).unwrap();
+
+    // Insert a note with tag 10.
+    let new_note = create_note(sender);
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into());
+    let values = [(note_index, new_note.id(), &note_metadata)];
+    let notes_db = BlockNoteTree::with_entries(values).unwrap();
+    let inclusion_path = notes_db.open(note_index);
+
+    let note = NoteRecord {
+        block_num,
+        note_index,
+        note_id: new_note.id().as_word(),
+        note_commitment: new_note.commitment(),
+        metadata: note_metadata,
+        details: Some(NoteDetails::from(&new_note)),
+        inclusion_path,
+    };
+    queries::insert_scripts(conn, [&note]).unwrap();
+    queries::insert_notes(conn, &[(note, None)]).unwrap();
+
+    // Query with a different tag — should return no notes.
+    let range = BlockNumber::GENESIS..=BlockNumber::from(1);
+    let (notes, last_included) =
+        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[999], range).unwrap();
+
+    assert!(notes.is_empty());
+    assert_eq!(last_included, BlockNumber::from(1));
+}
+
 fn insert_account_delta(
     conn: &mut SqliteConnection,
     account_id: AccountId,

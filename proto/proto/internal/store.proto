@@ -52,16 +52,11 @@ service Rpc {
     // Note that only 16-bit prefixes are supported at this time.
     rpc SyncNullifiers(rpc.SyncNullifiersRequest) returns (rpc.SyncNullifiersResponse) {}
 
-    // Returns info which can be used by the requester to sync up to the tip of chain for the notes they are interested in.
+    // Returns the next block containing notes matching the requested tags within the given range.
     //
-    // requester specifies the `note_tags` they are interested in, and the block height from which to search for new for
-    // matching notes for. The request will then return the next block containing any note matching the provided tags.
-    //
-    // The response includes each note's metadata and inclusion proof.
-    //
-    // A basic note sync can be implemented by repeatedly requesting the previous response's block until reaching the
-    // tip of the chain.
-    rpc SyncNotes(rpc.SyncNotesRequest) returns (rpc.SyncNotesResponse) {}
+    // This is the store-internal single-block variant. The external RPC endpoint batches multiple
+    // calls to this into a single multi-block response.
+    rpc SyncNotes(rpc.SyncNotesRequest) returns (StoreSyncNotesResponse) {}
 
     // Returns chain MMR updates within a block range.
     rpc SyncChainMmr(rpc.SyncChainMmrRequest) returns (rpc.SyncChainMmrResponse) {}
@@ -74,6 +69,31 @@ service Rpc {
 
     // Returns transactions records for specific accounts within a block range.
     rpc SyncTransactions(rpc.SyncTransactionsRequest) returns (rpc.SyncTransactionsResponse) {}
+}
+
+// SYNC NOTES (STORE-INTERNAL)
+// ================================================================================================
+
+// Store-internal response for note sync (single block).
+//
+// This is the single-block response returned by the store. The external RPC endpoint
+// batches multiple of these into a multi-block `SyncNotesResponse`.
+message StoreSyncNotesResponse {
+    // The block range covered by this response.
+    //
+    // `block_from` matches the request's `block_range.block_from`.
+    // `block_to` is the chain tip at the time of the response.
+    rpc.BlockRange block_range = 1;
+
+    // Block header of the block containing the matching notes.
+    blockchain.BlockHeader block_header = 2;
+
+    // Merkle path to verify the block's inclusion in the MMR at the returned
+    // `block_range.block_to`.
+    primitives.MerklePath mmr_path = 3;
+
+    // List of notes matching the specified criteria in this block.
+    repeated note.NoteSyncRecord notes = 4;
 }
 
 // BLOCK PRODUCER STORE API

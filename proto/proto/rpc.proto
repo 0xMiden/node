@@ -82,14 +82,12 @@ service Api {
     // Returns info which can be used by the client to sync up to the tip of chain for the notes
     // they are interested in.
     //
-    // Client specifies the `note_tags` they are interested in, and the block height from which to
-    // search for new for matching notes for. The request will then return the next block containing
-    // any note matching the provided tags.
+    // Client specifies the `note_tags` they are interested in, and the block range to search.
+    // The response contains all blocks with matching notes that fit within the response payload
+    // limit, along with each note's metadata and inclusion proof.
     //
-    // The response includes each note's metadata and inclusion proof.
-    //
-    // A basic note sync can be implemented by repeatedly requesting the previous response's block
-    // until reaching the tip of the chain.
+    // If `response.block_range.block_to` is less than the requested range end, make another
+    // request starting from `response.block_range.block_to + 1` to continue syncing.
     rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
 
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
@@ -461,8 +459,9 @@ message AccountVaultUpdate {
 
 // Note synchronization request.
 //
-// Specifies note tags that requester is interested in. The server will return the first block which
-// contains a note matching `note_tags` or the chain tip.
+// Specifies note tags that the requester is interested in. The server will return blocks
+// containing notes matching `note_tags` within the specified block range, batching as many
+// blocks as fit within the response payload limit.
 message SyncNotesRequest {
     // Block range from which to start synchronizing.
     BlockRange block_range = 1;
@@ -473,20 +472,35 @@ message SyncNotesRequest {
 
 // Represents the result of syncing notes request.
 message SyncNotesResponse {
-    // Pagination information.
-    PaginationInfo pagination_info = 1;
+    // A single block's worth of note sync data.
+    message NoteSyncBlock {
+        // Block header of the block containing the matching notes.
+        blockchain.BlockHeader block_header = 1;
 
-    // Block header of the block with the first note matching the specified criteria.
-    blockchain.BlockHeader block_header = 2;
+        // Merkle path to verify the block's inclusion in the MMR at the returned
+        // `block_range.block_to`.
+        //
+        // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
+        // an MMR of forest `block_range.block_to` with this path.
+        primitives.MerklePath mmr_path = 2;
 
-    // Merkle path to verify the block's inclusion in the MMR at the returned `chain_tip`.
+        // List of notes matching the specified criteria in this block, together with the
+        // Merkle paths from `block_header.note_root`.
+        repeated note.NoteSyncRecord notes = 3;
+    }
+
+    // The block range covered by this response.
     //
-    // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
-    // an MMR of forest `chain_tip` with this path.
-    primitives.MerklePath mmr_path = 3;
+    // `block_from` matches the request's `block_range.block_from`.
+    // `block_to` is the chain tip at the time of the response.
+    //
+    // If `block_to` equals the requested range end (or the chain tip when unset), the sync
+    // is complete. Otherwise, the client should request again starting from `block_to + 1`.
+    BlockRange block_range = 5;
 
-    // List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    repeated note.NoteSyncRecord notes = 4;
+    // Blocks containing matching notes, ordered by block number ascending.
+    // May be empty if no notes matched in the range.
+    repeated NoteSyncBlock blocks = 6;
 }
 
 // SYNC CHAIN MMR

@@ -126,7 +126,7 @@ impl rpc_server::Rpc for StoreApi {
     async fn sync_notes(
         &self,
         request: Request<proto::rpc::SyncNotesRequest>,
-    ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
+    ) -> Result<Response<proto::store::StoreSyncNotesResponse>, Status> {
         let request = request.into_inner();
 
         let chain_tip = self.state.latest_block_num().await;
@@ -134,21 +134,29 @@ impl rpc_server::Rpc for StoreApi {
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
 
+        let block_from = block_range.start().as_u32();
+
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (state, mmr_proof, last_block_included) =
-            self.state.sync_notes(request.note_tags, block_range).await?;
+        let result = self.state.sync_notes(request.note_tags, block_range).await?;
 
-        let notes = state.notes.into_iter().map(Into::into).collect();
+        let (block_header, mmr_path, notes) = match result {
+            Some((state, mmr_proof)) => (
+                Some(state.block_header.into()),
+                Some(mmr_proof.merkle_path().clone().into()),
+                state.notes.into_iter().map(Into::into).collect(),
+            ),
+            None => (None, None, Vec::new()),
+        };
 
-        Ok(Response::new(proto::rpc::SyncNotesResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
-                chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+        Ok(Response::new(proto::store::StoreSyncNotesResponse {
+            block_range: Some(proto::rpc::BlockRange {
+                block_from,
+                block_to: Some(chain_tip.as_u32()),
             }),
-            block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+            block_header,
+            mmr_path,
             notes,
         }))
     }
