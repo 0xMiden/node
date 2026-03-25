@@ -7,6 +7,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
+use miden_protocol::utils::serde::DeserializationError;
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -119,7 +120,7 @@ pub enum AddTransactionError {
     },
 
     #[error("transaction deserialization failed")]
-    TransactionDeserializationFailed(#[source] miden_protocol::utils::serde::DeserializationError),
+    TransactionDeserializationFailed(#[source] DeserializationError),
 
     #[error(
         "transaction expired at block height {expired_at} but the block height limit was {limit}"
@@ -167,7 +168,7 @@ impl From<VerifyTxError> for AddTransactionError {
 #[grpc(internal)]
 pub enum SubmitProvenBatchError {
     #[error("batch deserialization failed")]
-    Deserialization(#[source] miden_protocol::utils::serde::DeserializationError),
+    Deserialization(#[source] DeserializationError),
 }
 
 // Batch building errors
