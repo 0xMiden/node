@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use metrics::SeedingMetrics;
-use miden_air::ExecutionProof;
 use miden_node_block_producer::store::StoreClient;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_store::{DataDirectory, GenesisState, Store};
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -32,20 +32,23 @@ use miden_protocol::block::{
     SignedBlock,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
-use miden_protocol::crypto::dsa::falcon512_rpo::{PublicKey, SecretKey};
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
 use miden_protocol::note::{Note, NoteHeader, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
     InputNote,
+    InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
     OutputNote,
     ProvenTransaction,
-    ProvenTransactionBuilder,
+    PublicOutputNote,
     TransactionHeader,
+    TxAccountUpdate,
 };
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
+use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::BasicFungibleFaucet;
@@ -93,9 +96,12 @@ pub async fn seed_store(
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
     let signer = EcdsaSecretKey::new();
     let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer);
-    Store::bootstrap(genesis_state.clone(), &data_directory)
+    let genesis_block = genesis_state
+        .clone()
+        .into_block()
         .await
-        .expect("store should bootstrap");
+        .expect("genesis block should be created");
+    Store::bootstrap(&genesis_block, &data_directory).expect("store should bootstrap");
 
     // start the store
     let (_, store_url) = start_store(data_directory.clone()).await;
@@ -157,7 +163,7 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
         SecretKey::with_rng(&mut *rng)
@@ -283,7 +289,7 @@ fn create_accounts_and_notes(
     num_accounts: usize,
     storage_mode: AccountStorageMode,
     key_pair: &SecretKey,
-    rng: &Arc<Mutex<RpoRandomCoin>>,
+    rng: &Arc<Mutex<RandomCoin>>,
     faucet_id: AccountId,
     block_num: usize,
 ) -> (Vec<Account>, Vec<Note>) {
@@ -306,7 +312,7 @@ fn create_accounts_and_notes(
 
 /// Creates a public P2ID note containing 10 tokens of the fungible asset associated with the
 /// specified `faucet_id` and sent to the specified target account.
-fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RpoRandomCoin) -> Note {
+fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RandomCoin) -> Note {
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
     P2idNote::create(
         faucet_id,
@@ -326,7 +332,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(storage_mode)
-        .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Rpo))
+        .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet)
         .build()
         .unwrap()
@@ -335,7 +341,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
 /// Creates a new faucet account.
 fn create_faucet() -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RpoRandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed = [0_u8; 32];
 
@@ -346,7 +352,7 @@ fn create_faucet() -> Account {
         .with_component(BasicFungibleFaucet::new(token_symbol, 2, Felt::new(u64::MAX)).unwrap())
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build()
         .unwrap()
@@ -418,20 +424,24 @@ fn create_consume_note_tx(
         (AccountUpdateDetails::Private, Word::empty())
     };
 
-    ProvenTransactionBuilder::new(
+    let account_update = TxAccountUpdate::new(
         account.id(),
         init_hash,
         account.to_commitment(),
         account_delta_commitment,
+        details,
+    )
+    .unwrap();
+    ProvenTransaction::new(
+        account_update,
+        vec![InputNoteCommitment::from(input_note)],
+        Vec::<OutputNote>::new(),
         block_ref.block_num(),
         block_ref.commitment(),
         fee_from_block(block_ref).unwrap(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .add_input_notes(vec![input_note])
-    .account_update_details(details)
-    .build()
     .unwrap()
 }
 
@@ -453,11 +463,21 @@ fn create_emit_note_tx(
 
     faucet.increment_nonce(ONE).unwrap();
 
-    ProvenTransactionBuilder::new(
+    let account_update = TxAccountUpdate::new(
         faucet.id(),
         initial_account_hash,
         faucet.to_commitment(),
         Word::empty(),
+        AccountUpdateDetails::Private,
+    )
+    .unwrap();
+    ProvenTransaction::new(
+        account_update,
+        Vec::<InputNoteCommitment>::new(),
+        output_notes
+            .into_iter()
+            .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
+            .collect::<Vec<OutputNote>>(),
         block_ref.block_num(),
         block_ref.commitment(),
         FungibleAsset::new(
@@ -468,8 +488,6 @@ fn create_emit_note_tx(
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .add_output_notes(output_notes.into_iter().map(OutputNote::Full).collect::<Vec<OutputNote>>())
-    .build()
     .unwrap()
 }
 
@@ -509,7 +527,7 @@ async fn get_block_inputs(
                 batch
                     .input_notes()
                     .into_iter()
-                    .filter_map(|note| note.header().map(NoteHeader::commitment))
+                    .filter_map(|note| note.header().map(NoteHeader::to_commitment))
             }),
             batches.iter().map(ProvenBatch::reference_block_num),
         )
@@ -550,7 +568,8 @@ pub async fn start_store(
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
-            grpc_timeout: Duration::from_secs(30),
+            grpc_options: GrpcOptionsInternal::bench(),
+            storage_options: StorageOptions::bench(),
         }
         .serve()
         .await

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 
 use crate::genesis::GenesisBlock;
 

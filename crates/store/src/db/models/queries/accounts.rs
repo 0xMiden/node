@@ -37,7 +37,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
@@ -57,6 +57,7 @@ use delta::{
     AccountStateForInsert,
     PartialAccountState,
     apply_storage_delta,
+    select_latest_vault_assets,
     select_minimal_account_state_headers,
     select_vault_balances_by_faucet_ids,
 };
@@ -297,8 +298,6 @@ pub(crate) fn select_account_commitments_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<AccountCommitmentsPage, DatabaseError> {
-    use miden_protocol::utils::Serializable;
-
     // Fetch one extra to determine if there are more results
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
@@ -373,8 +372,6 @@ pub(crate) fn select_public_account_ids_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
-    use miden_protocol::utils::Serializable;
-
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
@@ -440,7 +437,7 @@ pub(crate) fn select_account_vault_assets(
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
     use schema::account_vault_assets as t;
     // TODO: These limits should be given by the protocol.
-    // See miden-base/issues/1770 for more details
+    // See miden-protocol/issues/1770 for more details
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
@@ -900,7 +897,7 @@ impl TryFrom<AccountVaultUpdateRaw> for AccountVaultValue {
     type Error = DatabaseError;
 
     fn try_from(raw: AccountVaultUpdateRaw) -> Result<Self, Self::Error> {
-        let vault_key = AssetVaultKey::new_unchecked(Word::read_from_bytes(&raw.vault_key)?);
+        let vault_key = AssetVaultKey::try_from(Word::read_from_bytes(&raw.vault_key)?)?;
         let asset = raw.asset.map(|bytes| Asset::read_from_bytes(&bytes)).transpose()?;
         let block_num = BlockNumber::from_raw_sql(raw.block_num)?;
 
@@ -1071,7 +1068,6 @@ fn prepare_partial_account_update(
     update: &BlockAccountUpdate,
     account_id: AccountId,
     delta: &miden_protocol::account::delta::AccountDelta,
-    block_num: BlockNumber,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     // Build the minimal account state needed for partial delta application.
     // Only load the storage map entries and vault balances that will receive updates.
@@ -1081,18 +1077,19 @@ fn prepare_partial_account_update(
     // --- Process asset updates. ---------------------------------
     // Only query balances for faucet_ids that are being updated.
     let faucet_ids =
-        Vec::from_iter(delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id));
+        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| vault_key.faucet_id()));
     let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
 
     // Encode `Some` as update and `None` as removal.
     let mut assets = Vec::new();
 
     // Update fungible assets.
-    for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
-        let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
-        let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
+    for (vault_key, amount_delta) in delta.vault().fungible().iter() {
+        let faucet_id = vault_key.faucet_id();
+        let prev_amount = prev_balances.get(&faucet_id).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?;
         let amount_abs = amount_delta.unsigned_abs();
-        let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
+        let delta = FungibleAsset::new(faucet_id, amount_abs)?;
         let new_balance = if *amount_delta < 0 {
             prev_asset.sub(delta)?
         } else {
@@ -1120,7 +1117,7 @@ fn prepare_partial_account_update(
     let mut storage = Vec::new();
     for (slot_name, map_delta) in delta.storage().maps() {
         for (key, value) in map_delta.entries() {
-            storage.push((account_id, slot_name.clone(), (*key).into_inner(), *value));
+            storage.push((account_id, slot_name.clone(), *key, *value));
         }
     }
 
@@ -1141,9 +1138,7 @@ fn prepare_partial_account_update(
 
     // --- Update the vault root by constructing the asset vault from DB.
     let new_vault_root = {
-        let (_last_block, assets) =
-            select_account_vault_assets(conn, account_id, BlockNumber::GENESIS..=block_num)?;
-        let assets: Vec<Asset> = assets.into_iter().filter_map(|entry| entry.asset).collect();
+        let assets = select_latest_vault_assets(conn, account_id)?;
         let mut vault = AssetVault::new(&assets)?;
         vault.apply_delta(delta.vault())?;
         vault.root()
@@ -1153,8 +1148,8 @@ fn prepare_partial_account_update(
     // Apply nonce delta.
     let new_nonce_value = state_headers
         .nonce
-        .as_int()
-        .checked_add(delta.nonce_delta().as_int())
+        .as_canonical_u64()
+        .checked_add(delta.nonce_delta().as_canonical_u64())
         .ok_or_else(|| {
             DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
         })?;
@@ -1239,7 +1234,7 @@ pub(crate) fn upsert_accounts(
 
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
-                prepare_partial_account_update(conn, update, account_id, delta, block_num)?
+                prepare_partial_account_update(conn, update, account_id, delta)?
             },
         };
 
@@ -1455,29 +1450,31 @@ pub(crate) struct AccountStorageMapRowInsert {
 // CLEANUP FUNCTIONS
 // ================================================================================================
 
-/// Number of historical blocks to retain for vault assets and storage map values.
+/// Number of historical blocks to retain for vault assets, storage map values, and account codes.
 /// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
 /// except for entries marked with `is_latest=true` which are always retained.
 pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 
 /// Clean up old entries for all accounts, deleting entries older than the retention window.
 ///
-/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`.
-/// This is a simple and efficient approach that doesn't require window functions.
+/// Deletes rows where `block_num < chain_tip - HISTORICAL_BLOCK_RETENTION` and `is_latest = false`
+/// for vault assets and storage map values. Also deletes account codes that are no longer
+/// referenced by any account row within the retention window.
 ///
 /// # Returns
-/// A tuple of `(vault_assets_deleted, storage_map_values_deleted)`
+/// A tuple of `(vault_assets_deleted, storage_map_values_deleted, account_codes_deleted)`
 #[instrument(COMPONENT: err)]
 pub(crate) fn prune_history(
     conn: &mut SqliteConnection,
     chain_tip: BlockNumber,
-) -> Result<(usize, usize), DatabaseError> {
+) -> Result<(usize, usize, usize), DatabaseError> {
     let cutoff_block = i64::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
     tracing::Span::current().record("cutoff_block", cutoff_block);
     let vault_deleted = prune_account_vault_assets(conn, cutoff_block)?;
     let storage_deleted = prune_account_storage_map_values(conn, cutoff_block)?;
+    let codes_deleted = prune_account_codes(conn, cutoff_block)?;
 
-    Ok((vault_deleted, storage_deleted))
+    Ok((vault_deleted, storage_deleted, codes_deleted))
 }
 
 #[instrument(COMPONENT: err)]
@@ -1508,6 +1505,45 @@ fn prune_account_storage_map_values(
                 .and(schema::account_storage_map_values::is_latest.eq(false)),
         ),
     )
+    .execute(conn)
+    .map_err(DatabaseError::Diesel)
+}
+
+/// Deletes account codes that are no longer referenced by any account row within the retention
+/// window.
+///
+/// An account code is safe to delete when no `accounts` row with `block_num >= cutoff_block`
+/// references its `code_commitment`. This covers both active accounts (`is_latest=true`) and
+/// recent historical rows that still fall within the retention window.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// DELETE FROM account_codes
+/// WHERE code_commitment NOT IN (
+///     SELECT DISTINCT code_commitment
+///     FROM accounts
+///     WHERE code_commitment IS NOT NULL
+///       AND (block_num >= ?1 OR is_latest = 1)
+/// )
+/// ```
+#[instrument(COMPONENT: err)]
+fn prune_account_codes(
+    conn: &mut SqliteConnection,
+    cutoff_block: i64,
+) -> Result<usize, DatabaseError> {
+    use diesel::sql_types::BigInt;
+
+    diesel::sql_query(
+        "DELETE FROM account_codes \
+         WHERE code_commitment NOT IN ( \
+             SELECT DISTINCT code_commitment \
+             FROM accounts \
+             WHERE code_commitment IS NOT NULL \
+               AND (block_num >= ?1 OR is_latest = 1 ) \
+         )",
+    )
+    .bind::<BigInt, _>(cutoff_block)
     .execute(conn)
     .map_err(DatabaseError::Diesel)
 }

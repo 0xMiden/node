@@ -48,7 +48,8 @@ async fn add_transaction_traces_are_correct() {
 
     let mut found_span = None;
     for _ in 0..500 {
-        if let Ok(span_data) = tokio::time::timeout(Duration::from_secs(1), rx_export.recv()).await {
+        if let Ok(span_data) = tokio::time::timeout(Duration::from_secs(1), rx_export.recv()).await
+        {
             let span_data = span_data.unwrap();
             if span_data.name.as_ref() == "COMPONENT.add_transaction" {
                 found_span = Some(span_data);
@@ -63,7 +64,6 @@ async fn add_transaction_traces_are_correct() {
     };
     assert!(span_data.attributes.iter().any(|kv| kv.key == "code.module.name".into()
         && kv.value == "miden_node_block_producer::mempool".into()));
-
 }
 
 // BATCH FAILED TESTS

@@ -5,6 +5,7 @@ use miden_protocol::note::{
     Note,
     NoteAttachment,
     NoteDetails,
+    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
@@ -12,7 +13,7 @@ use miden_protocol::note::{
     NoteTag,
     NoteType,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
@@ -155,7 +156,7 @@ impl From<(&NoteId, &NoteInclusionProof)> for proto::note::NoteInclusionInBlockP
         Self {
             note_id: Some(note_id.into()),
             block_num: proof.location().block_num().as_u32(),
-            note_index_in_block: proof.location().node_index_in_block().into(),
+            note_index_in_block: proof.location().block_note_tree_index().into(),
             inclusion_path: Some(proof.note_path().clone().into()),
         }
     }
@@ -216,6 +217,35 @@ impl TryFrom<proto::note::Note> for Note {
 
         let (assets, recipient) = note_details.into_parts();
         Ok(Note::new(assets, metadata, recipient))
+    }
+}
+
+// NOTE HEADER
+// ================================================================================================
+
+impl From<NoteHeader> for proto::note::NoteHeader {
+    fn from(header: NoteHeader) -> Self {
+        Self {
+            note_id: Some((&header.id()).into()),
+            metadata: Some(header.into_metadata().into()),
+        }
+    }
+}
+
+impl TryFrom<proto::note::NoteHeader> for NoteHeader {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
+        let note_id_word: Word = value
+            .note_id
+            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(note_id)))?
+            .try_into()?;
+        let metadata: NoteMetadata = value
+            .metadata
+            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(metadata)))?
+            .try_into()?;
+
+        Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }
 }
 

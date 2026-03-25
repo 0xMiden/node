@@ -8,7 +8,7 @@ use miden_node_store::AccountTreeWithHistory;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::testing::account_id::AccountIdBuilder;
@@ -79,7 +79,7 @@ fn setup_vanilla_account_tree(
         let account_id = generate_account_id(&mut seed);
         let commitment = generate_word(&mut seed);
         account_ids.push(account_id);
-        entries.push((account_id_to_smt_key(account_id), commitment));
+        entries.push((AccountIdKey::from(account_id).as_word(), commitment));
     }
 
     let storage = setup_storage(base_path);

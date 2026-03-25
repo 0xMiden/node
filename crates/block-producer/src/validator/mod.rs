@@ -3,7 +3,7 @@ use miden_node_proto::generated as proto;
 use miden_node_tracing::{info, instrument};
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use thiserror::Error;
 use url::Url;
 

@@ -17,7 +17,7 @@ use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountFile, AccountHeader, AccountId};
 use miden_protocol::assembly::Library;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::note::{
     Note,
     NoteAssets,
@@ -29,13 +29,12 @@ use miden_protocol::note::{
     NoteType,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
-use miden_tx::utils::Serializable;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -123,7 +122,7 @@ async fn fetch_counter_value(
         .find(|slot| slot.slot_name == COUNTER_SLOT_NAME.as_str())
         .context(format!("counter slot '{}' not found", COUNTER_SLOT_NAME.as_str()))?;
 
-    // The counter value is stored as a Word, with the actual u64 value in the last element
+    // The counter value is stored as a Word, with the actual u64 value in the first element
     let slot_value: Word = counter_slot
         .commitment
         .as_ref()
@@ -131,7 +130,11 @@ async fn fetch_counter_value(
         .try_into()
         .context("failed to convert slot value to word")?;
 
-    let value = slot_value.as_elements().last().expect("Word has 4 elements").as_int();
+    let value = slot_value
+        .as_elements()
+        .first()
+        .expect("Word has 4 elements")
+        .as_canonical_u64();
 
     Ok(Some(value))
 }
@@ -322,7 +325,7 @@ async fn setup_increment_task(
         .await?
         .unwrap_or(wallet_account_file.account.clone());
 
-    let AuthSecretKey::Falcon512Rpo(secret_key) = wallet_account_file
+    let AuthSecretKey::Falcon512Poseidon2(secret_key) = wallet_account_file
         .auth_secret_keys
         .first()
         .expect("wallet account file should have one auth secret key")
@@ -825,7 +828,8 @@ async fn create_and_submit_network_note(
     rng: &mut ChaCha20Rng,
 ) -> Result<(String, AccountHeader, BlockNumber)> {
     // Create authenticator for transaction signing
-    let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Rpo(secret_key.clone())]);
+    let authenticator =
+        BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key.clone())]);
 
     let account_interface = AccountInterface::from_account(wallet_account);
 
@@ -855,7 +859,7 @@ async fn create_and_submit_network_note(
 
     // Prove the transaction
     let prover = LocalTransactionProver::default();
-    let proven_tx = prover.prove(executed_tx).context("Failed to prove transaction")?;
+    let proven_tx = prover.prove(executed_tx).await.context("Failed to prove transaction")?;
 
     // Submit the proven transaction
     let request = ProvenTransaction {

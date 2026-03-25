@@ -3,6 +3,7 @@ use std::num::{NonZero, TryFromIntError};
 
 use miden_crypto::merkle::smt::SmtProof;
 use miden_node_proto::domain::account::AccountInfo;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
@@ -216,7 +217,11 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             .map(|key_digest| {
                 let word = read_root::<GetWitnessesError>(Some(key_digest), "VaultKey")
                     .map_err(invalid_argument)?;
-                Ok(AssetVaultKey::new_unchecked(word))
+                AssetVaultKey::try_from(word).map_err(|e| {
+                    invalid_argument(GetWitnessesError::DeserializationFailed(
+                        ConversionError::from(e),
+                    ))
+                })
             })
             .collect::<Result<BTreeSet<_>, Status>>()?;
 

@@ -23,7 +23,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 
 use crate::db::models::conv::raw_sql_to_nonce;
@@ -189,6 +189,36 @@ pub(super) fn select_vault_balances_by_faucet_ids(
     Ok(balances)
 }
 
+/// Selects the latest vault assets for an account.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT vault_key, asset
+/// FROM account_vault_assets
+/// WHERE account_id = ?1 AND is_latest = 1
+/// ```
+pub(super) fn select_latest_vault_assets(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+) -> Result<Vec<Asset>, DatabaseError> {
+    use schema::account_vault_assets as vault;
+
+    let entries: Vec<(Vec<u8>, Option<Vec<u8>>)> =
+        SelectDsl::select(vault::table, (vault::vault_key, vault::asset))
+            .filter(vault::account_id.eq(account_id.to_bytes()))
+            .filter(vault::is_latest.eq(true))
+            .load(conn)?;
+
+    entries
+        .into_iter()
+        .filter_map(|(_vault_key_bytes, maybe_asset_bytes)| {
+            maybe_asset_bytes.map(|bytes| Asset::read_from_bytes(&bytes))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 // HELPER FUNCTIONS
 // ================================================================================================
 
@@ -216,9 +246,9 @@ pub(super) fn apply_storage_delta(
         let mut entries = map_entries.get(slot_name).cloned().unwrap_or_default();
         for (key, value) in map_delta.entries() {
             if *value == EMPTY_WORD {
-                entries.remove(&(*key).into_inner());
+                entries.remove(key);
             } else {
-                entries.insert((*key).into_inner(), *value);
+                entries.insert(*key, *value);
             }
         }
 

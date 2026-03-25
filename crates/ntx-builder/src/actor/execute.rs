@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use miden_node_proto::clients::ValidatorClient;
-use miden_node_proto::generated::{self as proto};
 use miden_node_tracing::instrument;
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -35,10 +34,10 @@ use miden_protocol::transaction::{
 use miden_protocol::vm::FutureMaybeSend;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
-use miden_tx::utils::Serializable;
 use miden_tx::{
     DataStore,
     DataStoreError,
+    ExecutionOptions,
     FailedNote,
     LocalTransactionProver,
     MastForestStore,
@@ -51,13 +50,11 @@ use miden_tx::{
     TransactionProverError,
 };
 use tokio::sync::Mutex;
-use tokio::task::JoinError;
 use tracing::Instrument;
 
-use crate::actor::account_state::TransactionCandidate;
-use crate::block_producer::BlockProducerClient;
+use crate::actor::candidate::TransactionCandidate;
+use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use crate::db::Db;
-use crate::store::StoreClient;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NtxError {
@@ -73,8 +70,6 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
-    #[error("the ntx task panicked")]
-    Panic(#[source] JoinError),
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -111,6 +106,9 @@ pub struct NtxContext {
 
     /// Local database for persistent note script caching.
     db: Db,
+
+    /// Maximum number of VM execution cycles for network transactions.
+    max_cycles: u32,
 }
 
 impl NtxContext {
@@ -122,6 +120,7 @@ impl NtxContext {
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
+        max_cycles: u32,
     ) -> Self {
         Self {
             block_producer,
@@ -130,7 +129,27 @@ impl NtxContext {
             store,
             script_cache,
             db,
+            max_cycles,
         }
+    }
+
+    /// Creates a [`TransactionExecutor`] configured with the network transaction cycle limit.
+    fn create_executor<'a, 'b>(
+        &self,
+        data_store: &'a NtxDataStore,
+    ) -> TransactionExecutor<'a, 'b, NtxDataStore, UnreachableAuth> {
+        let exec_options = ExecutionOptions::new(
+            Some(self.max_cycles),
+            self.max_cycles,
+            ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
+            false,
+            false,
+        )
+        .expect("max_cycles should be within valid range");
+
+        TransactionExecutor::new(data_store)
+            .with_options(exec_options)
+            .expect("execution options should be valid for transaction executor")
     }
 
     /// Executes a transaction end-to-end: filtering, executing, proving, and submitted to the block
@@ -238,8 +257,7 @@ impl NtxContext {
         data_store: &NtxDataStore,
         notes: Vec<Note>,
     ) -> NtxResult<(InputNotes<InputNote>, Vec<FailedNote>)> {
-        let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
-            TransactionExecutor::new(data_store);
+        let executor = self.create_executor(data_store);
         let checker = NoteConsumptionChecker::new(&executor);
 
         match Box::pin(checker.check_notes_consumability(
@@ -251,6 +269,15 @@ impl NtxContext {
         .await
         {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
+                for failed_note in &failed {
+                    tracing::info!(
+                        note.id = %failed_note.note.id(),
+                        nullifier = %failed_note.note.nullifier(),
+                        err = %failed_note.error.as_report(),
+                        "note failed consumability check",
+                    );
+                }
+
                 // Map successful notes to input notes.
                 let successful = InputNotes::from_unauthenticated_notes(successful)
                     .map_err(NtxError::InputNotes)?;
@@ -273,8 +300,7 @@ impl NtxContext {
         data_store: &NtxDataStore,
         notes: InputNotes<InputNote>,
     ) -> NtxResult<ExecutedTransaction> {
-        let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
-            TransactionExecutor::new(data_store);
+        let executor = self.create_executor(data_store);
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),
@@ -293,11 +319,9 @@ impl NtxContext {
         if let Some(remote) = &self.prover {
             remote.prove(tx_inputs).await
         } else {
-            // Only perform tx inptus clone for local proving.
+            // Only perform tx inputs clone for local proving.
             let tx_inputs = tx_inputs.clone();
-            tokio::task::spawn_blocking(move || LocalTransactionProver::default().prove(tx_inputs))
-                .await
-                .map_err(NtxError::Panic)?
+            LocalTransactionProver::default().prove(tx_inputs).await
         }
         .map_err(NtxError::Proving)
     }
@@ -318,16 +342,10 @@ impl NtxContext {
         proven_tx: &ProvenTransaction,
         tx_inputs: &TransactionInputs,
     ) -> NtxResult<()> {
-        let request = proto::transaction::ProvenTransaction {
-            transaction: proven_tx.to_bytes(),
-            transaction_inputs: Some(tx_inputs.to_bytes()),
-        };
         self.validator
-            .clone()
-            .submit_proven_transaction(request)
+            .submit_proven_transaction(proven_tx, tx_inputs)
             .await
-            .map_err(NtxError::Submission)?;
-        Ok(())
+            .map_err(NtxError::Submission)
     }
 }
 

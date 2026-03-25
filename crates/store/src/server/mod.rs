@@ -11,8 +11,8 @@ use miden_node_proto_build::{
     store_rpc_api_descriptor,
 };
 use miden_node_tracing::{info, instrument};
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
-use miden_node_utils::signer::BlockSigner;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -23,8 +23,9 @@ use url::Url;
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::ApplyBlockError;
+use crate::genesis::GenesisBlock;
 use crate::state::State;
-use crate::{BlockProver, COMPONENT, GenesisState};
+use crate::{BlockProver, COMPONENT};
 
 mod api;
 mod block_producer;
@@ -40,24 +41,14 @@ pub struct Store {
     /// URL for the Block Prover client. Uses local prover if `None`.
     pub block_prover_url: Option<Url>,
     pub data_directory: PathBuf,
-    /// Server-side timeout for an individual gRPC request.
-    ///
-    /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub storage_options: StorageOptions,
+    pub grpc_options: GrpcOptionsInternal,
 }
 
 impl Store {
     /// Bootstraps the Store, creating the database state and inserting the genesis block data.
     #[instrument(COMPONENT: err)]
-    pub async fn bootstrap<S: BlockSigner>(
-        genesis: GenesisState<S>,
-        data_directory: &Path,
-    ) -> anyhow::Result<()> {
-        let genesis = genesis
-            .into_block()
-            .await
-            .context("failed to convert genesis configuration into the genesis block")?;
-
+    pub fn bootstrap(genesis: &GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(data_directory.to_path_buf()).with_context(|| {
                 format!("failed to load data directory at {}", data_directory.display())
@@ -66,14 +57,14 @@ impl Store {
 
         let block_store = data_directory.block_store_dir();
         let block_store =
-            BlockStore::bootstrap(block_store.clone(), &genesis).with_context(|| {
+            BlockStore::bootstrap(block_store.clone(), genesis).with_context(|| {
                 format!("failed to bootstrap block store at {}", block_store.display())
             })?;
         tracing::info!(target=COMPONENT, path=%block_store.display(), "Block store created");
 
         // Create the genesis block and insert it into the database.
         let database_filepath = data_directory.database_path();
-        Db::bootstrap(database_filepath.clone(), &genesis).with_context(|| {
+        Db::bootstrap(database_filepath.clone(), genesis).with_context(|| {
             format!("failed to bootstrap database at {}", database_filepath.display())
         })?;
         tracing::info!(target=COMPONENT, path=%database_filepath.display(), "Database created");
@@ -89,13 +80,13 @@ impl Store {
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
         info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
-            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_timeout,
+            block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_options.request_timeout,
             "Loading database");
 
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
         let state = Arc::new(
-            State::load(&self.data_directory, termination_ask)
+            State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?,
         );
@@ -127,17 +118,6 @@ impl Store {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        // This is currently required for postman to work properly because
-        // it doesn't support the new version yet.
-        //
-        // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
-        let reflection_service_alpha = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(store_rpc_api_descriptor())
-            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
-            .register_file_descriptor_set(store_block_producer_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         info!(target: COMPONENT, "Database loaded");
 
         let mut join_set = JoinSet::new();
@@ -158,34 +138,32 @@ impl Store {
         // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
             tonic::transport::Server::builder()
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
                 .add_service(rpc_service)
                 .add_service(reflection_service.clone())
-                .add_service(reflection_service_alpha.clone())
                 .serve_with_incoming(TcpListenerStream::new(self.rpc_listener)),
         );
 
         join_set.spawn(
             tonic::transport::Server::builder()
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
                 .add_service(ntx_builder_service)
                 .add_service(reflection_service.clone())
-                .add_service(reflection_service_alpha.clone())
                 .serve_with_incoming(TcpListenerStream::new(self.ntx_builder_listener)),
         );
 
         join_set.spawn(
             tonic::transport::Server::builder()
+                .accept_http1(true)
+                .timeout(self.grpc_options.request_timeout)
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .timeout(self.grpc_timeout)
                 .add_service(block_producer_service)
                 .add_service(reflection_service)
-                .add_service(reflection_service_alpha)
                 .serve_with_incoming(TcpListenerStream::new(self.block_producer_listener)),
         );
 

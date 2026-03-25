@@ -35,7 +35,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
 };
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
@@ -142,8 +142,7 @@ fn optimized_delta_matches_full_account_method() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -153,7 +152,7 @@ fn optimized_delta_matches_full_account_method() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -227,7 +226,8 @@ fn optimized_delta_matches_full_account_method() {
     assert!(!partial_delta.is_full_state(), "Delta should be partial, not full state");
 
     // Construct the expected final account by applying the delta
-    let expected_nonce = Felt::new(full_account_before.nonce().as_int() + nonce_delta.as_int());
+    let expected_nonce =
+        Felt::new(full_account_before.nonce().as_canonical_u64() + nonce_delta.as_canonical_u64());
     let expected_code_commitment = full_account_before.code().commitment();
 
     let mut expected_account = full_account_before.clone();
@@ -311,13 +311,19 @@ fn optimized_delta_matches_full_account_method() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "test exercises vault deltas across multiple blocks"
+)]
 fn optimized_delta_updates_non_empty_vault() {
     const ACCOUNT_SEED: [u8; 32] = [40u8; 32];
     const BLOCK_NUM_1: u32 = 1;
     const BLOCK_NUM_2: u32 = 2;
+    const BLOCK_NUM_3: u32 = 3;
     const NONCE_DELTA: u64 = 1;
     const INITIAL_AMOUNT: u64 = 700;
-    const ADDED_AMOUNT: u64 = 250;
+    const ADDED_AMOUNT_BLOCK_2: u64 = 250;
+    const ADDED_AMOUNT_BLOCK_3: u64 = 150;
     const SLOT_INDEX: usize = 0;
 
     let mut conn = setup_test_db();
@@ -336,8 +342,7 @@ fn optimized_delta_updates_non_empty_vault() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -347,7 +352,7 @@ fn optimized_delta_updates_non_empty_vault() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .with_assets([initial_asset])
         .build_existing()
@@ -355,9 +360,12 @@ fn optimized_delta_updates_non_empty_vault() {
 
     let block_1 = BlockNumber::from(BLOCK_NUM_1);
     let block_2 = BlockNumber::from(BLOCK_NUM_2);
+    let block_3 = BlockNumber::from(BLOCK_NUM_3);
     insert_block_header(&mut conn, block_1);
     insert_block_header(&mut conn, block_2);
+    insert_block_header(&mut conn, block_3);
 
+    // Block 1: insert full-state delta (initial account with 700 tokens of faucet_id)
     let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
@@ -369,9 +377,10 @@ fn optimized_delta_updates_non_empty_vault() {
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
 
+    // Block 2: partial delta — remove faucet_id (700), add faucet_id_1 (250)
     let mut vault_delta = AccountVaultDelta::default();
     vault_delta
-        .add_asset(Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT).unwrap()))
+        .add_asset(Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2).unwrap()))
         .unwrap();
     vault_delta
         .remove_asset(Asset::Fungible(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap()))
@@ -403,7 +412,7 @@ fn optimized_delta_updates_non_empty_vault() {
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
     assert_matches!(&vault_assets_after[0], Asset::Fungible(f) => {
         assert_eq!(f.faucet_id(), faucet_id_1, "Faucet ID should match");
-        assert_eq!(f.amount(), ADDED_AMOUNT, "Amount should match");
+        assert_eq!(f.amount(), ADDED_AMOUNT_BLOCK_2, "Amount should match");
     });
 
     let full_account_after = select_full_account(&mut conn, account.id())
@@ -411,6 +420,45 @@ fn optimized_delta_updates_non_empty_vault() {
 
     assert_eq!(full_account_after.vault().root(), expected_vault_root);
     assert_eq!(full_account_after.to_commitment(), expected_commitment);
+
+    // Block 3: partial delta — add more of faucet_id_1 (150 more, total = 400)
+    let mut vault_delta_3 = AccountVaultDelta::default();
+    vault_delta_3
+        .add_asset(Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_3).unwrap()))
+        .unwrap();
+
+    let partial_delta_3 = AccountDelta::new(
+        account.id(),
+        AccountStorageDelta::new(),
+        vault_delta_3,
+        Felt::new(NONCE_DELTA),
+    )
+    .unwrap();
+
+    let mut expected_after_3 = full_account_after.clone();
+    expected_after_3.apply_delta(&partial_delta_3).unwrap();
+    let commitment_3 = expected_after_3.to_commitment();
+    let expected_vault_root_3 = expected_after_3.vault().root();
+
+    let account_update_3 = BlockAccountUpdate::new(
+        account.id(),
+        commitment_3,
+        AccountUpdateDetails::Delta(partial_delta_3),
+    );
+    upsert_accounts(&mut conn, &[account_update_3], block_3).expect("Block 3 upsert failed");
+
+    let full_account_final =
+        select_full_account(&mut conn, account.id()).expect("Failed to load after block 3");
+
+    let final_assets: Vec<Asset> = full_account_final.vault().assets().collect();
+    assert_eq!(final_assets.len(), 1, "Should have exactly 1 vault asset");
+    assert_matches!(&final_assets[0], Asset::Fungible(f) => {
+        assert_eq!(f.faucet_id(), faucet_id_1);
+        assert_eq!(f.amount(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3, "Expected total of 400");
+    });
+
+    assert_eq!(full_account_final.vault().root(), expected_vault_root_3);
+    assert_eq!(full_account_final.to_commitment(), commitment_3);
 }
 
 #[test]
@@ -461,8 +509,7 @@ fn optimized_delta_updates_storage_map_header() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -472,7 +519,7 @@ fn optimized_delta_updates_storage_map_header() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -635,8 +682,7 @@ fn upsert_full_state_delta() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -646,7 +692,7 @@ fn upsert_full_state_delta() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();

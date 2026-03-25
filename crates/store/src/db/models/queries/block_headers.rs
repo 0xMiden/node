@@ -16,7 +16,7 @@ use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_tracing::instrument;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
 use crate::db::models::conv::SqlTypeConvert;

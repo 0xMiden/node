@@ -7,9 +7,8 @@ use miden_node_proto::generated::{self as proto};
 // Use standard tracing for Status errors (which don't impl std::error::Error)
 use miden_node_tracing::{info, instrument};
 use miden_node_utils::FlattenResult;
-use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_tx::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tokio_stream::StreamExt;
 use tonic::Status;
 use url::Url;
@@ -62,11 +61,10 @@ impl BlockProducerClient {
     #[instrument(COMPONENT: err)]
     pub async fn subscribe_to_mempool_with_retry(
         &self,
-        chain_tip: BlockNumber,
     ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
         let mut retry_counter = 0;
         loop {
-            match self.subscribe_to_mempool(chain_tip).await {
+            match self.subscribe_to_mempool().await {
                 Err(err) if err.code() == tonic::Code::Unavailable => {
                     // Exponential backoff with base 500ms and max 30s.
                     let backoff = Duration::from_millis(500)
@@ -90,11 +88,8 @@ impl BlockProducerClient {
 
     async fn subscribe_to_mempool(
         &self,
-        chain_tip: BlockNumber,
     ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
-        let request =
-            proto::block_producer::MempoolSubscriptionRequest { chain_tip: chain_tip.as_u32() };
-        let stream = self.client.clone().mempool_subscription(request).await?;
+        let stream = self.client.clone().mempool_subscription(()).await?;
 
         let stream = stream
             .into_inner()

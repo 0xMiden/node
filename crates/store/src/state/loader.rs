@@ -14,21 +14,23 @@ use std::path::Path;
 
 use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
-use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbStorage};
+use miden_large_smt_backend_rocksdb::RocksDbStorage;
 use miden_node_tracing::{info, instrument};
-use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+#[cfg(feature = "rocksdb")]
+use miden_node_utils::clap::RocksDbOptions;
+use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
 #[cfg(not(feature = "rocksdb"))]
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
-use miden_protocol::{Felt, FieldElement, Word};
+use miden_protocol::{Felt, Word};
 
 use crate::COMPONENT;
+use crate::account_state_forest::AccountStateForest;
 use crate::db::Db;
 use crate::db::models::queries::BlockHeaderCommitment;
 use crate::errors::{DatabaseError, StateInitializationError};
-use crate::inner_forest::InnerForest;
 
 // CONSTANTS
 // ================================================================================================
@@ -73,6 +75,9 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
         LargeSmtError::Storage(err) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
         },
+        err @ (LargeSmtError::RootMismatch { .. } | LargeSmtError::StorageNotEmpty) => {
+            StateInitializationError::AccountTreeIoError(err.as_report())
+        },
     }
 }
 
@@ -96,8 +101,14 @@ fn block_num_to_nullifier_leaf(block_num: BlockNumber) -> Word {
 /// which detects divergence between persistent storage and the database. If divergence is detected,
 /// the user should manually delete the tree storage directories and restart the node.
 pub trait StorageLoader: SmtStorage + Sized {
+    /// A configuration type for the implementation.
+    type Config: std::fmt::Debug + std::default::Default;
     /// Creates a storage backend for the given domain.
-    fn create(data_dir: &Path, domain: &'static str) -> Result<Self, StateInitializationError>;
+    fn create(
+        data_dir: &Path,
+        storage_options: &Self::Config,
+        domain: &'static str,
+    ) -> Result<Self, StateInitializationError>;
 
     /// Loads an account tree, either from persistent storage or by rebuilding from DB.
     fn load_account_tree(
@@ -117,7 +128,12 @@ pub trait StorageLoader: SmtStorage + Sized {
 
 #[cfg(not(feature = "rocksdb"))]
 impl StorageLoader for MemoryStorage {
-    fn create(_data_dir: &Path, _domain: &'static str) -> Result<Self, StateInitializationError> {
+    type Config = ();
+    fn create(
+        _data_dir: &Path,
+        _storage_options: &Self::Config,
+        _domain: &'static str,
+    ) -> Result<Self, StateInitializationError> {
         Ok(MemoryStorage::default())
     }
 
@@ -144,7 +160,7 @@ impl StorageLoader for MemoryStorage {
             let entries = page
                 .commitments
                 .into_iter()
-                .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
+                .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
 
             let mutations = smt
                 .compute_mutations(entries)
@@ -205,12 +221,17 @@ impl StorageLoader for MemoryStorage {
 
 #[cfg(feature = "rocksdb")]
 impl StorageLoader for RocksDbStorage {
-    fn create(data_dir: &Path, domain: &'static str) -> Result<Self, StateInitializationError> {
+    type Config = RocksDbOptions;
+    fn create(
+        data_dir: &Path,
+        storage_options: &Self::Config,
+        domain: &'static str,
+    ) -> Result<Self, StateInitializationError> {
         let storage_path = data_dir.join(domain);
-
+        let config = storage_options.with_path(&storage_path);
         fs_err::create_dir_all(&storage_path)
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))?;
-        RocksDbStorage::open(RocksDbConfig::new(storage_path))
+        RocksDbStorage::open(config)
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))
     }
 
@@ -249,7 +270,7 @@ impl StorageLoader for RocksDbStorage {
             let entries = page
                 .commitments
                 .into_iter()
-                .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
+                .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
 
             let mutations = smt
                 .compute_mutations(entries)
@@ -319,7 +340,7 @@ impl StorageLoader for RocksDbStorage {
 /// Loads an SMT from persistent storage.
 #[cfg(feature = "rocksdb")]
 pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializationError> {
-    LargeSmt::new(storage).map_err(account_tree_large_smt_error_to_init_error)
+    LargeSmt::load(storage).map_err(account_tree_large_smt_error_to_init_error)
 }
 
 // TREE LOADING FUNCTIONS
@@ -344,10 +365,10 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
-) -> Result<InnerForest, StateInitializationError> {
+) -> Result<AccountStateForest, StateInitializationError> {
     use miden_protocol::account::delta::AccountDelta;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let mut cursor = None;
 
     loop {

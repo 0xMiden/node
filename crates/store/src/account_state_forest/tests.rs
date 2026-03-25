@@ -1,14 +1,14 @@
 use assert_matches::assert_matches;
 use miden_node_proto::domain::account::StorageMapEntries;
+use miden_protocol::Felt;
 use miden_protocol::account::{AccountCode, StorageMapKey};
-use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
-use miden_protocol::{Felt, FieldElement};
 
 use super::*;
 
@@ -58,21 +58,21 @@ fn dummy_full_state_delta(account_id: AccountId, assets: &[Asset]) -> AccountDel
 fn empty_smt_root_is_recognized() {
     use miden_crypto::merkle::smt::Smt;
 
-    let empty_root = InnerForest::empty_smt_root();
+    let empty_root = AccountStateForest::empty_smt_root();
 
     assert_eq!(Smt::default().root(), empty_root);
 }
 
 #[test]
-fn inner_forest_basic_initialization() {
-    let forest = InnerForest::new();
+fn account_state_forest_basic_initialization() {
+    let forest = AccountStateForest::new();
     assert_eq!(forest.forest.lineage_count(), 0);
     assert_eq!(forest.forest.tree_count(), 0);
 }
 
 #[test]
 fn update_account_with_empty_deltas() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let block_num = BlockNumber::GENESIS.child();
 
@@ -99,7 +99,7 @@ fn vault_partial_vs_full_state_produces_same_root() {
     let asset = dummy_fungible_asset(faucet_id, 100);
 
     // Partial delta (block application)
-    let mut forest_partial = InnerForest::new();
+    let mut forest_partial = AccountStateForest::new();
     let mut vault_delta = AccountVaultDelta::default();
     vault_delta.add_asset(asset).unwrap();
     let partial_delta =
@@ -107,7 +107,7 @@ fn vault_partial_vs_full_state_produces_same_root() {
     forest_partial.update_account(block_num, &partial_delta).unwrap();
 
     // Full-state delta (DB reconstruction)
-    let mut forest_full = InnerForest::new();
+    let mut forest_full = AccountStateForest::new();
     let full_delta = dummy_full_state_delta(account_id, &[asset]);
     forest_full.update_account(block_num, &full_delta).unwrap();
 
@@ -120,7 +120,7 @@ fn vault_partial_vs_full_state_produces_same_root() {
 
 #[test]
 fn vault_incremental_updates_with_add_and_remove() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
 
@@ -153,7 +153,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     assert_ne!(root_after_150, root_after_120);
 
     // Verify by comparing to full-state delta
-    let mut fresh_forest = InnerForest::new();
+    let mut fresh_forest = AccountStateForest::new();
     let full_delta = dummy_full_state_delta(account_id, &[dummy_fungible_asset(faucet_id, 120)]);
     fresh_forest.update_account(block_3, &full_delta).unwrap();
     let root_full_state_120 = fresh_forest.get_vault_root(account_id, block_3).unwrap();
@@ -168,7 +168,7 @@ fn forest_versions_are_continuous_for_sequential_updates() {
     use assert_matches::assert_matches;
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(9);
@@ -201,7 +201,7 @@ fn forest_versions_are_continuous_for_sequential_updates() {
 
 #[test]
 fn vault_state_is_not_available_for_block_gaps() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
 
@@ -229,7 +229,7 @@ fn witness_queries_work_with_sparse_lineage_updates() {
     use assert_matches::assert_matches;
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(6);
@@ -282,14 +282,14 @@ fn witness_queries_work_with_sparse_lineage_updates() {
             .open(forest.tree_id_for_vault_root(account_id, block_3), asset_key.into()),
         Ok(_)
     );
-    assert_ne!(vault_root_at_3, InnerForest::empty_smt_root());
+    assert_ne!(vault_root_at_3, AccountStateForest::empty_smt_root());
 }
 
 #[test]
 fn vault_full_state_with_empty_vault_records_root() {
     use miden_protocol::account::{Account, AccountStorage};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let block_num = BlockNumber::GENESIS.child();
 
@@ -306,7 +306,7 @@ fn vault_full_state_with_empty_vault_records_root() {
     forest.update_account(block_num, &full_delta).unwrap();
 
     let recorded_root = forest.get_vault_root(account_id, block_num);
-    assert_eq!(recorded_root, Some(InnerForest::empty_smt_root()));
+    assert_eq!(recorded_root, Some(AccountStateForest::empty_smt_root()));
 
     let witnesses = forest
         .get_vault_asset_witnesses(account_id, block_num, std::collections::BTreeSet::new())
@@ -316,7 +316,7 @@ fn vault_full_state_with_empty_vault_records_root() {
 
 #[test]
 fn vault_shared_root_retained_when_one_entry_pruned() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account1 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let account2 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
     let faucet_id = dummy_faucet();
@@ -324,7 +324,7 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     let asset_amount = u64::from(HISTORICAL_BLOCK_RETENTION);
     let amount_increment = asset_amount / u64::from(HISTORICAL_BLOCK_RETENTION);
     let asset = dummy_fungible_asset(faucet_id, asset_amount);
-    let asset_key = AssetVaultKey::new_unchecked(asset.vault_key().into());
+    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
@@ -376,7 +376,7 @@ fn storage_map_incremental_updates() {
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
 
     let slot_name = StorageSlotName::mock(3);
@@ -431,7 +431,7 @@ fn test_storage_map_removals() {
     const VALUE_1: [u32; 4] = [10, 0, 0, 0];
     const VALUE_2: [u32; 4] = [20, 0, 0, 0];
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(SLOT_INDEX);
     let key_1 = StorageMapKey::from_index(1);
@@ -481,7 +481,7 @@ fn storage_map_state_is_not_available_for_block_gaps() {
     const VALUE_FIRST: u32 = 10;
     const VALUE_SECOND: u32 = 20;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(4);
     let raw_key = StorageMapKey::from_index(KEY_VALUE);
@@ -532,7 +532,7 @@ fn storage_map_empty_entries_query() {
     use miden_standards::account::auth::AuthSingleSig;
     use miden_standards::code_builder::CodeBuilder;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let block_num = BlockNumber::GENESIS.child();
     let slot_name = StorageSlotName::mock(0);
 
@@ -545,7 +545,7 @@ fn storage_map_empty_entries_query() {
     let account_component = AccountComponent::new(
         component_code,
         component_storage,
-        AccountComponentMetadata::new("test").with_supports_all_types(),
+        AccountComponentMetadata::new("test", AccountType::all()),
     )
     .unwrap();
 
@@ -555,7 +555,7 @@ fn storage_map_empty_entries_query() {
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -567,7 +567,7 @@ fn storage_map_empty_entries_query() {
     forest.update_account(block_num, &full_delta).unwrap();
 
     let root = forest.get_storage_map_root(account_id, &slot_name, block_num);
-    assert_eq!(root, Some(InnerForest::empty_smt_root()));
+    assert_eq!(root, Some(AccountStateForest::empty_smt_root()));
 }
 
 #[test]
@@ -577,7 +577,7 @@ fn storage_map_open_returns_proofs() {
     use assert_matches::assert_matches;
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(3);
     let block_num = BlockNumber::GENESIS.child();
@@ -613,7 +613,7 @@ fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     const KEY_VALUE: u32 = 11;
     const VALUE_VALUE: u32 = 22;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(SLOT_INDEX);
     let block_num = BlockNumber::GENESIS.child();
@@ -650,7 +650,7 @@ const TEST_PRUNE_CHAIN_TIP: u32 = HISTORICAL_BLOCK_RETENTION + 5;
 
 #[test]
 fn prune_handles_empty_forest() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
 
     let total_roots_removed = forest.prune(BlockNumber::GENESIS);
 
@@ -661,7 +661,7 @@ fn prune_handles_empty_forest() {
 fn prune_removes_smt_roots_from_forest() {
     use miden_protocol::account::delta::StorageMapDelta;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(7);
@@ -712,7 +712,7 @@ fn prune_removes_smt_roots_from_forest() {
 
 #[test]
 fn prune_respects_retention_boundary() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
 
@@ -736,7 +736,7 @@ fn prune_respects_retention_boundary() {
 fn prune_roots_removes_old_entries() {
     use miden_protocol::account::delta::StorageMapDelta;
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
 
     let faucet_id = dummy_faucet();
@@ -770,7 +770,7 @@ fn prune_roots_removes_old_entries() {
 
 #[test]
 fn prune_handles_multiple_accounts() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account1 = dummy_account();
     let account2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let faucet_id = dummy_faucet();
@@ -807,7 +807,7 @@ fn prune_handles_multiple_slots() {
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let slot_a = StorageSlotName::mock(1);
     let slot_b = StorageSlotName::mock(2);
@@ -843,7 +843,7 @@ fn prune_preserves_most_recent_state_per_entity() {
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_map_a = StorageSlotName::mock(1);
@@ -900,7 +900,7 @@ fn prune_preserves_entries_within_retention_window() {
 
     use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
 
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let faucet_id = dummy_faucet();
     let slot_map = StorageSlotName::mock(1);
@@ -944,7 +944,7 @@ fn prune_preserves_entries_within_retention_window() {
 /// witness generation.
 #[test]
 fn shared_vault_root_retained_when_one_account_changes() {
-    let mut forest = InnerForest::new();
+    let mut forest = AccountStateForest::new();
     let account1 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let account2 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
     let faucet_id = dummy_faucet();
@@ -953,7 +953,7 @@ fn shared_vault_root_retained_when_one_account_changes() {
     let block_1 = BlockNumber::GENESIS.child();
     let initial_amount = 1000u64;
     let asset = dummy_fungible_asset(faucet_id, initial_amount);
-    let asset_key = AssetVaultKey::new_unchecked(asset.vault_key().into());
+    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();

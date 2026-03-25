@@ -22,6 +22,7 @@ use miden_node_proto::domain::account::{
 };
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_tracing::{info, instrument};
+use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
@@ -36,6 +37,7 @@ use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
 
+use crate::account_state_forest::{AccountStateForest, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -50,7 +52,6 @@ use crate::errors::{
     GetCurrentBlockchainDataError,
     StateInitializationError,
 };
-use crate::inner_forest::{InnerForest, WitnessError};
 use crate::{COMPONENT, DataDirectory};
 
 mod loader;
@@ -116,7 +117,7 @@ pub struct State {
     inner: RwLock<InnerState<TreeStorage>>,
 
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
-    forest: RwLock<InnerForest>,
+    forest: RwLock<AccountStateForest>,
 
     /// To allow readers to access the tree data while an update in being performed, and prevent
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
@@ -134,6 +135,7 @@ impl State {
     #[instrument(COMPONENT:)]
     pub async fn load(
         data_path: &Path,
+        storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     ) -> Result<Self, StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
@@ -152,10 +154,18 @@ impl State {
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
 
-        let account_storage = TreeStorage::create(data_path, ACCOUNT_TREE_STORAGE_DIR)?;
+        let account_storage = TreeStorage::create(
+            data_path,
+            &storage_options.account_tree.into(),
+            ACCOUNT_TREE_STORAGE_DIR,
+        )?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage = TreeStorage::create(data_path, NULLIFIER_TREE_STORAGE_DIR)?;
+        let nullifier_storage = TreeStorage::create(
+            data_path,
+            &storage_options.nullifier_tree.into(),
+            NULLIFIER_TREE_STORAGE_DIR,
+        )?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         // Verify that tree roots match the expected roots from the database.

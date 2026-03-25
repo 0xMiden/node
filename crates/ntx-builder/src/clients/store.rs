@@ -27,8 +27,8 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::AccountInputs;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::AccountTargetNetworkNote;
-use miden_tx::utils::{Deserializable, Serializable};
 use thiserror::Error;
 use url::Url;
 
