@@ -251,7 +251,7 @@ impl Node for ProvenBatchNode {
     fn output_note_commitments(&self) -> Box<dyn Iterator<Item = Word> + '_> {
         Box::new(
             self.tx_headers()
-                .flat_map(|tx| tx.output_notes().iter().map(NoteHeader::commitment)),
+                .flat_map(|tx| tx.output_notes().iter().map(NoteHeader::to_commitment)),
         )
     }
 
@@ -261,7 +261,7 @@ impl Node for ProvenBatchNode {
                 .input_notes()
                 .iter()
                 .filter_map(|note| note.header())
-                .map(NoteHeader::commitment),
+                .map(NoteHeader::to_commitment),
         )
     }
 
@@ -302,7 +302,7 @@ impl Node for BlockNode {
             batch
                 .input_notes()
                 .iter()
-                .filter_map(|note| note.header().map(NoteHeader::commitment))
+                .filter_map(|note| note.header().map(NoteHeader::to_commitment))
         }))
     }
 

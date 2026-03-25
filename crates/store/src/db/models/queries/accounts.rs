@@ -1121,7 +1121,7 @@ fn prepare_partial_account_update(
     let mut storage = Vec::new();
     for (slot_name, map_delta) in delta.storage().maps() {
         for (key, value) in map_delta.entries() {
-            storage.push((account_id, slot_name.clone(), (*key).into_inner(), *value));
+            storage.push((account_id, slot_name.clone(), *key, *value));
         }
     }
 

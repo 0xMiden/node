@@ -117,7 +117,7 @@ impl AuthenticatedTransaction {
     pub fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner
             .unauthenticated_notes()
-            .map(NoteHeader::commitment)
+            .map(NoteHeader::to_commitment)
             .filter(|commitment| !self.notes_authenticated_by_store.contains(commitment))
     }
 

@@ -925,7 +925,7 @@ fn insert_account_delta(
                 account_id,
                 block_number,
                 slot_name.clone(),
-                *k.inner(),
+                *k,
                 *v,
             )
             .unwrap();
