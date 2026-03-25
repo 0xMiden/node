@@ -181,7 +181,7 @@ async fn prove_and_save(
             .await
         {
             Ok(Ok(proof)) => {
-                save_block(block_store, block_num, &proof).await?;
+                save_block_proof(block_store, block_num, &proof).await?;
                 db.mark_block_proven(block_num).await?;
                 return Ok(block_num);
             },
@@ -225,7 +225,7 @@ async fn prove_block(
 
 /// Saves a block proof to the block store.
 #[instrument(target = COMPONENT, name = "prove_block.save", skip_all, fields(block.number=block_num.as_u32()), err)]
-async fn save_block(
+async fn save_block_proof(
     block_store: &BlockStore,
     block_num: BlockNumber,
     proof: &BlockProof,
