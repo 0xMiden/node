@@ -16,14 +16,14 @@ message SignedBlock {
 
 // Represents a proposed block.
 message ProposedBlock {
-    // Block data encoded using [winter_utils::Serializable] implementation for
+    // Block data encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::block::ProposedBlock].
     bytes proposed_block = 1;
 }
 
 // Represents a block or nothing.
 message MaybeBlock {
-    // The requested block data encoded using [winter_utils::Serializable] implementation for
+    // The requested block data encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::block::Block].
     optional bytes block = 1;
 }
@@ -84,7 +84,7 @@ message BlockHeader {
 
 // Validator ECDSA public key.
 message ValidatorPublicKey {
-    // Signature encoded using [winter_utils::Serializable] implementation for
+    // Signature encoded using [miden_serde_utils::Serializable] implementation for
     // [crypto::dsa::ecdsa_k256_keccak::PublicKey].
     bytes validator_key = 1;
 }
@@ -94,7 +94,7 @@ message ValidatorPublicKey {
 
 // Block ECDSA Signature.
 message BlockSignature {
-    // Signature encoded using [winter_utils::Serializable] implementation for
+    // Signature encoded using [miden_serde_utils::Serializable] implementation for
     // [crypto::dsa::ecdsa_k256_keccak::Signature].
     bytes signature = 1;
 }
@@ -116,7 +116,7 @@ message FeeParameters {
 
 // Represents a block body.
 message BlockBody {
-    // Block body data encoded using [winter_utils::Serializable] implementation for
+    // Block body data encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::block::BlockBody].
     bytes block_body = 1;
 }
