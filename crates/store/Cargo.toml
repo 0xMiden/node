@@ -51,8 +51,8 @@ tracing           = { workspace = true }
 url               = { workspace = true }
 
 [build-dependencies]
-build-rs        = { workspace = true }
-fs-err          = { workspace = true }
+build-rs = { workspace = true }
+fs-err   = { workspace = true }
 # TODO: consider removing the `testing` from relevant functions in miden-agglayer
 miden-agglayer  = { features = ["testing"], workspace = true }
 miden-protocol  = { features = ["std"], workspace = true }
