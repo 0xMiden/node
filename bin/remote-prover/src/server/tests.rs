@@ -126,11 +126,7 @@ impl ProofRequest {
             .unwrap();
 
         let tx = Box::pin(tx.execute()).await.unwrap();
-        let tx = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(LocalTransactionProver::default().prove(tx.tx_inputs().clone()))
-                .unwrap()
-        });
+        let tx = LocalTransactionProver::default().prove(tx.tx_inputs().clone()).await.unwrap();
 
         ProposedBatch::new(
             vec![Arc::new(tx)],
