@@ -71,7 +71,7 @@ trait ProveRequest: Send + Sync {
         let result = self.prove(input).instrument(prove_span).await;
 
         if let Err(e) = &result {
-            tracing::Span::current().set_error(e);
+            prove_span.set_error(e);
         }
 
         result.map(|output| Self::encode_response(output))
