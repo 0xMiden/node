@@ -4,13 +4,15 @@
 //!
 //! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`] and `latest_proven_block` locally.
 //! 2. Maintains up to `max_concurrent_proofs` in-flight proving jobs via a [`JoinSet`].
-//! 3. Marks blocks as proven in the database **sequentially** — a block is only marked after all
-//!    its ancestors have been marked.
+//! 3. Blocks may be proven out of order since proving jobs run concurrently. The scheduler tracks
+//!    which blocks form a contiguous proven sequence from genesis and marks them in the database
+//!    via the `proven_in_sequence` column.
 //! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is retried
 //!    internally within its proving task.
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -126,6 +128,12 @@ async fn run(
     // blocks we've already scheduled.
     let mut highest_scheduled = BlockNumber::GENESIS;
 
+    // Tracks the highest block number for which all ancestors (and itself) have been proven.
+    let mut proven_in_sequence_tip = db.select_latest_proven_block_num().await?;
+    // Blocks that have been proven but are ahead of `proven_in_sequence_tip` (i.e., there is a
+    // gap). Once the gap fills, the tip advances through these.
+    let mut proven_ahead: BTreeSet<BlockNumber> = BTreeSet::new();
+
     loop {
         // Query the DB for unproven blocks beyond what we've already scheduled.
         let capacity = max_concurrent_proofs.get() - join_set.len();
@@ -145,7 +153,17 @@ async fn run(
         tokio::select! {
             // Proving task completed.
             result = join_set.join_next() => {
-                info!(target=COMPONENT, block.number=%result?, "Block proven");
+                let block_num = result?;
+                info!(target=COMPONENT, block.number=%block_num, "Block proven");
+
+                // Track this proven block and advance the in-sequence tip as far as possible.
+                proven_ahead.insert(block_num);
+                let advanced_in_sequence = advance_proven_in_sequence_tip(proven_in_sequence_tip, &mut proven_ahead);
+
+                if let Some(highest_advanced) = advanced_in_sequence.last() {
+                    proven_in_sequence_tip = *highest_advanced;
+                    db.mark_blocks_proven_in_sequence(advanced_in_sequence).await?;
+                }
             },
 
             // New chain tip received — re-query for unproven blocks on next iteration.
@@ -157,6 +175,23 @@ async fn run(
             },
         }
     }
+}
+
+/// Advances the proven-in-sequence tip through consecutive blocks in `proven_ahead`.
+///
+/// Removes consumed entries from the set and returns the block numbers that were advanced
+/// (i.e., the newly in-sequence blocks). Returns an empty vec if no progress was made.
+fn advance_proven_in_sequence_tip(
+    current_tip: BlockNumber,
+    proven_ahead: &mut BTreeSet<BlockNumber>,
+) -> Vec<BlockNumber> {
+    let mut advanced = Vec::new();
+    let mut tip = current_tip;
+    while proven_ahead.remove(&(tip + 1)) {
+        tip = tip + 1;
+        advanced.push(tip);
+    }
+    advanced
 }
 
 // PROVE BLOCK

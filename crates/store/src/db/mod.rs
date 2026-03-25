@@ -587,6 +587,16 @@ impl Db {
         Ok(())
     }
 
+    /// Marks the given blocks as proven in sequence.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn mark_blocks_proven_in_sequence(&self, block_nums: Vec<BlockNumber>) -> Result<()> {
+        self.transact("mark blocks proven in sequence", move |conn| {
+            models::queries::mark_blocks_proven_in_sequence(conn, &block_nums)
+        })
+        .await?;
+        Ok(())
+    }
+
     /// Returns the proving inputs for a given block number, if stored.
     #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_proving_inputs(

@@ -50,6 +50,7 @@ diesel::table! {
         signature -> Binary,
         commitment -> Binary,
         proving_inputs -> Nullable<Binary>,
+        proven_in_sequence -> Bool,
     }
 }
 
