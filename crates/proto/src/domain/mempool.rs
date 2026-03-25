@@ -4,9 +4,9 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_standards::note::AccountTargetNetworkNote;
 
-use super::note::NetworkNote;
 use crate::errors::{ConversionError, MissingFieldHelper};
 use crate::generated as proto;
 
@@ -15,7 +15,7 @@ pub enum MempoolEvent {
     TransactionAdded {
         id: TransactionId,
         nullifiers: Vec<Nullifier>,
-        network_notes: Vec<NetworkNote>,
+        network_notes: Vec<AccountTargetNetworkNote>,
         account_delta: Option<AccountUpdateDetails>,
     },
     BlockCommitted {

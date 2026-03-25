@@ -8,7 +8,7 @@ use miden_protocol::errors::{
     FeeError,
     TokenSymbolError,
 };
-use miden_protocol::utils::DeserializationError;
+use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
 use miden_standards::account::wallets::BasicWalletError;
 

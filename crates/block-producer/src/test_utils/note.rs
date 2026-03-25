@@ -1,5 +1,5 @@
 use miden_protocol::note::Note;
-use miden_protocol::transaction::OutputNote;
+use miden_protocol::transaction::{OutputNote, PublicOutputNote};
 use miden_standards::testing::note::NoteBuilder;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
@@ -12,5 +12,5 @@ pub fn mock_note(num: u8) -> Note {
 }
 
 pub fn mock_output_note(num: u8) -> OutputNote {
-    OutputNote::Full(mock_note(num))
+    OutputNote::Public(PublicOutputNote::new(mock_note(num)).unwrap())
 }

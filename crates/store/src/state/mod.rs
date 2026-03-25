@@ -21,9 +21,11 @@ use miden_node_proto::domain::account::{
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
+use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, StorageMapWitness, StorageSlotName};
+use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
@@ -35,6 +37,7 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, instrument};
 
+use crate::account_state_forest::{AccountStateForest, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -49,7 +52,6 @@ use crate::errors::{
     GetCurrentBlockchainDataError,
     StateInitializationError,
 };
-use crate::inner_forest::{InnerForest, WitnessError};
 use crate::{COMPONENT, DataDirectory};
 
 mod loader;
@@ -115,7 +117,7 @@ pub struct State {
     inner: RwLock<InnerState<TreeStorage>>,
 
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
-    forest: RwLock<InnerForest>,
+    forest: RwLock<AccountStateForest>,
 
     /// To allow readers to access the tree data while an update in being performed, and prevent
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
@@ -133,6 +135,7 @@ impl State {
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
+        storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     ) -> Result<Self, StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
@@ -151,10 +154,18 @@ impl State {
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
 
-        let account_storage = TreeStorage::create(data_path, ACCOUNT_TREE_STORAGE_DIR)?;
+        let account_storage = TreeStorage::create(
+            data_path,
+            &storage_options.account_tree.into(),
+            ACCOUNT_TREE_STORAGE_DIR,
+        )?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage = TreeStorage::create(data_path, NULLIFIER_TREE_STORAGE_DIR)?;
+        let nullifier_storage = TreeStorage::create(
+            data_path,
+            &storage_options.nullifier_tree.into(),
+            NULLIFIER_TREE_STORAGE_DIR,
+        )?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         // Verify that tree roots match the expected roots from the database.
@@ -670,7 +681,8 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to return all entries.
+    /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
+    #[expect(clippy::too_many_lines)]
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,
@@ -728,29 +740,73 @@ impl State {
 
         let mut storage_map_details =
             Vec::<AccountStorageMapDetails>::with_capacity(storage_requests.len());
+        let mut map_keys_requests = Vec::new();
+        let mut all_entries_requests = Vec::new();
+        let mut storage_request_slots = Vec::with_capacity(storage_requests.len());
 
-        // Use forest for storage map queries
-        let forest_guard = self.forest.read().await;
+        for (index, StorageMapRequest { slot_name, slot_data }) in
+            storage_requests.into_iter().enumerate()
+        {
+            storage_request_slots.push(slot_name.clone());
+            match slot_data {
+                SlotData::MapKeys(keys) => {
+                    map_keys_requests.push((index, slot_name, keys));
+                },
+                SlotData::All => {
+                    all_entries_requests.push((index, slot_name));
+                },
+            }
+        }
 
-        for StorageMapRequest { slot_name, slot_data } in storage_requests {
-            let details = match &slot_data {
-                SlotData::MapKeys(keys) => forest_guard
-                    .open_storage_map(account_id, slot_name.clone(), block_num, keys)
+        let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
+
+        if !map_keys_requests.is_empty() {
+            let forest_guard = self.forest.read().await;
+            for (index, slot_name, keys) in map_keys_requests {
+                let details = forest_guard
+                    .get_storage_map_details_for_keys(
+                        account_id,
+                        slot_name.clone(),
+                        block_num,
+                        &keys,
+                    )
                     .ok_or_else(|| DatabaseError::StorageRootNotFound {
                         account_id,
                         slot_name: slot_name.to_string(),
                         block_num,
                     })?
-                    .map_err(DatabaseError::MerkleError)?,
-                SlotData::All => forest_guard
-                    .storage_map_entries(account_id, slot_name.clone(), block_num)
-                    .ok_or_else(|| DatabaseError::StorageRootNotFound {
-                        account_id,
-                        slot_name: slot_name.to_string(),
-                        block_num,
-                    })?,
-            };
+                    .map_err(DatabaseError::MerkleError)?;
+                storage_map_details_by_index[index] = Some(details);
+            }
+        }
 
+        // TODO parallelize the read requests
+        for (index, slot_name) in all_entries_requests {
+            let details = self
+                .db
+                .reconstruct_storage_map_from_db(
+                    account_id,
+                    slot_name.clone(),
+                    block_num,
+                    Some(
+                        // TODO unify this with
+                        // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
+                        // and accumulated the limits
+                        <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
+                    ),
+                )
+                .await?;
+            storage_map_details_by_index[index] = Some(details);
+        }
+
+        for (details, slot_name) in
+            storage_map_details_by_index.into_iter().zip(storage_request_slots)
+        {
+            let details = details.ok_or_else(|| DatabaseError::StorageRootNotFound {
+                account_id,
+                slot_name: slot_name.to_string(),
+                block_num,
+            })?;
             storage_map_details.push(details);
         }
 
@@ -830,7 +886,7 @@ impl State {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        raw_key: Word,
+        raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
         let witness = self
             .forest

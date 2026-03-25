@@ -19,9 +19,9 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{NoteId, Nullifier};
-use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::note::NoteHeader;
+use miden_protocol::transaction::{InputNoteCommitment, OrderedTransactionHeaders, TransactionId};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
 use crate::COMPONENT;
@@ -38,33 +38,32 @@ pub struct TransactionRecordRaw {
     transaction_id: Vec<u8>,
     initial_state_commitment: Vec<u8>,
     final_state_commitment: Vec<u8>,
-    nullifiers: Vec<u8>,
+    input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
+    fee: Vec<u8>,
 }
 
 impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
     type Error = DatabaseError;
     fn try_into(self) -> Result<crate::db::TransactionRecord, Self::Error> {
         use miden_protocol::Word;
+        use miden_protocol::asset::FungibleAsset;
 
-        let initial_state_commitment = self.initial_state_commitment;
-        let final_state_commitment = self.final_state_commitment;
-        let nullifiers_binary = self.nullifiers;
-        let output_notes_binary = self.output_notes;
-
-        // Deserialize input notes as nullifiers and output notes as note IDs
-        let nullifiers: Vec<Nullifier> = Deserializable::read_from_bytes(&nullifiers_binary)?;
-        let output_notes: Vec<NoteId> = Deserializable::read_from_bytes(&output_notes_binary)?;
+        let input_notes: Vec<InputNoteCommitment> =
+            Deserializable::read_from_bytes(&self.input_notes)?;
+        let output_notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&self.output_notes)?;
+        let fee = FungibleAsset::read_from_bytes(&self.fee)?;
 
         Ok(crate::db::TransactionRecord {
             account_id: AccountId::read_from_bytes(&self.account_id[..])?,
             block_num: BlockNumber::from_raw_sql(self.block_num)?,
             transaction_id: TransactionId::read_from_bytes(&self.transaction_id[..])?,
-            initial_state_commitment: Word::read_from_bytes(&initial_state_commitment)?,
-            final_state_commitment: Word::read_from_bytes(&final_state_commitment)?,
-            nullifiers,
+            initial_state_commitment: Word::read_from_bytes(&self.initial_state_commitment)?,
+            final_state_commitment: Word::read_from_bytes(&self.final_state_commitment)?,
+            input_notes,
             output_notes,
+            fee,
         })
     }
 }
@@ -108,9 +107,10 @@ pub struct TransactionSummaryRowInsert {
     block_num: i64,
     initial_state_commitment: Vec<u8>,
     final_state_commitment: Vec<u8>,
-    nullifiers: Vec<u8>,
+    input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
+    fee: Vec<u8>,
 }
 
 impl TransactionSummaryRowInsert {
@@ -124,25 +124,14 @@ impl TransactionSummaryRowInsert {
     ) -> Self {
         const HEADER_BASE_SIZE: usize = 4 + 32 + 16 + 64; // block_num + tx_id + account_id + commitments
 
-        // Extract nullifiers from input notes and serialize them.
-        // We only store the nullifiers (not the full `InputNoteCommitment`) since
-        // that's all that's needed when reading back `TransactionRecords`.
-        let nullifiers: Vec<Nullifier> = transaction_header
-            .input_notes()
-            .iter()
-            .map(miden_protocol::transaction::InputNoteCommitment::nullifier)
-            .collect();
-        let nullifiers_binary = nullifiers.to_bytes();
+        // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
+        let input_notes: Vec<InputNoteCommitment> =
+            transaction_header.input_notes().iter().cloned().collect();
+        let input_notes_binary = input_notes.to_bytes();
 
-        // Extract note IDs from output note headers and serialize them.
-        // We only store the `NoteId`s (not the full `NoteHeader` with metadata) since
-        // that's all that's needed when reading back `TransactionRecords`.
-        let output_note_ids: Vec<NoteId> = transaction_header
-            .output_notes()
-            .iter()
-            .map(miden_protocol::note::NoteHeader::id)
-            .collect();
-        let output_notes_binary = output_note_ids.to_bytes();
+        // Serialize output notes as full NoteHeaders (NoteId + NoteMetadata).
+        let output_notes: Vec<NoteHeader> = transaction_header.output_notes().to_vec();
+        let output_notes_binary = output_notes.to_bytes();
 
         // Manually calculate the estimated size of the transaction header to avoid
         // the cost of serialization. The size estimation includes:
@@ -150,14 +139,11 @@ impl TransactionSummaryRowInsert {
         // - 32 bytes for transaction ID
         // - 16 bytes for account ID
         // - 64 bytes for initial + final state commitments (32 bytes each)
-        // - 32 bytes per input note (nullifier size)
-        // - 500 bytes per output note (estimated size when converted to NoteSyncRecord)
-        //
-        // Note: 500 bytes per output note is an over-estimate but ensures we don't
-        // exceed memory limits when these transactions are later converted to proto records.
-        let nullifiers_size = (transaction_header.input_notes().num_notes() * 32) as usize;
-        let output_notes_size = transaction_header.output_notes().len() * 500;
-        let size_in_bytes = (HEADER_BASE_SIZE + nullifiers_size + output_notes_size) as i64;
+        // - ~64 bytes per input note (nullifier + optional NoteHeader)
+        // - ~64 bytes per output note (NoteHeader = NoteId + NoteMetadata)
+        let input_notes_size = (transaction_header.input_notes().num_notes() as usize) * 64;
+        let output_notes_size = transaction_header.output_notes().len() * 64;
+        let size_in_bytes = (HEADER_BASE_SIZE + input_notes_size + output_notes_size) as i64;
 
         Self {
             transaction_id: transaction_header.id().to_bytes(),
@@ -165,9 +151,10 @@ impl TransactionSummaryRowInsert {
             block_num: block_num.to_raw_sql(),
             initial_state_commitment: transaction_header.initial_state_commitment().to_bytes(),
             final_state_commitment: transaction_header.final_state_commitment().to_bytes(),
-            nullifiers: nullifiers_binary,
+            input_notes: input_notes_binary,
             output_notes: output_notes_binary,
             size_in_bytes,
+            fee: transaction_header.fee().to_bytes(),
         }
     }
 }

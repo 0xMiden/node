@@ -5,14 +5,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use miden_agglayer::{
-    EthAddressFormat,
+    EthAddress,
+    MetadataHash,
     create_existing_agglayer_faucet,
     create_existing_bridge_account,
 };
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountCode, AccountFile, AccountStorageMode, AccountType};
-use miden_protocol::crypto::dsa::falcon512_rpo::SecretKey;
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -26,7 +27,6 @@ fn main() {
 
     // Generate sample agglayer account files for genesis config samples.
     generate_agglayer_sample_accounts();
-    miden_node_rocksdb_cxx_linkage_fix::configure();
 }
 
 /// Generates sample agglayer account files for the `02-with-account-files` genesis config sample.
@@ -53,14 +53,14 @@ fn generate_agglayer_sample_accounts() {
     // Create bridge admin and GER manager as proper wallet accounts.
     // WARNING: DO NOT USE THESE IN PRODUCTION
     let bridge_admin_key =
-        SecretKey::with_rng(&mut RpoRandomCoin::new(Word::new([Felt::new(4u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(4u64); 4])));
     let ger_manager_key =
-        SecretKey::with_rng(&mut RpoRandomCoin::new(Word::new([Felt::new(5u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(5u64); 4])));
 
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
         AuthMethod::SingleSig {
-            approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -70,7 +70,7 @@ fn generate_agglayer_sample_accounts() {
     let ger_manager = create_basic_wallet(
         [5u8; 32],
         AuthMethod::SingleSig {
-            approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Rpo),
+            approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -88,8 +88,8 @@ fn generate_agglayer_sample_accounts() {
 
     // Placeholder Ethereum addresses for sample faucets.
     // WARNING: DO NOT USE THESE ADDRESSES IN PRODUCTION
-    let eth_origin_address = EthAddressFormat::new([1u8; 20]);
-    let usdc_origin_address = EthAddressFormat::new([2u8; 20]);
+    let eth_origin_address = EthAddress::new([1u8; 20]);
+    let usdc_origin_address = EthAddress::new([2u8; 20]);
 
     // Create AggLayer faucets using "existing" variant
     // ETH: 8 decimals (protocol max is 12), max supply of 1 billion tokens
@@ -103,6 +103,7 @@ fn generate_agglayer_sample_accounts() {
         &eth_origin_address,
         0u32,
         10u8,
+        MetadataHash::from_token_info("Ether", "ETH", 8),
     );
 
     // USDC: 6 decimals, max supply of 10 billion tokens
@@ -116,6 +117,7 @@ fn generate_agglayer_sample_accounts() {
         &usdc_origin_address,
         0u32,
         10u8,
+        MetadataHash::from_token_info("USD Coin", "USDC", 6),
     );
 
     // Strip source location decorators from account code to ensure deterministic output.
@@ -140,17 +142,17 @@ fn generate_agglayer_sample_accounts() {
         .expect("Failed to write agglayer_faucet_usdc.mac");
 }
 
-/// Strips source location decorators from an account's code MAST forest.
+/// Clears debug info from an account's code MAST forest.
 ///
 /// This is necessary because the MAST forest embeds absolute file paths from the Cargo build
-/// directory, which include a hash that differs between `cargo check` and `cargo build`. Stripping
-/// decorators ensures the serialized `.mac` files are identical regardless of which cargo command
+/// directory, which include a hash that differs between `cargo check` and `cargo build`. Clearing
+/// debug info ensures the serialized `.mac` files are identical regardless of which cargo command
 /// is used (CI or local builds or tests).
 fn strip_code_decorators(account: Account) -> Account {
     let (id, vault, storage, code, nonce, seed) = account.into_parts();
 
     let mut mast = code.mast();
-    Arc::make_mut(&mut mast).strip_decorators();
+    Arc::make_mut(&mut mast).clear_debug_info();
     let code = AccountCode::from_parts(mast, code.procedures().to_vec());
 
     Account::new_unchecked(id, vault, storage, code, nonce, seed)

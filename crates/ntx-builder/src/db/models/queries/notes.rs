@@ -3,13 +3,15 @@
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::note::SingleTargetNetworkNote;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{Note, Nullifier};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::actor::inflight_note::InflightNetworkNote;
+use crate::NoteError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
+use crate::inflight_note::InflightNetworkNote;
 
 // MODELS
 // ================================================================================================
@@ -32,10 +34,23 @@ pub struct NoteInsert {
     pub nullifier: Vec<u8>,
     pub account_id: Vec<u8>,
     pub note_data: Vec<u8>,
+    pub note_id: Option<Vec<u8>>,
     pub attempt_count: i32,
     pub last_attempt: Option<i64>,
+    pub last_error: Option<String>,
     pub created_by: Option<Vec<u8>>,
     pub consumed_by: Option<Vec<u8>>,
+}
+
+/// Row returned by `get_note_error()`.
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = schema::notes)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct NoteErrorRow {
+    pub note_id: Option<Vec<u8>>,
+    pub last_error: Option<String>,
+    pub attempt_count: i32,
+    pub last_attempt: Option<i64>,
 }
 
 // QUERIES
@@ -49,20 +64,26 @@ pub struct NoteInsert {
 ///
 /// ```sql
 /// INSERT OR REPLACE INTO notes
-///     (nullifier, account_id, note_data, attempt_count, last_attempt, created_by, consumed_by)
-/// VALUES (?1, ?2, ?3, 0, NULL, NULL, NULL)
+///     (nullifier, account_id, note_data, note_id, attempt_count, last_attempt, last_error,
+///      created_by, consumed_by)
+/// VALUES (?1, ?2, ?3, ?4, 0, NULL, NULL, NULL, NULL)
 /// ```
 pub fn insert_committed_notes(
     conn: &mut SqliteConnection,
-    notes: &[SingleTargetNetworkNote],
+    notes: &[AccountTargetNetworkNote],
 ) -> Result<(), DatabaseError> {
     for note in notes {
         let row = NoteInsert {
-            nullifier: conversions::nullifier_to_bytes(&note.nullifier()),
-            account_id: conversions::network_account_id_to_bytes(note.account_id()),
-            note_data: conversions::single_target_note_to_bytes(note),
+            nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
+            account_id: conversions::network_account_id_to_bytes(
+                NetworkAccountId::try_from(note.target_account_id())
+                    .expect("account ID of a network note should be a network account"),
+            ),
+            note_data: note.as_note().to_bytes(),
+            note_id: Some(conversions::note_id_to_bytes(&note.as_note().id())),
             attempt_count: 0,
             last_attempt: None,
+            last_error: None,
             created_by: None,
             consumed_by: None,
         };
@@ -121,7 +142,8 @@ pub fn available_notes(
     Ok(result)
 }
 
-/// Marks notes as failed by incrementing `attempt_count` and setting `last_attempt`.
+/// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
+/// the latest error message.
 ///
 /// # Raw SQL
 ///
@@ -129,27 +151,50 @@ pub fn available_notes(
 ///
 /// ```sql
 /// UPDATE notes
-/// SET attempt_count = attempt_count + 1, last_attempt = ?1
-/// WHERE nullifier = ?2
+/// SET attempt_count = attempt_count + 1, last_attempt = ?1, last_error = ?2
+/// WHERE nullifier = ?3
 /// ```
 pub fn notes_failed(
     conn: &mut SqliteConnection,
-    nullifiers: &[Nullifier],
+    failed_notes: &[(Nullifier, NoteError)],
     block_num: BlockNumber,
 ) -> Result<(), DatabaseError> {
     let block_num_val = conversions::block_num_to_i64(block_num);
 
-    for nullifier in nullifiers {
+    for (nullifier, error) in failed_notes {
         let nullifier_bytes = conversions::nullifier_to_bytes(nullifier);
+        let error_report = error.as_report();
 
         diesel::update(schema::notes::table.find(&nullifier_bytes))
             .set((
                 schema::notes::attempt_count.eq(schema::notes::attempt_count + 1),
                 schema::notes::last_attempt.eq(Some(block_num_val)),
+                schema::notes::last_error.eq(Some(error_report)),
             ))
             .execute(conn)?;
     }
     Ok(())
+}
+
+/// Returns the latest execution error for a note identified by its note ID.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT note_id, last_error, attempt_count, last_attempt
+/// FROM notes
+/// WHERE note_id = ?1
+/// ```
+pub fn get_note_error(
+    conn: &mut SqliteConnection,
+    note_id_bytes: &[u8],
+) -> Result<Option<NoteErrorRow>, DatabaseError> {
+    schema::notes::table
+        .filter(schema::notes::note_id.eq(note_id_bytes))
+        .select(NoteErrorRow::as_select())
+        .first(conn)
+        .optional()
+        .map_err(Into::into)
 }
 
 // HELPERS
@@ -161,6 +206,11 @@ fn note_row_to_inflight(
     attempt_count: usize,
     last_attempt: Option<BlockNumber>,
 ) -> Result<InflightNetworkNote, DatabaseError> {
-    let note = conversions::single_target_note_from_bytes(note_data)?;
+    let note = Note::read_from_bytes(note_data)
+        .map_err(|source| DatabaseError::deserialization("failed to parse note", source))?;
+    let note = AccountTargetNetworkNote::new(note).map_err(|source| {
+        DatabaseError::deserialization("failed to convert to network note", source)
+    })?;
+
     Ok(InflightNetworkNote::from_parts(note, attempt_count, last_attempt))
 }

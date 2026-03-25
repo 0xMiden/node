@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_db::Db;
@@ -9,13 +8,15 @@ use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -23,7 +24,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{info_span, instrument};
 
 use crate::block_validation::validate_block;
-use crate::db::{insert_transaction, load};
+use crate::db::{insert_transaction, load, load_chain_tip, upsert_block_header};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
 
@@ -36,10 +37,10 @@ use crate::{COMPONENT, ValidatorSigner};
 pub struct Validator {
     /// The address of the validator component.
     pub address: SocketAddr,
-    /// Server-side timeout for an individual gRPC request.
+    /// gRPC server options for internal services (timeouts, connection caps).
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
-    pub grpc_timeout: Duration,
+    pub grpc_options: GrpcOptionsInternal,
 
     /// The signer used to sign blocks.
     pub signer: ValidatorSigner,
@@ -70,23 +71,13 @@ impl Validator {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        // This is currently required for postman to work properly because
-        // it doesn't support the new version yet.
-        //
-        // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
-        let reflection_service_alpha = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(validator_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         // Build the gRPC server with the API service and trace layer.
         tonic::transport::Server::builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-            .timeout(self.grpc_timeout)
+            .timeout(self.grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(ValidatorServer::new(self.signer, db)))
             .add_service(reflection_service)
-            .add_service(reflection_service_alpha)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .context("failed to serve validator API")
@@ -102,11 +93,18 @@ impl Validator {
 struct ValidatorServer {
     signer: ValidatorSigner,
     db: Arc<Db>,
+    /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
+    /// ensuring consistent chain tip reads and preventing race conditions.
+    sign_block_semaphore: Semaphore,
 }
 
 impl ValidatorServer {
     fn new(signer: ValidatorSigner, db: Db) -> Self {
-        Self { signer, db: db.into() }
+        Self {
+            signer,
+            db: db.into(),
+            sign_block_semaphore: Semaphore::new(1),
+        }
     }
 }
 
@@ -161,7 +159,8 @@ impl api_server::Api for ValidatorServer {
         Ok(tonic::Response::new(()))
     }
 
-    /// Validates a proposed block and returns the block header and body.
+    /// Validates a proposed block, verifies chain continuity, signs the block header, and updates
+    /// the chain tip.
     async fn sign_block(
         &self,
         request: tonic::Request<proto::blockchain::ProposedBlock>,
@@ -176,19 +175,45 @@ impl api_server::Api for ValidatorServer {
             })
         })?;
 
-        // Validate the block.
-        let signature =
-            validate_block(proposed_block, &self.signer, &self.db).await.map_err(|err| {
+        // Serialize sign_block requests to prevent race conditions between loading the
+        // chain tip and persisting the validated block header.
+        let _permit = self.sign_block_semaphore.acquire().await.map_err(|err| {
+            tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
+        })?;
+
+        // Load the current chain tip from the database.
+        let chain_tip = self
+            .db
+            .query("load_chain_tip", load_chain_tip)
+            .await
+            .map_err(|err| {
+                tonic::Status::internal(format!("Failed to load chain tip: {}", err.as_report()))
+            })?
+            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
+
+        // Validate the block against the current chain tip.
+        let (signature, header) = validate_block(proposed_block, &self.signer, &self.db, chain_tip)
+            .await
+            .map_err(|err| {
                 tonic::Status::invalid_argument(format!(
                     "Failed to validate block: {}",
                     err.as_report()
                 ))
             })?;
 
+        // Persist the validated block header.
+        self.db
+            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
+            .await
+            .map_err(|err| {
+                tonic::Status::internal(format!(
+                    "Failed to persist block header: {}",
+                    err.as_report()
+                ))
+            })?;
+
         // Send the signature.
-        info_span!("serialize").in_scope(|| {
-            let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
-            Ok(tonic::Response::new(response))
-        })
+        let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
+        Ok(tonic::Response::new(response))
     }
 }

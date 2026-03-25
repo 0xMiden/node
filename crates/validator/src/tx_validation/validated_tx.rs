@@ -1,7 +1,14 @@
-use miden_protocol::account::AccountId;
+use miden_protocol::Word;
+use miden_protocol::account::{AccountDelta, AccountId};
+use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::transaction::{ExecutedTransaction, TransactionId};
-use miden_tx::utils::Serializable;
+use miden_protocol::transaction::{
+    ExecutedTransaction,
+    InputNote,
+    InputNotes,
+    RawOutputNotes,
+    TransactionId,
+};
 
 /// Re-executed and validated transaction that the Validator, or some ad-hoc
 /// auditing procedure, might need to analyze.
@@ -11,7 +18,7 @@ use miden_tx::utils::Serializable;
 pub struct ValidatedTransaction(ExecutedTransaction);
 
 impl ValidatedTransaction {
-    /// Creates a new instance of [`ValidatedTransactionInfo`].
+    /// Creates a new instance of [`ValidatedTransaction`].
     pub fn new(tx: ExecutedTransaction) -> Self {
         Self(tx)
     }
@@ -28,11 +35,36 @@ impl ValidatedTransaction {
 
     /// Returns ID of the account against which this transaction was executed.
     pub fn account_id(&self) -> AccountId {
-        self.0.account_delta().id()
+        self.0.account_id()
     }
 
-    /// Returns the binary representation of the transaction info.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.0.to_bytes()
+    /// Returns a description of changes between the initial and final account states.
+    pub fn account_delta(&self) -> &AccountDelta {
+        self.0.account_delta()
+    }
+
+    /// Returns the notes consumed in this transaction.
+    pub fn input_notes(&self) -> &InputNotes<InputNote> {
+        self.0.input_notes()
+    }
+
+    /// Returns the notes created in this transaction.
+    pub fn output_notes(&self) -> &RawOutputNotes {
+        self.0.output_notes()
+    }
+
+    /// Returns the commitment of the initial account state.
+    pub fn initial_account_hash(&self) -> Word {
+        self.0.initial_account().initial_commitment()
+    }
+
+    /// Returns the commitment of the final account state.
+    pub fn final_account_hash(&self) -> Word {
+        self.0.final_account().to_commitment()
+    }
+
+    /// Returns the fee of the transaction.
+    pub fn fee(&self) -> FungibleAsset {
+        self.0.fee()
     }
 }

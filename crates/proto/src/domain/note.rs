@@ -1,25 +1,22 @@
 use std::sync::Arc;
 
-use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
     NoteDetails,
+    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
     NoteScript,
     NoteTag,
     NoteType,
-    Nullifier,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
-use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
-use thiserror::Error;
+use miden_standards::note::AccountTargetNetworkNote;
 
-use super::account::NetworkAccountId;
 use crate::errors::{ConversionError, MissingFieldHelper};
 use crate::generated as proto;
 
@@ -93,13 +90,29 @@ impl From<Note> for proto::note::Note {
     }
 }
 
-impl From<NetworkNote> for proto::note::NetworkNote {
-    fn from(note: NetworkNote) -> Self {
-        let note = Note::from(note);
+impl From<AccountTargetNetworkNote> for proto::note::NetworkNote {
+    fn from(note: AccountTargetNetworkNote) -> Self {
+        let note = note.into_note();
         Self {
             metadata: Some(proto::note::NoteMetadata::from(note.metadata().clone())),
             details: NoteDetails::from(note).to_bytes(),
         }
+    }
+}
+
+impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::note::NetworkNote) -> Result<Self, Self::Error> {
+        let details = NoteDetails::read_from_bytes(&value.details)
+            .map_err(|err| ConversionError::deserialization_error("NoteDetails", err))?;
+        let (assets, recipient) = details.into_parts();
+        let metadata: NoteMetadata = value
+            .metadata
+            .ok_or_else(|| proto::note::NetworkNote::missing_field(stringify!(metadata)))?
+            .try_into()?;
+        let note = Note::new(assets, metadata, recipient);
+        AccountTargetNetworkNote::new(note).map_err(ConversionError::NetworkNoteError)
     }
 }
 
@@ -143,7 +156,7 @@ impl From<(&NoteId, &NoteInclusionProof)> for proto::note::NoteInclusionInBlockP
         Self {
             note_id: Some(note_id.into()),
             block_num: proof.location().block_num().as_u32(),
-            note_index_in_block: proof.location().node_index_in_block().into(),
+            note_index_in_block: proof.location().block_note_tree_index().into(),
             inclusion_path: Some(proof.note_path().clone().into()),
         }
     }
@@ -207,146 +220,33 @@ impl TryFrom<proto::note::Note> for Note {
     }
 }
 
-// NETWORK NOTE
+// NOTE HEADER
 // ================================================================================================
 
-/// An enum that wraps around notes used in a network mode.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NetworkNote {
-    SingleTarget(SingleTargetNetworkNote),
-}
-
-impl NetworkNote {
-    pub fn inner(&self) -> &Note {
-        match self {
-            NetworkNote::SingleTarget(note) => note.inner(),
-        }
-    }
-
-    pub fn metadata(&self) -> &NoteMetadata {
-        self.inner().metadata()
-    }
-
-    pub fn nullifier(&self) -> Nullifier {
-        self.inner().nullifier()
-    }
-
-    pub fn id(&self) -> NoteId {
-        self.inner().id()
-    }
-}
-
-impl From<NetworkNote> for Note {
-    fn from(value: NetworkNote) -> Self {
-        match value {
-            NetworkNote::SingleTarget(note) => note.into(),
+impl From<NoteHeader> for proto::note::NoteHeader {
+    fn from(header: NoteHeader) -> Self {
+        Self {
+            note_id: Some((&header.id()).into()),
+            metadata: Some(header.into_metadata().into()),
         }
     }
 }
 
-impl TryFrom<Note> for NetworkNote {
-    type Error = NetworkNoteError;
-
-    fn try_from(note: Note) -> Result<Self, Self::Error> {
-        SingleTargetNetworkNote::try_from(note).map(NetworkNote::SingleTarget)
-    }
-}
-
-impl TryFrom<proto::note::NetworkNote> for NetworkNote {
+impl TryFrom<proto::note::NoteHeader> for NoteHeader {
     type Error = ConversionError;
 
-    fn try_from(proto_note: proto::note::NetworkNote) -> Result<Self, Self::Error> {
-        from_proto(proto_note)
+    fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
+        let note_id_word: Word = value
+            .note_id
+            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(note_id)))?
+            .try_into()?;
+        let metadata: NoteMetadata = value
+            .metadata
+            .ok_or_else(|| proto::note::NoteHeader::missing_field(stringify!(metadata)))?
+            .try_into()?;
+
+        Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }
-}
-
-// SINGLE TARGET NETWORK NOTE
-// ================================================================================================
-
-/// A newtype that wraps around notes targeting a single network account.
-///
-/// A note is considered a single-target network note if its attachment
-/// is a valid `NetworkAccountTarget`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SingleTargetNetworkNote {
-    note: Note,
-    account_target: NetworkAccountTarget,
-}
-
-impl SingleTargetNetworkNote {
-    pub fn inner(&self) -> &Note {
-        &self.note
-    }
-
-    pub fn metadata(&self) -> &NoteMetadata {
-        self.inner().metadata()
-    }
-
-    pub fn nullifier(&self) -> Nullifier {
-        self.inner().nullifier()
-    }
-
-    pub fn id(&self) -> NoteId {
-        self.inner().id()
-    }
-
-    /// The network account ID that this note targets.
-    pub fn account_id(&self) -> NetworkAccountId {
-        self.account_target.target_id().try_into().expect("always a network account ID")
-    }
-
-    pub fn can_be_consumed(&self, block_num: BlockNumber) -> Option<bool> {
-        self.account_target.execution_hint().can_be_consumed(block_num)
-    }
-}
-
-impl From<SingleTargetNetworkNote> for Note {
-    fn from(value: SingleTargetNetworkNote) -> Self {
-        value.note
-    }
-}
-
-impl TryFrom<Note> for SingleTargetNetworkNote {
-    type Error = NetworkNoteError;
-
-    fn try_from(note: Note) -> Result<Self, Self::Error> {
-        // Single-target network notes are identified by having a NetworkAccountTarget attachment
-        let attachment = note.metadata().attachment();
-        let account_target = NetworkAccountTarget::try_from(attachment)
-            .map_err(NetworkNoteError::InvalidAttachment)?;
-        Ok(Self { note, account_target })
-    }
-}
-
-impl TryFrom<proto::note::NetworkNote> for SingleTargetNetworkNote {
-    type Error = ConversionError;
-
-    fn try_from(proto_note: proto::note::NetworkNote) -> Result<Self, Self::Error> {
-        from_proto(proto_note)
-    }
-}
-
-/// Helper function to deduplicate implementations `TryFrom<proto::note::NetworkNote>`.
-fn from_proto<T>(proto_note: proto::note::NetworkNote) -> Result<T, ConversionError>
-where
-    T: TryFrom<Note>,
-    T::Error: Into<ConversionError>,
-{
-    let details = NoteDetails::read_from_bytes(&proto_note.details)
-        .map_err(|err| ConversionError::deserialization_error("NoteDetails", err))?;
-    let (assets, recipient) = details.into_parts();
-    let metadata: NoteMetadata = proto_note
-        .metadata
-        .ok_or_else(|| proto::note::NetworkNote::missing_field(stringify!(metadata)))?
-        .try_into()?;
-    let note = Note::new(assets, metadata, recipient);
-    T::try_from(note).map_err(Into::into)
-}
-
-#[derive(Debug, Error)]
-pub enum NetworkNoteError {
-    #[error("note does not have a valid NetworkAccountTarget attachment: {0}")]
-    InvalidAttachment(#[source] NetworkAccountTargetError),
 }
 
 // NOTE SCRIPT

@@ -3,6 +3,7 @@ use std::path::Path;
 
 use assert_matches::assert_matches;
 use miden_protocol::ONE;
+use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 
 use super::*;
@@ -47,7 +48,7 @@ fn parsing_yields_expected_default_values() -> TestResult {
 
         assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
         assert_eq!(faucet.decimals(), 6);
-        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // check account balance, and ensure ordering is retained
@@ -95,11 +96,11 @@ fn parsing_account_from_file() -> TestResult {
     // Create a test wallet account and save it to a .mac file
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
-    let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
+    let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
     let test_account = create_basic_wallet(
@@ -153,10 +154,10 @@ fn parsing_native_faucet_from_file() -> TestResult {
     // Create a faucet account and save it to a .mac file
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
-    let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
+    let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
-    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Rpo);
+    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let faucet_component =
         BasicFungibleFaucet::new(TokenSymbol::new("MIDEN").unwrap(), 6, Felt::new(1_000_000_000))?;
@@ -215,11 +216,11 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     // Create a regular wallet account (not a faucet) and try to use it as native faucet
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
-    let secret_key = miden_protocol::crypto::dsa::falcon512_rpo::SecretKey::with_rng(
+    let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Rpo),
+        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
     let regular_account = create_basic_wallet(
@@ -327,7 +328,7 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     // Verify native faucet symbol
     {
         let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
-        assert_eq!(faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // Bridge account is a regular account (not a faucet)
@@ -354,7 +355,28 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
 
     // Verify the genesis state can be converted to a block
-    let _block = state.into_block().await?;
+    let block = state.into_block().await?;
+
+    // Verify that non-private accounts (Public and Network) get full Delta details.
+    for update in block.inner().body().updated_accounts() {
+        let is_private = update.account_id().is_private();
+        match update.details() {
+            AccountUpdateDetails::Delta(_) => {
+                assert!(
+                    !is_private,
+                    "Private account {:?} should not have Delta details",
+                    update.account_id()
+                );
+            },
+            AccountUpdateDetails::Private => {
+                assert!(
+                    is_private,
+                    "Non-private account {:?} should have Delta details, not Private",
+                    update.account_id()
+                );
+            },
+        }
+    }
 
     Ok(())
 }

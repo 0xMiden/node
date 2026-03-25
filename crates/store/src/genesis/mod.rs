@@ -2,7 +2,7 @@ use miden_node_utils::signer::BlockSigner;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{Account, AccountDelta};
-use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockBody,
@@ -35,7 +35,7 @@ pub struct GenesisState<S> {
 }
 
 /// A type-safety wrapper ensuring that genesis block data can only be created from
-/// [`GenesisState`].
+/// [`GenesisState`] or validated from a [`ProvenBlock`] via [`GenesisBlock::try_from`].
 pub struct GenesisBlock(ProvenBlock);
 
 impl GenesisBlock {
@@ -45,6 +45,27 @@ impl GenesisBlock {
 
     pub fn into_inner(self) -> ProvenBlock {
         self.0
+    }
+}
+
+impl TryFrom<ProvenBlock> for GenesisBlock {
+    type Error = anyhow::Error;
+
+    fn try_from(block: ProvenBlock) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            block.header().block_num() == BlockNumber::GENESIS,
+            "expected genesis block number (0), got {}",
+            block.header().block_num(),
+        );
+
+        anyhow::ensure!(
+            block
+                .signature()
+                .verify(block.header().commitment(), block.header().validator_key()),
+            "genesis block signature verification failed",
+        );
+
+        Ok(Self(block))
     }
 }
 
@@ -73,10 +94,10 @@ impl<S: BlockSigner> GenesisState<S> {
             .accounts
             .iter()
             .map(|account| {
-                let account_update_details = if account.id().is_public() {
-                    AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone())?)
-                } else {
+                let account_update_details = if account.id().is_private() {
                     AccountUpdateDetails::Private
+                } else {
+                    AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone())?)
                 };
 
                 Ok(BlockAccountUpdate::new(
@@ -89,7 +110,10 @@ impl<S: BlockSigner> GenesisState<S> {
 
         // Convert account updates to SMT entries using account_id_to_smt_key
         let smt_entries = accounts.iter().map(|update| {
-            (account_id_to_smt_key(update.account_id()), update.final_state_commitment())
+            (
+                AccountIdKey::from(update.account_id()).as_word(),
+                update.final_state_commitment(),
+            )
         });
 
         // Create LargeSmt with MemoryStorage

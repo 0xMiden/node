@@ -5,10 +5,9 @@ use std::num::TryFromIntError;
 pub use miden_node_grpc_error_macro::GrpcError;
 use miden_protocol::crypto::merkle::smt::{SmtLeafError, SmtProofError};
 use miden_protocol::errors::{AccountError, AssetError, FeeError, NoteError, StorageSlotNameError};
-use miden_protocol::utils::DeserializationError;
+use miden_protocol::utils::serde::DeserializationError;
+use miden_standards::note::NetworkAccountTargetError;
 use thiserror::Error;
-
-use crate::domain::note::NetworkNoteError;
 
 #[cfg(test)]
 mod test_macro;
@@ -28,7 +27,7 @@ pub enum ConversionError {
     #[error("note error")]
     NoteError(#[from] NoteError),
     #[error("network note error")]
-    NetworkNoteError(#[from] NetworkNoteError),
+    NetworkNoteError(#[source] NetworkAccountTargetError),
     #[error("SMT leaf error")]
     SmtLeafError(#[from] SmtLeafError),
     #[error("SMT proof error")]

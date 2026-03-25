@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::Mul;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_node_proto::domain::note::NetworkNote;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{OutputNote, TransactionId};
+use miden_standards::note::NetworkNoteExt;
 use tokio::sync::mpsc;
 
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -43,22 +43,7 @@ impl SubscriptionProvider {
     /// Creates a new [`MempoolEvent`] subscription.
     ///
     /// This replaces any existing subscription.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provided chain tip does not match the provider's. The error
-    /// value contains the provider's chain tip.
-    ///
-    /// This prevents desync between the subscribers view of the world and the mempool's event
-    /// stream.
-    pub fn subscribe(
-        &mut self,
-        chain_tip: BlockNumber,
-    ) -> Result<mpsc::Receiver<MempoolEvent>, BlockNumber> {
-        if self.chain_tip != chain_tip {
-            return Err(self.chain_tip);
-        }
-
+    pub fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
         // We should leave enough space to at least send the uncommitted events (plus some extra).
         let capacity = self.inflight_txs.len().mul(2).max(1024);
         let (tx, rx) = mpsc::channel(capacity);
@@ -74,7 +59,7 @@ impl SubscriptionProvider {
             Self::send_event(&mut self.subscription, tx.clone());
         }
 
-        Ok(rx)
+        rx
     }
 
     pub(super) fn transaction_added(&mut self, tx: &AuthenticatedTransaction) {
@@ -83,8 +68,10 @@ impl SubscriptionProvider {
         let network_notes = tx
             .output_notes()
             .filter_map(|note| match note {
-                OutputNote::Full(inner) => NetworkNote::try_from(inner.clone()).ok(),
-                _ => None,
+                OutputNote::Public(inner) => {
+                    inner.clone().into_note().into_account_target_network_note().ok()
+                },
+                OutputNote::Private(_) => None,
             })
             .collect();
         let account_delta =
