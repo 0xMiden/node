@@ -149,12 +149,18 @@ pub async fn bench_sync_nullifiers(
         let resp_block_range = response.block_range.expect("block_range should exist");
         let resp_chain_tip = resp_block_range.block_to.expect("block_to should exist");
 
-        if response.notes.is_empty() {
+        if response.blocks.is_empty() {
             break;
         }
 
-        // Get the notes nullifiers, limiting to 20 notes maximum
-        let note_ids: Vec<_> = response.notes.iter().map(|n| n.note_id.unwrap()).collect();
+        // Collect note IDs from all blocks in the response.
+        let note_ids: Vec<_> = response
+            .blocks
+            .iter()
+            .flat_map(|b| b.notes.iter().map(|n| n.note_id.unwrap()))
+            .collect();
+
+        // Get the notes nullifiers, limiting to 20 notes maximum.
         let note_ids_to_fetch: Vec<_> =
             note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
         if !note_ids_to_fetch.is_empty() {
@@ -172,8 +178,10 @@ pub async fn bench_sync_nullifiers(
             }));
         }
 
-        // The notes all come from the same block; use the block header to find it.
-        current_block_num = response.block_header.map_or(resp_chain_tip, |h| h.block_num);
+        // Advance past the last block in the response.
+        let last_block = response.blocks.last().unwrap();
+        current_block_num =
+            last_block.block_header.as_ref().map_or(resp_chain_tip, |h| h.block_num);
         if current_block_num >= resp_chain_tip {
             break;
         }

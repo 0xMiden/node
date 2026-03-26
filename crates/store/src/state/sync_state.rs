@@ -1,5 +1,6 @@
 use std::ops::RangeInclusive;
 
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
@@ -10,6 +11,17 @@ use crate::COMPONENT;
 use crate::db::models::queries::StorageMapValuesPage;
 use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
+
+/// Estimated byte size of a [`NoteSyncBlock`] excluding its notes.
+///
+/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
+const BLOCK_OVERHEAD_BYTES: usize = 1600;
+
+/// Estimated byte size of a single [`NoteSyncRecord`].
+///
+/// Note ID (~38 bytes) + index + metadata (~26 bytes) + sparse merkle path with 16
+/// siblings (~608 bytes).
+const NOTE_RECORD_BYTES: usize = 700;
 
 // STATE SYNCHRONIZATION ENDPOINTS
 // ================================================================================================
@@ -64,33 +76,47 @@ impl State {
 
     /// Loads data to synchronize a client's notes.
     ///
-    /// The client's request contains a list of tags, this method will return the first
-    /// block with a matching tag, or the chain tip. All the other values are filter based on this
-    /// block range.
-    ///
-    /// # Arguments
-    ///
-    /// - `note_tags`: The tags the client is interested in, resulting notes are restricted to the
-    ///   first block containing a matching note.
-    /// - `block_range`: The range of blocks from which to synchronize notes.
+    /// Returns as many blocks with matching notes as fit within the response payload
+    /// limit. Each block includes its header and MMR proof at `block_range.end()`.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<Option<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
+    ) -> Result<Vec<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
         let inner = self.inner.read().await;
         let checkpoint = *block_range.end();
 
-        let note_sync = self.db.get_note_sync(block_range, note_tags).await?;
+        let mut results = Vec::new();
+        let mut accumulated_size: usize = 0;
+        let mut current_from = *block_range.start();
 
-        if note_sync.notes.is_empty() {
-            return Ok(None);
+        loop {
+            let range = current_from..=checkpoint;
+            let Some(note_sync) = self.db.get_note_sync(range, note_tags.clone()).await? else {
+                break;
+            };
+
+            accumulated_size += BLOCK_OVERHEAD_BYTES + note_sync.notes.len() * NOTE_RECORD_BYTES;
+
+            if accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
+                break;
+            }
+
+            let block_num = note_sync.block_header.block_num();
+            let mmr_proof = inner.blockchain.open_at(block_num, checkpoint)?;
+            results.push((note_sync, mmr_proof));
+
+            if block_num >= checkpoint {
+                break;
+            }
+
+            // The DB query uses `committed_at > block_range.start()` (exclusive),
+            // so setting current_from to the found block is sufficient to skip it.
+            current_from = block_num;
         }
 
-        let mmr_proof = inner.blockchain.open_at(note_sync.block_header.block_num(), checkpoint)?;
-
-        Ok(Some((note_sync, mmr_proof)))
+        Ok(results)
     }
 
     pub async fn sync_nullifiers(

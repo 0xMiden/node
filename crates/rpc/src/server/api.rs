@@ -16,7 +16,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
-    MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
@@ -40,17 +39,6 @@ use tracing::{debug, info};
 use url::Url;
 
 use crate::COMPONENT;
-
-/// Estimated byte size of a [`NoteSyncBlock`] excluding its notes.
-///
-/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
-const BLOCK_OVERHEAD_BYTES: usize = 1600;
-
-/// Estimated byte size of a single [`NoteSyncRecord`].
-///
-/// Note ID (~38 bytes) + index + metadata (~26 bytes) + sparse merkle path with 16
-/// siblings (~608 bytes).
-const NOTE_RECORD_BYTES: usize = 700;
 
 // RPC SERVICE
 // ================================================================================================
@@ -271,86 +259,9 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        let request = request.into_inner();
-        check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
+        check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
 
-        let block_range = request
-            .block_range
-            .ok_or_else(|| Status::invalid_argument("missing block_range"))?;
-        let note_tags = request.note_tags;
-
-        let mut sync_blocks = Vec::new();
-        let mut accumulated_size: usize = 0;
-        let mut current_block_from = block_range.block_from;
-        // The upper bound for the response: the requested block_to if specified,
-        // otherwise updated to the chain tip from the store on each iteration.
-        let mut response_block_to = block_range.block_to.unwrap_or(0);
-
-        loop {
-            let store_request = proto::rpc::SyncNotesRequest {
-                block_range: Some(proto::rpc::BlockRange {
-                    block_from: current_block_from,
-                    block_to: block_range.block_to,
-                }),
-                note_tags: note_tags.clone(),
-            };
-
-            let store_response =
-                self.store.clone().sync_notes(store_request.into_request()).await?.into_inner();
-
-            // When block_to was not specified, use the chain tip from the store.
-            if block_range.block_to.is_none() {
-                let store_chain_tip = store_response
-                    .block_range
-                    .ok_or_else(|| Status::internal("store response missing block_range"))?
-                    .block_to
-                    .ok_or_else(|| Status::internal("store response missing block_to"))?;
-                response_block_to = store_chain_tip;
-            }
-
-            // No notes means we've reached the end of the range without more matches.
-            if store_response.notes.is_empty() {
-                break;
-            }
-
-            let sync_block = proto::rpc::sync_notes_response::NoteSyncBlock {
-                block_header: store_response.block_header,
-                mmr_path: store_response.mmr_path,
-                notes: store_response.notes,
-            };
-
-            accumulated_size += BLOCK_OVERHEAD_BYTES + sync_block.notes.len() * NOTE_RECORD_BYTES;
-
-            // If we exceed the budget, drop this block and stop.
-            if accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
-                break;
-            }
-
-            // The block number of the returned notes, used to advance the cursor.
-            let notes_block_num = sync_block
-                .block_header
-                .as_ref()
-                .ok_or_else(|| Status::internal("store response missing block_header"))?
-                .block_num;
-            sync_blocks.push(sync_block);
-
-            // Check if we've reached the end of the requested range.
-            if notes_block_num >= response_block_to {
-                break;
-            }
-
-            // Advance the cursor. The store query uses `committed_at > block_range.start()`
-            // (exclusive), so setting block_from to the current block is sufficient to skip it.
-            current_block_from = notes_block_num;
-        }
-
-        Ok(Response::new(proto::rpc::SyncNotesResponse {
-            block_range: Some(proto::rpc::BlockRange {
-                block_from: block_range.block_from,
-                block_to: Some(response_block_to),
-            }),
-            blocks: sync_blocks,
-        }))
+        self.store.clone().sync_notes(request).await
     }
 
     async fn get_notes_by_id(

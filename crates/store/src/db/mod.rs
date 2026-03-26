@@ -511,7 +511,7 @@ impl Db {
         &self,
         block_range: RangeInclusive<BlockNumber>,
         note_tags: Vec<u32>,
-    ) -> Result<NoteSyncUpdate, NoteSyncError> {
+    ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
         self.transact("notes sync task", move |conn| {
             queries::get_note_sync(conn, note_tags.as_slice(), block_range)
         })
