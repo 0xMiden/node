@@ -129,7 +129,7 @@ async fn run(
     let mut highest_scheduled = BlockNumber::GENESIS;
 
     // Tracks the highest block number for which all ancestors (and itself) have been proven.
-    let mut proven_in_sequence_tip = db.select_latest_proven_block_num().await?;
+    let mut proven_in_sequence_tip = db.select_latest_proven_in_sequence_block_num().await?;
     // Blocks that have been proven but are ahead of `proven_in_sequence_tip` (i.e., there is a
     // gap). Once the gap fills, the tip advances through these.
     let mut proven_ahead: BTreeSet<BlockNumber> = BTreeSet::new();

@@ -172,7 +172,7 @@ impl rpc_server::Rpc for StoreApi {
             proto::rpc::Finality::Proven => self
                 .state
                 .db()
-                .select_latest_proven_block_num()
+                .select_latest_proven_in_sequence_block_num()
                 .await
                 .map_err(SyncChainMmrError::DatabaseError)?,
         };

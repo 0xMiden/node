@@ -622,12 +622,11 @@ impl Db {
         .await
     }
 
-    /// Returns the highest block number that has been proven, or `None` if no blocks have been
-    /// proven yet.
+    /// Returns the highest block number that has been proven in sequence.
     ///
     /// This includes the genesis block, which is not technically proven, but treated as such.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_latest_proven_block_num(&self) -> Result<BlockNumber> {
+    pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
         self.transact("select latest proven block num", |conn| {
             models::queries::select_latest_proven_block_num(conn)
         })
