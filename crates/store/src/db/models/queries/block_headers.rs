@@ -382,7 +382,7 @@ pub(crate) fn select_unproven_blocks(
 /// FROM block_headers
 /// WHERE proven_in_sequence = TRUE
 /// ```
-pub(crate) fn select_latest_proven_block_num(
+pub(crate) fn select_latest_proven_in_sequence_block_num(
     conn: &mut SqliteConnection,
 ) -> Result<BlockNumber, DatabaseError> {
     let block_num: i64 =

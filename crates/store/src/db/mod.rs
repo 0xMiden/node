@@ -628,7 +628,7 @@ impl Db {
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
         self.transact("select latest proven block num", |conn| {
-            models::queries::select_latest_proven_block_num(conn)
+            models::queries::select_latest_proven_in_sequence_block_num(conn)
         })
         .await
     }

@@ -3506,7 +3506,7 @@ fn select_latest_proven_block_num_only_genesis() {
     // Genesis block (block 0) is proven at insert time (proving_inputs = None).
     create_block(&mut conn, BlockNumber::GENESIS);
 
-    let latest = queries::select_latest_proven_block_num(&mut conn).unwrap();
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::GENESIS);
 }
 
@@ -3528,7 +3528,7 @@ fn select_latest_proven_block_num_all_proven_in_sequence() {
     let block_nums: Vec<BlockNumber> = (1..=3).map(BlockNumber::from).collect();
     queries::mark_blocks_proven_in_sequence(&mut conn, &block_nums).unwrap();
 
-    let latest = queries::select_latest_proven_block_num(&mut conn).unwrap();
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(3u32));
 }
 
@@ -3551,7 +3551,7 @@ fn select_latest_proven_block_num_with_hole() {
     queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
 
     // Latest proven in sequence should be 1 (blocks 3, 4 are proven but not in sequence).
-    let latest = queries::select_latest_proven_block_num(&mut conn).unwrap();
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(1u32));
 }
 
@@ -3572,7 +3572,7 @@ fn select_latest_proven_block_num_hole_filled() {
     queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
 
     assert_eq!(
-        queries::select_latest_proven_block_num(&mut conn).unwrap(),
+        queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap(),
         BlockNumber::from(1u32),
     );
 
@@ -3582,7 +3582,7 @@ fn select_latest_proven_block_num_hole_filled() {
     queries::mark_blocks_proven_in_sequence(&mut conn, &newly_in_sequence).unwrap();
 
     // Now all blocks through 4 are proven in sequence.
-    let latest = queries::select_latest_proven_block_num(&mut conn).unwrap();
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(4u32));
 }
 
@@ -3639,6 +3639,6 @@ fn mark_blocks_proven_in_sequence_is_idempotent() {
     // Already marked, so no rows updated.
     assert_eq!(count, 0);
 
-    let latest = queries::select_latest_proven_block_num(&mut conn).unwrap();
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(1u32));
 }
