@@ -219,14 +219,14 @@ where
     /// # Panics
     ///
     /// Panics if this node has any ancestor nodes, or if this node was not selected.
-    pub fn prune(&mut self, id: N::Id) {
+    pub fn prune(&mut self, id: N::Id) -> N {
         assert!(
             self.edges.parents_of(&id).is_empty(),
             "Cannot prune node {id} as it still has ancestors",
         );
         assert!(self.selected.contains(&id), "Cannot prune node {id} as it was not selected");
 
-        self.remove(id);
+        self.remove(id)
     }
 
     /// Unconditionally removes the given node from the graph, deleting its edges and state.

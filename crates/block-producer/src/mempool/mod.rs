@@ -256,13 +256,15 @@ impl Mempool {
             return Err(AddTransactionError::CapacityExceeded);
         }
 
+        // TODO: check budget.
+
         for tx in txs {
             self.authentication_staleness_check(tx.authentication_height())?;
             self.expiration_check(tx.expires_at())?;
         }
 
         self.transactions
-            .append_user_batch(txs.to_vec())
+            .append_user_batch(txs)
             .map_err(AddTransactionError::StateConflict)?;
 
         for tx in txs {
@@ -506,15 +508,8 @@ impl Mempool {
         //
         // The same logic follows for transactions.
         for batch in block.iter().map(|batch| batch.id()) {
-            self.batches.prune(batch);
-        }
-
-        for tx in block
-            .iter()
-            .flat_map(|batch| batch.transactions().as_slice())
-            .map(TransactionHeader::id)
-        {
-            self.transactions.prune(tx);
+            let batch = self.batches.prune(batch);
+            self.transactions.prune(&batch);
         }
     }
 
