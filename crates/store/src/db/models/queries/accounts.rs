@@ -36,7 +36,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 
 use crate::COMPONENT;
@@ -298,8 +298,6 @@ pub(crate) fn select_account_commitments_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<AccountCommitmentsPage, DatabaseError> {
-    use miden_protocol::utils::Serializable;
-
     // Fetch one extra to determine if there are more results
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
@@ -374,8 +372,6 @@ pub(crate) fn select_public_account_ids_paged(
     page_size: NonZeroUsize,
     after_account_id: Option<AccountId>,
 ) -> Result<PublicAccountIdsPage, DatabaseError> {
-    use miden_protocol::utils::Serializable;
-
     #[expect(clippy::cast_possible_wrap)]
     let limit = (page_size.get() + 1) as i64;
 
@@ -441,7 +437,7 @@ pub(crate) fn select_account_vault_assets(
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
     use schema::account_vault_assets as t;
     // TODO: These limits should be given by the protocol.
-    // See miden-base/issues/1770 for more details
+    // See miden-protocol/issues/1770 for more details
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
@@ -901,7 +897,7 @@ impl TryFrom<AccountVaultUpdateRaw> for AccountVaultValue {
     type Error = DatabaseError;
 
     fn try_from(raw: AccountVaultUpdateRaw) -> Result<Self, Self::Error> {
-        let vault_key = AssetVaultKey::new_unchecked(Word::read_from_bytes(&raw.vault_key)?);
+        let vault_key = AssetVaultKey::try_from(Word::read_from_bytes(&raw.vault_key)?)?;
         let asset = raw.asset.map(|bytes| Asset::read_from_bytes(&bytes)).transpose()?;
         let block_num = BlockNumber::from_raw_sql(raw.block_num)?;
 
@@ -1081,18 +1077,19 @@ fn prepare_partial_account_update(
     // --- Process asset updates. ---------------------------------
     // Only query balances for faucet_ids that are being updated.
     let faucet_ids =
-        Vec::from_iter(delta.vault().fungible().iter().map(|(faucet_id, _)| *faucet_id));
+        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| vault_key.faucet_id()));
     let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
 
     // Encode `Some` as update and `None` as removal.
     let mut assets = Vec::new();
 
     // Update fungible assets.
-    for (faucet_id, amount_delta) in delta.vault().fungible().iter() {
-        let prev_amount = prev_balances.get(faucet_id).copied().unwrap_or(0);
-        let prev_asset = FungibleAsset::new(*faucet_id, prev_amount)?;
+    for (vault_key, amount_delta) in delta.vault().fungible().iter() {
+        let faucet_id = vault_key.faucet_id();
+        let prev_amount = prev_balances.get(&faucet_id).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?;
         let amount_abs = amount_delta.unsigned_abs();
-        let delta = FungibleAsset::new(*faucet_id, amount_abs)?;
+        let delta = FungibleAsset::new(faucet_id, amount_abs)?;
         let new_balance = if *amount_delta < 0 {
             prev_asset.sub(delta)?
         } else {
@@ -1120,7 +1117,7 @@ fn prepare_partial_account_update(
     let mut storage = Vec::new();
     for (slot_name, map_delta) in delta.storage().maps() {
         for (key, value) in map_delta.entries() {
-            storage.push((account_id, slot_name.clone(), (*key).into_inner(), *value));
+            storage.push((account_id, slot_name.clone(), *key, *value));
         }
     }
 
@@ -1151,8 +1148,8 @@ fn prepare_partial_account_update(
     // Apply nonce delta.
     let new_nonce_value = state_headers
         .nonce
-        .as_int()
-        .checked_add(delta.nonce_delta().as_int())
+        .as_canonical_u64()
+        .checked_add(delta.nonce_delta().as_canonical_u64())
         .ok_or_else(|| {
             DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
         })?;

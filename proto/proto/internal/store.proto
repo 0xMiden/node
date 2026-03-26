@@ -103,7 +103,7 @@ service BlockProducer {
 
 // Applies a block to the state.
 message ApplyBlockRequest {
-    // Ordered batches encoded using [winter_utils::Serializable] implementation for
+    // Ordered batches encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_objects::batch::OrderedBatches].
     bytes ordered_batches = 1;
     // Block signed by the Validator.

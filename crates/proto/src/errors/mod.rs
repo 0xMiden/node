@@ -5,7 +5,7 @@ use std::num::TryFromIntError;
 pub use miden_node_grpc_error_macro::GrpcError;
 use miden_protocol::crypto::merkle::smt::{SmtLeafError, SmtProofError};
 use miden_protocol::errors::{AccountError, AssetError, FeeError, NoteError, StorageSlotNameError};
-use miden_protocol::utils::DeserializationError;
+use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::note::NetworkAccountTargetError;
 use thiserror::Error;
 

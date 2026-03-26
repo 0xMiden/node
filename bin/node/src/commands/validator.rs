@@ -9,7 +9,7 @@ use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use url::Url;
 
 use crate::commands::{
