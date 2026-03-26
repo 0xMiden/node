@@ -66,6 +66,7 @@ use tracing::instrument;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{AddTransactionError, StateConflict};
+use crate::mempool::budget::BudgetStatus;
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -256,7 +257,14 @@ impl Mempool {
             return Err(AddTransactionError::CapacityExceeded);
         }
 
-        // TODO: check budget.
+        // Ensure the batch doesn't exceed the mempool budget for batches.
+        let mut budget = self.config.batch_budget;
+        for tx in txs {
+            if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+                // TODO: better error plox.
+                return Err(AddTransactionError::CapacityExceeded);
+            }
+        }
 
         for tx in txs {
             self.authentication_staleness_check(tx.authentication_height())?;
