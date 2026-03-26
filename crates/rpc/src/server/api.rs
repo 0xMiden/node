@@ -279,12 +279,12 @@ impl api_server::Api for RpcService {
             .ok_or_else(|| Status::invalid_argument("missing block_range"))?;
         let note_tags = request.note_tags;
 
-        let mut blocks = Vec::new();
+        let mut sync_blocks = Vec::new();
         let mut accumulated_size: usize = 0;
         let mut current_block_from = block_range.block_from;
-
-        // The chain tip as reported by the store, updated on each iteration.
-        let chain_tip;
+        // The upper bound for the response: the requested block_to if specified,
+        // otherwise updated to the chain tip from the store on each iteration.
+        let mut response_block_to = block_range.block_to.unwrap_or(0);
 
         loop {
             let store_request = proto::rpc::SyncNotesRequest {
@@ -298,44 +298,44 @@ impl api_server::Api for RpcService {
             let store_response =
                 self.store.clone().sync_notes(store_request.into_request()).await?.into_inner();
 
-            let store_block_range = store_response
-                .block_range
-                .ok_or_else(|| Status::internal("store response missing block_range"))?;
-            let store_chain_tip = store_block_range
-                .block_to
-                .ok_or_else(|| Status::internal("store response missing block_to"))?;
+            // When block_to was not specified, use the chain tip from the store.
+            if block_range.block_to.is_none() {
+                let store_chain_tip = store_response
+                    .block_range
+                    .ok_or_else(|| Status::internal("store response missing block_range"))?
+                    .block_to
+                    .ok_or_else(|| Status::internal("store response missing block_to"))?;
+                response_block_to = store_chain_tip;
+            }
 
             // No notes means we've reached the end of the range without more matches.
             if store_response.notes.is_empty() {
-                chain_tip = store_chain_tip;
                 break;
             }
 
-            let block = proto::rpc::sync_notes_response::NoteSyncBlock {
+            let sync_block = proto::rpc::sync_notes_response::NoteSyncBlock {
                 block_header: store_response.block_header,
                 mmr_path: store_response.mmr_path,
                 notes: store_response.notes,
             };
 
-            accumulated_size += BLOCK_OVERHEAD_BYTES + block.notes.len() * NOTE_RECORD_BYTES;
+            accumulated_size += BLOCK_OVERHEAD_BYTES + sync_block.notes.len() * NOTE_RECORD_BYTES;
 
             // If we exceed the budget, drop this block and stop.
             if accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
-                chain_tip = store_chain_tip;
                 break;
             }
 
             // The block number of the returned notes, used to advance the cursor.
-            let notes_block_num = block
+            let notes_block_num = sync_block
                 .block_header
                 .as_ref()
                 .ok_or_else(|| Status::internal("store response missing block_header"))?
                 .block_num;
-            blocks.push(block);
+            sync_blocks.push(sync_block);
 
-            // Check if we've reached the end of the requested range or the chain tip.
-            if notes_block_num >= block_range.block_to.unwrap_or(store_chain_tip) {
-                chain_tip = store_chain_tip;
+            // Check if we've reached the end of the requested range.
+            if notes_block_num >= response_block_to {
                 break;
             }
 
@@ -347,9 +347,9 @@ impl api_server::Api for RpcService {
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             block_range: Some(proto::rpc::BlockRange {
                 block_from: block_range.block_from,
-                block_to: Some(chain_tip),
+                block_to: Some(response_block_to),
             }),
-            blocks,
+            blocks: sync_blocks,
         }))
     }
 

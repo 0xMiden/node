@@ -492,7 +492,8 @@ message SyncNotesResponse {
     // The block range covered by this response.
     //
     // `block_from` matches the request's `block_range.block_from`.
-    // `block_to` is the chain tip at the time of the response.
+    // `block_to` matches the request's `block_range.block_to`, or the chain tip if it was
+    // not specified.
     //
     // If `block_to` equals the requested range end (or the chain tip when unset), the sync
     // is complete. Otherwise, the client should request again starting from `block_to + 1`.
