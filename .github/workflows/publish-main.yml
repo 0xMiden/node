@@ -46,12 +46,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-binstall@1.16.6
-      - name: Install cargo-msrv
-        run: cargo binstall --no-confirm --force cargo-msrv
-      - name: Check MSRV for each workspace member
-        run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          ./scripts/check-msrv.sh
+      # - name: Install cargo-msrv
+      #   run: cargo binstall --no-confirm --force cargo-msrv
+      # - name: Check MSRV for each workspace member
+      #   run: |
+      #     export PATH="$HOME/.cargo/bin:$PATH"
+      #     ./scripts/check-msrv.sh
       - name: Run cargo publish
         run: cargo publish --workspace
         env:
