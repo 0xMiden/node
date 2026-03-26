@@ -12,6 +12,7 @@ use crate::test_utils::MockProvenTxBuilder;
 use crate::test_utils::batch::TransactionBatchConstructor;
 
 mod add_transaction;
+mod add_user_batch;
 
 impl Mempool {
     /// Returns an empty [`Mempool`] and a perfect clone intended for use as the Unit Under Test and
