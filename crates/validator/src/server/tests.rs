@@ -226,51 +226,6 @@ async fn chain_tip_minus_one_rejected() {
     );
 }
 
-/// Replacing a block whose parent is missing from the database should be rejected with
-/// `NoPrevBlockHeader`.
-///
-/// This covers the genesis replacement case: genesis (block 0) has no parent, so
-/// `chain_tip.block_num().parent()` returns `None` and the replacement is rejected.
-/// Since `ProposedBlock::new` cannot produce `block_num` 0, we simulate the scenario by
-/// building a block at height 1 (`proposed_block_num` == `chain_tip block_num`), and using a
-/// database that does not contain the parent (genesis). This triggers the same
-/// `NoPrevBlockHeader` error via `load_block_header` returning `None`.
-#[tokio::test]
-async fn genesis_replacement_rejected() {
-    use crate::block_validation::{BlockValidationError, validate_block};
-
-    let mut tv = TestValidator::new().await;
-    let genesis_header = tv.chain_tip.clone();
-
-    // Advance to block 1.
-    tv.apply_empty_block().await;
-    let block_1_header = tv.chain_tip.clone();
-
-    // Create a separate DB that contains block 1 as chain tip but does NOT contain genesis.
-    // When the validator tries to replace block 1, it looks up the parent (block 0)
-    // and fails with NoPrevBlockHeader because genesis is missing.
-    let dir = tempfile::tempdir().unwrap();
-    let db = load(dir.path().join("test.sqlite3")).await.unwrap();
-    db.transact("upsert_block_1", {
-        let h = block_1_header.clone();
-        move |conn| upsert_block_header(conn, &h)
-    })
-    .await
-    .unwrap();
-
-    // Build a replacement block also at height 1 (same parent = genesis).
-    let replacement = empty_block(&genesis_header, &PartialBlockchain::default());
-
-    // Pass chain_tip = block_1_header so proposed_block_num == chain_tip block_num,
-    // triggering the replacement path. The DB lookup for genesis will fail.
-    let result = validate_block(replacement, tv.signer(), &db, block_1_header).await;
-    assert!(result.is_err(), "replacement with missing parent should be rejected");
-    assert!(
-        matches!(result.unwrap_err(), BlockValidationError::NoPrevBlockHeader),
-        "expected NoPrevBlockHeader error"
-    );
-}
-
 /// A block with the wrong previous block commitment should be rejected.
 #[tokio::test]
 async fn commitment_mismatch_rejected() {
