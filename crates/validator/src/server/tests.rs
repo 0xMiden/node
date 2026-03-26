@@ -7,7 +7,7 @@ use miden_node_utils::fee::test_fee_params;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::Serializable;
+use miden_tx::utils::serde::Serializable;
 
 use super::ValidatorServer;
 use crate::ValidatorSigner;
