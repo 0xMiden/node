@@ -195,19 +195,6 @@ impl From<NoteRecord> for proto::note::CommittedNote {
     }
 }
 
-impl From<NoteRecord> for proto::note::NoteSyncRecord {
-    fn from(value: NoteRecord) -> Self {
-        let metadata_header = Some(value.metadata.to_header().into());
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(value.note_id.into()),
-            block_num: value.block_num.as_u32(),
-            note_index_in_block: value.note_index.leaf_index_value().into(),
-            inclusion_path: Some(value.inclusion_path.into()),
-        });
-        Self { metadata_header, inclusion_proof }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub struct NoteSyncUpdate {
     pub notes: Vec<NoteSyncRecord>,
