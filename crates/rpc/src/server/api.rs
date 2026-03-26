@@ -43,13 +43,14 @@ use crate::COMPONENT;
 
 /// Estimated byte size of a [`NoteSyncBlock`] excluding its notes.
 ///
-/// `BlockHeader` (~288 bytes) + MMR proof (~1024 bytes).
-const BLOCK_OVERHEAD_BYTES: usize = 1312;
+/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
+const BLOCK_OVERHEAD_BYTES: usize = 1600;
 
 /// Estimated byte size of a single [`NoteSyncRecord`].
 ///
-/// `note_id` (32) + `note_index` (4) + metadata (23) + sparse merkle path (520).
-const NOTE_RECORD_BYTES: usize = 579;
+/// Note ID (~38 bytes) + index + metadata (~26 bytes) + sparse merkle path with 16
+/// siblings (~608 bytes).
+const NOTE_RECORD_BYTES: usize = 700;
 
 // RPC SERVICE
 // ================================================================================================
