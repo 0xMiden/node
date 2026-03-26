@@ -2,7 +2,8 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use assert_matches::assert_matches;
-use diesel::{Connection, RunQueryDsl, SqliteConnection};
+use diesel::{Connection, SqliteConnection};
+use miden_node_proto::BlockProofRequest;
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee, test_fee_params};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
@@ -27,9 +28,11 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
+    BlockInputs,
     BlockNoteIndex,
     BlockNoteTree,
     BlockNumber,
@@ -63,6 +66,7 @@ use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
+    PartialBlockchain,
     TransactionHeader,
     TransactionId,
 };
@@ -78,7 +82,6 @@ use tempfile::tempdir;
 use super::{AccountInfo, NoteRecord, NullifierInfo, TransactionRecord};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
-use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
@@ -106,8 +109,22 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
     );
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
+
+    let proving_inputs = if block_num == BlockNumber::GENESIS {
+        None
+    } else {
+        Some(dummy_proving_inputs(&block_header))
+    };
+
     conn.transaction(|conn| {
-        queries::insert_block_header(conn, &block_header, &dummy_signature, None)
+        queries::insert_block_header(conn, &block_header, &dummy_signature, proving_inputs)?;
+        // For non-genesis blocks, simulate the block having been proven and marked in sequence
+        // so that tests which don't care about proving state get a fully-proven chain.
+        if block_num != BlockNumber::GENESIS {
+            queries::mark_block_proven(conn, block_num)?;
+            queries::mark_blocks_proven_in_sequence(conn, &[block_num])?;
+        }
+        Ok::<_, DatabaseError>(())
     })
     .unwrap();
 }
@@ -746,7 +763,13 @@ fn db_block_header() {
     // test insertion
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    queries::insert_block_header(conn, &block_header, &dummy_signature, None).unwrap();
+    queries::insert_block_header(
+        conn,
+        &block_header,
+        &dummy_signature,
+        Some(dummy_proving_inputs(&block_header)),
+    )
+    .unwrap();
 
     // test fetch unknown block header
     let block_number = 1;
@@ -778,7 +801,13 @@ fn db_block_header() {
     );
 
     let dummy_signature = SecretKey::new().sign(block_header2.commitment());
-    queries::insert_block_header(conn, &block_header2, &dummy_signature, None).unwrap();
+    queries::insert_block_header(
+        conn,
+        &block_header2,
+        &dummy_signature,
+        Some(dummy_proving_inputs(&block_header2)),
+    )
+    .unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
@@ -2020,7 +2049,13 @@ fn db_roundtrip_block_header() {
 
     // Insert
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    queries::insert_block_header(&mut conn, &block_header, &dummy_signature, None).unwrap();
+    queries::insert_block_header(
+        &mut conn,
+        &block_header,
+        &dummy_signature,
+        Some(dummy_proving_inputs(&block_header)),
+    )
+    .unwrap();
 
     // Retrieve
     let retrieved =
@@ -3465,7 +3500,21 @@ fn account_state_forest_preserves_mixed_slots_independently() {
 // PROVEN IN SEQUENCE TESTS
 // ================================================================================================
 
-/// Helper to insert a block that requires proving (has non-null `proving_inputs`j).
+/// Creates a minimal dummy `BlockProofRequest` for test purposes.
+fn dummy_proving_inputs(block_header: &BlockHeader) -> BlockProofRequest {
+    BlockProofRequest {
+        tx_batches: OrderedBatches::new(vec![]),
+        block_header: block_header.clone(),
+        block_inputs: BlockInputs::new(
+            BlockHeader::mock(0, None, None, &[], EMPTY_WORD),
+            PartialBlockchain::default(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        ),
+    }
+}
+
 fn create_unproven_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
     let block_header = BlockHeader::new(
         1_u8.into(),
@@ -3483,18 +3532,13 @@ fn create_unproven_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
     );
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    let row = queries::BlockHeaderInsert {
-        block_num: block_num.to_raw_sql(),
-        block_header: block_header.to_bytes(),
-        signature: dummy_signature.to_bytes(),
-        commitment: queries::BlockHeaderCommitment::new(&block_header).to_raw_sql(),
-        proving_inputs: Some(vec![0u8; 4]), // dummy non-null proving inputs
-        proven_in_sequence: false,
-    };
     conn.transaction(|conn| {
-        diesel::insert_into(crate::db::schema::block_headers::table)
-            .values(&[row])
-            .execute(conn)
+        queries::insert_block_header(
+            conn,
+            &block_header,
+            &dummy_signature,
+            Some(dummy_proving_inputs(&block_header)),
+        )
     })
     .unwrap();
 }
