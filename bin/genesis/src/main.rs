@@ -13,9 +13,9 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
 };
-use miden_protocol::crypto::dsa::falcon512_rpo::{self, SecretKey as RpoSecretKey};
-use miden_protocol::crypto::rand::RpoRandomCoin;
-use miden_protocol::utils::Deserializable;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::{self, SecretKey as FalconSecretKey};
+use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -71,7 +71,7 @@ fn run(
     let bridge_admin = create_basic_wallet(
         rand::random(),
         AuthMethod::SingleSig {
-            approver: (bridge_admin_pub.into(), AuthScheme::Falcon512Rpo),
+            approver: (bridge_admin_pub.into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -83,7 +83,7 @@ fn run(
     let ger_manager = create_basic_wallet(
         rand::random(),
         AuthMethod::SingleSig {
-            approver: (ger_manager_pub.into(), AuthScheme::Falcon512Rpo),
+            approver: (ger_manager_pub.into(), AuthScheme::Falcon512Poseidon2),
         },
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
@@ -104,14 +104,14 @@ fn run(
 
     // Write .mac files.
     let bridge_admin_secrets = bridge_admin_secret
-        .map(|sk| vec![AuthSecretKey::Falcon512Rpo(sk)])
+        .map(|sk| vec![AuthSecretKey::Falcon512Poseidon2(sk)])
         .unwrap_or_default();
     AccountFile::new(bridge_admin, bridge_admin_secrets)
         .write(output_dir.join("bridge_admin.mac"))
         .context("failed to write bridge_admin.mac")?;
 
     let ger_manager_secrets = ger_manager_secret
-        .map(|sk| vec![AuthSecretKey::Falcon512Rpo(sk)])
+        .map(|sk| vec![AuthSecretKey::Falcon512Poseidon2(sk)])
         .unwrap_or_default();
     AccountFile::new(ger_manager, ger_manager_secrets)
         .write(output_dir.join("ger_manager.mac"))
@@ -156,11 +156,11 @@ path = "bridge.mac"
 }
 
 /// Generates a new Falcon512 keypair using a random seed.
-fn generate_falcon_keypair() -> (falcon512_rpo::PublicKey, RpoSecretKey) {
+fn generate_falcon_keypair() -> (falcon512_poseidon2::PublicKey, FalconSecretKey) {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let auth_seed: [u64; 4] = rng.random();
-    let mut coin = RpoRandomCoin::new(Word::from(auth_seed.map(Felt::new)));
-    let secret_key = RpoSecretKey::with_rng(&mut coin);
+    let mut coin = RandomCoin::new(Word::from(auth_seed.map(Felt::new)));
+    let secret_key = FalconSecretKey::with_rng(&mut coin);
     let public_key = secret_key.public_key();
     (public_key, secret_key)
 }
@@ -170,11 +170,11 @@ fn generate_falcon_keypair() -> (falcon512_rpo::PublicKey, RpoSecretKey) {
 fn resolve_pubkey(
     hex_pubkey: Option<&str>,
     label: &str,
-) -> anyhow::Result<(falcon512_rpo::PublicKey, Option<RpoSecretKey>)> {
+) -> anyhow::Result<(falcon512_poseidon2::PublicKey, Option<FalconSecretKey>)> {
     if let Some(hex_str) = hex_pubkey {
         let bytes =
             hex::decode(hex_str).with_context(|| format!("invalid hex for {label} public key"))?;
-        let pubkey = falcon512_rpo::PublicKey::read_from_bytes(&bytes)
+        let pubkey = falcon512_poseidon2::PublicKey::read_from_bytes(&bytes)
             .with_context(|| format!("failed to deserialize {label} public key"))?;
         Ok((pubkey, None))
     } else {
@@ -199,7 +199,7 @@ fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
 mod tests {
     use miden_node_store::genesis::config::GenesisConfig;
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-    use miden_protocol::utils::Serializable;
+    use miden_protocol::utils::serde::Serializable;
 
     use super::*;
 

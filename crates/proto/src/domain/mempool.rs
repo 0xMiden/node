@@ -4,7 +4,7 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use miden_standards::note::AccountTargetNetworkNote;
 
 use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};

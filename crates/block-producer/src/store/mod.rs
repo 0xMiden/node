@@ -14,7 +14,7 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tracing::{debug, info, instrument};
 use url::Url;
 
@@ -161,7 +161,7 @@ impl StoreClient {
             nullifiers: proven_tx.nullifiers().map(Into::into).collect(),
             unauthenticated_notes: proven_tx
                 .unauthenticated_notes()
-                .map(|note| note.commitment().into())
+                .map(|note| note.to_commitment().into())
                 .collect(),
         };
 

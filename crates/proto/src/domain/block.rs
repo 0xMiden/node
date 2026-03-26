@@ -14,7 +14,7 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 
 use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};

@@ -1,9 +1,8 @@
 use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
-use miden_protocol::utils::Serializable;
 
-use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
 use crate::generated as proto;
 
 // FROM TRANSACTION ID
@@ -76,12 +75,6 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
         let header: Option<miden_protocol::note::NoteHeader> =
             value.header.map(TryInto::try_into).transpose().context("header")?;
 
-        // TODO: https://github.com/0xMiden/node/issues/1783
-        // InputNoteCommitment has private fields, so we reconstruct it via
-        // serialization roundtrip using its Serializable/Deserializable impls.
-        let mut bytes = Vec::new();
-        nullifier.write_into(&mut bytes);
-        header.write_into(&mut bytes);
-        InputNoteCommitment::decode_bytes(&bytes, "InputNoteCommitment")
+        Ok(InputNoteCommitment::from_parts_unchecked(nullifier, header))
     }
 }

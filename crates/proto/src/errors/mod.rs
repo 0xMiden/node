@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 // Re-export the GrpcError derive macro for convenience
 pub use miden_node_grpc_error_macro::GrpcError;
-use miden_protocol::utils::DeserializationError;
+use miden_protocol::utils::serde::{Deserializable, DeserializationError};
 
 #[cfg(test)]
 mod test_macro;
@@ -250,7 +250,7 @@ impl<T: prost::Message> GrpcDecodeExt for T {}
 /// // After:
 /// BlockBody::decode_bytes(&value.block_body, "BlockBody")
 /// ```
-pub trait DecodeBytesExt: miden_protocol::utils::Deserializable {
+pub trait DecodeBytesExt: Deserializable {
     /// Deserialize from bytes, wrapping any error as a [`ConversionError`].
     fn decode_bytes(bytes: &[u8], entity: &'static str) -> Result<Self, ConversionError> {
         Self::read_from_bytes(bytes)
@@ -258,7 +258,7 @@ pub trait DecodeBytesExt: miden_protocol::utils::Deserializable {
     }
 }
 
-impl<T: miden_protocol::utils::Deserializable> DecodeBytesExt for T {}
+impl<T: Deserializable> DecodeBytesExt for T {}
 
 // FROM IMPLS FOR EXTERNAL ERROR TYPES
 // ================================================================================================

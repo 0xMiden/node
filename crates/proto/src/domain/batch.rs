@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
 use crate::generated as proto;
