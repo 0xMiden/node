@@ -154,8 +154,7 @@ pub async fn bench_sync_nullifiers(
         }
 
         // Get the notes nullifiers, limiting to 20 notes maximum
-        let note_ids: Vec<_> =
-            response.notes.iter().map(|n| n.note_id.unwrap()).collect();
+        let note_ids: Vec<_> = response.notes.iter().map(|n| n.note_id.unwrap()).collect();
         let note_ids_to_fetch: Vec<_> =
             note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
         if !note_ids_to_fetch.is_empty() {
