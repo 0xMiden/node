@@ -250,6 +250,33 @@ async fn commitment_mismatch_rejected() {
     );
 }
 
+/// A replacement block (same height as chain tip) with the wrong parent commitment should be
+/// rejected.
+#[tokio::test]
+async fn replacement_commitment_mismatch_rejected() {
+    let mut tv = TestValidator::new().await;
+
+    // Advance past genesis so we have a replaceable block.
+    tv.apply_empty_block().await;
+
+    // Build a replacement block at the same height but using a *different* genesis so its
+    // prev_block_commitment won't match the validator's actual parent of the chain tip.
+    let other_genesis_state =
+        GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
+    let other_genesis_block = other_genesis_state.into_block().await.unwrap();
+    let other_genesis_header = other_genesis_block.inner().header().clone();
+    let mismatched_replacement = empty_block(&other_genesis_header, &PartialBlockchain::default());
+
+    let result = tv.call_sign_block(&mismatched_replacement).await;
+    assert!(result.is_err(), "replacement with mismatched commitment should be rejected");
+    let status = result.unwrap_err();
+    assert!(
+        status.message().contains("previous block commitment"),
+        "expected commitment mismatch error, got: {}",
+        status.message()
+    );
+}
+
 /// An empty block (no transactions, no batches) should be accepted.
 #[tokio::test]
 async fn empty_block_succeeds() {
