@@ -10,41 +10,41 @@ import "types/primitives.proto";
 
 // Submits proven transaction to the Miden network.
 message ProvenTransaction {
-  // Transaction encoded using [winter_utils::Serializable] implementation for
-  // [miden_protocol::transaction::proven_tx::ProvenTransaction].
-  bytes transaction = 1;
-  // Transaction inputs encoded using [winter_utils::Serializable] implementation for
-  // [miden_protocol::transaction::TransactionInputs].
-  optional bytes transaction_inputs = 2;
+    // Transaction encoded using [winter_utils::Serializable] implementation for
+    // [miden_protocol::transaction::proven_tx::ProvenTransaction].
+    bytes transaction = 1;
+    // Transaction inputs encoded using [winter_utils::Serializable] implementation for
+    // [miden_protocol::transaction::TransactionInputs].
+    optional bytes transaction_inputs = 2;
 }
 
 message TransactionBatch {
-  // The proposed batch of transaction encoded using [winter_utils::Serializable] implementation
-  // for [miden_protocol::batch::ProposedBatch].
-  bytes proposed_batch = 1;
-  // Each transaction's inputs encoded using [winter_utils::Serializable] implementation for
-  // [miden_protocol::transaction::TransactionInputs].
-  //
-  // Order of inputs should match the transaction order in the batch.
-  repeated bytes transaction_inputs = 2;
+    // The proposed batch of transaction encoded using [winter_utils::Serializable] implementation
+    // for [miden_protocol::batch::ProposedBatch].
+    bytes proposed_batch = 1;
+    // Each transaction's inputs encoded using [winter_utils::Serializable] implementation for
+    // [miden_protocol::transaction::TransactionInputs].
+    //
+    // Order of inputs should match the transaction order in the batch.
+    repeated bytes transaction_inputs = 2;
 }
 
 // Represents a transaction ID.
 message TransactionId {
-  // The transaction ID.
-  primitives.Digest id = 1;
+    // The transaction ID.
+    primitives.Digest id = 1;
 }
 
 // Represents a transaction summary.
 message TransactionSummary {
-  // A unique 32-byte identifier of a transaction.
-  TransactionId transaction_id = 1;
+    // A unique 32-byte identifier of a transaction.
+    TransactionId transaction_id = 1;
 
-  // The block number in which the transaction was executed.
-  fixed32 block_num = 2;
+    // The block number in which the transaction was executed.
+    fixed32 block_num = 2;
 
-  // The ID of the account affected by the transaction.
-  account.AccountId account_id = 3;
+    // The ID of the account affected by the transaction.
+    account.AccountId account_id = 3;
 }
 
 // Represents a commitment to an input note of a transaction.
@@ -52,33 +52,33 @@ message TransactionSummary {
 // For authenticated notes, only the nullifier is present.
 // For unauthenticated notes, the note header is also included.
 message InputNoteCommitment {
-  // The nullifier of the input note.
-  primitives.Digest nullifier = 1;
+    // The nullifier of the input note.
+    primitives.Digest nullifier = 1;
 
-  // The note header, present only for unauthenticated input notes.
-  optional note.NoteHeader header = 2;
+    // The note header, present only for unauthenticated input notes.
+    optional note.NoteHeader header = 2;
 }
 
 // Represents a transaction header.
 message TransactionHeader {
-  // The unique identifier of the transaction.
-  TransactionId transaction_id = 1;
+    // The unique identifier of the transaction.
+    TransactionId transaction_id = 1;
 
-  // ID of the account against which the transaction was executed.
-  account.AccountId account_id = 2;
+    // ID of the account against which the transaction was executed.
+    account.AccountId account_id = 2;
 
-  // State commitment of the account before the transaction was executed.
-  primitives.Digest initial_state_commitment = 3;
+    // State commitment of the account before the transaction was executed.
+    primitives.Digest initial_state_commitment = 3;
 
-  // State commitment of the account after the transaction was executed.
-  primitives.Digest final_state_commitment = 4;
+    // State commitment of the account after the transaction was executed.
+    primitives.Digest final_state_commitment = 4;
 
-  // Input notes of the transaction.
-  repeated InputNoteCommitment input_notes = 5;
+    // Input notes of the transaction.
+    repeated InputNoteCommitment input_notes = 5;
 
-  // Output notes of the transaction.
-  repeated note.NoteHeader output_notes = 6;
+    // Output notes of the transaction.
+    repeated note.NoteHeader output_notes = 6;
 
-  // The fee paid by the transaction.
-  primitives.Asset fee = 7;
+    // The fee paid by the transaction.
+    primitives.Asset fee = 7;
 }
