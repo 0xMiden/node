@@ -575,26 +575,20 @@ impl Db {
         .await
     }
 
-    /// Marks a previously committed block as proven.
+    /// Marks a previously committed block as proven and advances the proven-in-sequence tip.
     ///
-    /// Clears the `proving_inputs` for the given block number.
+    /// Atomically clears `proving_inputs` for the given block, then walks forward from the
+    /// current proven-in-sequence tip through consecutive proven blocks, marking each as
+    /// proven-in-sequence. Returns the block numbers that were newly marked in-sequence.
     #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn mark_block_proven(&self, block_num: BlockNumber) -> Result<()> {
+    pub async fn mark_proven_and_advance_sequence(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Vec<BlockNumber>> {
         self.transact("mark block proven", move |conn| {
-            models::queries::mark_block_proven(conn, block_num)
+            models::queries::mark_proven_and_advance_sequence(conn, block_num)
         })
-        .await?;
-        Ok(())
-    }
-
-    /// Marks the given blocks as proven in sequence.
-    #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn mark_blocks_proven_in_sequence(&self, block_nums: Vec<BlockNumber>) -> Result<()> {
-        self.transact("mark blocks proven in sequence", move |conn| {
-            models::queries::mark_blocks_proven_in_sequence(conn, &block_nums)
-        })
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Returns the proving inputs for a given block number, if stored.
@@ -605,15 +599,6 @@ impl Db {
     ) -> Result<Option<BlockProofRequest>> {
         self.transact("select block proving inputs", move |conn| {
             models::queries::select_block_proving_inputs(conn, block_num)
-        })
-        .await
-    }
-
-    /// Returns proven block numbers that are not yet marked as proven in sequence.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
-    pub async fn select_proven_not_in_sequence(&self) -> Result<Vec<BlockNumber>> {
-        self.transact("select proven not in sequence", |conn| {
-            models::queries::select_proven_not_in_sequence(conn)
         })
         .await
     }

@@ -4,15 +4,14 @@
 //!
 //! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`] and `latest_proven_block` locally.
 //! 2. Maintains up to `max_concurrent_proofs` in-flight proving jobs via a [`JoinSet`].
-//! 3. Blocks may be proven out of order since proving jobs run concurrently. The scheduler tracks
-//!    which blocks form a contiguous proven sequence from genesis and marks them in the database
-//!    via the `proven_in_sequence` column.
+//! 3. Blocks may be proven out of order since proving jobs run concurrently. When a block is marked
+//!    as proven, the database atomically advances the `proven_in_sequence` column for all blocks
+//!    that now form a contiguous proven sequence from genesis.
 //! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is retried
 //!    internally within its proving task.
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
-use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -126,30 +125,10 @@ async fn run(
     // In-flight proving tasks.
     let mut join_set = ProofTaskJoinSet::new();
 
-    // Tracks the highest block number for which all ancestors (and itself) have been proven.
-    // Initialized from the DB so we resume correctly after restarts.
-    let mut proven_in_sequence_tip = db.select_latest_proven_in_sequence_block_num().await?;
-
-    // Recover any blocks that were proven before a restart but not yet marked in sequence.
-    // These blocks have proving_inputs = NULL but proven_in_sequence = FALSE.
-    let recovered = db.select_proven_not_in_sequence().await?;
-    let mut proven_ahead: BTreeSet<BlockNumber> = recovered.into_iter().collect();
-    let advanced = advance_proven_in_sequence_tip(proven_in_sequence_tip, &mut proven_ahead);
-    if let Some(&last) = advanced.last() {
-        info!(
-            target: COMPONENT,
-            from = %proven_in_sequence_tip,
-            to = %advanced.last().unwrap(),
-            "Recovered proven-in-sequence blocks on startup"
-        );
-        proven_in_sequence_tip = last;
-        db.mark_blocks_proven_in_sequence(advanced).await?;
-    }
-
     // Highest block number that is in-flight or has been proven. Used to avoid re-querying
     // blocks we've already scheduled. Initialized from the in-sequence tip so we skip
     // already-proven blocks on restart.
-    let mut highest_scheduled = proven_in_sequence_tip;
+    let mut highest_scheduled = db.select_latest_proven_in_sequence_block_num().await?;
 
     loop {
         // Query the DB for unproven blocks beyond what we've already scheduled.
@@ -168,18 +147,22 @@ async fn run(
 
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
-            // Proving task completed.
+            // Proving task completed. mark_block_proven atomically clears proving_inputs
+            // and advances the proven-in-sequence tip within a single transaction.
             result = join_set.join_next() => {
-                let block_num = result?;
-                info!(target=COMPONENT, block.number=%block_num, "Block proven");
+                let proven_block_num = result?;
+                // Mark the block as proven and advance the proven-in-sequence tip within a single transaction.
+                let advanced_in_sequence = db.mark_proven_and_advance_sequence(proven_block_num).await?;
 
-                // Track this proven block and advance the in-sequence tip as far as possible.
-                proven_ahead.insert(block_num);
-                let advanced_in_sequence = advance_proven_in_sequence_tip(proven_in_sequence_tip, &mut proven_ahead);
-
-                if let Some(highest_advanced) = advanced_in_sequence.last() {
-                    proven_in_sequence_tip = *highest_advanced;
-                    db.mark_blocks_proven_in_sequence(advanced_in_sequence).await?;
+                if let Some(&last) = advanced_in_sequence.last() {
+                    info!(
+                        target = COMPONENT,
+                        block.number = %proven_block_num,
+                        proven_in_sequence_tip = %last,
+                        "Block proven and in-sequence advanced",
+                    );
+                } else {
+                    info!(target = COMPONENT, block.number = %proven_block_num, "Block proven");
                 }
             },
 
@@ -194,31 +177,14 @@ async fn run(
     }
 }
 
-/// Advances the proven-in-sequence tip through consecutive blocks in `proven_ahead`.
-///
-/// Removes consumed entries from the set and returns the block numbers that were advanced
-/// (i.e., the newly in-sequence blocks). Returns an empty vec if no progress was made.
-fn advance_proven_in_sequence_tip(
-    current_tip: BlockNumber,
-    proven_ahead: &mut BTreeSet<BlockNumber>,
-) -> Vec<BlockNumber> {
-    let mut advanced = Vec::new();
-    let mut tip = current_tip;
-    while proven_ahead.remove(&(tip + 1)) {
-        tip = tip + 1;
-        advanced.push(tip);
-    }
-    advanced
-}
-
 // PROVE BLOCK
 // ================================================================================================
 
 /// Proves a single block, saves the proof to the block store, and returns the block number.
 ///
-/// This function encapsulates the full lifecycle of a single proof job: loading inputs from the
-/// DB, invoking the prover (with a timeout), and persisting the proof to disk, and marking the
-/// block as proven in the DB.
+/// This function encapsulates the proving and saving of a single proof job: loading inputs from
+/// the DB, invoking the prover (with a timeout), and persisting the proof to disk. The caller
+/// is responsible for marking the block as proven in the DB via [`Db::mark_block_proven`].
 #[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(block.number=block_num.as_u32()), err)]
 async fn prove_and_save(
     db: &Db,
@@ -234,7 +200,6 @@ async fn prove_and_save(
         {
             Ok(Ok(proof)) => {
                 save_block_proof(block_store, block_num, &proof).await?;
-                db.mark_block_proven(block_num).await?;
                 return Ok(block_num);
             },
             Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,

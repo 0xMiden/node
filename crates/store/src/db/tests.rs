@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use assert_matches::assert_matches;
-use diesel::{Connection, SqliteConnection};
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
 use miden_node_proto::BlockProofRequest;
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee, test_fee_params};
@@ -84,6 +84,7 @@ use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
+use crate::db::schema;
 use crate::errors::DatabaseError;
 
 fn create_db() -> SqliteConnection {
@@ -121,8 +122,16 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         // For non-genesis blocks, simulate the block having been proven and marked in sequence
         // so that tests which don't care about proving state get a fully-proven chain.
         if block_num != BlockNumber::GENESIS {
-            queries::mark_block_proven(conn, block_num)?;
-            queries::mark_blocks_proven_in_sequence(conn, &[block_num])?;
+            use crate::db::models::conv::SqlTypeConvert;
+            diesel::update(
+                schema::block_headers::table
+                    .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
+            )
+            .set((
+                schema::block_headers::proving_inputs.eq(None::<Vec<u8>>),
+                schema::block_headers::proven_in_sequence.eq(true),
+            ))
+            .execute(conn)?;
         }
         Ok::<_, DatabaseError>(())
     })
@@ -3555,7 +3564,7 @@ fn select_latest_proven_block_num_only_genesis() {
 }
 
 #[test]
-fn select_latest_proven_block_num_all_proven_in_sequence() {
+fn mark_block_proven_advances_in_sequence_for_consecutive_blocks() {
     let mut conn = create_db();
 
     // Insert genesis (proven + in-sequence) and three unproven blocks.
@@ -3564,20 +3573,19 @@ fn select_latest_proven_block_num_all_proven_in_sequence() {
         create_unproven_block(&mut conn, BlockNumber::from(i));
     }
 
-    // Mark all three as proven.
+    // Mark all three as proven in order. Each call atomically advances the in-sequence tip.
     for i in 1u32..=3 {
-        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
+        let advanced =
+            queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(i)).unwrap();
+        assert_eq!(advanced, vec![BlockNumber::from(i)]);
     }
-    // Mark all as proven in sequence.
-    let block_nums: Vec<BlockNumber> = (1..=3).map(BlockNumber::from).collect();
-    queries::mark_blocks_proven_in_sequence(&mut conn, &block_nums).unwrap();
 
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(3u32));
 }
 
 #[test]
-fn select_latest_proven_block_num_with_hole() {
+fn mark_block_proven_with_hole_does_not_advance_past_gap() {
     let mut conn = create_db();
 
     // Insert genesis + blocks 1..=4 as unproven.
@@ -3586,13 +3594,18 @@ fn select_latest_proven_block_num_with_hole() {
         create_unproven_block(&mut conn, BlockNumber::from(i));
     }
 
-    // Prove blocks 1, 3, 4 (skipping 2 — creating a hole).
-    for i in [1u32, 3, 4] {
-        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
-    }
+    // Prove block 1 — advances tip to 1.
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
 
-    // Only block 1 is contiguously proven after genesis, so mark it in sequence.
-    queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
+    // Prove blocks 3, 4 (skipping 2) — cannot advance past the gap.
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+    assert!(advanced.is_empty());
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
+    assert!(advanced.is_empty());
 
     // Latest proven in sequence should be 1 (blocks 3, 4 are proven but not in sequence).
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
@@ -3600,47 +3613,7 @@ fn select_latest_proven_block_num_with_hole() {
 }
 
 #[test]
-fn select_proven_not_in_sequence_returns_proven_but_unmarked_blocks() {
-    let mut conn = create_db();
-
-    // Genesis (proven + in-sequence) + blocks 1..=4 unproven.
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=4 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-
-    // Prove blocks 1, 3, 4 (not 2).
-    for i in [1u32, 3, 4] {
-        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
-    }
-    // Mark block 1 in sequence.
-    queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
-
-    // Blocks 3 and 4 are proven but not in sequence.
-    let not_in_seq = queries::select_proven_not_in_sequence(&mut conn).unwrap();
-    assert_eq!(not_in_seq, vec![BlockNumber::from(3u32), BlockNumber::from(4u32)]);
-}
-
-#[test]
-fn select_proven_not_in_sequence_empty_when_all_in_sequence() {
-    let mut conn = create_db();
-
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=3 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-    for i in 1u32..=3 {
-        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
-    }
-    let block_nums: Vec<BlockNumber> = (1u32..=3).map(BlockNumber::from).collect();
-    queries::mark_blocks_proven_in_sequence(&mut conn, &block_nums).unwrap();
-
-    let not_in_seq = queries::select_proven_not_in_sequence(&mut conn).unwrap();
-    assert!(not_in_seq.is_empty());
-}
-
-#[test]
-fn select_latest_proven_block_num_hole_filled() {
+fn mark_block_proven_filling_hole_advances_through_all_consecutive() {
     let mut conn = create_db();
 
     // Insert genesis + blocks 1..=4 as unproven.
@@ -3650,20 +3623,28 @@ fn select_latest_proven_block_num_hole_filled() {
     }
 
     // Prove blocks out of order: 1, 3, 4 first.
-    for i in [1u32, 3, 4] {
-        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
-    }
-    queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+    assert!(advanced.is_empty());
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
+    assert!(advanced.is_empty());
 
     assert_eq!(
         queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap(),
         BlockNumber::from(1u32),
     );
 
-    // Now prove block 2, filling the hole. Mark 2, 3, 4 in sequence.
-    queries::mark_block_proven(&mut conn, BlockNumber::from(2u32)).unwrap();
-    let newly_in_sequence: Vec<BlockNumber> = (2u32..=4).map(BlockNumber::from).collect();
-    queries::mark_blocks_proven_in_sequence(&mut conn, &newly_in_sequence).unwrap();
+    // Now prove block 2, filling the hole. Should advance through 2, 3, 4.
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(2u32)).unwrap();
+    assert_eq!(
+        advanced,
+        vec![BlockNumber::from(2u32), BlockNumber::from(3u32), BlockNumber::from(4u32)],
+    );
 
     // Now all blocks through 4 are proven in sequence.
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
@@ -3681,8 +3662,8 @@ fn select_unproven_blocks_skips_proven() {
     }
 
     // Prove blocks 1 and 3.
-    queries::mark_block_proven(&mut conn, BlockNumber::from(1u32)).unwrap();
-    queries::mark_block_proven(&mut conn, BlockNumber::from(3u32)).unwrap();
+    queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
 
     // Unproven blocks after genesis should be 2, 4, 5.
     let unproven = queries::select_unproven_blocks(&mut conn, BlockNumber::GENESIS, 10).unwrap();
@@ -3706,22 +3687,16 @@ fn select_unproven_blocks_respects_limit() {
 }
 
 #[test]
-fn mark_blocks_proven_in_sequence_is_idempotent() {
+fn mark_block_proven_is_idempotent_for_in_sequence() {
     let mut conn = create_db();
 
     create_block(&mut conn, BlockNumber::GENESIS);
     create_unproven_block(&mut conn, BlockNumber::from(1u32));
-    queries::mark_block_proven(&mut conn, BlockNumber::from(1u32)).unwrap();
 
-    // Mark block 1 in sequence twice.
-    let count =
-        queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
-    assert_eq!(count, 1);
-
-    let count =
-        queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
-    // Row is matched again even though the value is unchanged.
-    assert_eq!(count, 1);
+    // First call marks block 1 proven and advances it in-sequence.
+    let advanced =
+        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
 
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(1u32));
