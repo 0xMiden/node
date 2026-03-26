@@ -3556,6 +3556,46 @@ fn select_latest_proven_block_num_with_hole() {
 }
 
 #[test]
+fn select_proven_not_in_sequence_returns_proven_but_unmarked_blocks() {
+    let mut conn = create_db();
+
+    // Genesis (proven + in-sequence) + blocks 1..=4 unproven.
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=4 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+
+    // Prove blocks 1, 3, 4 (not 2).
+    for i in [1u32, 3, 4] {
+        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
+    }
+    // Mark block 1 in sequence.
+    queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
+
+    // Blocks 3 and 4 are proven but not in sequence.
+    let not_in_seq = queries::select_proven_not_in_sequence(&mut conn).unwrap();
+    assert_eq!(not_in_seq, vec![BlockNumber::from(3u32), BlockNumber::from(4u32)]);
+}
+
+#[test]
+fn select_proven_not_in_sequence_empty_when_all_in_sequence() {
+    let mut conn = create_db();
+
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=3 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+    for i in 1u32..=3 {
+        queries::mark_block_proven(&mut conn, BlockNumber::from(i)).unwrap();
+    }
+    let block_nums: Vec<BlockNumber> = (1u32..=3).map(BlockNumber::from).collect();
+    queries::mark_blocks_proven_in_sequence(&mut conn, &block_nums).unwrap();
+
+    let not_in_seq = queries::select_proven_not_in_sequence(&mut conn).unwrap();
+    assert!(not_in_seq.is_empty());
+}
+
+#[test]
 fn select_latest_proven_block_num_hole_filled() {
     let mut conn = create_db();
 
@@ -3636,8 +3676,8 @@ fn mark_blocks_proven_in_sequence_is_idempotent() {
 
     let count =
         queries::mark_blocks_proven_in_sequence(&mut conn, &[BlockNumber::from(1u32)]).unwrap();
-    // Already marked, so no rows updated.
-    assert_eq!(count, 0);
+    // Row is matched again even though the value is unchanged.
+    assert_eq!(count, 1);
 
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(1u32));

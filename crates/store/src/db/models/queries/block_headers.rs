@@ -331,6 +331,39 @@ pub(crate) fn mark_blocks_proven_in_sequence(
     Ok(count)
 }
 
+/// Select block numbers that are proven but not yet marked as proven in sequence,
+/// in ascending order.
+///
+/// These are blocks whose `proving_inputs` have been cleared (proven) but whose
+/// `proven_in_sequence` flag is still `FALSE`. This is used on startup to recover
+/// in-sequence state for blocks that were proven before a restart.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num
+/// FROM block_headers
+/// WHERE proving_inputs IS NULL
+///   AND proven_in_sequence = FALSE
+/// ORDER BY block_num ASC
+/// ```
+pub(crate) fn select_proven_not_in_sequence(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    let block_nums: Vec<i64> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
+            .filter(schema::block_headers::proving_inputs.is_null())
+            .filter(schema::block_headers::proven_in_sequence.eq(false))
+            .order(schema::block_headers::block_num.asc())
+            .load(conn)?;
+
+    block_nums
+        .into_iter()
+        .map(BlockNumber::from_raw_sql)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 /// Select unproven block numbers greater than `after`, in ascending order, up to `limit`.
 ///
 /// A block is unproven when its `proving_inputs` are non-NULL.

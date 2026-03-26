@@ -609,6 +609,15 @@ impl Db {
         .await
     }
 
+    /// Returns proven block numbers that are not yet marked as proven in sequence.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_proven_not_in_sequence(&self) -> Result<Vec<BlockNumber>> {
+        self.transact("select proven not in sequence", |conn| {
+            models::queries::select_proven_not_in_sequence(conn)
+        })
+        .await
+    }
+
     /// Returns unproven block numbers greater than `after`, in ascending order, up to `limit`.
     #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_unproven_blocks(

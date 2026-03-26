@@ -54,6 +54,7 @@ impl ProofTaskJoinSet {
         self.0.len()
     }
 
+    /// Spawns a new task to prove and save a block.
     fn spawn(
         &mut self,
         db: &Arc<Db>,
@@ -124,15 +125,31 @@ async fn run(
 
     // In-flight proving tasks.
     let mut join_set = ProofTaskJoinSet::new();
-    // Highest block number that is inflight or has been proven. Used to avoid re-querying
-    // blocks we've already scheduled.
-    let mut highest_scheduled = BlockNumber::GENESIS;
 
     // Tracks the highest block number for which all ancestors (and itself) have been proven.
+    // Initialized from the DB so we resume correctly after restarts.
     let mut proven_in_sequence_tip = db.select_latest_proven_in_sequence_block_num().await?;
-    // Blocks that have been proven but are ahead of `proven_in_sequence_tip` (i.e., there is a
-    // gap). Once the gap fills, the tip advances through these.
-    let mut proven_ahead: BTreeSet<BlockNumber> = BTreeSet::new();
+
+    // Recover any blocks that were proven before a restart but not yet marked in sequence.
+    // These blocks have proving_inputs = NULL but proven_in_sequence = FALSE.
+    let recovered = db.select_proven_not_in_sequence().await?;
+    let mut proven_ahead: BTreeSet<BlockNumber> = recovered.into_iter().collect();
+    let advanced = advance_proven_in_sequence_tip(proven_in_sequence_tip, &mut proven_ahead);
+    if let Some(&last) = advanced.last() {
+        info!(
+            target: COMPONENT,
+            from = %proven_in_sequence_tip,
+            to = %advanced.last().unwrap(),
+            "Recovered proven-in-sequence blocks on startup"
+        );
+        proven_in_sequence_tip = last;
+        db.mark_blocks_proven_in_sequence(advanced).await?;
+    }
+
+    // Highest block number that is in-flight or has been proven. Used to avoid re-querying
+    // blocks we've already scheduled. Initialized from the in-sequence tip so we skip
+    // already-proven blocks on restart.
+    let mut highest_scheduled = proven_in_sequence_tip;
 
     loop {
         // Query the DB for unproven blocks beyond what we've already scheduled.
