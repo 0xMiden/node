@@ -65,7 +65,7 @@ use tracing::instrument;
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, StateConflict};
+use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::budget::BudgetStatus;
 use crate::{
     COMPONENT,
@@ -230,16 +230,16 @@ impl Mempool {
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
-    ) -> Result<BlockNumber, AddTransactionError> {
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
         if self.unbatched_transactions_count() >= self.config.tx_capacity.get() {
-            return Err(AddTransactionError::CapacityExceeded);
+            return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
         self.transactions
             .append(Arc::clone(&tx))
-            .map_err(AddTransactionError::StateConflict)?;
+            .map_err(MempoolSubmissionError::StateConflict)?;
         self.subscription.transaction_added(&tx);
         self.inject_telemetry();
 
@@ -250,11 +250,11 @@ impl Mempool {
     pub fn add_user_batch(
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
-    ) -> Result<BlockNumber, AddTransactionError> {
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
         assert!(!txs.is_empty(), "Cannot have a batch with no transactions");
 
         if self.unbatched_transactions_count() + txs.len() >= self.config.tx_capacity.get() {
-            return Err(AddTransactionError::CapacityExceeded);
+            return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
         // Ensure the batch doesn't exceed the mempool budget for batches.
@@ -262,7 +262,7 @@ impl Mempool {
         for tx in txs {
             if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
                 // TODO: better error plox.
-                return Err(AddTransactionError::CapacityExceeded);
+                return Err(MempoolSubmissionError::CapacityExceeded);
             }
         }
 
@@ -273,7 +273,7 @@ impl Mempool {
 
         self.transactions
             .append_user_batch(txs)
-            .map_err(AddTransactionError::StateConflict)?;
+            .map_err(MempoolSubmissionError::StateConflict)?;
 
         for tx in txs {
             self.subscription.transaction_added(tx);
@@ -549,14 +549,14 @@ impl Mempool {
     fn authentication_staleness_check(
         &self,
         authentication_height: BlockNumber,
-    ) -> Result<(), AddTransactionError> {
+    ) -> Result<(), MempoolSubmissionError> {
         let limit = self
             .chain_tip
             .checked_sub(self.committed_blocks.len() as u32)
             .expect("amount of committed blocks cannot exceed the chain tip");
 
         if authentication_height < limit {
-            return Err(AddTransactionError::StaleInputs {
+            return Err(MempoolSubmissionError::StaleInputs {
                 input_block: authentication_height,
                 stale_limit: limit,
             });
@@ -571,10 +571,10 @@ impl Mempool {
         Ok(())
     }
 
-    fn expiration_check(&self, expired_at: BlockNumber) -> Result<(), AddTransactionError> {
+    fn expiration_check(&self, expired_at: BlockNumber) -> Result<(), MempoolSubmissionError> {
         let limit = self.chain_tip + self.config.expiration_slack;
         if expired_at <= limit {
-            return Err(AddTransactionError::Expired { expired_at, limit });
+            return Err(MempoolSubmissionError::Expired { expired_at, limit });
         }
 
         Ok(())

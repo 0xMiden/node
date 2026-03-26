@@ -29,7 +29,7 @@ use url::Url;
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, BlockProducerError, StoreError};
+use crate::errors::{BlockProducerError, MempoolSubmissionError, StoreError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
@@ -314,11 +314,11 @@ impl BlockProducerRpcServer {
     async fn submit_proven_transaction(
         &self,
         request: proto::transaction::ProvenTransaction,
-    ) -> Result<proto::blockchain::BlockNumber, AddTransactionError> {
+    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
         debug!(target: COMPONENT, ?request);
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction)
-            .map_err(AddTransactionError::TransactionDeserializationFailed)?;
+            .map_err(MempoolSubmissionError::TransactionDeserializationFailed)?;
 
         let tx_id = tx.id();
 
@@ -339,12 +339,12 @@ impl BlockProducerRpcServer {
             .store
             .get_tx_inputs(&tx)
             .await
-            .map_err(AddTransactionError::StoreConnectionFailed)?;
+            .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
 
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
         let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
             .map(Arc::new)
-            .map_err(AddTransactionError::StateConflict)?;
+            .map_err(MempoolSubmissionError::StateConflict)?;
 
         self.mempool.lock().await.lock().await.add_transaction(tx).map(Into::into)
     }
@@ -358,9 +358,9 @@ impl BlockProducerRpcServer {
     async fn submit_batch(
         &self,
         request: proto::transaction::TransactionBatch,
-    ) -> Result<proto::blockchain::BlockNumber, AddTransactionError> {
+    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
         let batch = ProposedBatch::read_from_bytes(&request.proposed_batch)
-            .map_err(AddTransactionError::TransactionDeserializationFailed)?;
+            .map_err(MempoolSubmissionError::TransactionDeserializationFailed)?;
 
         // We assume that the rpc component has verified everything, including the transaction
         // proofs.
@@ -371,13 +371,13 @@ impl BlockProducerRpcServer {
                 .store
                 .get_tx_inputs(tx)
                 .await
-                .map_err(AddTransactionError::StoreConnectionFailed)?;
+                .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
 
             // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
             // as the batch integrity itself.
             let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
                 .map(Arc::new)
-                .map_err(AddTransactionError::StateConflict)?;
+                .map_err(MempoolSubmissionError::StateConflict)?;
             txs.push(tx);
         }
 
