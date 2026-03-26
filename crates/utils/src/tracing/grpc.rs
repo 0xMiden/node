@@ -18,12 +18,20 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
 
     // Create a span with a generic, static name. Fields to be recorded after needs to be
     // initialized as empty since otherwise the assignment will have no effect.
-    let span = tracing::info_span!(
-        "rpc",
-        otel.name = field::Empty,
-        rpc.service = service,
-        rpc.method = method
-    );
+    let span = match method {
+        "SyncState" | "SyncNullifiers" => tracing::debug_span!(
+            "rpc",
+            otel.name = field::Empty,
+            rpc.service = service,
+            rpc.method = method
+        ),
+        _ => tracing::info_span!(
+            "rpc",
+            otel.name = field::Empty,
+            rpc.service = service,
+            rpc.method = method
+        ),
+    };
 
     // Set the span name via otel.name
     let otel_name = format!("{service}/{method}");
