@@ -131,7 +131,8 @@ async fn chain_tip_plus_one_succeeds() {
 async fn chain_tip_replacement_succeeds() {
     let mut tv = TestValidator::new().await;
 
-    // Apply block 1 to advance the chain tip.
+    // The genesis block can never be replaced, so we advance the chain
+    // to block 1, which we can then replace.
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
     tv.apply_empty_block().await;
