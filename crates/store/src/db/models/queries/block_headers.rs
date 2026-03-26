@@ -231,8 +231,13 @@ pub(crate) fn insert_block_header(
     signature: &Signature,
     proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
-    // A block inserted without proving inputs is already proven (genesis), so it is trivially
-    // proven in sequence.
+    // Only the genesis block should be inserted without proving inputs.
+    if proving_inputs.is_none() && block_header.block_num() != BlockNumber::GENESIS {
+        return Err(DatabaseError::DataCorrupted(
+            "Only the genesis block should be inserted without proving inputs".into(),
+        ));
+    }
+    // We treat the genesis as proven.
     let proven_in_sequence = proving_inputs.is_none();
     let row = BlockHeaderInsert {
         block_num: block_header.block_num().to_raw_sql(),
