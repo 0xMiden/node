@@ -266,9 +266,20 @@ impl Mempool {
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         let reverted_batches = self.batches.revert_batch_and_descendants(batch);
-        for reverted in reverted_batches {
+        for reverted in &reverted_batches {
             self.transactions.requeue_transactions(reverted);
         }
+
+        // Find rolled back batch to mark the txs as failed.
+        //
+        // Note that its possible it doesn't exist, since this batch could have already been
+        // reverted as part of a separate rollback.
+        if let Some(batch) = reverted_batches.iter().find(|reverted| reverted.id() == batch) {
+            let failed_txs = batch.transactions().iter().map(|tx| tx.id());
+            let reverted_txs = self.transactions.increment_failure_count(failed_txs);
+            self.subscription.txs_reverted(reverted_txs);
+        }
+
         self.inject_telemetry();
     }
 
@@ -369,25 +380,21 @@ impl Mempool {
             return;
         }
 
-        // Remove all descendants _without_ reinserting the transactions.
+        // Revert the batches, and requeue the transactions for batch selection.
         //
-        // This is done to prevent a system bug from causing repeated failures if we keep retrying
-        // the same transactions. Since we can't trivially identify the cause of the block
-        // failure, we take the safe route and nuke all associated state.
-        //
-        // A more refined approach could be to tag the offending transactions and then evict them
-        // once a certain failure threshold has been met.
-        let mut reverted_txs = HashSet::default();
-        let (_, batches) = self.pending_block.take().expect("we just checked it is some");
-        for batch in batches {
+        // Transactions which have failed excessively are also reverted.
+        let (_, block) = self.pending_block.take().expect("we just checked it is some");
+        for batch in &block {
             let reverted = self.batches.revert_batch_and_descendants(batch.id());
 
             for batch in reverted {
-                for tx in batch.into_transactions() {
-                    reverted_txs.extend(self.transactions.revert_tx_and_descendants(tx.id()));
-                }
+                self.transactions.requeue_transactions(&batch);
             }
         }
+        let failed_txs = block
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
+        let reverted_txs = self.transactions.increment_failure_count(failed_txs);
 
         self.subscription.txs_reverted(reverted_txs);
         self.inject_telemetry();
@@ -492,7 +499,7 @@ impl Mempool {
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
         let batches = self.batches.revert_expired(self.chain_tip);
         for batch in batches {
-            self.transactions.requeue_transactions(batch);
+            self.transactions.requeue_transactions(&batch);
         }
         self.transactions.revert_expired(self.chain_tip)
     }
