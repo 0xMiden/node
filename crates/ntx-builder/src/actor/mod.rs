@@ -112,7 +112,7 @@ impl AccountActorContext {
             idle_timeout: Duration::from_secs(60),
             db: db.clone(),
             request_tx,
-            max_cycles: 1 << 16,
+            max_cycles: 1 << 18,
         }
     }
 }

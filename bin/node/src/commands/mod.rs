@@ -53,7 +53,7 @@ const ENV_NTX_MAX_CYCLES: &str = "MIDEN_NTX_MAX_CYCLES";
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_NTX_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-const DEFAULT_NTX_MAX_CYCLES: u32 = 1 << 16;
+const DEFAULT_NTX_MAX_CYCLES: u32 = 1 << 18;
 
 /// Configuration for the Validator key used to sign blocks.
 ///
@@ -199,7 +199,7 @@ pub struct NtxBuilderConfig {
 
     /// Maximum number of VM execution cycles allowed for a single network transaction.
     ///
-    /// Network transactions that exceed this limit will fail. Defaults to 2^16 (65536) cycles.
+    /// Network transactions that exceed this limit will fail. Defaults to 2^18 (262.144) cycles.
     #[arg(
         long = "ntx-builder.max-cycles",
         env = ENV_NTX_MAX_CYCLES,
