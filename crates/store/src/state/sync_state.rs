@@ -104,12 +104,13 @@ impl State {
             }
 
             let block_num = note_sync.block_header.block_num();
-            let mmr_proof = inner.blockchain.open_at(block_num, checkpoint)?;
-            results.push((note_sync, mmr_proof));
 
             if block_num >= checkpoint {
                 break;
             }
+
+            let mmr_proof = inner.blockchain.open_at(block_num, checkpoint)?;
+            results.push((note_sync, mmr_proof));
 
             // The DB query uses `committed_at > block_range.start()` (exclusive),
             // so setting current_from to the found block is sufficient to skip it.
