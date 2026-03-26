@@ -204,7 +204,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         &self,
         request: Request<proto::store::VaultAssetWitnessesRequest>,
     ) -> Result<Response<proto::store::VaultAssetWitnessesResponse>, Status> {
-        const MAX_VAULT_KEYS: usize = 1000;
+        const MAX_VAULT_KEYS: usize = 100;
 
         let request = request.into_inner();
 
