@@ -148,7 +148,7 @@ impl rpc_server::Rpc for StoreApi {
                 block_num: last_block_included.as_u32(),
             }),
             block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path.into()),
+            mmr_path: Some(mmr_proof.merkle_path().clone().into()),
             notes,
         }))
     }

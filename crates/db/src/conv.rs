@@ -151,7 +151,7 @@ pub(crate) fn raw_sql_to_nonce(raw: i64) -> Felt {
 }
 #[inline(always)]
 pub(crate) fn nonce_to_raw_sql(nonce: Felt) -> i64 {
-    nonce.as_int() as i64
+    nonce.as_canonical_u64() as i64
 }
 
 #[inline(always)]

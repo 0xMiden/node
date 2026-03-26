@@ -14,7 +14,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -27,6 +27,9 @@ use crate::block_validation::validate_block;
 use crate::db::{insert_transaction, load, load_chain_tip, upsert_block_header};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
+
+#[cfg(test)]
+mod tests;
 
 // VALIDATOR
 // ================================================================================

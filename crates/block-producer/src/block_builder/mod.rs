@@ -168,7 +168,7 @@ impl BlockBuilder {
                 .input_notes()
                 .iter()
                 .cloned()
-                .filter_map(|note| note.header().map(NoteHeader::commitment))
+                .filter_map(|note| note.header().map(NoteHeader::to_commitment))
         });
         let block_references_iter =
             batch_iter.clone().map(Deref::deref).map(ProvenBatch::reference_block_num);

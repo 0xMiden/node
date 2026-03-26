@@ -78,6 +78,7 @@ pub async fn validate_block(
     // If the proposed block has the same block number as the current chain tip, this is a
     // replacement block. Validate it against the previous block header.
     let prev = if proposed_header.block_num() == chain_tip.block_num() {
+        // The genesis block cannot be replaced (genesis block has no parent).
         let prev_block_num =
             chain_tip.block_num().parent().ok_or(BlockValidationError::NoPrevBlockHeader)?;
         db.query("load_block_header", move |conn| load_block_header(conn, prev_block_num))

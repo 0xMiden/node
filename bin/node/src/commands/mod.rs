@@ -10,7 +10,7 @@ use miden_node_block_producer::{
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::Deserializable;
+use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
 pub mod block_producer;
@@ -49,7 +49,7 @@ const ENV_NTX_MAX_CYCLES: &str = "MIDEN_NTX_MAX_CYCLES";
 const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_NTX_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-const DEFAULT_NTX_MAX_CYCLES: u32 = 1 << 16;
+const DEFAULT_NTX_MAX_CYCLES: u32 = 1 << 18;
 
 /// Configuration for the Validator key used to sign blocks.
 ///

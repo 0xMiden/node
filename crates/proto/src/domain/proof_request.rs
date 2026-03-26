@@ -3,7 +3,7 @@
 
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs};
-use miden_protocol::utils::{
+use miden_protocol::utils::serde::{
     ByteReader,
     ByteWriter,
     Deserializable,

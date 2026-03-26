@@ -89,7 +89,8 @@ pub enum NtxBuilderCommand {
 
         /// Maximum number of VM execution cycles allowed for a single network transaction.
         ///
-        /// Network transactions that exceed this limit will fail. Defaults to 2^16 (65536) cycles.
+        /// Network transactions that exceed this limit will fail. Defaults to 2^18 (262.144)
+        /// cycles.
         #[arg(
             long = "max-cycles",
             env = ENV_NTX_MAX_CYCLES,

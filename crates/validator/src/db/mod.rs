@@ -10,7 +10,7 @@ use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db, SqlTypeConvert};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tracing::instrument;
 
 use crate::COMPONENT;
