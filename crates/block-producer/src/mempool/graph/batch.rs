@@ -95,8 +95,8 @@ impl BatchGraph {
         let expired = self.inner.expired_and_unselected(chain_tip);
         let mut reverted = Vec::new();
 
-        for tx in expired {
-            reverted.extend(self.revert_batch_and_descendants(tx));
+        for batch in expired {
+            reverted.extend(self.revert_batch_and_descendants(batch));
         }
 
         reverted

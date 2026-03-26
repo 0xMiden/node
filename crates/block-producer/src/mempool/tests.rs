@@ -7,6 +7,7 @@ use pretty_assertions::assert_eq;
 use serial_test::serial;
 
 use super::*;
+use crate::mempool::graph::TransactionGraph;
 use crate::test_utils::MockProvenTxBuilder;
 use crate::test_utils::batch::TransactionBatchConstructor;
 
@@ -236,7 +237,7 @@ fn transactions_exceeding_failure_limit_are_removed() {
 
     uut.add_transaction(failing_tx).unwrap();
 
-    for _ in 0..3 {
+    for _ in 0..TransactionGraph::FAILURE_LIMIT - 1 {
         let reverted = uut.transactions.increment_failure_count(std::iter::once(tx_id));
         assert!(reverted.is_empty());
         assert_eq!(uut.unbatched_transactions_count(), 1);

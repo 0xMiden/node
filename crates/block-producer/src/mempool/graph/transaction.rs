@@ -78,8 +78,8 @@ pub struct TransactionGraph {
 }
 
 impl TransactionGraph {
-    /// The maximum number of times a transaction is allowed to fail before being evicted.
-    const FAILURE_LIMIT: u32 = 3;
+    /// Transactions are evicted after failing this number of times.
+    pub const FAILURE_LIMIT: u32 = 3;
 
     pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) -> Result<(), StateConflict> {
         self.inner.append(tx)
@@ -174,7 +174,7 @@ impl TransactionGraph {
             let count = self.failures.entry(tx).or_default();
             *count += 1;
 
-            if *count > Self::FAILURE_LIMIT {
+            if *count >= Self::FAILURE_LIMIT {
                 to_revert.push(tx);
             }
         }
@@ -195,6 +195,7 @@ impl TransactionGraph {
     /// graph.
     pub fn prune(&mut self, transaction: TransactionId) {
         self.inner.prune(transaction);
+        self.failures.remove(&transaction);
     }
 
     /// Number of transactions which have not been selected for inclusion in a batch.
