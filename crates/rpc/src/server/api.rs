@@ -14,6 +14,7 @@ use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
+use miden_node_tracing::{debug, info};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -35,7 +36,6 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use tonic::{IntoRequest, Request, Response, Status};
-use tracing::{debug, info};
 use url::Url;
 
 use crate::COMPONENT;

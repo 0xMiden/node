@@ -24,6 +24,7 @@ futures                    = { workspace = true }
 itertools                  = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-proto-build     = { features = ["internal"], workspace = true }
+miden-node-tracing         = { workspace = true }
 miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }

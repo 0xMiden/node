@@ -9,6 +9,7 @@ use anyhow::Context;
 use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::domain::account::NetworkAccountId;
+use miden_node_tracing::instrument;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -380,10 +381,10 @@ impl AccountActor {
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Updates the state of the actor based on the execution result.
-    #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
+    #[instrument(COMPONENT:)]
     async fn execute_transactions(
         &mut self,
-        account_id: NetworkAccountId,
+        _account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
     ) {
         let block_num = tx_candidate.chain_tip_header.block_num();

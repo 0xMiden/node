@@ -15,6 +15,8 @@ use std::path::Path;
 use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::RocksDbStorage;
+use miden_node_tracing::{info, instrument};
+#[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
@@ -23,9 +25,6 @@ use miden_protocol::block::{BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
 use miden_protocol::{Felt, Word};
-#[cfg(feature = "rocksdb")]
-use tracing::info;
-use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::account_state_forest::AccountStateForest;
@@ -138,7 +137,7 @@ impl StorageLoader for MemoryStorage {
         Ok(MemoryStorage::default())
     }
 
-    #[instrument(target = COMPONENT, skip_all)]
+    #[instrument(COMPONENT:)]
     async fn load_account_tree(
         self,
         db: &mut Db,
@@ -180,7 +179,7 @@ impl StorageLoader for MemoryStorage {
     // TODO: Make the loading methodology for account and nullifier trees consistent.
     // Currently we use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()`
     // for accounts. Consider using `NullifierTree::with_storage_from_entries()` for consistency.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[instrument(COMPONENT:)]
     async fn load_nullifier_tree(
         self,
         db: &mut Db,
@@ -236,7 +235,7 @@ impl StorageLoader for RocksDbStorage {
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))
     }
 
-    #[instrument(target = COMPONENT, skip_all)]
+    #[instrument(COMPONENT:)]
     async fn load_account_tree(
         self,
         db: &mut Db,
@@ -287,7 +286,7 @@ impl StorageLoader for RocksDbStorage {
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
     }
 
-    #[instrument(target = COMPONENT, skip_all)]
+    #[instrument(COMPONENT:)]
     async fn load_nullifier_tree(
         self,
         db: &mut Db,
@@ -348,7 +347,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 // ================================================================================================
 
 /// Loads the blockchain MMR from all block headers in the database.
-#[instrument(target = COMPONENT, skip_all)]
+#[instrument(COMPONENT:)]
 pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
     let block_commitments = db.select_all_block_header_commitments().await?;
 
@@ -362,7 +361,7 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 }
 
 /// Loads SMT forest with storage map and vault Merkle paths for all public accounts.
-#[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+#[instrument(COMPONENT: block.number = %block_num)]
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
@@ -421,7 +420,7 @@ pub async fn load_smt_forest(
 ///
 /// # Errors
 /// Returns `StateInitializationError::TreeStorageDiverged` if any root doesn't match.
-#[instrument(target = COMPONENT, skip_all)]
+#[instrument(COMPONENT:)]
 pub async fn verify_tree_consistency(
     account_tree_root: Word,
     nullifier_tree_root: Word,

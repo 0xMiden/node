@@ -22,6 +22,7 @@ libsqlite3-sys             = { workspace = true }
 miden-node-db              = { workspace = true }
 miden-node-proto           = { workspace = true }
 miden-node-proto-build     = { features = ["internal"], workspace = true }
+miden-node-tracing         = { workspace = true }
 miden-node-utils           = { workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["tx-prover"], workspace = true }

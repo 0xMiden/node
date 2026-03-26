@@ -1,0 +1,16 @@
+error: `err` / `report` is not supported on `Box<dyn Future>` return types; use `async fn` instead
+  --> tests/ui/instrument/report_on_async_trait.rs:11:1
+   |
+11 | #[async_trait]
+   | ^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `async_trait` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0046]: not all trait items implemented, missing: `call`
+  --> tests/ui/instrument/report_on_async_trait.rs:12:1
+   |
+ 6 |     async fn call(&self) -> Result<(), String>;
+   |     ------------------------------------------- `call` from trait
+...
+12 | impl Service for Impl {
+   | ^^^^^^^^^^^^^^^^^^^^^ missing `call` in implementation

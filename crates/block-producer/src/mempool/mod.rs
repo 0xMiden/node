@@ -46,12 +46,12 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_tracing::{instrument, warn};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::TransactionId;
 use subscription::SubscriptionProvider;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
-use tracing::{instrument, warn};
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -59,7 +59,6 @@ use crate::errors::{AddTransactionError, VerifyTxError};
 use crate::mempool::budget::BudgetStatus;
 use crate::mempool::nodes::{BlockNode, Node, NodeId, ProposedBatchNode, TransactionNode};
 use crate::{
-    COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
     SERVER_MEMPOOL_EXPIRATION_SLACK,
     SERVER_MEMPOOL_STATE_RETENTION,
@@ -133,7 +132,7 @@ impl Default for MempoolConfig {
 // ================================================================================================
 
 impl SharedMempool {
-    #[instrument(target = COMPONENT, name = "mempool.lock", skip_all)]
+    #[instrument(COMPONENT:)]
     pub async fn lock(&self) -> MutexGuard<'_, Mempool> {
         self.0.lock().await
     }
@@ -204,7 +203,7 @@ impl Mempool {
     /// # Errors
     ///
     /// Returns an error if the transaction's initial conditions don't match the current state.
-    #[instrument(target = COMPONENT, name = "mempool.add_transaction", skip_all, fields(tx=%tx.id()))]
+    #[instrument(COMPONENT:)]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
@@ -263,7 +262,7 @@ impl Mempool {
     /// Transactions are returned in a valid execution ordering.
     ///
     /// Returns `None` if no transactions are available.
-    #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
         // The selection algorithm is fairly neanderthal in nature.
         //
@@ -343,7 +342,7 @@ impl Mempool {
     /// Drops the proposed batch and all of its descendants.
     ///
     /// Transactions are re-queued.
-    #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         // Due to the distributed nature of the system, its possible that a proposed batch was
         // already proven, or already reverted. This guards against this eventuality.
@@ -377,7 +376,7 @@ impl Mempool {
     }
 
     /// Marks a batch as proven if it exists.
-    #[instrument(target = COMPONENT, name = "mempool.commit_batch", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
         // Due to the distributed nature of the system, its possible that a proposed batch was
         // already proven, or already reverted. This guards against this eventuality.
@@ -403,7 +402,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is already a block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn select_block(&mut self) -> (BlockNumber, Vec<Arc<ProvenBatch>>) {
         // The selection algorithm is fairly neanderthal in nature.
         //
@@ -486,7 +485,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn commit_block(&mut self, to_commit: BlockHeader) {
         let block = self
             .nodes
@@ -522,7 +521,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.rollback_block", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn rollback_block(&mut self, block: BlockNumber) {
         // Only revert if the given block is actually inflight.
         //
@@ -586,7 +585,7 @@ impl Mempool {
     /// Creates a subscription to [`MempoolEvent`] which will be emitted in the order they occur.
     ///
     /// Only emits events which occurred after the current committed block.
-    #[instrument(target = COMPONENT, name = "mempool.subscribe", skip_all)]
+    #[instrument(COMPONENT:)]
     pub fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
         self.subscription.subscribe()
     }

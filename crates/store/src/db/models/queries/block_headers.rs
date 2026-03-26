@@ -13,12 +13,12 @@ use diesel::{
 };
 use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
-use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::vec_raw_try_into;
 use crate::db::schema;
@@ -227,11 +227,7 @@ impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_block_header(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,

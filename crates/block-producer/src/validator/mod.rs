@@ -1,10 +1,10 @@
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::generated as proto;
+use miden_node_tracing::{info, instrument};
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use thiserror::Error;
-use tracing::{info, instrument};
 use url::Url;
 
 use crate::COMPONENT;
@@ -47,7 +47,7 @@ impl BlockProducerValidatorClient {
         Self { client: validator }
     }
 
-    #[instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,

@@ -3,8 +3,9 @@
 //! This module contains the implementation for starting the network monitoring service.
 
 use anyhow::Result;
+use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::logging::OpenTelemetry;
-use tracing::{debug, info, instrument, warn};
+use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;

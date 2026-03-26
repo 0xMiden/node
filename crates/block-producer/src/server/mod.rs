@@ -10,6 +10,7 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::block_producer::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
+use miden_node_tracing::{debug, error, info, instrument};
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -23,7 +24,6 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::Status;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, instrument};
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
@@ -98,11 +98,12 @@ impl BlockProducer {
                         .min(Duration::from_secs(30));
 
                     error!(
-                        store = %self.store_url,
+                        target: COMPONENT,
                         ?backoff,
                         %retries_counter,
                         %err,
-                        "store connection failed while fetching chain tip, retrying"
+                        "store connection failed while fetching chain tip from {store}, retrying",
+                        store = self.store_url,
                     );
 
                     retries_counter += 1;
@@ -301,12 +302,7 @@ impl BlockProducerRpcServer {
     // RPC ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.server.submit_proven_transaction",
-         skip_all,
-         err
-     )]
+    #[instrument(COMPONENT: err)]
     async fn submit_proven_transaction(
         &self,
         request: proto::transaction::ProvenTransaction,
@@ -345,12 +341,7 @@ impl BlockProducerRpcServer {
             .map(|block_height| proto::blockchain::BlockNumber { block_num: block_height.as_u32() })
     }
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.server.submit_proven_batch",
-         skip_all,
-         err
-     )]
+    #[instrument(COMPONENT: err)]
     async fn submit_proven_batch(
         &self,
         request: proto::transaction::ProvenTransactionBatch,

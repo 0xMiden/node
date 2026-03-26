@@ -3,19 +3,20 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use futures::FutureExt;
+use miden_node_tracing::instrument;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
-use tracing::{Span, instrument};
+use tracing::Span;
 
+use crate::TelemetryInjectorExt;
 use crate::errors::BuildBlockError;
 use crate::mempool::SharedMempool;
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, TelemetryInjectorExt};
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -102,7 +103,7 @@ impl BlockBuilder {
     /// - Each stage has its own child span and are free to add further field data.
     /// - A failed stage will emit an error event, and both its own span and the root span will be
     ///   marked as errors.
-    #[instrument(parent = None, target = COMPONENT, name = "block_builder.build_block", skip_all)]
+    #[instrument(COMPONENT: root)]
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
@@ -126,7 +127,7 @@ impl BlockBuilder {
             .await
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
+    #[instrument(COMPONENT:)]
     async fn select_block(mempool: &SharedMempool) -> SelectedBlock {
         let (block_number, batches) = mempool.lock().await.select_block();
         SelectedBlock { block_number, batches }
@@ -148,7 +149,7 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn get_block_inputs(
         &self,
         selected_block: SelectedBlock,
@@ -206,7 +207,7 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn propose_block(
         &self,
         batches_inputs: BlockBatchesAndInputs,
@@ -220,7 +221,7 @@ impl BlockBuilder {
         Ok(proposed_block)
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn build_and_validate_block(
         &self,
         proposed_block: ProposedBlock,
@@ -254,7 +255,7 @@ impl BlockBuilder {
         Ok((ordered_batches, signed_block))
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.commit_block", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     async fn commit_block(
         &self,
         mempool: &SharedMempool,
@@ -272,7 +273,7 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
+    #[instrument(COMPONENT:)]
     async fn rollback_block(&self, mempool: &SharedMempool, block: BlockNumber) {
         mempool.lock().await.rollback_block(block);
     }

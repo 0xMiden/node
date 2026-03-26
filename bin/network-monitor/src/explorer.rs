@@ -4,11 +4,12 @@
 use std::fmt::{self, Display};
 use std::time::Duration;
 
+use miden_node_tracing::info;
 use reqwest::Client;
 use serde::Serialize;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-use tracing::{info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus, Status};

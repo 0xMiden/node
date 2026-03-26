@@ -16,6 +16,8 @@ members = [
   "crates/rpc",
   "crates/store",
   "crates/test-macro",
+  "crates/tracing",
+  "crates/tracing-macro",
   "crates/utils",
   "crates/validator",
   "proto",
@@ -54,12 +56,15 @@ miden-node-proto-build          = { path = "proto", version = "0.14" }
 miden-node-rpc                  = { path = "crates/rpc", version = "0.14" }
 miden-node-store                = { path = "crates/store", version = "0.14" }
 miden-node-test-macro           = { path = "crates/test-macro" }
+miden-node-tracing              = { path = "crates/tracing", version = "0.14" }
 miden-node-utils                = { path = "crates/utils", version = "0.14" }
 miden-node-validator            = { path = "crates/validator", version = "0.14" }
 miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.14" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.14" }
+miden-node-tracing-macro           = { path = "crates/tracing-macro", version = "0.14" }
+trybuild                           = { features = ["diff"], version = "1.0" }
 
 # miden-protocol dependencies. These should be updated in sync.
 miden-block-prover    = { version = "0.14" }

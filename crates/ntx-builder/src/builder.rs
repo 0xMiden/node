@@ -5,6 +5,7 @@ use anyhow::Context;
 use futures::Stream;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_tracing::instrument;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use tokio::net::TcpListener;
@@ -184,7 +185,7 @@ impl NetworkTransactionBuilder {
     }
 
     /// Handles account IDs loaded from the store by syncing state to DB and spawning actors.
-    #[tracing::instrument(name = "ntx.builder.handle_loaded_account", skip(self, account_id))]
+    #[instrument(COMPONENT:)]
     async fn handle_loaded_account(
         &mut self,
         account_id: NetworkAccountId,
@@ -216,7 +217,7 @@ impl NetworkTransactionBuilder {
     }
 
     /// Handles mempool events by writing to DB first, then notifying actors.
-    #[tracing::instrument(name = "ntx.builder.handle_mempool_event", skip(self, event))]
+    #[instrument(COMPONENT:)]
     async fn handle_mempool_event(&mut self, event: MempoolEvent) -> Result<(), anyhow::Error> {
         match &event {
             MempoolEvent::TransactionAdded { account_delta, .. } => {

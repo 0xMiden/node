@@ -7,6 +7,7 @@ use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_proto::errors::{ConversionError, MissingFieldHelper};
 use miden_node_proto::{AccountState, generated as proto};
+use miden_node_tracing::{debug, info, instrument};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -15,7 +16,6 @@ use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Serializable;
-use tracing::{debug, info, instrument};
 use url::Url;
 
 use crate::COMPONENT;
@@ -137,7 +137,7 @@ impl StoreClient {
     }
 
     /// Returns the latest block's header from the store.
-    #[instrument(target = COMPONENT, name = "store.client.latest_header", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn latest_header(&self) -> Result<BlockHeader, StoreError> {
         let response = self
             .client
@@ -155,7 +155,7 @@ impl StoreClient {
         BlockHeader::try_from(response).map_err(Into::into)
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_tx_inputs", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_tx_inputs(
         &self,
         proven_tx: &ProvenTransaction,
@@ -200,7 +200,7 @@ impl StoreClient {
         Ok(tx_inputs)
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_block_inputs", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_block_inputs(
         &self,
         updated_accounts: impl Iterator<Item = AccountId> + Send,
@@ -222,7 +222,7 @@ impl StoreClient {
         store_response.try_into().map_err(Into::into)
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.get_batch_inputs", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn get_batch_inputs(
         &self,
         block_references: impl Iterator<Item = (BlockNumber, Word)> + Send,
@@ -238,7 +238,7 @@ impl StoreClient {
         store_response.try_into().map_err(Into::into)
     }
 
-    #[instrument(target = COMPONENT, name = "store.client.apply_block", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn apply_block(
         &self,
         ordered_batches: &OrderedBatches,

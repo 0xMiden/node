@@ -7,6 +7,7 @@ use miden_node_db::Db;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
+use miden_node_tracing::instrument;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
@@ -21,7 +22,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{info_span, instrument};
+use tracing::info_span;
 
 use crate::block_validation::validate_block;
 use crate::db::{insert_transaction, load, load_chain_tip, upsert_block_header};
@@ -122,7 +123,7 @@ impl api_server::Api for ValidatorServer {
     }
 
     /// Receives a proven transaction, then validates and stores it.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[instrument(COMPONENT:)]
     async fn submit_proven_transaction(
         &self,
         request: tonic::Request<proto::transaction::ProvenTransaction>,

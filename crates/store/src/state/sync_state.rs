@@ -1,12 +1,11 @@
 use std::ops::RangeInclusive;
 
+use miden_node_tracing::instrument;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
-use tracing::instrument;
 
 use super::State;
-use crate::COMPONENT;
 use crate::db::models::queries::StorageMapValuesPage;
 use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
@@ -26,7 +25,7 @@ impl State {
     }
 
     /// Returns the chain MMR delta for the specified block range.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(COMPONENT: ret, err)]
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -73,7 +72,7 @@ impl State {
     /// - `note_tags`: The tags the client is interested in, resulting notes are restricted to the
     ///   first block containing a matching note.
     /// - `block_range`: The range of blocks from which to synchronize notes.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(COMPONENT: ret, err)]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,

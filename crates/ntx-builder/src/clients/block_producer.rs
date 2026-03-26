@@ -4,12 +4,13 @@ use futures::{TryStream, TryStreamExt};
 use miden_node_proto::clients::{BlockProducerClient as InnerBlockProducerClient, Builder};
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::{self as proto};
+// Use standard tracing for Status errors (which don't impl std::error::Error)
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::FlattenResult;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Serializable;
 use tokio_stream::StreamExt;
 use tonic::Status;
-use tracing::{info, instrument};
 use url::Url;
 
 use crate::COMPONENT;
@@ -41,7 +42,7 @@ impl BlockProducerClient {
         Self { client: block_producer }
     }
 
-    #[instrument(target = COMPONENT, name = "ntx.block_producer.client.submit_proven_transaction", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn submit_proven_transaction(
         &self,
         proven_tx: &ProvenTransaction,
@@ -57,7 +58,7 @@ impl BlockProducerClient {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "ntx.block_producer.client.subscribe_to_mempool", skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn subscribe_to_mempool_with_retry(
         &self,
     ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {

@@ -10,6 +10,7 @@ use miden_node_proto_build::{
     store_ntx_builder_api_descriptor,
     store_rpc_api_descriptor,
 };
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -17,7 +18,6 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
-use tracing::{info, instrument};
 use url::Url;
 
 use crate::blocks::BlockStore;
@@ -47,12 +47,7 @@ pub struct Store {
 
 impl Store {
     /// Bootstraps the Store, creating the database state and inserting the genesis block data.
-    #[instrument(
-        target = COMPONENT,
-        name = "store.bootstrap",
-        skip_all,
-        err,
-    )]
+    #[instrument(COMPONENT: err)]
     pub fn bootstrap(genesis: &GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(data_directory.to_path_buf()).with_context(|| {

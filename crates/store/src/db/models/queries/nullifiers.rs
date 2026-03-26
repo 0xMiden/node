@@ -12,6 +12,7 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamLimiter,
@@ -23,7 +24,6 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
-use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nullifier_prefix_to_raw_sql};
 use crate::db::models::utils::{get_nullifier_prefix, vec_raw_try_into};
 use crate::db::{NullifierInfo, schema};
@@ -226,11 +226,7 @@ pub(crate) fn select_nullifiers_paged(
 /// INSERT INTO nullifiers (nullifier, nullifier_prefix, block_num)
 /// VALUES (?1, ?2, ?3)
 /// ```
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_nullifiers_for_block(
     conn: &mut SqliteConnection,
     nullifiers: &[Nullifier],

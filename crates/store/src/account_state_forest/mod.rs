@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
 use miden_node_proto::domain::account::AccountStorageMapDetails;
+use miden_node_tracing::instrument;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
@@ -29,9 +30,7 @@ use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
-use tracing::instrument;
 
-use crate::COMPONENT;
 pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
 
 #[cfg(test)]
@@ -306,7 +305,7 @@ impl AccountStateForest {
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
-    #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+    #[instrument(COMPONENT: block.number = %block_num)]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,
@@ -646,7 +645,7 @@ impl AccountStateForest {
     /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
     ///
     /// Returns the number of pruned roots for observability.
-    #[instrument(target = COMPONENT, skip_all, ret, fields(block.number = %chain_tip))]
+    #[instrument(COMPONENT: ret, block.number = %chain_tip)]
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
         let cutoff_block = chain_tip
             .checked_sub(HISTORICAL_BLOCK_RETENTION)

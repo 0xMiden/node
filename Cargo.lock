@@ -1853,6 +1853,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuzzy-search"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "464810ef4f0f4ce4573c9cb2584a5ed78ef0d00ca328ddfc39dc9a89d8d0bef9"
+dependencies = [
+ "anyhow",
+ "rayon",
+]
+
+[[package]]
 name = "generator"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3114,6 +3124,7 @@ dependencies = [
  "hex",
  "humantime",
  "miden-node-proto",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -3164,6 +3175,7 @@ dependencies = [
  "miden-node-proto-build",
  "miden-node-store",
  "miden-node-test-macro",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-node-validator",
  "miden-protocol",
@@ -3222,6 +3234,7 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-test-macro",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
@@ -3292,6 +3305,7 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
@@ -3337,6 +3351,7 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-test-macro",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
@@ -3388,6 +3403,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-tracing"
+version = "0.14.0"
+dependencies = [
+ "async-trait",
+ "miden-node-tracing-macro",
+ "miden-node-utils",
+ "opentelemetry",
+ "tracing",
+ "trybuild",
+]
+
+[[package]]
+name = "miden-node-tracing-macro"
+version = "0.14.0"
+dependencies = [
+ "fuzzy-search",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "miden-node-utils"
 version = "0.14.0"
 dependencies = [
@@ -3433,6 +3470,7 @@ dependencies = [
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-tx",
@@ -3538,6 +3576,7 @@ dependencies = [
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",

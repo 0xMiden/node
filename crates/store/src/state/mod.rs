@@ -21,6 +21,7 @@ use miden_node_proto::domain::account::{
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
@@ -35,7 +36,6 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
@@ -132,7 +132,7 @@ impl State {
     // --------------------------------------------------------------------------------------------
 
     /// Loads the state from the data directory.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[instrument(COMPONENT:)]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -200,7 +200,7 @@ impl State {
     ///
     /// If [None] is given as the value of `block_num`, the data for the latest [BlockHeader] is
     /// returned.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(COMPONENT: ret, err)]
     pub async fn get_block_header(
         &self,
         block_num: Option<BlockNumber>,
@@ -225,7 +225,7 @@ impl State {
     /// tree.
     ///
     /// Note: these proofs are invalidated once the nullifier tree is modified, i.e. on a new block.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret)]
+    #[instrument(COMPONENT: ret)]
     pub async fn check_nullifiers(&self, nullifiers: &[Nullifier]) -> Vec<SmtProof> {
         let inner = self.inner.read().await;
         nullifiers
@@ -533,7 +533,7 @@ impl State {
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
-    #[instrument(target = COMPONENT, skip_all, ret)]
+    #[instrument(COMPONENT: ret)]
     pub async fn get_transaction_inputs(
         &self,
         account_id: AccountId,

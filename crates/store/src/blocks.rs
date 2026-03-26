@@ -2,11 +2,10 @@ use std::io::ErrorKind;
 use std::ops::Not;
 use std::path::PathBuf;
 
+use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::utils::serde::Serializable;
-use tracing::instrument;
 
-use crate::COMPONENT;
 use crate::genesis::GenesisBlock;
 
 #[derive(Debug)]
@@ -23,13 +22,7 @@ impl BlockStore {
     /// # Errors
     ///
     /// Uses [`std::fs::create_dir`] and therefore has the same error conditions.
-    #[instrument(
-        target = COMPONENT,
-        name = "store.block_store.bootstrap",
-        skip_all,
-        err,
-        fields(path = %store_dir.display()),
-    )]
+    #[instrument(COMPONENT: err)]
     pub fn bootstrap(store_dir: PathBuf, genesis_block: &GenesisBlock) -> std::io::Result<Self> {
         fs_err::create_dir(&store_dir)?;
 
@@ -74,13 +67,7 @@ impl BlockStore {
         }
     }
 
-    #[instrument(
-        target = COMPONENT,
-        name = "store.block_store.save_block",
-        skip(self, data),
-        err,
-        fields(block_size = data.len())
-    )]
+    #[instrument(COMPONENT: err)]
     pub async fn save_block(
         &self,
         block_num: BlockNumber,

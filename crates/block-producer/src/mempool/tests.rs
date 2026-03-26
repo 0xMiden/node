@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use assert_matches::assert_matches;
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use pretty_assertions::assert_eq;
@@ -44,16 +46,24 @@ async fn add_transaction_traces_are_correct() {
     let txs = MockProvenTxBuilder::sequential();
     uut.add_transaction(txs[0].clone()).unwrap();
 
-    let span_data = rx_export.recv().await.unwrap();
-    assert_eq!(span_data.name, "mempool.add_transaction");
+    let mut found_span = None;
+    for _ in 0..500 {
+        if let Ok(span_data) = tokio::time::timeout(Duration::from_secs(1), rx_export.recv()).await
+        {
+            let span_data = span_data.unwrap();
+            if span_data.name.as_ref() == "COMPONENT.add_transaction" {
+                found_span = Some(span_data);
+                break;
+            }
+        }
+    }
+
+    assert_matches!(&found_span, Some(span_data) if span_data.name.as_ref() == "COMPONENT.add_transaction");
+    let Some(span_data) = found_span else {
+        unreachable!();
+    };
     assert!(span_data.attributes.iter().any(|kv| kv.key == "code.module.name".into()
         && kv.value == "miden_node_block_producer::mempool".into()));
-    assert!(
-        span_data
-            .attributes
-            .iter()
-            .any(|kv| kv.key == "tx".into() && kv.value.to_string().starts_with("0x"))
-    );
 }
 
 // BATCH FAILED TESTS

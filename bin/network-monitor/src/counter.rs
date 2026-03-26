@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
+use miden_node_tracing::{error, info, warn};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountFile, AccountHeader, AccountId};
 use miden_protocol::assembly::Library;
@@ -38,7 +39,7 @@ use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::{Mutex, watch};
-use tracing::{error, info, instrument, warn};
+use tracing::instrument;
 
 /// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
 const RESYNC_FAILURE_THRESHOLD: usize = 3;
@@ -184,7 +185,7 @@ async fn fetch_wallet_account(
     let response = match rpc_client.get_account(request).await {
         Ok(response) => response.into_inner(),
         Err(e) => {
-            warn!(account.id = %account_id, err = %e, "failed to fetch wallet account via RPC");
+            warn!(account.id = %account_id, "failed to fetch wallet account via RPC: {e}");
             return Ok(None);
         },
     };
@@ -519,11 +520,14 @@ async fn try_resync_wallet_account(
     let fresh_account = fetch_wallet_account(rpc_client, wallet_account.id())
         .await
         .inspect_err(|e| {
-            error!(account.id = %wallet_account.id(), err = ?e, "failed to re-sync wallet account from RPC");
+            error!(account.id = %wallet_account.id(), "failed to re-sync wallet account from RPC: {e:?}");
         })?
         .context("wallet account not found on-chain during re-sync")
         .inspect_err(|e| {
-            error!(account.id = %wallet_account.id(), err = ?e, "wallet account not found on-chain during re-sync");
+            error!(
+                account.id = %wallet_account.id(),
+                "wallet account not found on-chain during re-sync: {e:?}"
+            );
         })?;
 
     info!(account.id = %wallet_account.id(), "wallet account re-synced from RPC");

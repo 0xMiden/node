@@ -18,6 +18,7 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -39,7 +40,6 @@ use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 
-use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
 #[cfg(test)]
 use crate::db::models::vec_raw_try_into;
@@ -1182,11 +1182,7 @@ fn prepare_partial_account_update(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn upsert_accounts(
     conn: &mut SqliteConnection,
     accounts: &[BlockAccountUpdate],
@@ -1467,12 +1463,7 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 ///
 /// # Returns
 /// A tuple of `(vault_assets_deleted, storage_map_values_deleted, account_codes_deleted)`
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-    fields(cutoff_block),
-)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn prune_history(
     conn: &mut SqliteConnection,
     chain_tip: BlockNumber,
@@ -1486,12 +1477,7 @@ pub(crate) fn prune_history(
     Ok((vault_deleted, storage_deleted, codes_deleted))
 }
 
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-    fields(cutoff_block),
-)]
+#[instrument(COMPONENT: err)]
 fn prune_account_vault_assets(
     conn: &mut SqliteConnection,
     cutoff_block: i64,
@@ -1507,12 +1493,7 @@ fn prune_account_vault_assets(
     .map_err(DatabaseError::Diesel)
 }
 
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-    fields(cutoff_block),
-)]
+#[instrument(COMPONENT: err)]
 fn prune_account_storage_map_values(
     conn: &mut SqliteConnection,
     cutoff_block: i64,
@@ -1546,12 +1527,7 @@ fn prune_account_storage_map_values(
 ///       AND (block_num >= ?1 OR is_latest = 1)
 /// )
 /// ```
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    err,
-    fields(cutoff_block),
-)]
+#[instrument(COMPONENT: err)]
 fn prune_account_codes(
     conn: &mut SqliteConnection,
     cutoff_block: i64,

@@ -1,14 +1,14 @@
 use miden_node_db::{DatabaseError, Db};
+use miden_node_tracing::instrument;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
-use tracing::{Span, instrument};
+use tracing::Span;
 
+use crate::ValidatorSigner;
 use crate::db::{find_unvalidated_transactions, load_block_header};
-use crate::{COMPONENT, ValidatorSigner};
-
 // BLOCK VALIDATION ERROR
 // ================================================================================================
 
@@ -44,7 +44,7 @@ pub enum BlockValidationError {
 ///    tip, validated against the previous block header.
 ///
 /// On success, returns the signature and the validated block header.
-#[instrument(target = COMPONENT, skip_all, err, fields(tip.number = chain_tip.block_num().as_u32()))]
+#[instrument(COMPONENT: err)]
 pub async fn validate_block(
     proposed_block: ProposedBlock,
     signer: &ValidatorSigner,
@@ -110,7 +110,7 @@ pub async fn validate_block(
 }
 
 /// Signs a block header using the validator's signer.
-#[instrument(target = COMPONENT, name = "sign_block", skip_all, err, fields(block.number = header.block_num().as_u32()))]
+#[instrument(COMPONENT: err)]
 async fn sign_header(
     signer: &ValidatorSigner,
     header: &BlockHeader,

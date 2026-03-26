@@ -1,0 +1,5 @@
+error: `foo` is not in the OpenTelemetry allowlist
+ --> tests/ui/instrument/field_not_in_allowlist.rs:3:19
+  |
+3 | #[instrument(rpc: foo = bar)]
+  |                   ^^^

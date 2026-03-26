@@ -7,8 +7,9 @@ use axum::Router;
 use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
+use miden_node_tracing::info;
 use tokio::sync::watch;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;

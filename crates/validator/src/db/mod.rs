@@ -8,10 +8,10 @@ use diesel::SqliteConnection;
 use diesel::dsl::exists;
 use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db, SqlTypeConvert};
+use miden_node_tracing::instrument;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
@@ -19,7 +19,7 @@ use crate::db::models::{BlockHeaderRowInsert, ValidatedTransactionRowInsert};
 use crate::tx_validation::ValidatedTransaction;
 
 /// Open a connection to the DB and apply any pending migrations.
-#[instrument(target = COMPONENT, skip_all)]
+#[instrument(COMPONENT:)]
 pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
     let db = Db::new(&database_filepath)?;
     tracing::info!(
@@ -33,7 +33,7 @@ pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
 }
 
 /// Inserts a new validated transaction into the database.
-#[instrument(target = COMPONENT, skip_all, fields(tx_id = %tx_info.tx_id()), err)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
     tx_info: &ValidatedTransaction,
@@ -59,7 +59,7 @@ pub(crate) fn insert_transaction(
 ///   WHERE id = ?
 /// );
 /// ```
-#[instrument(target = COMPONENT, skip(conn), err)]
+#[instrument(COMPONENT: err)]
 pub(crate) fn find_unvalidated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
@@ -84,7 +84,7 @@ pub(crate) fn find_unvalidated_transactions(
 ///
 /// Inserts a new row if no block header exists at the given block number, or replaces the
 /// existing block header if one already exists.
-#[instrument(target = COMPONENT, skip(conn, header), err)]
+#[instrument(COMPONENT: err)]
 pub fn upsert_block_header(
     conn: &mut SqliteConnection,
     header: &BlockHeader,
@@ -100,7 +100,7 @@ pub fn upsert_block_header(
 /// Loads the chain tip (block header with the highest block number) from the database.
 ///
 /// Returns `None` if no block headers have been persisted (i.e. bootstrap has not been run).
-#[instrument(target = COMPONENT, skip(conn), err)]
+#[instrument(COMPONENT: err)]
 pub fn load_chain_tip(conn: &mut SqliteConnection) -> Result<Option<BlockHeader>, DatabaseError> {
     let row = schema::block_headers::table
         .order(schema::block_headers::block_num.desc())
@@ -118,7 +118,7 @@ pub fn load_chain_tip(conn: &mut SqliteConnection) -> Result<Option<BlockHeader>
 /// Loads a block header by its block number.
 ///
 /// Returns `None` if no block header exists at the given block number.
-#[instrument(target = COMPONENT, skip(conn), err)]
+#[instrument(COMPONENT: err)]
 pub fn load_block_header(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,

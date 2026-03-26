@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::SignedBlock;
@@ -7,7 +8,7 @@ use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, info_span, instrument};
+use tracing::{Instrument, info_span};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, InvalidBlockError};
@@ -40,7 +41,7 @@ impl State {
     ///   released.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
     #[expect(clippy::too_many_lines)]
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[instrument(COMPONENT: err)]
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 

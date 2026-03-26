@@ -4,6 +4,7 @@ use std::sync::Arc;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_tracing::instrument;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
@@ -133,7 +134,7 @@ impl Coordinator {
     /// This method creates a new [`AccountActor`] instance for the specified account origin
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
-    #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self, origin, actor_context))]
+    #[instrument(COMPONENT:)]
     pub fn spawn_actor(&mut self, origin: AccountOrigin, actor_context: &AccountActorContext) {
         let account_id = origin.id();
 

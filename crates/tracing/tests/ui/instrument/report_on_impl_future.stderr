@@ -1,0 +1,5 @@
+error: `err` / `report` is not supported on `impl Future` return types; use `async fn` instead
+ --> tests/ui/instrument/report_on_impl_future.rs:4:13
+  |
+4 | fn foo() -> impl std::future::Future<Output = Result<(), String>> {
+  |             ^^^^
