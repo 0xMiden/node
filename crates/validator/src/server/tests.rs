@@ -337,6 +337,54 @@ async fn unknown_transactions_rejected() {
     }
 }
 
+/// After replacing the chain tip, a new block built against the pre-replacement tip should be
+/// rejected because its previous block commitment no longer matches.
+#[tokio::test]
+async fn new_block_after_replacement_with_stale_commitment_rejected() {
+    let mut tv = TestValidator::new().await;
+
+    // Advance to block 1 and save the state needed to build on top of it.
+    let genesis_header = tv.chain_tip.clone();
+    let chain_at_genesis = tv.chain.clone();
+    tv.apply_empty_block().await;
+    let original_block_1_header = tv.chain_tip.clone();
+    let chain_after_block_1 = tv.chain.clone();
+
+    // Replace block 1 with a different block at the same height.
+    let block_inputs = BlockInputs::new(
+        genesis_header.clone(),
+        chain_at_genesis.clone(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let far_future_timestamp = genesis_header.timestamp() + 1_000_000;
+    let replacement = ProposedBlock::new_at(block_inputs, vec![], far_future_timestamp).unwrap();
+    let (replacement_header, _) = replacement.clone().into_header_and_body().unwrap();
+    assert_ne!(
+        replacement_header.commitment(),
+        original_block_1_header.commitment(),
+        "replacement block should differ from the original"
+    );
+    tv.call_sign_block(&replacement).await.unwrap();
+
+    // Now try to submit block 2 built on top of the *original* block 1.
+    // Its prev_block_commitment points to the old block 1, not the replacement.
+    let stale_block_2 = empty_block(&original_block_1_header, &chain_after_block_1);
+
+    let result = tv.call_sign_block(&stale_block_2).await;
+    assert!(
+        result.is_err(),
+        "block with stale commitment after replacement should be rejected"
+    );
+    let status = result.unwrap_err();
+    assert!(
+        status.message().contains("previous block commitment"),
+        "expected commitment mismatch error, got: {}",
+        status.message()
+    );
+}
+
 /// Verify that `validate_block` rejects blocks with a non-sequential block number.
 #[tokio::test]
 async fn validate_block_number_mismatch() {
