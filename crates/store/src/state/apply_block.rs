@@ -39,6 +39,10 @@ impl State {
     ///   use the fresh data.
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `proving_inputs` is `None` and the block is not the genesis block.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
     #[expect(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all, err)]
