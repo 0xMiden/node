@@ -142,8 +142,7 @@ message NoteInclusionInBlockProof {
 
 // Represents a note's metadata header together with proof of inclusion in a block.
 //
-// To get the full `NoteMetadata` (including
-// attachment), use `GetNotesById`.
+// To get the full `NoteMetadata` (including attachment), use `GetNotesById`.
 message NoteSyncRecord {
     // The fixed-size metadata header of the note.
     NoteMetadataHeader metadata_header = 1;
