@@ -93,6 +93,8 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         ntx_tracking: ntx_tracking_rx,
         explorer: explorer_rx,
         note_transport: note_transport_rx,
+        monitor_version: env!("CARGO_PKG_VERSION").to_string(),
+        network_name: config.network_name.clone(),
     };
     tasks.spawn_http_server(server_state, &config);
 

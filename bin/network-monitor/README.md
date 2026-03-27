@@ -27,6 +27,7 @@ miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 ```
 
 **Available Options:**
+- `--network-name`: Display name of the network shown on the dashboard (default: `Localhost`)
 - `--rpc-url`: RPC service URL (default: `http://localhost:50051`)
 - `--remote-prover-urls`: Comma-separated list of remote prover URLs. If omitted or empty, prover tasks are disabled.
 - `--faucet-url`: Faucet service URL for testing. If omitted, faucet testing is disabled.
@@ -51,6 +52,7 @@ miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 
 If command-line arguments are not provided, the application falls back to environment variables:
 
+- `MIDEN_MONITOR_NETWORK_NAME`: Display name of the network shown on the dashboard (default: `Localhost`)
 - `MIDEN_MONITOR_RPC_URL`: RPC service URL
 - `MIDEN_MONITOR_REMOTE_PROVER_URLS`: Comma-separated list of remote prover URLs. If unset or empty, prover tasks are disabled.
 - `MIDEN_MONITOR_FAUCET_URL`: Faucet service URL for testing. If unset, faucet testing is disabled.
@@ -218,6 +220,7 @@ The monitor application provides real-time status monitoring for the following M
 
 The web dashboard provides a clean, responsive interface with the following features:
 
+- **Network Identity**: Displays the configured network name (e.g., "Testnet", "Devnet") above the dashboard title and the monitor version in the footer
 - **Real-time Updates**: Automatically refreshes service status every 10 seconds
 - **Unified Service Cards**: Each service is displayed in a dedicated card that auto-sizes to show all information
 - **Combined Prover Information**: Remote prover cards integrate both connectivity status and proof generation test results
