@@ -280,35 +280,19 @@ pub(crate) fn select_block_proving_inputs(
         .map_err(Into::into)
 }
 
-/// Mark a committed block as proven and advance the proven-in-sequence tip.
+/// Clear `proving_inputs` for the given block, marking it as proven.
 ///
-/// This atomically:
-/// 1. Clears `proving_inputs` for the given block (marking it proven).
-/// 2. Queries all blocks where `proving_inputs IS NULL AND proven_in_sequence = FALSE`.
-/// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
-///    sets `proven_in_sequence = TRUE` for each.
+/// # Raw SQL
 ///
-/// Because all three steps happen within the caller's transaction, there is no window
-/// where a block could be proven but not yet marked in-sequence due to interruption.
-///
-/// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
-/// or below the current tip, as that indicates a consistency bug.
-///
-/// # Returns
-///
-/// The block numbers that were newly marked as proven in sequence (may be empty if the newly
-/// proven block doesn't yet form a contiguous chain from the tip).
-#[tracing::instrument(
-    target = COMPONENT,
-    skip_all,
-    fields(block.number = %block_num),
-    err,
-)]
-pub(crate) fn mark_proven_and_advance_sequence(
+/// ```sql
+/// UPDATE block_headers
+/// SET proving_inputs = NULL
+/// WHERE block_num = ?
+/// ```
+pub(crate) fn clear_block_proving_inputs(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
-) -> Result<Vec<BlockNumber>, DatabaseError> {
-    // Clear proving_inputs for the specified block.
+) -> Result<(), DatabaseError> {
     diesel::update(
         schema::block_headers::table
             .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
@@ -316,50 +300,61 @@ pub(crate) fn mark_proven_and_advance_sequence(
     .set(schema::block_headers::proving_inputs.eq(None::<Vec<u8>>))
     .execute(conn)?;
 
-    // Get the current proven-in-sequence tip (highest in-sequence).
-    let tip: i64 =
-        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
-            .filter(schema::block_headers::proven_in_sequence.eq(true))
-            .order(schema::block_headers::block_num.desc())
-            .first(conn)?;
-    let mut tip = BlockNumber::from_raw_sql(tip)?;
+    Ok(())
+}
 
-    // Get all blocks that are proven but not yet in-sequence.
-    let unsequenced: Vec<i64> =
+/// Select block numbers that are proven (`proving_inputs IS NULL`) but not yet marked
+/// in-sequence, ordered ascending.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num
+/// FROM block_headers
+/// WHERE proving_inputs IS NULL
+///   AND proven_in_sequence = FALSE
+/// ORDER BY block_num ASC
+/// ```
+pub(crate) fn select_proven_not_in_sequence_blocks(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    let block_nums: Vec<i64> =
         SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
             .filter(schema::block_headers::proving_inputs.is_null())
             .filter(schema::block_headers::proven_in_sequence.eq(false))
             .order(schema::block_headers::block_num.asc())
             .load(conn)?;
 
-    // Walk forward from the tip through consecutive proven blocks.
-    let mut newly_in_sequence = Vec::new();
-    for raw in unsequenced {
-        let candidate = BlockNumber::from_raw_sql(raw)?;
-        if candidate <= tip {
-            return Err(DatabaseError::DataCorrupted(format!(
-                "block {candidate} is proven but not marked in-sequence while the tip is at {tip}"
-            )));
-        }
-        if candidate == tip + 1 {
-            tip = candidate;
-            newly_in_sequence.push(candidate);
-        } else {
-            break;
-        }
-    }
+    block_nums
+        .into_iter()
+        .map(BlockNumber::from_raw_sql)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
 
-    // Mark the newly contiguous blocks as proven-in-sequence.
-    if !newly_in_sequence.is_empty() {
-        let raw_nums: Vec<i64> = newly_in_sequence.iter().map(|b| b.to_raw_sql()).collect();
-        diesel::update(
-            schema::block_headers::table.filter(schema::block_headers::block_num.eq_any(&raw_nums)),
-        )
-        .set(schema::block_headers::proven_in_sequence.eq(true))
-        .execute(conn)?;
-    }
+/// Mark blocks in the range `[block_from, block_to]` as proven in sequence.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// UPDATE block_headers
+/// SET proven_in_sequence = TRUE
+/// WHERE block_num >= ? AND block_num <= ?
+/// ```
+pub(crate) fn mark_blocks_as_proven_in_sequence(
+    conn: &mut SqliteConnection,
+    block_from: BlockNumber,
+    block_to: BlockNumber,
+) -> Result<(), DatabaseError> {
+    diesel::update(
+        schema::block_headers::table
+            .filter(schema::block_headers::block_num.ge(block_from.to_raw_sql()))
+            .filter(schema::block_headers::block_num.le(block_to.to_raw_sql())),
+    )
+    .set(schema::block_headers::proven_in_sequence.eq(true))
+    .execute(conn)?;
 
-    Ok(newly_in_sequence)
+    Ok(())
 }
 
 /// Select unproven block numbers greater than `after`, in ascending order, up to `limit`.

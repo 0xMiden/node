@@ -3576,7 +3576,7 @@ fn mark_block_proven_advances_in_sequence_for_consecutive_blocks() {
     // Mark all three as proven in order. Each call atomically advances the in-sequence tip.
     for i in 1u32..=3 {
         let advanced =
-            queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(i)).unwrap();
+            super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(i)).unwrap();
         assert_eq!(advanced, vec![BlockNumber::from(i)]);
     }
 
@@ -3596,15 +3596,15 @@ fn mark_block_proven_with_hole_does_not_advance_past_gap() {
 
     // Prove block 1 — advances tip to 1.
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
     assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
 
     // Prove blocks 3, 4 (skipping 2) — cannot advance past the gap.
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
     assert!(advanced.is_empty());
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
     assert!(advanced.is_empty());
 
     // Latest proven in sequence should be 1 (blocks 3, 4 are proven but not in sequence).
@@ -3624,13 +3624,13 @@ fn mark_block_proven_filling_hole_advances_through_all_consecutive() {
 
     // Prove blocks out of order: 1, 3, 4 first.
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
     assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
     assert!(advanced.is_empty());
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
     assert!(advanced.is_empty());
 
     assert_eq!(
@@ -3640,7 +3640,7 @@ fn mark_block_proven_filling_hole_advances_through_all_consecutive() {
 
     // Now prove block 2, filling the hole. Should advance through 2, 3, 4.
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(2u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(2u32)).unwrap();
     assert_eq!(
         advanced,
         vec![BlockNumber::from(2u32), BlockNumber::from(3u32), BlockNumber::from(4u32)],
@@ -3662,8 +3662,8 @@ fn select_unproven_blocks_skips_proven() {
     }
 
     // Prove blocks 1 and 3.
-    queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+    super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
 
     // Unproven blocks after genesis should be 2, 4, 5.
     let unproven = queries::select_unproven_blocks(&mut conn, BlockNumber::GENESIS, 10).unwrap();
@@ -3695,7 +3695,7 @@ fn mark_block_proven_is_idempotent_for_in_sequence() {
 
     // First call marks block 1 proven and advances it in-sequence.
     let advanced =
-        queries::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
     assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
 
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();

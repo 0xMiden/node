@@ -586,7 +586,7 @@ impl Db {
         block_num: BlockNumber,
     ) -> Result<Vec<BlockNumber>> {
         self.transact("mark block proven", move |conn| {
-            models::queries::mark_proven_and_advance_sequence(conn, block_num)
+            mark_proven_and_advance_sequence(conn, block_num)
         })
         .await
     }
@@ -827,4 +827,51 @@ impl Db {
         })
         .await
     }
+}
+
+/// Mark a committed block as proven and advance the proven-in-sequence tip.
+///
+/// This is intended to atomically (when run in a transaction):
+/// 1. Clears `proving_inputs` for the given block (marking it proven).
+/// 2. Queries all blocks where `proving_inputs IS NULL AND proven_in_sequence = FALSE`.
+/// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
+///    sets `proven_in_sequence = TRUE` for each.
+///
+/// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
+/// or below the current tip, as that indicates a consistency bug.
+pub(crate) fn mark_proven_and_advance_sequence(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    // Clear proving_inputs for the specified block.
+    models::queries::clear_block_proving_inputs(conn, block_num)?;
+
+    // Get the current proven-in-sequence tip (highest in-sequence).
+    let mut tip = models::queries::select_latest_proven_in_sequence_block_num(conn)?;
+
+    // Get all blocks that are proven but not yet marked in-sequence.
+    let unsequenced = models::queries::select_proven_not_in_sequence_blocks(conn)?;
+
+    // Walk forward from the tip through consecutive proven blocks.
+    let mut newly_in_sequence = Vec::new();
+    for candidate in unsequenced {
+        if candidate <= tip {
+            return Err(DatabaseError::DataCorrupted(format!(
+                "block {candidate} is proven but not marked in-sequence while the tip is at {tip}"
+            )));
+        }
+        if candidate == tip + 1 {
+            tip = candidate;
+            newly_in_sequence.push(candidate);
+        } else {
+            break;
+        }
+    }
+
+    // Mark the newly contiguous blocks as proven-in-sequence.
+    if let (Some(&from), Some(&to)) = (newly_in_sequence.first(), newly_in_sequence.last()) {
+        models::queries::mark_blocks_as_proven_in_sequence(conn, from, to)?;
+    }
+
+    Ok(newly_in_sequence)
 }
