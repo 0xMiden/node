@@ -7,6 +7,7 @@ services:
     volumes:
       - genesis-data:/genesis
       - store-data:/store
+      - validator-data:/validator
       - accounts:/accounts
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -14,6 +15,7 @@ services:
         set -e
         echo "Bootstrapping validator (creating genesis block)..."
         miden-node validator bootstrap \
+          --data-directory /validator \
           --genesis-block-directory /genesis \
           --accounts-directory /accounts
         echo "Bootstrapping store..."
