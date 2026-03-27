@@ -102,6 +102,7 @@ pub async fn run_faucet_test_task(
     let mut success_count = 0u64;
     let mut failure_count = 0u64;
     let mut last_tx_id = None;
+    let mut last_error: Option<String>;
     let mut faucet_metadata = None;
 
     let mut interval = tokio::time::interval(test_interval);
@@ -118,11 +119,13 @@ pub async fn run_faucet_test_task(
             Ok((minted_tokens, metadata)) => {
                 success_count += 1;
                 last_tx_id = Some(minted_tokens.tx_id.clone());
+                last_error = None;
                 faucet_metadata = Some(metadata);
                 info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
             },
             Err(e) => {
                 failure_count += 1;
+                last_error = Some(format!("{e:#}"));
                 warn!("Faucet test failed: {}", e);
             },
         }
@@ -140,13 +143,13 @@ pub async fn run_faucet_test_task(
 
         let status = ServiceStatus {
             name: "Faucet".to_string(),
-            status: if success_count > 0 || failure_count == 0 {
-                Status::Healthy
-            } else {
+            status: if last_error.is_some() {
                 Status::Unhealthy
+            } else {
+                Status::Healthy
             },
             last_checked: current_time,
-            error: None,
+            error: last_error.clone(),
             details: ServiceDetails::FaucetTest(test_details),
         };
 
