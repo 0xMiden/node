@@ -4,16 +4,18 @@ use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
+    NoteAttachmentKind,
     NoteDetails,
     NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
+    NoteMetadataHeader,
     NoteScript,
     NoteTag,
     NoteType,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
@@ -40,6 +42,49 @@ impl TryFrom<proto::note::NoteType> for NoteType {
             proto::note::NoteType::Public => Ok(NoteType::Public),
             proto::note::NoteType::Private => Ok(NoteType::Private),
             proto::note::NoteType::Unspecified => Err(ConversionError::EnumDiscriminantOutOfRange),
+        }
+    }
+}
+
+// NOTE ATTACHMENT KIND
+// ================================================================================================
+
+impl From<NoteAttachmentKind> for proto::note::NoteAttachmentKind {
+    fn from(kind: NoteAttachmentKind) -> Self {
+        match kind {
+            NoteAttachmentKind::None => proto::note::NoteAttachmentKind::None,
+            NoteAttachmentKind::Word => proto::note::NoteAttachmentKind::Word,
+            NoteAttachmentKind::Array => proto::note::NoteAttachmentKind::Array,
+        }
+    }
+}
+
+impl TryFrom<proto::note::NoteAttachmentKind> for NoteAttachmentKind {
+    type Error = ConversionError;
+
+    fn try_from(kind: proto::note::NoteAttachmentKind) -> Result<Self, Self::Error> {
+        match kind {
+            proto::note::NoteAttachmentKind::None => Ok(NoteAttachmentKind::None),
+            proto::note::NoteAttachmentKind::Word => Ok(NoteAttachmentKind::Word),
+            proto::note::NoteAttachmentKind::Array => Ok(NoteAttachmentKind::Array),
+            proto::note::NoteAttachmentKind::Unspecified => {
+                Err(ConversionError::EnumDiscriminantOutOfRange)
+            },
+        }
+    }
+}
+
+// NOTE METADATA HEADER
+// ================================================================================================
+
+impl From<NoteMetadataHeader> for proto::note::NoteMetadataHeader {
+    fn from(header: NoteMetadataHeader) -> Self {
+        Self {
+            sender: Some(header.sender().into()),
+            note_type: proto::note::NoteType::from(header.note_type()) as i32,
+            tag: header.tag().as_u32(),
+            attachment_kind: proto::note::NoteAttachmentKind::from(header.attachment_kind()) as i32,
+            attachment_scheme: header.attachment_scheme().as_u32(),
         }
     }
 }
@@ -156,7 +201,7 @@ impl From<(&NoteId, &NoteInclusionProof)> for proto::note::NoteInclusionInBlockP
         Self {
             note_id: Some(note_id.into()),
             block_num: proof.location().block_num().as_u32(),
-            note_index_in_block: proof.location().node_index_in_block().into(),
+            note_index_in_block: proof.location().block_note_tree_index().into(),
             inclusion_path: Some(proof.note_path().clone().into()),
         }
     }

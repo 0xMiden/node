@@ -43,7 +43,7 @@ pub trait GraphNode {
 
 #[cfg(test)]
 pub(crate) mod test_node {
-    use miden_protocol::{Felt, FieldElement};
+    use miden_protocol::Felt;
 
     use super::*;
 

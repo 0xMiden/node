@@ -24,7 +24,7 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
@@ -117,7 +117,7 @@ impl AccountVaultValue {
         let vault_key = Word::read_from_bytes(&vault_key)?;
         Ok(Self {
             block_num: BlockNumber::from_raw_sql(block_num)?,
-            vault_key: AssetVaultKey::new_unchecked(vault_key),
+            vault_key: AssetVaultKey::try_from(vault_key)?,
             asset: asset.map(|b| Asset::read_from_bytes(&b)).transpose()?,
         })
     }
@@ -195,22 +195,6 @@ impl From<NoteRecord> for proto::note::CommittedNote {
     }
 }
 
-impl From<NoteRecord> for proto::note::NoteSyncRecord {
-    fn from(value: NoteRecord) -> Self {
-        let note_id = value.note_id.into();
-        let note_index_in_block = value.note_index.leaf_index_value().into();
-        let metadata = value.metadata.into();
-        let inclusion_path = value.inclusion_path.into();
-
-        proto::note::NoteSyncRecord {
-            note_id: Some(note_id),
-            note_index_in_block,
-            metadata: Some(metadata),
-            inclusion_path: Some(inclusion_path),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub struct NoteSyncUpdate {
     pub notes: Vec<NoteSyncRecord>,
@@ -228,12 +212,14 @@ pub struct NoteSyncRecord {
 
 impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
     fn from(note: NoteSyncRecord) -> Self {
-        Self {
-            note_index_in_block: note.note_index.leaf_index_value().into(),
+        let metadata_header = Some(note.metadata.to_header().into());
+        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
             note_id: Some(note.note_id.into()),
-            metadata: Some(note.metadata.into()),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
-        }
+            block_num: note.block_num.as_u32(),
+            note_index_in_block: note.note_index.leaf_index_value().into(),
+            inclusion_path: Some(note.inclusion_path.into()),
+        });
+        Self { metadata_header, inclusion_proof }
     }
 }
 

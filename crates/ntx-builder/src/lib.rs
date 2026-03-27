@@ -7,13 +7,17 @@ use actor::AccountActorContext;
 use anyhow::Context;
 use builder::MempoolEventStream;
 use chain_state::ChainState;
-use clients::{BlockProducerClient, StoreClient};
+use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
 use db::Db;
 use futures::TryStreamExt;
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::{RwLock, mpsc};
 use url::Url;
+
+pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
 mod actor;
 mod builder;
@@ -22,6 +26,7 @@ mod clients;
 mod coordinator;
 pub(crate) mod db;
 pub(crate) mod inflight_note;
+pub mod server;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
@@ -61,6 +66,12 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
+
+/// Default maximum number of VM execution cycles allowed for a network transaction.
+///
+/// This limits the computational cost of network transactions. The protocol maximum is
+/// `1 << 29` but network transactions should be much cheaper.
+const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 
 // CONFIGURATION
 // =================================================================================================
@@ -114,6 +125,12 @@ pub struct NtxBuilderConfig {
     /// Once this limit is reached, no new transactions will be created for this account.
     pub max_account_crashes: usize,
 
+    /// Maximum number of VM execution cycles allowed for a single network transaction.
+    ///
+    /// Network transactions that exceed this limit will fail with an execution error.
+    /// Defaults to 2^18 cycles.
+    pub max_cycles: u32,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -138,6 +155,7 @@ impl NtxBuilderConfig {
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
+            max_cycles: DEFAULT_MAX_TX_CYCLES,
             database_filepath,
         }
     }
@@ -219,6 +237,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the maximum number of VM execution cycles for network transactions.
+    #[must_use]
+    pub fn with_max_cycles(mut self, max: u32) -> Self {
+        self.max_cycles = max;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -243,6 +268,8 @@ impl NtxBuilderConfig {
 
         let store = StoreClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
+        let validator = ValidatorClient::new(self.validator_url.clone());
+        let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
 
         // Subscribe to mempool first to ensure we don't miss any events. The subscription
         // replays all inflight transactions, so the subscriber's state is fully reconstructed.
@@ -268,9 +295,9 @@ impl NtxBuilderConfig {
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
         let actor_context = AccountActorContext {
-            block_producer_url: self.block_producer_url.clone(),
-            validator_url: self.validator_url.clone(),
-            tx_prover_url: self.tx_prover_url.clone(),
+            block_producer: block_producer.clone(),
+            validator,
+            prover,
             chain_state: chain_state.clone(),
             store: store.clone(),
             script_cache,
@@ -279,6 +306,7 @@ impl NtxBuilderConfig {
             idle_timeout: self.idle_timeout,
             db: db.clone(),
             request_tx,
+            max_cycles: self.max_cycles,
         };
 
         Ok(NetworkTransactionBuilder::new(

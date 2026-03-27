@@ -71,7 +71,7 @@ message MempoolEvent {
         repeated note.NetworkNote network_notes = 3;
         // Changes to a network account, if any. This includes creation of new network accounts.
         //
-        // The account delta is encoded using [winter_utils::Serializable] implementation
+        // The account delta is encoded using [miden_serde_utils::Serializable] implementation
         // for [miden_protocol::account::delta::AccountDelta].
         optional bytes network_account_delta = 4;
     }

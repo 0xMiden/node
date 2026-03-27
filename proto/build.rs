@@ -11,6 +11,7 @@ const STORE_BLOCK_PRODUCER_PROTO: &str = "internal/store.proto";
 const BLOCK_PRODUCER_PROTO: &str = "internal/block_producer.proto";
 const REMOTE_PROVER_PROTO: &str = "remote_prover.proto";
 const VALIDATOR_PROTO: &str = "internal/validator.proto";
+const NTX_BUILDER_PROTO: &str = "internal/ntx_builder.proto";
 
 const RPC_DESCRIPTOR: &str = "rpc_file_descriptor.bin";
 const STORE_RPC_DESCRIPTOR: &str = "store_rpc_file_descriptor.bin";
@@ -19,6 +20,7 @@ const STORE_BLOCK_PRODUCER_DESCRIPTOR: &str = "store_block_producer_file_descrip
 const BLOCK_PRODUCER_DESCRIPTOR: &str = "block_producer_file_descriptor.bin";
 const REMOTE_PROVER_DESCRIPTOR: &str = "remote_prover_file_descriptor.bin";
 const VALIDATOR_DESCRIPTOR: &str = "validator_file_descriptor.bin";
+const NTX_BUILDER_DESCRIPTOR: &str = "ntx_builder_file_descriptor.bin";
 
 /// Generates Rust protobuf bindings from .proto files.
 ///
@@ -74,6 +76,12 @@ fn main() -> miette::Result<()> {
     fs::write(&validator_path, validator_file_descriptor.encode_to_vec())
         .into_diagnostic()
         .wrap_err("writing validator file descriptor")?;
+
+    let ntx_builder_file_descriptor = protox::compile([NTX_BUILDER_PROTO], includes)?;
+    let ntx_builder_path = out_dir.join(NTX_BUILDER_DESCRIPTOR);
+    fs::write(&ntx_builder_path, ntx_builder_file_descriptor.encode_to_vec())
+        .into_diagnostic()
+        .wrap_err("writing ntx builder file descriptor")?;
 
     Ok(())
 }

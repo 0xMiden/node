@@ -367,8 +367,20 @@ function updateDisplay() {
         rpcService?.details?.RpcStatus?.block_producer_status?.chain_tip ??
         null;
 
+    // Compute effective health for a service, considering all signals for remote provers.
+    const isServiceHealthy = (s) => {
+        if (s.details && s.details.RemoteProverStatus) {
+            const statusOk = s.status === 'Healthy';
+            const testOk = s.testStatus == null || s.testStatus === 'Healthy';
+            const probeResult = grpcWebProbeResults.get(s.details.RemoteProverStatus.url);
+            const probeOk = !probeResult || probeResult.ok;
+            return statusOk && testOk && probeOk;
+        }
+        return s.status === 'Healthy';
+    };
+
     // Count healthy vs unhealthy services
-    const healthyServices = processedServices.filter(s => s.status === 'Healthy').length;
+    const healthyServices = processedServices.filter(isServiceHealthy).length;
     const totalServices = processedServices.length;
     const allHealthy = healthyServices === totalServices;
 
@@ -377,9 +389,18 @@ function updateDisplay() {
     overallStatus.style.color = allHealthy ? '#22C55D' : '#ff5500';
     servicesCount.textContent = `${totalServices} Services`;
 
+    // Update network name in logo
+    document.getElementById('network-name').textContent = statusData.network_name;
+
+    // Update monitor version
+    const versionEl = document.getElementById('monitor-version');
+    if (statusData.monitor_version) {
+        versionEl.textContent = 'Monitor v' + statusData.monitor_version;
+    }
+
     // Generate status cards
     const serviceCardsHtml = processedServices.map(service => {
-        const isHealthy = service.status === 'Healthy';
+        const isHealthy = isServiceHealthy(service);
         const statusColor = isHealthy ? '#22C55D' : '#ff5500';
         const statusIcon = isHealthy ? '✓' : '✗';
         const numOrDash = value => isHealthy ? (value?.toLocaleString?.() ?? value ?? '-') : '-';

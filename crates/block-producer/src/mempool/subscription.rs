@@ -81,8 +81,10 @@ impl SubscriptionProvider {
         let network_notes = tx
             .output_notes()
             .filter_map(|note| match note {
-                OutputNote::Full(inner) => inner.clone().into_account_target_network_note().ok(),
-                _ => None,
+                OutputNote::Public(inner) => {
+                    inner.clone().into_note().into_account_target_network_note().ok()
+                },
+                OutputNote::Private(_) => None,
             })
             .collect();
         let account_delta =

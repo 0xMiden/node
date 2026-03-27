@@ -35,3 +35,9 @@ fn bundled_bootstrap_parses() {
 fn bundled_start_parses() {
     let _ = parse(&["bundled", "start"]);
 }
+
+#[test]
+fn bundled_start_with_max_cycles_parses() {
+    let max_cycles = 2_i32.pow(18).to_string();
+    let _ = parse(&["bundled", "start", "--ntx-builder.max-cycles", &max_cycles]);
+}

@@ -49,7 +49,7 @@ use miden_protocol::note::{
     NoteType,
     Nullifier,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
 use crate::COMPONENT;
@@ -875,7 +875,7 @@ impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
         let attachment = note.metadata.attachment();
 
         let target_account_id = NetworkAccountTarget::try_from(attachment).ok();
-        let network_note_type = if target_account_id.is_some() {
+        let network_note_type = if target_account_id.is_some() && !note.metadata.is_private() {
             NetworkNoteType::SingleTarget
         } else {
             NetworkNoteType::None

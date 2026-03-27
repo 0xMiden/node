@@ -20,7 +20,7 @@ use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteAttachment;
-use miden_protocol::utils::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
 use thiserror::Error;
 
@@ -298,7 +298,7 @@ impl From<AccountHeader> for proto::account::AccountHeader {
             vault_root: Some(header.vault_root().into()),
             storage_commitment: Some(header.storage_commitment().into()),
             code_commitment: Some(header.code_commitment().into()),
-            nonce: header.nonce().as_int(),
+            nonce: header.nonce().as_canonical_u64(),
         }
     }
 }
@@ -373,14 +373,9 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         if too_many_assets {
             Ok(Self::LimitExceeded)
         } else {
-            let parsed_assets =
-                Result::<Vec<_>, ConversionError>::from_iter(assets.into_iter().map(|asset| {
-                    let asset = asset
-                        .asset
-                        .ok_or(proto::primitives::Asset::missing_field(stringify!(asset)))?;
-                    let asset = Word::try_from(asset)?;
-                    Asset::try_from(asset).map_err(ConversionError::AssetError)
-                }))?;
+            let parsed_assets = Result::<Vec<_>, ConversionError>::from_iter(
+                assets.into_iter().map(Asset::try_from),
+            )?;
             Ok(Self::Assets(parsed_assets))
         }
     }
@@ -395,9 +390,7 @@ impl From<AccountVaultDetails> for proto::rpc::AccountVaultDetails {
             },
             AccountVaultDetails::Assets(assets) => Self {
                 too_many_assets: false,
-                assets: Vec::from_iter(assets.into_iter().map(|asset| proto::primitives::Asset {
-                    asset: Some(proto::primitives::Digest::from(Word::from(asset))),
-                })),
+                assets: Vec::from_iter(assets.into_iter().map(proto::primitives::Asset::from)),
             },
         }
     }
@@ -1005,17 +998,20 @@ impl TryFrom<proto::primitives::Asset> for Asset {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Asset) -> Result<Self, Self::Error> {
-        let inner = value.asset.ok_or(proto::primitives::Asset::missing_field("asset"))?;
-        let word = Word::try_from(inner)?;
+        let key = value.key.ok_or(proto::primitives::Asset::missing_field("key"))?;
+        let key_word = Word::try_from(key)?;
+        let value = value.value.ok_or(proto::primitives::Asset::missing_field("value"))?;
+        let value_word = Word::try_from(value)?;
 
-        Asset::try_from(word).map_err(ConversionError::AssetError)
+        Asset::from_key_value_words(key_word, value_word).map_err(ConversionError::AssetError)
     }
 }
 
 impl From<Asset> for proto::primitives::Asset {
     fn from(asset_from: Asset) -> Self {
         proto::primitives::Asset {
-            asset: Some(Word::from(asset_from).into()),
+            key: Some(asset_from.to_key_word().into()),
+            value: Some(asset_from.to_value_word().into()),
         }
     }
 }

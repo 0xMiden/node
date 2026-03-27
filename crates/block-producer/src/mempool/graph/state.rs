@@ -311,7 +311,7 @@ mod tests {
     use std::collections::HashSet;
 
     use miden_protocol::note::Nullifier;
-    use miden_protocol::{Felt, FieldElement, Word};
+    use miden_protocol::{Felt, Word};
 
     use super::*;
     use crate::errors::StateConflict;
