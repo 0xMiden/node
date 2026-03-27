@@ -412,10 +412,11 @@ impl api_server::Api for RpcService {
             ))
         })?;
 
-        // If transaction inputs are provided, re-execute the transaction to validate it.
+        // Transaction inputs must be provided in order to allow for re-execution.
         if request.transaction_inputs.is_some() {
-            // Re-execute the transaction via the Validator.
             self.validator.clone().submit_proven_transaction(request.clone()).await?;
+        } else {
+            return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
         block_producer.clone().submit_proven_transaction(request).await
