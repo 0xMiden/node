@@ -108,6 +108,7 @@ impl State {
 
             let block_num = note_sync.block_header.block_num();
 
+            // The MMR at `checkpoint` contains proofs for blocks 0..checkpoint-1
             if block_num >= checkpoint {
                 break;
             }

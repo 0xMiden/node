@@ -493,7 +493,7 @@ message SyncNotesResponse {
     //
     // `block_from` matches the request's `block_range.block_from`.
     // `block_to` matches the request's `block_range.block_to`, or the chain tip if it was
-    // not specified.
+    // not specified, or if the requested block number is beyond the tip.
     BlockRange block_range = 1;
 
     // Blocks containing matching notes, ordered by block number ascending.

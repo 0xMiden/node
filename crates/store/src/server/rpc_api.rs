@@ -133,15 +133,15 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
-        let requested_block_to = request.block_range.and_then(|r| r.block_to);
-
-        let block_from = block_range.start().as_u32();
-        let response_block_to = requested_block_to.unwrap_or(chain_tip.as_u32());
+        let block_from = block_range.start();
+        // Clamp block_to to the chain tip to avoid erroring when opening the MMR proof
+        let block_to = block_range.end().min(&chain_tip);
+        let clamped_block_range = *block_from..=*block_to;
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let results = self.state.sync_notes(request.note_tags, block_range).await?;
+        let results = self.state.sync_notes(request.note_tags, clamped_block_range).await?;
 
         let blocks = results
             .into_iter()
@@ -154,8 +154,8 @@ impl rpc_server::Rpc for StoreApi {
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             block_range: Some(proto::rpc::BlockRange {
-                block_from,
-                block_to: Some(response_block_to),
+                block_from: block_from.as_u32(),
+                block_to: Some(block_to.as_u32()),
             }),
             blocks,
         }))
