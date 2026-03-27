@@ -18,15 +18,15 @@ impl GraphNode for SelectedBatch {
     type Id = BatchId;
 
     fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_> {
-        Box::new(self.txs().iter().flat_map(|tx| tx.nullifiers()))
+        Box::new(self.transactions().iter().flat_map(|tx| tx.nullifiers()))
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.txs().iter().flat_map(|tx| tx.output_note_commitments()))
+        Box::new(self.transactions().iter().flat_map(|tx| tx.output_note_commitments()))
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.txs().iter().flat_map(|tx| tx.unauthenticated_note_commitments()))
+        Box::new(self.transactions().iter().flat_map(|tx| tx.unauthenticated_note_commitments()))
     }
 
     fn account_updates(
@@ -134,9 +134,9 @@ impl BatchGraph {
     ///
     /// Panics if the batch does not exist, or has existing ancestors in the batch
     /// graph.
-    pub fn prune(&mut self, batch: BatchId) {
-        self.inner.prune(batch);
+    pub fn prune(&mut self, batch: BatchId) -> SelectedBatch {
         self.proven.remove(&batch);
+        self.inner.prune(batch)
     }
 
     pub fn proven_count(&self) -> usize {

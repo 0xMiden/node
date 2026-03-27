@@ -34,10 +34,6 @@ impl SelectedBatch {
         self.id
     }
 
-    pub(crate) fn txs(&self) -> &[Arc<AuthenticatedTransaction>] {
-        &self.txs
-    }
-
     pub(crate) fn into_transactions(self) -> Vec<Arc<AuthenticatedTransaction>> {
         self.txs
     }

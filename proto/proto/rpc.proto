@@ -2,12 +2,12 @@
 syntax = "proto3";
 package rpc;
 
+import "google/protobuf/empty.proto";
 import "types/account.proto";
 import "types/blockchain.proto";
 import "types/note.proto";
 import "types/primitives.proto";
 import "types/transaction.proto";
-import "google/protobuf/empty.proto";
 
 // RPC API
 // ================================================================================================
@@ -59,19 +59,12 @@ service Api {
     // Submits proven transaction to the Miden network. Returns the node's current block height.
     rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
-    // Submits a proven batch of transactions to the Miden network.
+    // Submits a batch of transactions to the Miden network.
     //
-    // The batch may include transactions which were are:
-    //
-    //   - already in the mempool i.e. previously successfully submitted
-    //   - will be submitted to the mempool in the future
-    //   - won't be submitted to the mempool at all
-    //
-    // All transactions in the batch but not in the mempool must build on the current mempool
-    // state following normal transaction submission rules.
+    // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
     // STATE SYNCHRONIZATION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -125,10 +118,8 @@ message RpcStatus {
     BlockProducerStatus block_producer = 4;
 }
 
-
 // BLOCK PRODUCER STATUS
 // ================================================================================================
-
 
 // Represents the status of the block producer.
 message BlockProducerStatus {
@@ -268,7 +259,6 @@ message AccountRequest {
 
 // Represents the result of getting account proof.
 message AccountResponse {
-
     message AccountDetails {
         // Account header.
         account.AccountHeader header = 1;

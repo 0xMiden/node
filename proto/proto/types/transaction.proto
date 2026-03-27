@@ -18,10 +18,15 @@ message ProvenTransaction {
     optional bytes transaction_inputs = 2;
 }
 
-message ProvenTransactionBatch {
-    // Encoded using [winter_utils::Serializable] implementation for
-    // [miden_protocol::transaction::proven_tx::ProvenTransaction].
-    bytes encoded = 1;
+message TransactionBatch {
+    // The proposed batch of transaction encoded using [winter_utils::Serializable] implementation
+    // for [miden_protocol::batch::ProposedBatch].
+    bytes proposed_batch = 1;
+    // Each transaction's inputs encoded using [winter_utils::Serializable] implementation for
+    // [miden_protocol::transaction::TransactionInputs].
+    //
+    // Order of inputs should match the transaction order in the batch.
+    repeated bytes transaction_inputs = 2;
 }
 
 // Represents a transaction ID.

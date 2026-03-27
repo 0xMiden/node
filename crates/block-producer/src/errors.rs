@@ -34,12 +34,12 @@ pub enum BlockProducerError {
     },
 }
 
-// Transaction adding errors
+// Add transaction and add user batch errors
 // =================================================================================================
 
 #[derive(Debug, Error, GrpcError)]
-pub enum AddTransactionError {
-    #[error("failed to retrieve transaction inputs from the store")]
+pub enum MempoolSubmissionError {
+    #[error("failed to retrieve inputs from the store")]
     #[grpc(internal)]
     StoreConnectionFailed(#[source] StoreError),
 
@@ -55,7 +55,7 @@ pub enum AddTransactionError {
         stale_limit: BlockNumber,
     },
 
-    #[error("transaction deserialization failed")]
+    #[error("request deserialization failed")]
     TransactionDeserializationFailed(#[source] miden_protocol::utils::DeserializationError),
 
     #[error(
@@ -91,16 +91,6 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
-}
-
-// Submit proven batch by user errors
-// =================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-#[grpc(internal)]
-pub enum SubmitProvenBatchError {
-    #[error("batch deserialization failed")]
-    Deserialization(#[source] miden_protocol::utils::DeserializationError),
 }
 
 // Batch building errors
