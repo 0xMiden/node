@@ -92,7 +92,13 @@ impl BatchGraph {
     ///
     /// Batches are returned in reverse-chronological order.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> Vec<SelectedBatch> {
-        self.inner.revert_expired_unselected(chain_tip)
+        let reverted = self.inner.revert_expired_unselected(chain_tip);
+
+        for batch in &reverted {
+            self.proven.remove(&batch.id());
+        }
+
+        reverted
     }
 
     /// Marks the given batch as proven, making it available for selection in a block
