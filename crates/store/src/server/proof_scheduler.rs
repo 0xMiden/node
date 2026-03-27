@@ -42,7 +42,7 @@ pub const DEFAULT_MAX_CONCURRENT_PROOFS: NonZeroUsize = NonZeroUsize::new(8).unw
 
 /// A wrapper around [`JoinSet`] whose `join_next` returns [`std::future::pending`] when empty
 /// instead of `None`, making it safe to use directly in `tokio::select!` without a special case.
-struct ProofTaskJoinSet(JoinSet<anyhow::Result<BlockNumber>>);
+struct ProofTaskJoinSet(JoinSet<anyhow::Result<()>>);
 
 impl ProofTaskJoinSet {
     fn new() -> Self {
@@ -53,7 +53,7 @@ impl ProofTaskJoinSet {
         self.0.len()
     }
 
-    /// Spawns a new task to prove and save a block.
+    /// Spawns a new task to prove a block.
     fn spawn(
         &mut self,
         db: &Arc<Db>,
@@ -64,13 +64,12 @@ impl ProofTaskJoinSet {
         let db = Arc::clone(db);
         let block_prover = Arc::clone(block_prover);
         let block_store = Arc::clone(block_store);
-        self.0.spawn(
-            async move { prove_and_save(&db, &block_prover, &block_store, block_num).await },
-        );
+        self.0
+            .spawn(async move { prove_block(&db, &block_prover, &block_store, block_num).await });
     }
 
     /// Returns the result of the next completed task, or pends forever if the set is empty.
-    async fn join_next(&mut self) -> anyhow::Result<BlockNumber> {
+    async fn join_next(&mut self) -> anyhow::Result<()> {
         if self.0.is_empty() {
             std::future::pending().await
         } else {
@@ -147,23 +146,8 @@ async fn run(
 
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
-            // Proving task completed. mark_block_proven atomically clears proving_inputs
-            // and advances the proven-in-sequence tip within a single transaction.
             result = join_set.join_next() => {
-                let proven_block_num = result?;
-                // Mark the block as proven and advance the proven-in-sequence tip within a single transaction.
-                let advanced_in_sequence = db.mark_proven_and_advance_sequence(proven_block_num).await?;
-
-                if let Some(&last) = advanced_in_sequence.last() {
-                    info!(
-                        target = COMPONENT,
-                        block.number = %proven_block_num,
-                        proven_in_sequence_tip = %last,
-                        "Block proven and in-sequence advanced",
-                    );
-                } else {
-                    info!(target = COMPONENT, block.number = %proven_block_num, "Block proven");
-                }
+                result?;
             },
 
             // New chain tip received — re-query for unproven blocks on next iteration.
@@ -180,27 +164,42 @@ async fn run(
 // PROVE BLOCK
 // ================================================================================================
 
-/// Proves a single block, saves the proof to the block store, and returns the block number.
-///
-/// This function encapsulates the proving and saving of a single proof job: loading inputs from
-/// the DB, invoking the prover (with a timeout), and persisting the proof to disk. The caller
-/// is responsible for marking the block as proven in the DB via [`Db::mark_block_proven`].
+/// Proves a single block, saves the proof to the block store, marks the block as proven in the
+/// DB, and advances the proven-in-sequence tip.
 #[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(block.number=block_num.as_u32()), err)]
-async fn prove_and_save(
+async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
     block_store: &BlockStore,
     block_num: BlockNumber,
-) -> anyhow::Result<BlockNumber> {
+) -> anyhow::Result<()> {
     const MAX_RETRIES: u32 = 10;
 
     for _ in 0..MAX_RETRIES {
-        match tokio::time::timeout(BLOCK_PROVE_TIMEOUT, prove_block(db, block_prover, block_num))
-            .await
+        match tokio::time::timeout(
+            BLOCK_PROVE_TIMEOUT,
+            generate_block_proof(db, block_prover, block_num),
+        )
+        .await
         {
             Ok(Ok(proof)) => {
+                // Save the block proof to file.
                 save_block_proof(block_store, block_num, &proof).await?;
-                return Ok(block_num);
+
+                // Mark the block as proven and advance the sequence in the database.
+                let advanced_in_sequence = db.mark_proven_and_advance_sequence(block_num).await?;
+                if let Some(&last) = advanced_in_sequence.last() {
+                    info!(
+                        target = COMPONENT,
+                        block.number = %block_num,
+                        proven_in_sequence_tip = %last,
+                        "Block proven and in-sequence advanced",
+                    );
+                } else {
+                    info!(target = COMPONENT, block.number = %block_num, "Block proven");
+                }
+
+                return Ok(());
             },
             Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
             Ok(Err(ProveBlockError::Transient(err))) => {
@@ -215,11 +214,11 @@ async fn prove_and_save(
     anyhow::bail!("maximum retries ({MAX_RETRIES}) exceeded");
 }
 
-/// Proves a single block by loading inputs from the DB and invoking the block prover.
+/// Generates a block proof by loading inputs from the DB and invoking the block prover.
 ///
 /// Records `block_commitment` on `parent_span` once the block header is available.
-#[instrument(target = COMPONENT, name = "prove_block.prove", skip_all, fields(block.number=block_num.as_u32()), err)]
-async fn prove_block(
+#[instrument(target = COMPONENT, name = "prove_block.generate", skip_all, fields(block.number=block_num.as_u32()), err)]
+async fn generate_block_proof(
     db: &Db,
     block_prover: &BlockProver,
     block_num: BlockNumber,
