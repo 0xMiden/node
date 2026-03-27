@@ -956,23 +956,21 @@ fn note_sync_across_multiple_blocks() {
         queries::insert_notes(conn, &[(note, None)]).unwrap();
     }
 
-    // Simulate the RPC batching loop: repeatedly query with advancing block_from.
-    let full_range = BlockNumber::GENESIS..=BlockNumber::from(3);
+    // Simulate the store batching loop: repeatedly call get_note_sync with advancing
+    // block_from, same as `State::sync_notes` does.
     let mut collected_block_nums = Vec::new();
-    let mut current_from = *full_range.start();
+    let mut current_from = BlockNumber::GENESIS;
+    let end = BlockNumber::from(3);
 
     loop {
-        let range = current_from..=*full_range.end();
-        let (notes, _last_included) =
-            queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], range).unwrap();
-
-        if notes.is_empty() {
+        let range = current_from..=end;
+        let Some(update) = queries::get_note_sync(conn, &[tag], range).unwrap() else {
             break;
-        }
+        };
 
         // All notes in a single response come from the same block.
-        let block_num = notes[0].block_num;
-        assert!(notes.iter().all(|n| n.block_num == block_num));
+        let block_num = update.block_header.block_num();
+        assert!(update.notes.iter().all(|n| n.block_num == block_num));
         collected_block_nums.push(block_num);
 
         // The query uses `committed_at > block_range.start()` (exclusive), so
@@ -1019,13 +1017,10 @@ fn note_sync_no_matching_tags() {
     queries::insert_scripts(conn, [&note]).unwrap();
     queries::insert_notes(conn, &[(note, None)]).unwrap();
 
-    // Query with a different tag — should return no notes.
+    // Query with a different tag — should return None.
     let range = BlockNumber::GENESIS..=BlockNumber::from(1);
-    let (notes, last_included) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[999], range).unwrap();
-
-    assert!(notes.is_empty());
-    assert_eq!(last_included, BlockNumber::from(1));
+    let result = queries::get_note_sync(conn, &[999], range).unwrap();
+    assert!(result.is_none());
 }
 
 fn insert_account_delta(

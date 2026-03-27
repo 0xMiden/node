@@ -126,38 +126,38 @@ impl rpc_server::Rpc for StoreApi {
     async fn sync_notes(
         &self,
         request: Request<proto::rpc::SyncNotesRequest>,
-    ) -> Result<Response<proto::store::StoreSyncNotesResponse>, Status> {
+    ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
         let request = request.into_inner();
 
         let chain_tip = self.state.latest_block_num().await;
+        let requested_block_to = request.block_range.as_ref().and_then(|r| r.block_to);
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
 
         let block_from = block_range.start().as_u32();
+        let response_block_to = requested_block_to.unwrap_or(chain_tip.as_u32());
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let result = self.state.sync_notes(request.note_tags, block_range).await?;
+        let results = self.state.sync_notes(request.note_tags, block_range).await?;
 
-        let (block_header, mmr_path, notes) = match result {
-            Some((state, mmr_proof)) => (
-                Some(state.block_header.into()),
-                Some(mmr_proof.merkle_path().clone().into()),
-                state.notes.into_iter().map(Into::into).collect(),
-            ),
-            None => (None, None, Vec::new()),
-        };
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(Into::into).collect(),
+            })
+            .collect();
 
-        Ok(Response::new(proto::store::StoreSyncNotesResponse {
+        Ok(Response::new(proto::rpc::SyncNotesResponse {
             block_range: Some(proto::rpc::BlockRange {
                 block_from,
-                block_to: Some(chain_tip.as_u32()),
+                block_to: Some(response_block_to),
             }),
-            block_header,
-            mmr_path,
-            notes,
+            blocks,
         }))
     }
 
