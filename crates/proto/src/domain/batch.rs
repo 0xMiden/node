@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Serializable;
 
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
 use crate::generated as proto;
 
 /// Data required for a transaction batch.
@@ -30,20 +30,20 @@ impl TryFrom<proto::store::BatchInputs> for BatchInputs {
     type Error = ConversionError;
 
     fn try_from(response: proto::store::BatchInputs) -> Result<Self, ConversionError> {
+        let decoder = response.decoder();
         let result = Self {
-            batch_reference_block_header: response
-                .batch_reference_block_header
-                .ok_or(proto::store::BatchInputs::missing_field("block_header"))?
-                .try_into()?,
+            batch_reference_block_header: decoder
+                .decode_field("block_header", response.batch_reference_block_header)?,
             note_proofs: response
                 .note_proofs
                 .iter()
                 .map(<(NoteId, NoteInclusionProof)>::try_from)
-                .collect::<Result<_, ConversionError>>()?,
-            partial_block_chain: PartialBlockchain::read_from_bytes(&response.partial_block_chain)
-                .map_err(|source| {
-                    ConversionError::deserialization_error("PartialBlockchain", source)
-                })?,
+                .collect::<Result<_, ConversionError>>()
+                .context("note_proofs")?,
+            partial_block_chain: PartialBlockchain::decode_bytes(
+                &response.partial_block_chain,
+                "PartialBlockchain",
+            )?,
         };
 
         Ok(result)

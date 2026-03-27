@@ -81,7 +81,8 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         &self,
         request: Request<proto::account::AccountId>,
     ) -> Result<Response<proto::store::MaybeAccountDetails>, Status> {
-        let account_id = read_account_id::<Status>(Some(request.into_inner()))?;
+        let account_id =
+            read_account_id::<proto::account::AccountId, Status>(Some(request.into_inner()))?;
 
         let account_info: Option<AccountInfo> =
             self.state.get_network_account_details_by_id(account_id).await?;
@@ -97,7 +98,9 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::store::UnconsumedNetworkNotes>, Status> {
         let request = request.into_inner();
         let block_num = BlockNumber::from(request.block_num);
-        let account_id = read_account_id::<Status>(request.account_id)?;
+        let account_id = read_account_id::<proto::store::UnconsumedNetworkNotesRequest, Status>(
+            request.account_id,
+        )?;
 
         let state = self.state.clone();
 
@@ -207,8 +210,11 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let request = request.into_inner();
 
         // Read account ID.
-        let account_id =
-            read_account_id::<GetWitnessesError>(request.account_id).map_err(invalid_argument)?;
+        let account_id = read_account_id::<
+            proto::store::VaultAssetWitnessesRequest,
+            GetWitnessesError,
+        >(request.account_id)
+        .map_err(invalid_argument)?;
 
         // Read vault keys.
         let vault_keys = request
@@ -264,7 +270,10 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 
         // Read the account ID.
         let account_id =
-            read_account_id::<GetWitnessesError>(request.account_id).map_err(invalid_argument)?;
+            read_account_id::<proto::store::StorageMapWitnessRequest, GetWitnessesError>(
+                request.account_id,
+            )
+            .map_err(invalid_argument)?;
 
         // Read the map key.
         let map_key = read_root::<GetWitnessesError>(request.map_key, "MapKey")

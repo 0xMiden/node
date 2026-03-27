@@ -4,10 +4,10 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Serializable;
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
 use crate::generated as proto;
 
 #[derive(Debug, Clone)]
@@ -82,30 +82,31 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
     type Error = ConversionError;
 
     fn try_from(event: proto::block_producer::MempoolEvent) -> Result<Self, Self::Error> {
-        let event =
-            event.event.ok_or(proto::block_producer::MempoolEvent::missing_field("event"))?;
+        let event = event.event.ok_or(ConversionError::missing_field::<
+            proto::block_producer::MempoolEvent,
+        >("event"))?;
 
         match event {
             proto::block_producer::mempool_event::Event::TransactionAdded(tx) => {
-                let id = tx
-                    .id
-                    .ok_or(proto::block_producer::mempool_event::TransactionAdded::missing_field(
-                        "id",
-                    ))?
-                    .try_into()?;
-                let nullifiers =
-                    tx.nullifiers.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?;
+                let decoder = tx.decoder();
+                let id = decoder.decode_field("id", tx.id)?;
+                let nullifiers = tx
+                    .nullifiers
+                    .into_iter()
+                    .map(Nullifier::try_from)
+                    .collect::<Result<_, _>>()
+                    .context("nullifiers")?;
                 let network_notes = tx
                     .network_notes
                     .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<_, _>>()?;
+                    .map(AccountTargetNetworkNote::try_from)
+                    .collect::<Result<_, _>>()
+                    .context("network_notes")?;
                 let account_delta = tx
                     .network_account_delta
                     .as_deref()
-                    .map(AccountUpdateDetails::read_from_bytes)
-                    .transpose()
-                    .map_err(|err| ConversionError::deserialization_error("account_delta", err))?;
+                    .map(|bytes| AccountUpdateDetails::decode_bytes(bytes, "account_delta"))
+                    .transpose()?;
 
                 Ok(Self::TransactionAdded {
                     id,
@@ -115,18 +116,15 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                 })
             },
             proto::block_producer::mempool_event::Event::BlockCommitted(block_committed) => {
-                let header = block_committed
-                    .block_header
-                    .ok_or(proto::block_producer::mempool_event::BlockCommitted::missing_field(
-                        "block_header",
-                    ))?
-                    .try_into()?;
+                let decoder = block_committed.decoder();
+                let header = decoder.decode_field("block_header", block_committed.block_header)?;
                 let header = Box::new(header);
                 let txs = block_committed
                     .transactions
                     .into_iter()
                     .map(TransactionId::try_from)
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>()
+                    .context("transactions")?;
 
                 Ok(Self::BlockCommitted { header, txs })
             },
@@ -135,7 +133,8 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
                     .reverted
                     .into_iter()
                     .map(TransactionId::try_from)
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>()
+                    .context("reverted")?;
 
                 Ok(Self::TransactionsReverted(txs))
             },

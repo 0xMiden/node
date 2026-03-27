@@ -25,7 +25,7 @@ use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
 use thiserror::Error;
 
 use super::try_convert;
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
 use crate::generated::{self as proto};
 
 #[cfg(test)]
@@ -57,7 +57,8 @@ impl TryFrom<proto::account::AccountId> for AccountId {
     type Error = ConversionError;
 
     fn try_from(account_id: proto::account::AccountId) -> Result<Self, Self::Error> {
-        AccountId::read_from_bytes(&account_id.id).map_err(|_| ConversionError::NotAValidFelt)
+        AccountId::read_from_bytes(&account_id.id)
+            .map_err(|_| ConversionError::message("value is not in the range 0..MODULUS"))
     }
 }
 
@@ -123,13 +124,14 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
         let slot_headers = slots
             .into_iter()
             .map(|slot| {
+                let decoder = slot.decoder();
                 let slot_name = StorageSlotName::new(slot.slot_name)?;
                 let slot_type = storage_slot_type_from_raw(slot.slot_type)?;
-                let commitment =
-                    slot.commitment.ok_or(ConversionError::NotAValidFelt)?.try_into()?;
+                let commitment = decoder.decode_field("commitment", slot.commitment)?;
                 Ok(StorageSlotHeader::new(slot_name, slot_type, commitment))
             })
-            .collect::<Result<Vec<_>, ConversionError>>()?;
+            .collect::<Result<Vec<_>, ConversionError>>()
+            .context("slots")?;
 
         Ok(AccountStorageHeader::new(slot_headers)?)
     }
@@ -150,14 +152,13 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
     type Error = ConversionError;
 
     fn try_from(value: proto::rpc::AccountRequest) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
         let proto::rpc::AccountRequest { account_id, block_num, details } = value;
 
-        let account_id = account_id
-            .ok_or(proto::rpc::AccountRequest::missing_field(stringify!(account_id)))?
-            .try_into()?;
+        let account_id = decoder.decode_field("account_id", account_id)?;
         let block_num = block_num.map(Into::into);
 
-        let details = details.map(TryFrom::try_from).transpose()?;
+        let details = details.map(TryFrom::try_from).transpose().context("details")?;
 
         Ok(AccountRequest { account_id, block_num, details })
     }
@@ -182,9 +183,14 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
             storage_maps,
         } = value;
 
-        let code_commitment = code_commitment.map(TryFrom::try_from).transpose()?;
-        let asset_vault_commitment = asset_vault_commitment.map(TryFrom::try_from).transpose()?;
-        let storage_requests = try_convert(storage_maps).collect::<Result<_, _>>()?;
+        let code_commitment =
+            code_commitment.map(TryFrom::try_from).transpose().context("code_commitment")?;
+        let asset_vault_commitment = asset_vault_commitment
+            .map(TryFrom::try_from)
+            .transpose()
+            .context("asset_vault_commitment")?;
+        let storage_requests =
+            try_convert(storage_maps).collect::<Result<_, _>>().context("storage_maps")?;
 
         Ok(AccountDetailRequest {
             code_commitment,
@@ -208,13 +214,14 @@ impl TryFrom<proto::rpc::account_request::account_detail_request::StorageMapDeta
     fn try_from(
         value: proto::rpc::account_request::account_detail_request::StorageMapDetailRequest,
     ) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
         let proto::rpc::account_request::account_detail_request::StorageMapDetailRequest {
             slot_name,
             slot_data,
         } = value;
 
-        let slot_name = StorageSlotName::new(slot_name)?;
-        let slot_data = slot_data.ok_or(proto::rpc::account_request::account_detail_request::StorageMapDetailRequest::missing_field(stringify!(slot_data)))?.try_into()?;
+        let slot_name = StorageSlotName::new(slot_name).context("slot_name")?;
+        let slot_data = decoder.decode_field("slot_data", slot_data)?;
 
         Ok(StorageMapRequest { slot_name, slot_data })
     }
@@ -242,7 +249,7 @@ impl
         Ok(match value {
             ProtoSlotData::AllEntries(true) => SlotData::All,
             ProtoSlotData::AllEntries(false) => {
-                return Err(ConversionError::EnumDiscriminantOutOfRange);
+                return Err(ConversionError::message("enum variant discriminant out of range"));
             },
             ProtoSlotData::MapKeys(keys) => {
                 let keys = try_convert(keys.map_keys).collect::<Result<Vec<_>, _>>()?;
@@ -259,6 +266,7 @@ impl TryFrom<proto::account::AccountHeader> for AccountHeader {
     type Error = ConversionError;
 
     fn try_from(value: proto::account::AccountHeader) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
         let proto::account::AccountHeader {
             account_id,
             vault_root,
@@ -267,19 +275,14 @@ impl TryFrom<proto::account::AccountHeader> for AccountHeader {
             nonce,
         } = value;
 
-        let account_id = account_id
-            .ok_or(proto::account::AccountHeader::missing_field(stringify!(account_id)))?
-            .try_into()?;
-        let vault_root = vault_root
-            .ok_or(proto::account::AccountHeader::missing_field(stringify!(vault_root)))?
-            .try_into()?;
-        let storage_commitment = storage_commitment
-            .ok_or(proto::account::AccountHeader::missing_field(stringify!(storage_commitment)))?
-            .try_into()?;
-        let code_commitment = code_commitment
-            .ok_or(proto::account::AccountHeader::missing_field(stringify!(code_commitment)))?
-            .try_into()?;
-        let nonce = nonce.try_into().map_err(|_e| ConversionError::NotAValidFelt)?;
+        let account_id = decoder.decode_field("account_id", account_id)?;
+        let vault_root = decoder.decode_field("vault_root", vault_root)?;
+        let storage_commitment = decoder.decode_field("storage_commitment", storage_commitment)?;
+        let code_commitment = decoder.decode_field("code_commitment", code_commitment)?;
+        let nonce = nonce
+            .try_into()
+            .map_err(|e| ConversionError::message(format!("{e}")))
+            .context("nonce")?;
 
         Ok(AccountHeader::new(
             account_id,
@@ -515,8 +518,6 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
         value: proto::rpc::account_storage_details::AccountStorageMapDetails,
     ) -> Result<Self, Self::Error> {
         use proto::rpc::account_storage_details::account_storage_map_details::{
-            all_map_entries::StorageMapEntry,
-            map_entries_with_proofs::StorageMapEntryWithProof,
             AllMapEntries,
             Entries as ProtoEntries,
             MapEntriesWithProofs,
@@ -528,47 +529,39 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
             entries,
         } = value;
 
-        let slot_name = StorageSlotName::new(slot_name)?;
+        let slot_name = StorageSlotName::new(slot_name).context("slot_name")?;
 
         let entries = if too_many_entries {
             StorageMapEntries::LimitExceeded
         } else {
             match entries {
                 None => {
-                    return Err(
-                        proto::rpc::account_storage_details::AccountStorageMapDetails::missing_field(
-                            stringify!(entries),
-                        ),
-                    );
+                    return Err(ConversionError::missing_field::<
+                        proto::rpc::account_storage_details::AccountStorageMapDetails,
+                    >("entries"));
                 },
                 Some(ProtoEntries::AllEntries(AllMapEntries { entries })) => {
                     let entries = entries
                         .into_iter()
                         .map(|entry| {
-                            let key = entry
-                                .key
-                                .ok_or(StorageMapEntry::missing_field(stringify!(key)))?
-                                .try_into()
-                                .map(StorageMapKey::new)?;
-                            let value = entry
-                                .value
-                                .ok_or(StorageMapEntry::missing_field(stringify!(value)))?
-                                .try_into()?;
+                            let decoder = entry.decoder();
+                            let key = StorageMapKey::new(decoder.decode_field("key", entry.key)?);
+                            let value = decoder.decode_field("value", entry.value)?;
                             Ok((key, value))
                         })
-                        .collect::<Result<Vec<_>, ConversionError>>()?;
+                        .collect::<Result<Vec<_>, ConversionError>>()
+                        .context("entries")?;
                     StorageMapEntries::AllEntries(entries)
                 },
                 Some(ProtoEntries::EntriesWithProofs(MapEntriesWithProofs { entries })) => {
                     let proofs = entries
                         .into_iter()
                         .map(|entry| {
-                            let smt_opening = entry.proof.ok_or(
-                                StorageMapEntryWithProof::missing_field(stringify!(proof)),
-                            )?;
-                            SmtProof::try_from(smt_opening)
+                            let decoder = entry.decoder();
+                            decoder.decode_field("proof", entry.proof)
                         })
-                        .collect::<Result<Vec<_>, ConversionError>>()?;
+                        .collect::<Result<Vec<_>, ConversionError>>()
+                        .context("entries")?;
                     StorageMapEntries::EntriesWithProofs(proofs)
                 },
             }
@@ -664,13 +657,13 @@ impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
     type Error = ConversionError;
 
     fn try_from(value: proto::rpc::AccountStorageDetails) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
         let proto::rpc::AccountStorageDetails { header, map_details } = value;
 
-        let header = header
-            .ok_or(proto::rpc::AccountStorageDetails::missing_field(stringify!(header)))?
-            .try_into()?;
+        let header = decoder.decode_field("header", header)?;
 
-        let map_details = try_convert(map_details).collect::<Result<Vec<_>, _>>()?;
+        let map_details =
+            try_convert(map_details).collect::<Result<Vec<_>, _>>().context("map_details")?;
 
         Ok(Self { header, map_details })
     }
@@ -687,11 +680,11 @@ impl From<AccountStorageDetails> for proto::rpc::AccountStorageDetails {
     }
 }
 
-const fn storage_slot_type_from_raw(slot_type: u32) -> Result<StorageSlotType, ConversionError> {
+fn storage_slot_type_from_raw(slot_type: u32) -> Result<StorageSlotType, ConversionError> {
     Ok(match slot_type {
         0 => StorageSlotType::Value,
         1 => StorageSlotType::Map,
-        _ => return Err(ConversionError::EnumDiscriminantOutOfRange),
+        _ => return Err(ConversionError::message("enum variant discriminant out of range")),
     })
 }
 
@@ -716,17 +709,16 @@ impl TryFrom<proto::rpc::AccountResponse> for AccountResponse {
     type Error = ConversionError;
 
     fn try_from(value: proto::rpc::AccountResponse) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
         let proto::rpc::AccountResponse { block_num, witness, details } = value;
 
         let block_num = block_num
-            .ok_or(proto::rpc::AccountResponse::missing_field(stringify!(block_num)))?
+            .ok_or(ConversionError::missing_field::<proto::rpc::AccountResponse>("block_num"))?
             .into();
 
-        let witness = witness
-            .ok_or(proto::rpc::AccountResponse::missing_field(stringify!(witness)))?
-            .try_into()?;
+        let witness = decoder.decode_field("witness", witness)?;
 
-        let details = details.map(TryFrom::try_from).transpose()?;
+        let details = details.map(TryFrom::try_from).transpose().context("details")?;
 
         Ok(AccountResponse { block_num, witness, details })
     }
@@ -777,6 +769,7 @@ impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
     type Error = ConversionError;
 
     fn try_from(value: proto::rpc::account_response::AccountDetails) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
         let proto::rpc::account_response::AccountDetails {
             header,
             code,
@@ -784,21 +777,11 @@ impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
             storage_details,
         } = value;
 
-        let account_header = header
-            .ok_or(proto::rpc::account_response::AccountDetails::missing_field(stringify!(header)))?
-            .try_into()?;
+        let account_header = decoder.decode_field("header", header)?;
 
-        let storage_details = storage_details
-            .ok_or(proto::rpc::account_response::AccountDetails::missing_field(stringify!(
-                storage_details
-            )))?
-            .try_into()?;
+        let storage_details = decoder.decode_field("storage_details", storage_details)?;
 
-        let vault_details = vault_details
-            .ok_or(proto::rpc::account_response::AccountDetails::missing_field(stringify!(
-                vault_details
-            )))?
-            .try_into()?;
+        let vault_details = decoder.decode_field("vault_details", vault_details)?;
         let account_code = code;
 
         Ok(AccountDetails {
@@ -840,21 +823,13 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitness {
     type Error = ConversionError;
 
     fn try_from(account_witness: proto::account::AccountWitness) -> Result<Self, Self::Error> {
-        let witness_id = account_witness
-            .witness_id
-            .ok_or(proto::account::AccountWitness::missing_field(stringify!(witness_id)))?
-            .try_into()?;
-        let commitment = account_witness
-            .commitment
-            .ok_or(proto::account::AccountWitness::missing_field(stringify!(commitment)))?
-            .try_into()?;
-        let path = account_witness
-            .path
-            .ok_or(proto::account::AccountWitness::missing_field(stringify!(path)))?
-            .try_into()?;
+        let decoder = account_witness.decoder();
+        let witness_id = decoder.decode_field("witness_id", account_witness.witness_id)?;
+        let commitment = decoder.decode_field("commitment", account_witness.commitment)?;
+        let path = decoder.decode_field("path", account_witness.path)?;
 
         AccountWitness::new(witness_id, commitment, path).map_err(|err| {
-            ConversionError::deserialization_error(
+            ConversionError::deserialization(
                 "AccountWitness",
                 DeserializationError::InvalidValue(err.to_string()),
             )
@@ -888,35 +863,20 @@ impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
     fn try_from(
         account_witness_record: proto::account::AccountWitness,
     ) -> Result<Self, Self::Error> {
-        let witness_id = account_witness_record
-            .witness_id
-            .ok_or(proto::account::AccountWitness::missing_field(stringify!(witness_id)))?
-            .try_into()?;
-        let commitment = account_witness_record
-            .commitment
-            .ok_or(proto::account::AccountWitness::missing_field(stringify!(commitment)))?
-            .try_into()?;
-        let path: SparseMerklePath = account_witness_record
-            .path
-            .as_ref()
-            .ok_or(proto::account::AccountWitness::missing_field(stringify!(path)))?
-            .clone()
-            .try_into()?;
+        let decoder = account_witness_record.decoder();
+        let witness_id = decoder.decode_field("witness_id", account_witness_record.witness_id)?;
+        let commitment = decoder.decode_field("commitment", account_witness_record.commitment)?;
+        let account_id = decoder.decode_field("account_id", account_witness_record.account_id)?;
+        let path: SparseMerklePath = decoder.decode_field("path", account_witness_record.path)?;
 
         let witness = AccountWitness::new(witness_id, commitment, path).map_err(|err| {
-            ConversionError::deserialization_error(
+            ConversionError::deserialization(
                 "AccountWitness",
                 DeserializationError::InvalidValue(err.to_string()),
             )
         })?;
 
-        Ok(Self {
-            account_id: account_witness_record
-                .account_id
-                .ok_or(proto::account::AccountWitness::missing_field(stringify!(account_id)))?
-                .try_into()?,
-            witness,
-        })
+        Ok(Self { account_id, witness })
     }
 }
 
@@ -959,19 +919,11 @@ impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> fo
     fn try_from(
         from: proto::store::transaction_inputs::AccountTransactionInputRecord,
     ) -> Result<Self, Self::Error> {
-        let account_id = from
-            .account_id
-            .ok_or(proto::store::transaction_inputs::AccountTransactionInputRecord::missing_field(
-                stringify!(account_id),
-            ))?
-            .try_into()?;
+        let decoder = from.decoder();
+        let account_id = decoder.decode_field("account_id", from.account_id)?;
 
-        let account_commitment = from
-            .account_commitment
-            .ok_or(proto::store::transaction_inputs::AccountTransactionInputRecord::missing_field(
-                stringify!(account_commitment),
-            ))?
-            .try_into()?;
+        let account_commitment =
+            decoder.decode_field("account_commitment", from.account_commitment)?;
 
         // If the commitment is equal to `Word::empty()`, it signifies that this is a new
         // account which is not yet present in the Store.
@@ -1000,13 +952,13 @@ impl From<AccountState> for proto::store::transaction_inputs::AccountTransaction
 impl TryFrom<proto::primitives::Asset> for Asset {
     type Error = ConversionError;
 
-    fn try_from(value: proto::primitives::Asset) -> Result<Self, Self::Error> {
-        let key = value.key.ok_or(proto::primitives::Asset::missing_field("key"))?;
-        let key_word = Word::try_from(key)?;
-        let value = value.value.ok_or(proto::primitives::Asset::missing_field("value"))?;
-        let value_word = Word::try_from(value)?;
+    fn try_from(asset: proto::primitives::Asset) -> Result<Self, Self::Error> {
+        let decoder = asset.decoder();
+        let key_word: Word = decoder.decode_field("key", asset.key)?;
+        let value_word: Word = decoder.decode_field("value", asset.value)?;
 
-        Asset::from_key_value_words(key_word, value_word).map_err(ConversionError::AssetError)
+        let asset = Asset::from_key_value_words(key_word, value_word)?;
+        Ok(asset)
     }
 }
 

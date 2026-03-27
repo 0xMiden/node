@@ -4,7 +4,7 @@ use miden_protocol::crypto::merkle::smt::{LeafIndex, SmtLeaf, SmtProof};
 use miden_protocol::crypto::merkle::{MerklePath, SparseMerklePath};
 
 use crate::domain::{convert, try_convert};
-use crate::errors::{ConversionError, MissingFieldHelper};
+use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
 use crate::generated as proto;
 
 // MERKLE PATH
@@ -62,7 +62,8 @@ impl TryFrom<proto::primitives::SparseMerklePath> for SparseMerklePath {
                 .siblings
                 .into_iter()
                 .map(Word::try_from)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<Result<Vec<_>, _>>()
+                .context("siblings")?,
         )?)
     }
 }
@@ -84,12 +85,16 @@ impl TryFrom<proto::primitives::MmrDelta> for MmrDelta {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::MmrDelta) -> Result<Self, Self::Error> {
-        let data: Result<Vec<_>, ConversionError> =
-            value.data.into_iter().map(Word::try_from).collect();
+        let data: Vec<_> = value
+            .data
+            .into_iter()
+            .map(Word::try_from)
+            .collect::<Result<_, _>>()
+            .context("data")?;
 
         Ok(MmrDelta {
             forest: Forest::new(value.forest as usize),
-            data: data?,
+            data,
         })
     }
 }
@@ -104,20 +109,22 @@ impl TryFrom<proto::primitives::SmtLeaf> for SmtLeaf {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::SmtLeaf) -> Result<Self, Self::Error> {
-        let leaf = value.leaf.ok_or(proto::primitives::SmtLeaf::missing_field(stringify!(leaf)))?;
+        let leaf = value
+            .leaf
+            .ok_or(ConversionError::missing_field::<proto::primitives::SmtLeaf>("leaf"))?;
 
         match leaf {
             proto::primitives::smt_leaf::Leaf::EmptyLeafIndex(leaf_index) => {
                 Ok(Self::new_empty(LeafIndex::new_max_depth(leaf_index)))
             },
             proto::primitives::smt_leaf::Leaf::Single(entry) => {
-                let (key, value): (Word, Word) = entry.try_into()?;
+                let (key, value): (Word, Word) = entry.try_into().context("entry")?;
 
                 Ok(SmtLeaf::new_single(key, value))
             },
             proto::primitives::smt_leaf::Leaf::Multiple(entries) => {
                 let domain_entries: Vec<(Word, Word)> =
-                    try_convert(entries.entries).collect::<Result<_, _>>()?;
+                    try_convert(entries.entries).collect::<Result<_, _>>().context("entries")?;
 
                 Ok(SmtLeaf::new_multiple(domain_entries)?)
             },
@@ -148,14 +155,9 @@ impl TryFrom<proto::primitives::SmtLeafEntry> for (Word, Word) {
     type Error = ConversionError;
 
     fn try_from(entry: proto::primitives::SmtLeafEntry) -> Result<Self, Self::Error> {
-        let key: Word = entry
-            .key
-            .ok_or(proto::primitives::SmtLeafEntry::missing_field(stringify!(key)))?
-            .try_into()?;
-        let value: Word = entry
-            .value
-            .ok_or(proto::primitives::SmtLeafEntry::missing_field(stringify!(value)))?
-            .try_into()?;
+        let decoder = entry.decoder();
+        let key: Word = decoder.decode_field("key", entry.key)?;
+        let value: Word = decoder.decode_field("value", entry.value)?;
 
         Ok((key, value))
     }
@@ -177,14 +179,9 @@ impl TryFrom<proto::primitives::SmtOpening> for SmtProof {
     type Error = ConversionError;
 
     fn try_from(opening: proto::primitives::SmtOpening) -> Result<Self, Self::Error> {
-        let path: SparseMerklePath = opening
-            .path
-            .ok_or(proto::primitives::SmtOpening::missing_field(stringify!(path)))?
-            .try_into()?;
-        let leaf: SmtLeaf = opening
-            .leaf
-            .ok_or(proto::primitives::SmtOpening::missing_field(stringify!(leaf)))?
-            .try_into()?;
+        let decoder = opening.decoder();
+        let path: SparseMerklePath = decoder.decode_field("path", opening.path)?;
+        let leaf: SmtLeaf = decoder.decode_field("leaf", opening.leaf)?;
 
         Ok(SmtProof::new(path, leaf)?)
     }

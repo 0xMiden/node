@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt, GrpcStructDecoder};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
@@ -109,8 +109,7 @@ where
     E: From<ConversionError>,
 {
     block_range.ok_or_else(|| {
-        ConversionError::MissingFieldInProtobufRepresentation { entity, field_name: "block_range" }
-            .into()
+        ConversionError::message(format!("{entity}: missing field `block_range`")).into()
     })
 }
 
@@ -123,12 +122,10 @@ pub fn read_root<E>(
 where
     E: From<ConversionError>,
 {
-    root.ok_or_else(|| ConversionError::MissingFieldInProtobufRepresentation {
-        entity,
-        field_name: "root",
-    })?
-    .try_into()
-    .map_err(Into::into)
+    root.ok_or_else(|| ConversionError::message(format!("{entity}: missing field `root`")))?
+        .try_into()
+        .context("root")
+        .map_err(|e: ConversionError| e.into())
 }
 
 /// Converts a collection of proto primitives to Words, returning a specific error type if
@@ -143,6 +140,7 @@ where
         .into_iter()
         .map(TryInto::try_into)
         .collect::<Result<Vec<_>, ConversionError>>()
+        .context("digests")
         .map_err(Into::into)
 }
 
@@ -156,23 +154,19 @@ where
         .cloned()
         .map(AccountId::try_from)
         .collect::<Result<_, ConversionError>>()
+        .context("account_ids")
         .map_err(Into::into)
 }
 
-pub fn read_account_id<E>(id: Option<proto::account::AccountId>) -> Result<AccountId, E>
+pub fn read_account_id<M: miden_node_proto::prost::Message, E>(
+    id: Option<proto::account::AccountId>,
+) -> Result<AccountId, E>
 where
     E: From<ConversionError>,
 {
-    id.ok_or_else(|| {
-        ConversionError::deserialization_error(
-            "AccountId",
-            miden_protocol::crypto::utils::DeserializationError::InvalidValue(
-                "Missing account ID".to_string(),
-            ),
-        )
-    })?
-    .try_into()
-    .map_err(Into::into)
+    GrpcStructDecoder::<M>::default()
+        .decode_field("account_id", id)
+        .map_err(|e: ConversionError| e.into())
 }
 
 #[instrument(
@@ -189,8 +183,9 @@ where
     nullifiers
         .iter()
         .copied()
-        .map(TryInto::try_into)
+        .map(Nullifier::try_from)
         .collect::<Result<_, ConversionError>>()
+        .context("nullifiers")
         .map_err(Into::into)
 }
 
