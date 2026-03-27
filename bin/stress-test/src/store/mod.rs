@@ -157,7 +157,9 @@ pub async fn bench_sync_nullifiers(
         let note_ids: Vec<_> = response
             .blocks
             .iter()
-            .flat_map(|b| b.notes.iter().map(|n| n.note_id.unwrap()))
+            .flat_map(|b| {
+                b.notes.iter().map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
+            })
             .collect();
 
         // Get the notes nullifiers, limiting to 20 notes maximum.

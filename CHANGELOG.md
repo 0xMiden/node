@@ -43,6 +43,7 @@
 - Removed gRPC reflection v1-alpha support ([#1795](https://github.com/0xMiden/node/pull/1795)).
 - [BREAKING] Rust requirement bumped from `v1.91` to `v1.93` ([#1803](https://github.com/0xMiden/node/pull/1803)).
 - [BREAKING] Updated `SyncNotes` endpoint to returned multiple note updates ([#1809](https://github.com/0xMiden/node/issues/1809), ([#1851](https://github.com/0xMiden/node/pull/1851))).
+- [BREAKING] Refactored `NoteSyncRecord` to returned a fixed-size `NoteMetadataHeader` ([#1837](https://github.com/0xMiden/node/pull/1837)).
 
 ### Fixes
 
