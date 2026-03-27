@@ -85,7 +85,7 @@ impl State {
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<Vec<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
+    ) -> Result<Vec<(NoteSyncUpdate, Option<MmrProof>)>, NoteSyncError> {
         let checkpoint = *block_range.end();
         let note_tags: Arc<[u32]> = note_tags.into();
 
@@ -108,16 +108,16 @@ impl State {
 
             let block_num = note_sync.block_header.block_num();
 
-            // The MMR at `checkpoint` contains proofs for blocks 0..checkpoint-1
+            // The MMR at `checkpoint` contains proofs for blocks 0..checkpoint-1. When we reach the
+            // last block, we return the note without a MMR proof.
             if block_num >= checkpoint {
+                results.push((note_sync, None));
                 break;
             }
 
             let mmr_proof = self.inner.read().await.blockchain.open_at(block_num, checkpoint)?;
-            results.push((note_sync, mmr_proof));
+            results.push((note_sync, Some(mmr_proof)));
 
-            // The DB query uses `committed_at > block_range.start()` (exclusive),
-            // so setting current_from to the found block is sufficient to skip it.
             current_from = block_num;
         }
 

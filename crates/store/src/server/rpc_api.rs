@@ -147,7 +147,7 @@ impl rpc_server::Rpc for StoreApi {
             .into_iter()
             .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
                 block_header: Some(state.block_header.into()),
-                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                mmr_path: mmr_proof.map(|proof| proof.merkle_path().clone().into()),
                 notes: state.notes.into_iter().map(Into::into).collect(),
             })
             .collect();
