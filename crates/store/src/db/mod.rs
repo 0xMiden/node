@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
@@ -496,10 +497,10 @@ impl Db {
     pub async fn get_note_sync(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-        note_tags: Vec<u32>,
+        note_tags: Arc<[u32]>,
     ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
         self.transact("notes sync task", move |conn| {
-            queries::get_note_sync(conn, note_tags.as_slice(), block_range)
+            queries::get_note_sync(conn, &note_tags, block_range)
         })
         .await
     }

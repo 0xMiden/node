@@ -130,10 +130,10 @@ impl rpc_server::Rpc for StoreApi {
         let request = request.into_inner();
 
         let chain_tip = self.state.latest_block_num().await;
-        let requested_block_to = request.block_range.as_ref().and_then(|r| r.block_to);
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+        let requested_block_to = request.block_range.and_then(|r| r.block_to);
 
         let block_from = block_range.start().as_u32();
         let response_block_to = requested_block_to.unwrap_or(chain_tip.as_u32());

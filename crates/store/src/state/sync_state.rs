@@ -1,4 +1,5 @@
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
@@ -76,16 +77,17 @@ impl State {
 
     /// Loads data to synchronize a client's notes.
     ///
-    /// Returns as many blocks with matching notes as fit within the response payload
-    /// limit. Each block includes its header and MMR proof at `block_range.end()`.
+    /// Returns as many blocks with matching notes as fit within the response payload limit
+    /// ([`MAX_RESPONSE_PAYLOAD_BYTES`](miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES)).
+    /// Each block includes its header and MMR proof at `block_range.end()`.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<Vec<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
-        let inner = self.inner.read().await;
         let checkpoint = *block_range.end();
+        let note_tags: Arc<[u32]> = note_tags.into();
 
         let mut results = Vec::new();
         let mut accumulated_size: usize = 0;
@@ -93,13 +95,14 @@ impl State {
 
         loop {
             let range = current_from..=checkpoint;
-            let Some(note_sync) = self.db.get_note_sync(range, note_tags.clone()).await? else {
+            let Some(note_sync) = self.db.get_note_sync(range, Arc::clone(&note_tags)).await?
+            else {
                 break;
             };
 
             accumulated_size += BLOCK_OVERHEAD_BYTES + note_sync.notes.len() * NOTE_RECORD_BYTES;
 
-            if accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
+            if !results.is_empty() && accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
                 break;
             }
 
@@ -109,7 +112,7 @@ impl State {
                 break;
             }
 
-            let mmr_proof = inner.blockchain.open_at(block_num, checkpoint)?;
+            let mmr_proof = self.inner.read().await.blockchain.open_at(block_num, checkpoint)?;
             results.push((note_sync, mmr_proof));
 
             // The DB query uses `committed_at > block_range.start()` (exclusive),
