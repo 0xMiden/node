@@ -377,6 +377,15 @@ function updateDisplay() {
     overallStatus.style.color = allHealthy ? '#22C55D' : '#ff5500';
     servicesCount.textContent = `${totalServices} Services`;
 
+    // Update network name in logo
+    document.getElementById('network-name').textContent = statusData.network_name;
+
+    // Update monitor version
+    const versionEl = document.getElementById('monitor-version');
+    if (statusData.monitor_version) {
+        versionEl.textContent = 'Monitor v' + statusData.monitor_version;
+    }
+
     // Generate status cards
     const serviceCardsHtml = processedServices.map(service => {
         const isHealthy = service.status === 'Healthy';

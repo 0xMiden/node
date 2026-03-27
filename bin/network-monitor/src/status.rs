@@ -271,6 +271,8 @@ pub struct WorkerStatusDetails {
 pub struct NetworkStatus {
     pub services: Vec<ServiceStatus>,
     pub last_updated: u64,
+    pub monitor_version: String,
+    pub network_name: String,
 }
 
 // FROM IMPLEMENTATIONS
