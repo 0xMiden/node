@@ -182,6 +182,28 @@ fn cannot_have_multiple_inflight_blocks() {
     uut.select_block();
 }
 
+/// This ensures we've guarded against a batch being marked as proven and then rolled back.
+///
+/// This shouldn't be possible in a well behaving system, but if a bug leads to this outcome,
+/// then yanking a previously proven batch could result in mempool corruption (since the batch
+/// could be in a block).
+#[test]
+fn rollbacks_of_already_proven_batches_are_ignored() {
+    let txs = MockProvenTxBuilder::sequential();
+
+    let (mut uut, _) = Mempool::for_tests();
+    uut.add_transaction(txs[0].clone()).unwrap();
+    let batch = uut.select_batch().unwrap();
+
+    let proof = Arc::new(ProvenBatch::mocked_from_transactions([txs[0].raw_proven_transaction()]));
+    uut.commit_batch(Arc::clone(&proof));
+    let reference = uut.clone();
+
+    uut.rollback_batch(batch.id());
+
+    assert_eq!(uut, reference);
+}
+
 // BLOCK FAILED TESTS
 // ================================================================================================
 

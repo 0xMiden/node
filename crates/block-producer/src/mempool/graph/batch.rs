@@ -109,6 +109,11 @@ impl BatchGraph {
         }
     }
 
+    /// Returns `true` if the batch has been proven previously.
+    pub fn is_proven(&mut self, batch: &BatchId) -> bool {
+        self.proven.contains_key(batch)
+    }
+
     pub fn select_block(&mut self, mut budget: BlockBudget) -> Vec<Arc<ProvenBatch>> {
         let mut selected = Vec::default();
 

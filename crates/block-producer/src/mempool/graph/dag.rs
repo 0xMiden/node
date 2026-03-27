@@ -84,7 +84,7 @@ where
     }
 
     /// Returns `true` if the given node was previously selected.
-    fn is_selected(&self, node: &N::Id) -> bool {
+    pub fn is_selected(&self, node: &N::Id) -> bool {
         self.selected.contains(node)
     }
 

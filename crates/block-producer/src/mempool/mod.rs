@@ -265,6 +265,16 @@ impl Mempool {
     /// Transactions are re-queued.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
+        // Guards against bugs in the proof scheduler where a retry results in multiple results
+        // coming back for the same batch. If the batch previously succeeded, then yanking it would
+        // corrupt the mempool since the batch might be in a block.
+        //
+        // Either way, we simply ignore rollbacks of batches that have already succeeded as a
+        // precaution.
+        if self.batches.is_proven(&batch) {
+            return;
+        }
+
         let reverted_batches = self.batches.revert_batch_and_descendants(batch);
         for reverted in reverted_batches {
             self.transactions.requeue_transactions(reverted);
