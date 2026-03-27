@@ -231,10 +231,10 @@ impl TransactionGraph {
                 continue;
             }
 
-            let x = self.inner.revert_node_and_descendants(transaction);
+            let reverted_now = self.inner.revert_node_and_descendants(revert);
 
             // Clean up book keeping and also revert transactions from the same user batch, if any.
-            for tx in &x {
+            for tx in &reverted_now {
                 self.failures.remove(&tx.id());
 
                 // Note that this is a pretty rough shod approach. We just dump the entire batch of
@@ -248,7 +248,7 @@ impl TransactionGraph {
                 }
             }
 
-            reverted.extend(x.into_iter().map(|tx| tx.id()));
+            reverted.extend(reverted_now.into_iter().map(|tx| tx.id()));
         }
 
         reverted

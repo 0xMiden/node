@@ -253,7 +253,7 @@ impl Mempool {
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         assert!(!txs.is_empty(), "Cannot have a batch with no transactions");
 
-        if self.unbatched_transactions_count() + txs.len() >= self.config.tx_capacity.get() {
+        if self.unbatched_transactions_count() + txs.len() > self.config.tx_capacity.get() {
             return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
