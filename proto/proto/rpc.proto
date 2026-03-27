@@ -497,11 +497,11 @@ message SyncNotesResponse {
     //
     // If `block_to` equals the requested range end (or the chain tip when unset), the sync
     // is complete. Otherwise, the client should request again starting from `block_to + 1`.
-    BlockRange block_range = 5;
+    BlockRange block_range = 1;
 
     // Blocks containing matching notes, ordered by block number ascending.
     // May be empty if no notes matched in the range.
-    repeated NoteSyncBlock blocks = 6;
+    repeated NoteSyncBlock blocks = 2;
 }
 
 // SYNC CHAIN MMR
