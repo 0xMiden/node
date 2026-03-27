@@ -187,16 +187,16 @@ async fn prove_block(
                 block_store.save_proof(block_num, &proof.to_bytes()).await?;
 
                 // Mark the block as proven and advance the sequence in the database.
-                let advanced_in_sequence = db.mark_proven_and_advance_sequence(block_num).await?;
-                if let Some(&last) = advanced_in_sequence.last() {
+                let new_tip = db.mark_proven_and_advance_sequence(block_num).await?;
+                if new_tip == block_num {
+                    info!(target = COMPONENT, block.number = %block_num, "Block proven");
+                } else {
                     info!(
                         target = COMPONENT,
                         block.number = %block_num,
-                        proven_in_sequence_tip = %last,
+                        %new_tip,
                         "Block proven and in-sequence advanced",
                     );
-                } else {
-                    info!(target = COMPONENT, block.number = %block_num, "Block proven");
                 }
 
                 return Ok(());
