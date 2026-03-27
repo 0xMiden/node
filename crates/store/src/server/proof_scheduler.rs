@@ -184,7 +184,7 @@ async fn prove_block(
         {
             Ok(Ok(proof)) => {
                 // Save the block proof to file.
-                save_block_proof(block_store, block_num, &proof).await?;
+                block_store.save_proof(block_num, &proof.to_bytes()).await?;
 
                 // Mark the block as proven and advance the sequence in the database.
                 let advanced_in_sequence = db.mark_proven_and_advance_sequence(block_num).await?;
@@ -237,17 +237,6 @@ async fn generate_block_proof(
         .map_err(ProveBlockError::from_prover_error)?;
 
     Ok(proof)
-}
-
-/// Saves a block proof to the block store.
-#[instrument(target = COMPONENT, name = "prove_block.save", skip_all, fields(block.number=block_num.as_u32()), err)]
-async fn save_block_proof(
-    block_store: &BlockStore,
-    block_num: BlockNumber,
-    proof: &BlockProof,
-) -> anyhow::Result<()> {
-    block_store.save_proof(block_num, &proof.to_bytes()).await?;
-    Ok(())
 }
 
 // PROVE BLOCK ERROR
