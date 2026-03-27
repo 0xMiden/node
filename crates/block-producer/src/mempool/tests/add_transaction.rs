@@ -68,8 +68,8 @@ mod tx_expiration {
         // Create at least some locally retained state.
         let slack = uut.config.expiration_slack;
         for _ in 0..slack + 10 {
-            let (number, _) = uut.select_block();
-            let header = BlockHeader::mock(number, None, None, &[], Word::default());
+            let block = uut.select_block();
+            let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
             uut.commit_block(header);
         }
 
@@ -140,8 +140,8 @@ mod authentication_height {
         // Create at least some locally retained state.
         let retention = uut.config.state_retention.get();
         for _ in 0..retention + 10 {
-            let (number, _) = uut.select_block();
-            let header = BlockHeader::mock(number, None, None, &[], Word::default());
+            let block = uut.select_block();
+            let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
             uut.commit_block(header);
         }
 

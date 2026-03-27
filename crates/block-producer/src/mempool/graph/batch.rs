@@ -14,6 +14,9 @@ use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
+// BATCH IMPL FOR GRAPH NODE
+// ================================================================================================
+
 impl GraphNode for SelectedBatch {
     type Id = BatchId;
 
@@ -43,6 +46,9 @@ impl GraphNode for SelectedBatch {
         self.expires_at()
     }
 }
+
+// BATCH GRAPH
+// ================================================================================================
 
 /// Tracks [`SelectedBatch`] instances that are pending proof generation.
 ///
@@ -114,6 +120,12 @@ impl BatchGraph {
         self.proven.contains_key(batch)
     }
 
+    /// Selects a set of batches for inclusion in the next block.
+    ///
+    /// A batch is available for selection if:
+    /// - all the batches it depends on have been selected for a previous block, or are selected in
+    ///   this block as well, and
+    /// - the batch has had a proof submitted
     pub fn select_block(&mut self, mut budget: BlockBudget) -> Vec<Arc<ProvenBatch>> {
         let mut selected = Vec::default();
 

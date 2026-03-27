@@ -8,6 +8,9 @@ use crate::mempool::graph::edges::Edges;
 use crate::mempool::graph::node::GraphNode;
 use crate::mempool::graph::state::State;
 
+// GRAPH DAG
+// ================================================================================================
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graph<N>
 where
@@ -287,6 +290,9 @@ where
         self.nodes.contains_key(node)
     }
 }
+
+// GRAPH DAG TESTS
+// ================================================================================================
 
 #[cfg(test)]
 mod tests {

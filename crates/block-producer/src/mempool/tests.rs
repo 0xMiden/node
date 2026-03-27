@@ -136,19 +136,20 @@ fn block_commit_reverts_expired_txns() {
     uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
         tx_to_commit.raw_proven_transaction()
     ])));
-    let (block, _) = uut.select_block();
+    let block = uut.select_block();
     // A reverted transaction behaves as if it never existed, the current state is the expected
     // outcome, plus an extra committed block at the end.
     let mut reference = uut.clone();
 
     // Add a new transaction which will expire when the pending block is committed.
-    let tx_to_revert =
-        MockProvenTxBuilder::with_account_index(1).expiration_block_num(block).build();
+    let tx_to_revert = MockProvenTxBuilder::with_account_index(1)
+        .expiration_block_num(block.block_number)
+        .build();
     let tx_to_revert = Arc::new(AuthenticatedTransaction::from_inner(tx_to_revert));
     uut.add_transaction(tx_to_revert).unwrap();
 
     // Commit the pending block which should revert the above tx.
-    let arb_header = BlockHeader::mock(block, None, None, &[], Word::empty());
+    let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
     uut.commit_block(arb_header.clone());
     reference.commit_block(arb_header);
 
@@ -160,8 +161,8 @@ fn empty_block_commitment() {
     let (mut uut, _) = Mempool::for_tests();
 
     for _ in 0..3 {
-        let (number, _) = uut.select_block();
-        let arb_header = BlockHeader::mock(number, None, None, &[], Word::empty());
+        let block = uut.select_block();
+        let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
         uut.commit_block(arb_header);
     }
 }
@@ -222,7 +223,7 @@ fn block_failure_reverts_its_transactions() {
     ])));
 
     // Block 1 will contain just the first batch.
-    let (number, _batches) = uut.select_block();
+    let block = uut.select_block();
 
     // Create another dependent batch.
     uut.add_transaction(reverted_txs[1].clone()).unwrap();
@@ -231,7 +232,7 @@ fn block_failure_reverts_its_transactions() {
     uut.add_transaction(reverted_txs[2].clone()).unwrap();
 
     // Fail the block which should result in everything reverting.
-    uut.rollback_block(number);
+    uut.rollback_block(block.block_number);
 
     assert_eq!(uut, reference);
 }

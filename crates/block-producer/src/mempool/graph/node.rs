@@ -3,6 +3,9 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
+// GRAPH NODE
+// ================================================================================================
+
 /// Defines a node in the mempool graph.
 pub trait GraphNode {
     type Id;
@@ -40,6 +43,9 @@ pub trait GraphNode {
     /// The block height at which this node is considered expired.
     fn expires_at(&self) -> BlockNumber;
 }
+
+// GRAPH NODE TESTS
+// ================================================================================================
 
 #[cfg(test)]
 pub(crate) mod test_node {

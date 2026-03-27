@@ -102,7 +102,19 @@ impl TransactionGraph {
     /// Only unselected transactions are considered; selected transactions are assumed to be in
     /// committed blocks and should not be reverted.
     ///
+    /// This is because we don't distinguish between committed and selected transactions. If we
+    /// didn't ignore selected transactions here, we would revert committed ones as well, which
+    /// breaks the state.
+    ///
     /// Returns the identifiers of transactions that were removed from the graph.
+    ///
+    /// # Note
+    ///
+    /// Since this _ignores_ selected transactions, and the purpose is to revert expired
+    /// transactions after a block is committed, the caller **must** ensure that selected
+    /// transactions from expired batches (and therefore not committed) are deselected
+    /// _before_ calling this function. i.e. first revert expired batches and deselect their
+    /// transactions, then call this.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
         self.inner
             .revert_expired_unselected(chain_tip)

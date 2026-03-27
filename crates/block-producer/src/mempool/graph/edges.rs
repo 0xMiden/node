@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+// GRAPH EDGES
+// ================================================================================================
+
 /// Maintains parent and child relationships between nodes in the mempool graph.
 ///
 /// `Edges` tracks both sides of the relationship to support efficient queries for a node's
@@ -91,6 +94,9 @@ where
         }
     }
 }
+
+// GRAPH EDGES TESTS
+// ================================================================================================
 
 #[cfg(test)]
 mod tests {
