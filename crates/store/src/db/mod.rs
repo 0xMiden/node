@@ -635,6 +635,12 @@ impl Db {
         values.extend(page.values);
         let mut last_block_included = page.last_block_included;
 
+        // If the first page returned no values, the block at block_range_start has more
+        // entries than the limit allows (e.g. genesis accounts with large storage maps).
+        if values.is_empty() && last_block_included == block_range_start {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+
         loop {
             if page.last_block_included == block_num || page.last_block_included < block_range_start
             {
