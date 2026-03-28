@@ -203,10 +203,10 @@ async fn prove_block(
             },
             Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
             Ok(Err(ProveBlockError::Transient(err))) => {
-                error!(target: COMPONENT, %block_num, err = ?err, "transient error proving block, retrying");
+                error!(target: COMPONENT, block.number=%block_num, err = %err.as_report(), "transient error proving block, retrying");
             },
             Err(elapsed) => {
-                error!(target: COMPONENT, %block_num, %elapsed, "block proving timed out, retrying");
+                error!(target: COMPONENT, block.number=%block_num, %elapsed, "block proving timed out, retrying");
             },
         }
     }
