@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use anyhow::Context;
 use miden_node_block_producer::BlockProducer;
 use miden_node_rpc::Rpc;
-use miden_node_store::Store;
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::{Validator, ValidatorSigner};
@@ -82,6 +83,14 @@ pub enum BundledCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
+        /// Maximum number of concurrent block proofs to be scheduled.
+        #[arg(
+            long = "max-concurrent-proofs",
+            default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
+            value_name = "NUM"
+        )]
+        max_concurrent_proofs: NonZeroUsize,
+
         #[command(flatten)]
         grpc_options: GrpcOptionsExternal,
 
@@ -125,6 +134,7 @@ impl BundledCommand {
                 validator,
                 enable_otel: _,
                 grpc_options,
+                max_concurrent_proofs,
                 storage_options,
             } => {
                 Self::start(
@@ -135,6 +145,7 @@ impl BundledCommand {
                     ntx_builder,
                     validator,
                     grpc_options,
+                    max_concurrent_proofs,
                     storage_options,
                 )
                 .await
@@ -151,6 +162,7 @@ impl BundledCommand {
         ntx_builder: NtxBuilderConfig,
         validator: BundledValidatorConfig,
         grpc_options: GrpcOptionsExternal,
+        max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         // Start listening on all gRPC urls so that inter-component connections can be created
@@ -209,6 +221,7 @@ impl BundledCommand {
                     data_directory: data_directory_clone,
                     block_prover_url,
                     grpc_options: grpc_options.into(),
+                    max_concurrent_proofs,
                     storage_options,
                 }
                 .serve()

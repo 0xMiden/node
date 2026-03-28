@@ -30,6 +30,19 @@ use tonic::Status;
 use crate::account_state_forest::{AccountStateForestError, WitnessError};
 use crate::db::models::conv::DatabaseTypeConversionError;
 
+// PROOF SCHEDULER ERRORS
+// =================================================================================================
+
+#[derive(Debug, Error)]
+pub enum ProofSchedulerError {
+    #[error("no proving inputs found for block {0}")]
+    MissingProvingInputs(BlockNumber),
+    #[error("failed to deserialize proving inputs for block")]
+    DeserializationFailed(#[source] DeserializationError),
+    #[error("invalid remote prover endpoint: {0}")]
+    InvalidProverEndpoint(String),
+}
+
 // DATABASE ERRORS
 // =================================================================================================
 
@@ -254,6 +267,9 @@ pub enum SyncChainMmrError {
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),
+    #[error("database error")]
+    #[grpc(internal)]
+    DatabaseError(#[source] DatabaseError),
 }
 
 impl From<diesel::result::Error> for StateSyncError {
