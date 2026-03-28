@@ -210,6 +210,13 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 
         // Sanity check the number of vault keys in the request
         if request.vault_keys.len() > MAX_VAULT_KEYS {
+            tracing::warn!(
+                limit=%MAX_VAULT_KEYS,
+                request=%request.vault_keys.len(),
+                account.id=%request.account_id.unwrap_or_default(),
+                "maximum vault key limit exceeded",
+            );
+
             return Err(Status::invalid_argument(format!(
                 "number of vault keys in request cannot exceed {MAX_VAULT_KEYS}"
             )));
