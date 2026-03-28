@@ -4,7 +4,7 @@ use std::sync::Arc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::block::BlockNumber;
 
 use crate::domain::transaction::AuthenticatedTransaction;
 
@@ -22,7 +22,7 @@ use crate::domain::transaction::AuthenticatedTransaction;
 pub(crate) struct SelectedBatch {
     txs: Vec<Arc<AuthenticatedTransaction>>,
     id: BatchId,
-    account_updates: HashMap<AccountId, (Word, Word)>,
+    account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
 }
 
 impl SelectedBatch {
@@ -43,12 +43,25 @@ impl SelectedBatch {
     }
 
     /// The aggregated list of account transitions this batch causes given as tuples of `(AccountId,
-    /// initial commitment, final commitment)`.
+    /// initial commitment, final commitment, Option<store commitment>)`.
     ///
     /// Note that the updates are aggregated, i.e. only a single update per account is possible, and
     /// transaction updates to an account of `a -> b -> c` will result in a single `a -> c`.
-    pub(crate) fn account_updates(&self) -> impl Iterator<Item = (AccountId, Word, Word)> {
-        self.account_updates.iter().map(|(account, (from, to))| (*account, *from, *to))
+    pub(crate) fn account_updates(
+        &self,
+    ) -> impl Iterator<Item = (AccountId, Word, Word, Option<Word>)> {
+        self.account_updates
+            .iter()
+            .map(|(account, (from, to, store))| (*account, *from, *to, *store))
+    }
+
+    pub(crate) fn expires_at(&self) -> BlockNumber {
+        self.txs
+            .iter()
+            .map(|tx| tx.expires_at().as_u32())
+            .min()
+            .unwrap_or(u32::MAX)
+            .into()
     }
 }
 
@@ -56,7 +69,7 @@ impl SelectedBatch {
 #[derive(Clone, Default)]
 pub(crate) struct SelectedBatchBuilder {
     pub(crate) txs: Vec<Arc<AuthenticatedTransaction>>,
-    pub(crate) account_updates: HashMap<AccountId, (Word, Word)>,
+    pub(crate) account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
 }
 
 impl SelectedBatchBuilder {
@@ -71,7 +84,7 @@ impl SelectedBatchBuilder {
         let update = tx.account_update();
         self.account_updates
             .entry(update.account_id())
-            .and_modify(|(_, to)| {
+            .and_modify(|(_from, to, _store)| {
                 assert!(
                     to == &update.initial_state_commitment(),
                     "Cannot select transaction {} as its initial commitment {} for account {} does \
@@ -84,14 +97,13 @@ not match the current commitment {}",
 
                 *to = update.final_state_commitment();
             })
-            .or_insert((update.initial_state_commitment(), update.final_state_commitment()));
+            .or_insert((
+                update.initial_state_commitment(),
+                update.final_state_commitment(),
+                tx.store_account_state(),
+            ));
 
         self.txs.push(tx);
-    }
-
-    /// Returns `true` if the batch contains the given transaction already.
-    pub(crate) fn contains(&self, target: &TransactionId) -> bool {
-        self.txs.iter().any(|tx| &tx.id() == target)
     }
 
     /// Returns `true` if it contains no transactions.

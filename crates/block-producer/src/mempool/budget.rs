@@ -57,7 +57,7 @@ impl BatchBudget {
     /// Attempts to consume the transaction's resources from the budget.
     ///
     /// Returns [`BudgetStatus::Exceeded`] if the transaction would exceed the remaining budget,
-    /// otherwise returns [`BudgetStatus::Ok`] and subtracts the resources from the budget.
+    /// otherwise returns [`BudgetStatus::WithinScope`] and subtracts the resources from the budget.
     #[must_use]
     pub(crate) fn check_then_subtract(&mut self, tx: &AuthenticatedTransaction) -> BudgetStatus {
         // This type assertion reminds us to update the account check if we ever support
@@ -89,7 +89,7 @@ impl BlockBudget {
     /// Attempts to consume the batch's resources from the budget.
     ///
     /// Returns [`BudgetStatus::Exceeded`] if the batch would exceed the remaining budget,
-    /// otherwise returns [`BudgetStatus::Ok`].
+    /// otherwise returns [`BudgetStatus::WithinScope`].
     #[must_use]
     pub(crate) fn check_then_subtract(&mut self, _batch: &ProvenBatch) -> BudgetStatus {
         if self.batches == 0 {

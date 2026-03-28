@@ -25,7 +25,7 @@
 //! committed within the same block.
 //!
 //! While this is technically possible, the bookkeeping and implementation to allow this are
-//! infeasible, and both blocks and batches have constraints. This is also undersireable since if
+//! infeasible, and both blocks and batches have constraints. This is also undesirable since if
 //! one component of such a cycle fails or expires, then all others would likewise need to be
 //! reverted.
 //!
@@ -39,25 +39,34 @@
 //!   included in a batch (or are part of the currently proposed batch).
 //! - Similarly, batches are proposed for block inclusion once _all_ ancestors have been included in
 //!   a block (or are part of the currently proposed block).
-//! - Reverting a node reverts all descendents as well.
-
-use std::collections::{HashMap, HashSet};
+//! - Reverting a node reverts all descendants as well.
+//!
+//! The mempool maintains two DAGs: one for authenticated transactions awaiting batching and one for
+//! batches awaiting inclusion in a block. As batches are selected, their constituent transactions
+//! are marked in the transaction graph while the batch itself is appended to the batch graph. When
+//! a block is proposed, the selected batches are staged in `pending_block` until the block is
+//! either committed or rolled back.
+//!
+//! Recently committed batches are retained in `committed_blocks` according to the configured
+//! `state_retention`, giving the mempool enough local history to validate newly authenticated
+//! transactions even if the store and block producer momentarily disagree on the chain tip.
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_utils::ErrorReport;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use subscription::SubscriptionProvider;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
-use tracing::{instrument, warn};
+use tracing::instrument;
 
+use crate::block_builder::SelectedBlock;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, VerifyTxError};
-use crate::mempool::budget::BudgetStatus;
-use crate::mempool::nodes::{BlockNode, Node, NodeId, ProposedBatchNode, TransactionNode};
+use crate::errors::{AddTransactionError, StateConflict};
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -68,8 +77,7 @@ use crate::{
 mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
-mod nodes;
-mod state;
+mod graph;
 mod subscription;
 
 #[cfg(test)]
@@ -81,7 +89,7 @@ mod tests;
 #[derive(Clone)]
 pub struct SharedMempool(Arc<Mutex<Mempool>>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MempoolConfig {
     /// The constraints each proposed block must adhere to.
     pub block_budget: BlockBudget,
@@ -107,6 +115,11 @@ pub struct MempoolConfig {
     /// mempool handling the authenticated data. Retaining the recent blocks locally therefore
     /// guarantees that the mempool can verify the data against the additional changes so long as
     /// the data was authenticated against one of the retained blocks.
+    ///
+    /// Practically, retaining `state_retention` blocks lets the mempool authenticate any
+    /// submission whose claimed height lies within `[chain_tip - state_retention + 1,
+    /// chain_tip]`. Inputs authenticated before this window are rejected as stale to prevent
+    /// gaps between the store and the locally retained history.
     pub state_retention: NonZeroUsize,
 
     /// The maximum number of uncommitted transactions allowed in the mempool at once.
@@ -133,6 +146,10 @@ impl Default for MempoolConfig {
 // ================================================================================================
 
 impl SharedMempool {
+    /// Acquires an asynchronous lock on the underlying [`Mempool`].
+    ///
+    /// Callers should minimise the amount of work performed while holding the lock to reduce
+    /// contention with other subsystems that need to access the pool.
     #[instrument(target = COMPONENT, name = "mempool.lock", skip_all)]
     pub async fn lock(&self) -> MutexGuard<'_, Mempool> {
         self.0.lock().await
@@ -142,26 +159,24 @@ impl SharedMempool {
 // MEMPOOL
 // ================================================================================================
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Mempool {
-    /// Contains the aggregated state of all transactions, batches and blocks currently inflight in
-    /// the mempool. Combines with `nodes` to describe the mempool's state graph.
-    state: state::InflightState,
-
-    /// Contains all the transactions, batches and blocks currently in the mempool.
-    nodes: nodes::Nodes,
+    /// Tracks the dependency graph for transactions awaiting batching.
+    transactions: graph::TransactionGraph,
+    /// Tracks the dependency graph for batches awaiting inclusion in a block.
+    batches: graph::BatchGraph,
+    /// The block currently being built, if any.
+    pending_block: Option<SelectedBlock>,
+    /// The most recently committed blocks in chronological order.
+    ///
+    /// Limited to the state retention amount defined in the config. Once a pending block is
+    /// committed it is appended here, and the oldest block's state is pruned.
+    committed_blocks: VecDeque<SelectedBlock>,
 
     chain_tip: BlockNumber,
 
     config: MempoolConfig,
     subscription: subscription::SubscriptionProvider,
-}
-
-// We have to implement this manually since the subscription channel does not implement PartialEq.
-impl PartialEq for Mempool {
-    fn eq(&self, other: &Self) -> bool {
-        self.state == other.state && self.nodes == other.nodes
-    }
 }
 
 impl Mempool {
@@ -178,8 +193,10 @@ impl Mempool {
             config,
             chain_tip,
             subscription: SubscriptionProvider::new(chain_tip),
-            state: state::InflightState::default(),
-            nodes: nodes::Nodes::default(),
+            transactions: graph::TransactionGraph::default(),
+            batches: graph::BatchGraph::default(),
+            pending_block: None,
+            committed_blocks: VecDeque::default(),
         }
     }
 
@@ -203,56 +220,27 @@ impl Mempool {
     ///
     /// # Errors
     ///
-    /// Returns an error if the transaction's initial conditions don't match the current state.
+    /// Returns an error if the transaction would exceed the mempool capacity or if its initial
+    /// conditions don't match the current state.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Not impactful, and we may want ownership in the future"
+    )]
     #[instrument(target = COMPONENT, name = "mempool.add_transaction", skip_all, fields(tx=%tx.id()))]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
     ) -> Result<BlockNumber, AddTransactionError> {
-        if self.nodes.uncommitted_tx_count() >= self.config.tx_capacity.get() {
+        if self.unbatched_transactions_count() >= self.config.tx_capacity.get() {
             return Err(AddTransactionError::CapacityExceeded);
         }
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
-
-        // The transaction should append to the existing mempool state. This means:
-        //
-        // - The current account commitment should match the tx's initial state.
-        // - No duplicate nullifiers are created.
-        // - No duplicate notes are created.
-        // - All unauthenticated notes exist as output notes.
-        let account_commitment = self
-            .state
-            .account_commitment(&tx.account_id())
-            .or(tx.store_account_state())
-            .unwrap_or_default();
-        if tx.account_update().initial_state_commitment() != account_commitment {
-            return Err(VerifyTxError::IncorrectAccountInitialCommitment {
-                tx_initial_account_commitment: tx.account_update().initial_state_commitment(),
-                current_account_commitment: account_commitment,
-            }
-            .into());
-        }
-        let double_spend = self.state.nullifiers_exist(tx.nullifiers());
-        if !double_spend.is_empty() {
-            return Err(VerifyTxError::InputNotesAlreadyConsumed(double_spend).into());
-        }
-        let duplicates = self.state.output_notes_exist(tx.output_note_commitments());
-        if !duplicates.is_empty() {
-            return Err(VerifyTxError::OutputNotesAlreadyExist(duplicates).into());
-        }
-        let missing = self.state.output_notes_missing(tx.unauthenticated_note_commitments());
-        if !missing.is_empty() {
-            return Err(VerifyTxError::UnauthenticatedNotesNotFound(missing).into());
-        }
-
-        // Insert the transaction node.
+        self.transactions
+            .append(Arc::clone(&tx))
+            .map_err(AddTransactionError::StateConflict)?;
         self.subscription.transaction_added(&tx);
-        let tx = TransactionNode::new(tx);
-        self.state.insert(NodeId::Transaction(tx.id()), &tx);
-        self.nodes.txs.insert(tx.id(), tx);
-
         self.inject_telemetry();
 
         Ok(self.chain_tip)
@@ -265,79 +253,12 @@ impl Mempool {
     /// Returns `None` if no transactions are available.
     #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
-        // The selection algorithm is fairly neanderthal in nature.
-        //
-        // We iterate over all transaction nodes, each time selecting the first transaction which
-        // has no parent nodes that are unselected transactions. This is fairly primitive, but
-        // avoids the manual bookkeeping of which transactions are selectable.
-        //
-        // Note that selecting a transaction can unblock other transactions. This implementation
-        // handles this by resetting the iteration whenever a transaction is selected.
-        //
-        // This is still reasonably performant given that we only retain unselected transactions as
-        // transaction nodes i.e. selected transactions become batch nodes.
-        //
-        // The additional bookkeeping can be implemented once we have fee related strategies. KISS.
-
-        let mut selected = SelectedBatch::builder();
-        let mut budget = self.config.batch_budget;
-
-        let mut candidates = self.nodes.txs.values();
-
-        'next: while let Some(candidate) = candidates.next() {
-            if selected.contains(&candidate.id()) {
-                continue 'next;
-            }
-
-            // A transaction may be placed in a batch IFF all parents were already in a batch (or
-            // are part of this one).
-            for parent in self.state.parents(NodeId::Transaction(candidate.id()), candidate) {
-                match parent {
-                    // TODO(mirko): Once user batches are supported, they will also need to be
-                    // checked here.
-                    NodeId::Transaction(parent) if !selected.contains(&parent) => {
-                        continue 'next;
-                    },
-                    NodeId::Transaction(_)
-                    | NodeId::ProposedBatch(_)
-                    | NodeId::ProvenBatch(_)
-                    | NodeId::Block(_) => {},
-                }
-            }
-
-            if budget.check_then_subtract(candidate.inner()) == BudgetStatus::Exceeded {
-                break;
-            }
-
-            candidates = self.nodes.txs.values();
-            selected.push(candidate.inner().clone());
+        let batch = self.transactions.select_batch(self.config.batch_budget)?;
+        if let Err(err) = self.batches.append(batch.clone()) {
+            panic!("failed to append batch to dependency graph: {}", err.as_report());
         }
-
-        if selected.is_empty() {
-            return None;
-        }
-        let selected = selected.build();
-
-        let batch = ProposedBatchNode::new(selected.clone());
-        let batch_id = batch.batch_id();
-
-        for tx in batch.transactions() {
-            let node =
-                self.nodes.txs.remove(&tx.id()).expect("selected transaction node must exist");
-            self.state.remove(&node);
-            tracing::info!(
-                batch.id = %batch_id,
-                transaction.id = %tx.id(),
-                "Transaction selected for inclusion in batch"
-            );
-        }
-        self.state.insert(NodeId::ProposedBatch(batch_id), &batch);
-        self.nodes.proposed_batches.insert(batch_id, batch);
-
-        // TODO(mirko): Selecting a batch can unblock user batches, which should be checked here.
-
         self.inject_telemetry();
-        Some(selected)
+        Some(batch)
     }
 
     /// Drops the proposed batch and all of its descendants.
@@ -345,52 +266,27 @@ impl Mempool {
     /// Transactions are re-queued.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
-        // Due to the distributed nature of the system, its possible that a proposed batch was
-        // already proven, or already reverted. This guards against this eventuality.
-        if !self.nodes.proposed_batches.contains_key(&batch) {
+        // Guards against bugs in the proof scheduler where a retry results in multiple results
+        // coming back for the same batch. If the batch previously succeeded, then yanking it would
+        // corrupt the mempool since the batch might be in a block.
+        //
+        // Either way, we simply ignore rollbacks of batches that have already succeeded as a
+        // precaution.
+        if self.batches.is_proven(&batch) {
             return;
         }
 
-        // TODO(mirko): This will be somewhat complicated by the introduction of user batches
-        // since these don't have all inner txs present and therefore must at least partially
-        // revert their own tx descendents.
-
-        // Remove all descendents and reinsert their transactions. This is safe to do since
-        // a batch's state impact is the aggregation of its transactions.
-        let reverted = self.revert_subtree(NodeId::ProposedBatch(batch));
-
-        for (_, node) in reverted {
-            for tx in node.transactions() {
-                let tx = TransactionNode::new(Arc::clone(tx));
-                let tx_id = tx.id();
-                self.state.insert(NodeId::Transaction(tx_id), &tx);
-                self.nodes.txs.insert(tx_id, tx);
-                tracing::info!(
-                    batch.id = %batch,
-                    transaction.id = %tx_id,
-                    "Transaction requeued as part of batch rollback"
-                );
-            }
+        let reverted_batches = self.batches.revert_batch_and_descendants(batch);
+        for reverted in reverted_batches {
+            self.transactions.requeue_transactions(reverted);
         }
-
         self.inject_telemetry();
     }
 
     /// Marks a batch as proven if it exists.
     #[instrument(target = COMPONENT, name = "mempool.commit_batch", skip_all)]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
-        // Due to the distributed nature of the system, its possible that a proposed batch was
-        // already proven, or already reverted. This guards against this eventuality.
-        let Some(proposed) = self.nodes.proposed_batches.remove(&proof.id()) else {
-            return;
-        };
-
-        self.state.remove(&proposed);
-
-        let proven = proposed.into_proven_batch_node(proof);
-        self.state.insert(NodeId::ProvenBatch(proven.id()), &proven);
-        self.nodes.proven_batches.insert(proven.id(), proven);
-
+        self.batches.submit_proof(proof);
         self.inject_telemetry();
     }
 
@@ -404,70 +300,20 @@ impl Mempool {
     ///
     /// Panics if there is already a block in flight.
     #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
-    pub fn select_block(&mut self) -> (BlockNumber, Vec<Arc<ProvenBatch>>) {
-        // The selection algorithm is fairly neanderthal in nature.
-        //
-        // We iterate over all proven batch nodes, each time selecting the first which has no
-        // parent nodes that are unselected batches.
-        //
-        // Note that selecting a batch can unblock other batches. This implementation handles this
-        // by resetting the iteration whenever a batch is selected.
-
+    pub fn select_block(&mut self) -> SelectedBlock {
         assert!(
-            self.nodes.proposed_block.is_none(),
+            self.pending_block.is_none(),
             "block {} is already in progress",
-            self.nodes.proposed_block.as_ref().unwrap().0
+            self.pending_block.as_ref().unwrap().block_number
         );
 
         let block_number = self.chain_tip.child();
-        let mut selected = BlockNode::new(block_number);
-        let mut budget = self.config.block_budget;
-        let mut candidates = self.nodes.proven_batches.values();
+        let batches = self.batches.select_block(self.config.block_budget);
+        let block = SelectedBlock { block_number, batches };
 
-        'next: while let Some(candidate) = candidates.next() {
-            if selected.contains(candidate.id()) {
-                continue 'next;
-            }
-
-            // A batch is selectable if all parents are already blocks, or if the batch is part of
-            // the current block selection.
-            for parent in self.state.parents(NodeId::ProvenBatch(candidate.id()), candidate) {
-                match parent {
-                    NodeId::Block(_) => {},
-                    NodeId::ProvenBatch(parent) if selected.contains(parent) => {},
-                    _ => continue 'next,
-                }
-            }
-
-            if budget.check_then_subtract(candidate.inner()) == BudgetStatus::Exceeded {
-                break;
-            }
-
-            // Reset iteration as this batch could have unblocked previous batches.
-            candidates = self.nodes.proven_batches.values();
-            selected.push(candidate.clone());
-        }
-
-        // Replace the batches with the block in state and nodes.
-        for batch in selected.batches() {
-            // SAFETY: Selected batches came from nodes, and are unique.
-            let batch = self.nodes.proven_batches.remove(&batch.id()).unwrap();
-            self.state.remove(&batch);
-            tracing::info!(
-                block.number = %block_number,
-                batch.id = %batch.id(),
-                "Batch selected for inclusion in block",
-            );
-        }
-
-        let block_number = self.chain_tip.child();
-        let batches = selected.batches().to_vec();
-
-        self.state.insert(NodeId::Block(block_number), &selected);
-        self.nodes.proposed_block = Some((block_number, selected));
-
+        self.pending_block = Some(block.clone());
         self.inject_telemetry();
-        (block_number, batches)
+        block
     }
 
     /// Notify the pool that the in flight block was successfully committed to the chain.
@@ -478,32 +324,34 @@ impl Mempool {
     /// Sends a [`MempoolEvent::BlockCommitted`] event to subscribers, as well as a
     /// [`MempoolEvent::TransactionsReverted`] for transactions that are now considered expired.
     ///
-    /// # Returns
-    ///
-    /// Returns a set of transactions that were purged from the mempool because they can no longer
-    /// be included in the chain (e.g., expired transactions and their descendants).
+    /// On success the internal state is updated in place: the chain tip advances, expired data is
+    /// pruned, and subscribers are notified about the committed block and any reverted
+    /// transactions.
     ///
     /// # Panics
     ///
     /// Panics if there is no block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
-    pub fn commit_block(&mut self, to_commit: BlockHeader) {
+    pub fn commit_block(&mut self, block_header: BlockHeader) {
+        assert_eq!(self.chain_tip.child(), block_header.block_num());
         let block = self
-            .nodes
-            .proposed_block
-            .take_if(|(proposed, _)| proposed == &to_commit.block_num())
+            .pending_block
+            .take_if(|pending| pending.block_number == block_header.block_num())
             .expect("block must be in progress to commit");
-        let tx_ids = block.1.transactions().map(|tx| tx.id()).collect();
+        let tx_ids = block
+            .batches
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice().iter())
+            .map(miden_protocol::transaction::TransactionHeader::id)
+            .collect();
 
-        self.nodes.committed_blocks.push_back(block);
         self.chain_tip = self.chain_tip.child();
-        self.subscription.block_committed(to_commit, tx_ids);
+        self.subscription.block_committed(block_header, tx_ids);
 
-        if self.nodes.committed_blocks.len() > self.config.state_retention.get() {
-            let (_number, node) = self.nodes.committed_blocks.pop_front().unwrap();
-            self.state.remove(&node);
-        }
-        let reverted_tx_ids = self.revert_expired_nodes();
+        self.committed_blocks.push_back(block);
+        self.prune_oldest_block();
+
+        let reverted_tx_ids = self.revert_expired();
         self.subscription.txs_reverted(reverted_tx_ids);
         self.inject_telemetry();
     }
@@ -514,10 +362,8 @@ impl Mempool {
     ///
     /// Sends a [`MempoolEvent::TransactionsReverted`] event to subscribers.
     ///
-    /// # Returns
-    ///
-    /// Returns a set of transaction IDs that were reverted because they can no longer be
-    /// included in in the chain (e.g., expired transactions and their descendants)
+    /// The in-flight block state and all related transactions are discarded, and subscribers are
+    /// notified about the reverted transactions.
     ///
     /// # Panics
     ///
@@ -526,23 +372,14 @@ impl Mempool {
     pub fn rollback_block(&mut self, block: BlockNumber) {
         // Only revert if the given block is actually inflight.
         //
-        // This guards against extreme circumstances where multiple block proofs may be inflight at
-        // once. Due to the distributed nature of the node, one can imagine a scenario where
-        // multiple provers get the same job for example.
-        //
         // FIXME: We should consider a more robust check here to identify the block by a hash.
         //        If multiple jobs are possible, then so are multiple variants with the same block
         //        number.
-        if self
-            .nodes
-            .proposed_block
-            .as_ref()
-            .is_none_or(|(proposed, _)| proposed != &block)
-        {
+        if self.pending_block.as_ref().is_none_or(|pending| pending.block_number != block) {
             return;
         }
 
-        // Remove all descendents _without_ reinserting the transactions.
+        // Remove all descendants _without_ reinserting the transactions.
         //
         // This is done to prevent a system bug from causing repeated failures if we keep retrying
         // the same transactions. Since we can't trivially identify the cause of the block
@@ -550,33 +387,19 @@ impl Mempool {
         //
         // A more refined approach could be to tag the offending transactions and then evict them
         // once a certain failure threshold has been met.
-        let reverted = self.revert_subtree(NodeId::Block(block));
         let mut reverted_txs = HashSet::default();
+        let block = self.pending_block.take().expect("we just checked it is some");
+        for batch in block.batches {
+            let reverted = self.batches.revert_batch_and_descendants(batch.id());
 
-        // Log reverted batches and transactions.
-        for (id, node) in reverted {
-            match id {
-                NodeId::ProposedBatch(batch_id) | NodeId::ProvenBatch(batch_id) => {
-                    tracing::info!(
-                        block.number=%block,
-                        batch.id=%batch_id,
-                        "Reverted batch as part of block rollback"
-                    );
-                },
-                NodeId::Transaction(_) | NodeId::Block(_) => {},
-            }
-
-            for tx in node.transactions() {
-                reverted_txs.insert(tx.id());
-                tracing::info!(
-                    block.number=%block,
-                    transaction.id=%tx.id(),
-                    "Reverted transaction as part of block rollback"
-                );
+            for batch in reverted {
+                for tx in batch.into_transactions() {
+                    reverted_txs.extend(self.transactions.revert_tx_and_descendants(tx.id()));
+                }
             }
         }
-        self.subscription.txs_reverted(reverted_txs);
 
+        self.subscription.txs_reverted(reverted_txs);
         self.inject_telemetry();
     }
 
@@ -596,17 +419,17 @@ impl Mempool {
 
     /// Returns the number of transactions currently waiting to be batched.
     pub fn unbatched_transactions_count(&self) -> usize {
-        self.nodes.txs.len()
+        self.transactions.unselected_count()
     }
 
     /// Returns the number of batches currently being proven.
     pub fn proposed_batches_count(&self) -> usize {
-        self.nodes.proposed_batches.len()
+        self.batches.proposed_count()
     }
 
     /// Returns the number of proven batches waiting for block inclusion.
     pub fn proven_batches_count(&self) -> usize {
-        self.nodes.proven_batches.len()
+        self.batches.proven_count()
     }
 
     // INTERNAL HELPERS
@@ -617,121 +440,79 @@ impl Mempool {
     /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
     /// does not track fields added dynamically.
     fn inject_telemetry(&self) {
+        use miden_node_utils::tracing::OpenTelemetrySpanExt;
         let span = tracing::Span::current();
 
-        self.nodes.inject_telemetry(&span);
-        self.state.inject_telemetry(&span);
+        let committed_txs = self
+            .committed_blocks
+            .iter()
+            .flat_map(|block| block.batches.iter())
+            .map(|batch| batch.transactions().as_slice().len())
+            .sum::<usize>();
+        span.set_attribute(
+            "mempool.transactions.uncommitted",
+            self.transactions.count() - committed_txs,
+        );
+        span.set_attribute("mempool.transactions.unbatched", self.unbatched_transactions_count());
+        span.set_attribute("mempool.batches.proposed", self.proposed_batches_count());
+        span.set_attribute("mempool.batches.proven", self.proven_batches_count());
+
+        span.set_attribute("mempool.accounts", self.transactions.accounts_count());
+        span.set_attribute("mempool.nullifiers", self.transactions.nullifier_count());
+        span.set_attribute("mempool.output_notes", self.transactions.output_note_count());
     }
 
-    /// Reverts expired transactions and batches as per the current `chain_tip`.
+    /// Prunes the oldest locally retained block if the number of blocks exceeds the configured
+    /// limit.
     ///
-    /// Returns the list of all transactions that were reverted.
-    fn revert_expired_nodes(&mut self) -> HashSet<TransactionId> {
-        let expired_txs = self.nodes.txs.iter().filter_map(|(id, node)| {
-            (node.expires_at() <= self.chain_tip).then_some(NodeId::Transaction(*id))
-        });
-        let expired_proposed_batches =
-            self.nodes.proposed_batches.iter().filter_map(|(id, node)| {
-                (node.expires_at() <= self.chain_tip).then_some(NodeId::ProposedBatch(*id))
-            });
-        let expired_proven_batches = self.nodes.proven_batches.iter().filter_map(|(id, node)| {
-            (node.expires_at() <= self.chain_tip).then_some(NodeId::ProvenBatch(*id))
-        });
+    /// This includes pruning the block's batches and transactions from their graphs.
+    fn prune_oldest_block(&mut self) {
+        if self.committed_blocks.len() <= self.config.state_retention.get() {
+            return;
+        }
+        let block = self.committed_blocks.pop_front().unwrap();
 
-        let expired = expired_proven_batches
-            .chain(expired_proposed_batches)
-            .chain(expired_txs)
-            .collect::<Vec<_>>();
-        let mut reverted_txs = HashSet::default();
-        for expired_id in expired {
-            let reverted = self.revert_subtree(expired_id);
-            for (id, node) in reverted {
-                match id {
-                    NodeId::ProposedBatch(batch_id) | NodeId::ProvenBatch(batch_id) => {
-                        tracing::info!(
-                            ancestor=?expired_id,
-                            batch.id=%batch_id,
-                            "Reverted batch due to expiration of ancestor"
-                        );
-                    },
-                    NodeId::Transaction(_) => {},
-                    NodeId::Block(block_number) => panic!(
-                        "Found block {block_number} descendent while reverting expired nodes which shouldn't be possible since only one block is in progress"
-                    ),
-                }
-
-                for tx in node.transactions() {
-                    reverted_txs.insert(tx.id());
-                    tracing::info!(
-                        ancestor=?expired_id,
-                        transaction.id=%tx.id(),
-                        "Reverted transaction due to expiration of ancestor"
-                    );
-                }
-            }
+        // We perform pruning in chronological order, from oldest to youngest.
+        //
+        // Pruning a node requires that the node has no parents, and using chronological
+        // order gives us this property. This works because a batch can only be included in
+        // a block once _all_ its parents have been included. So if we follow the same order,
+        // it means that a batch's parents would already have been pruned.
+        //
+        // The same logic follows for transactions.
+        for batch in block.batches.iter().map(|batch| batch.id()) {
+            self.batches.prune(batch);
         }
 
-        reverted_txs
+        for tx in block
+            .batches
+            .iter()
+            .flat_map(|batch| batch.transactions().as_slice())
+            .map(TransactionHeader::id)
+        {
+            self.transactions.prune(tx);
+        }
     }
 
-    /// Reverts the subtree with the given root and returns the reverted nodes. Does nothing if the
-    /// root node does not exist to allow using this in cases where multiple overlapping calls to
-    /// this are made.
-    fn revert_subtree(&mut self, root: NodeId) -> HashMap<NodeId, Box<dyn Node>> {
-        let root_exists = match root {
-            NodeId::Transaction(id) => self.nodes.txs.contains_key(&id),
-            NodeId::ProposedBatch(id) => self.nodes.proposed_batches.contains_key(&id),
-            NodeId::ProvenBatch(id) => self.nodes.proven_batches.contains_key(&id),
-            NodeId::Block(id) => {
-                self.nodes.proposed_block.as_ref().is_some_and(|(number, _)| *number == id)
-            },
-        };
-        if !root_exists {
-            return HashMap::default();
+    /// Reverts all batches and transactions that have expired.
+    ///
+    /// Expired batch descendants are also reverted since these are now invalid.
+    ///
+    /// Transactions from batches are requeued. Expired transactions and their descendants are then
+    /// reverted as well.
+    fn revert_expired(&mut self) -> HashSet<TransactionId> {
+        let batches = self.batches.revert_expired(self.chain_tip);
+        for batch in batches {
+            self.transactions.requeue_transactions(batch);
         }
-
-        let mut to_process = vec![root];
-        let mut reverted = HashMap::default();
-
-        while let Some(id) = to_process.pop() {
-            if reverted.contains_key(&id) {
-                continue;
-            }
-
-            // SAFETY: all IDs come from the state DAG and must therefore exist. The processed check
-            // above also prevents removing a node twice.
-            let node: Box<dyn Node> = match id {
-                NodeId::Transaction(id) => {
-                    self.nodes.txs.remove(&id).map(|x| Box::new(x) as Box<dyn Node>)
-                },
-                NodeId::ProposedBatch(id) => {
-                    self.nodes.proposed_batches.remove(&id).map(|x| Box::new(x) as Box<dyn Node>)
-                },
-                NodeId::ProvenBatch(id) => {
-                    self.nodes.proven_batches.remove(&id).map(|x| Box::new(x) as Box<dyn Node>)
-                },
-                NodeId::Block(id) => self
-                    .nodes
-                    .proposed_block
-                    .take_if(|(number, _)| number == &id)
-                    .map(|(_, x)| Box::new(x) as Box<dyn Node>),
-            }
-            .unwrap();
-
-            to_process.extend(self.state.children(id, node.as_ref()));
-            self.state.remove(node.as_ref());
-            reverted.insert(id, node);
-        }
-
-        reverted
+        self.transactions.revert_expired(self.chain_tip)
     }
 
-    /// Rejects authentication height's which we cannot guarantee are correct from the locally
+    /// Rejects authentication heights that fall outside the overlap guaranteed by the locally
     /// retained state.
     ///
-    /// In other words, this returns an error if the authentication height is more than one block
-    /// older than the locally retained state. One block is allowed because this means block `N-1`
-    /// was authenticated by the store, and we can check blocks `N..chain_tip`.
+    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below this
+    /// range are rejected as stale because the mempool no longer tracks the intermediate history.
     ///
     /// # Panics
     ///
@@ -742,8 +523,10 @@ impl Mempool {
         &self,
         authentication_height: BlockNumber,
     ) -> Result<(), AddTransactionError> {
-        let oldest = self.nodes.oldest_committed_block().unwrap_or_default();
-        let limit = oldest.parent().unwrap_or_default();
+        let limit = self
+            .chain_tip
+            .checked_sub(self.committed_blocks.len() as u32)
+            .expect("number of committed blocks cannot exceed the chain tip");
 
         if authentication_height < limit {
             return Err(AddTransactionError::StaleInputs {
@@ -752,11 +535,10 @@ impl Mempool {
             });
         }
 
-        let latest_block =
-            self.nodes.proposed_block.as_ref().map_or(self.chain_tip, |(number, _)| *number);
         assert!(
-            authentication_height <= latest_block,
-            "Authentication height {authentication_height} exceeded the latest known block {latest_block}"
+            authentication_height <= self.chain_tip,
+            "Authentication height {authentication_height} exceeded the chain tip {}",
+            self.chain_tip
         );
 
         Ok(())
