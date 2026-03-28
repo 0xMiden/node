@@ -492,14 +492,30 @@ message SyncNotesResponse {
 // SYNC CHAIN MMR
 // ================================================================================================
 
+// The finality level for chain data queries.
+enum Finality {
+    // Return data up to the latest committed block.
+    FINALITY_UNSPECIFIED = 0;
+    // Return data up to the latest committed block.
+    FINALITY_COMMITTED = 1;
+    // Return data only up to the latest proven block.
+    FINALITY_PROVEN = 2;
+}
+
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
     // Block range from which to synchronize the chain MMR.
     //
     // The response will contain MMR delta starting after `block_range.block_from` up to
-    // `block_range.block_to` or the chain tip (whichever is lower). Set `block_from` to the last
-    // block already present in the caller's MMR so the delta begins at the next block.
+    // `block_range.block_to` or the effective tip (whichever is lower). Set `block_from` to the
+    // last block already present in the caller's MMR so the delta begins at the next block.
     BlockRange block_range = 1;
+
+    // The finality level to use when clamping the upper bound of the block range.
+    //
+    // When set to `FINALITY_UNSPECIFIED` or `FINALITY_COMMITTED`, the upper bound is clamped to the chain tip.
+    // When set to `FINALITY_PROVEN`, the upper bound is clamped to the latest proven block.
+    Finality finality = 2;
 }
 
 // Represents the result of syncing chain MMR.
