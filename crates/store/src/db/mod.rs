@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::generated as proto;
+use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -244,7 +244,7 @@ impl Db {
         fields(path=%database_filepath.display())
         err,
     )]
-    pub fn bootstrap(database_filepath: PathBuf, genesis: &GenesisBlock) -> anyhow::Result<()> {
+    pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
         // Create database.
         //
         // This will create the file if it does not exist, but will also happily open it if already
@@ -260,20 +260,11 @@ impl Db {
         // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
-        // Insert genesis block data.
-        let genesis = genesis.inner();
-        conn.transaction(move |conn| {
-            models::queries::apply_block(
-                conn,
-                genesis.header(),
-                genesis.signature(),
-                &[],
-                &[],
-                genesis.body().updated_accounts(),
-                genesis.body().transactions(),
-            )
-        })
-        .context("failed to insert genesis block")?;
+        // Insert genesis block data. Deconstruct into signed block.
+        let (header, body, signature, _proof) = genesis.into_inner().into_parts();
+        let genesis_block = SignedBlock::new_unchecked(header, body, signature);
+        conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[], None))
+            .context("failed to insert genesis block")?;
         Ok(())
     }
 
@@ -550,17 +541,10 @@ impl Db {
         acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
+        proving_inputs: Option<BlockProofRequest>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
-            models::queries::apply_block(
-                conn,
-                signed_block.header(),
-                signed_block.signature(),
-                &notes,
-                signed_block.body().created_nullifiers(),
-                signed_block.body().updated_accounts(),
-                signed_block.body().transactions(),
-            )?;
+            models::queries::apply_block(conn, &signed_block, &notes, proving_inputs)?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
             // it doesn't bind it properly to the data locked!
@@ -573,6 +557,58 @@ impl Db {
             acquire_done.blocking_recv()?;
 
             Ok(())
+        })
+        .await
+    }
+
+    /// Marks a previously committed block as proven and advances the proven-in-sequence tip.
+    ///
+    /// Atomically clears `proving_inputs` for the given block, then walks forward from the
+    /// current proven-in-sequence tip through consecutive proven blocks, marking each as
+    /// proven-in-sequence. Returns the block numbers that were newly marked in-sequence.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn mark_proven_and_advance_sequence(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Vec<BlockNumber>> {
+        self.transact("mark block proven", move |conn| {
+            mark_proven_and_advance_sequence(conn, block_num)
+        })
+        .await
+    }
+
+    /// Returns the proving inputs for a given block number, if stored.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_block_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<BlockProofRequest>> {
+        self.transact("select block proving inputs", move |conn| {
+            models::queries::select_block_proving_inputs(conn, block_num)
+        })
+        .await
+    }
+
+    /// Returns unproven block numbers greater than `after`, in ascending order, up to `limit`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_unproven_blocks(
+        &self,
+        after: BlockNumber,
+        limit: usize,
+    ) -> Result<Vec<BlockNumber>> {
+        self.transact("select unproven blocks", move |conn| {
+            models::queries::select_unproven_blocks(conn, after, limit)
+        })
+        .await
+    }
+
+    /// Returns the highest block number that has been proven in sequence.
+    ///
+    /// This includes the genesis block, which is not technically proven, but treated as such.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
+        self.transact("select latest proven block num", |conn| {
+            models::queries::select_latest_proven_in_sequence_block_num(conn)
         })
         .await
     }
@@ -783,4 +819,51 @@ impl Db {
         })
         .await
     }
+}
+
+/// Mark a committed block as proven and advance the proven-in-sequence tip.
+///
+/// This is intended to atomically (when run in a transaction):
+/// 1. Clears `proving_inputs` for the given block (marking it proven).
+/// 2. Queries all blocks where `proving_inputs IS NULL AND proven_in_sequence = FALSE`.
+/// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
+///    sets `proven_in_sequence = TRUE` for each.
+///
+/// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
+/// or below the current tip, as that indicates a consistency bug.
+pub(crate) fn mark_proven_and_advance_sequence(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    // Clear proving_inputs for the specified block.
+    models::queries::clear_block_proving_inputs(conn, block_num)?;
+
+    // Get the current proven-in-sequence tip (highest in-sequence).
+    let mut tip = models::queries::select_latest_proven_in_sequence_block_num(conn)?;
+
+    // Get all blocks that are proven but not yet marked in-sequence.
+    let unsequenced = models::queries::select_proven_not_in_sequence_blocks(conn)?;
+
+    // Walk forward from the tip through consecutive proven blocks.
+    let mut newly_in_sequence = Vec::new();
+    for candidate in unsequenced {
+        if candidate <= tip {
+            return Err(DatabaseError::DataCorrupted(format!(
+                "block {candidate} is proven but not marked in-sequence while the tip is at {tip}"
+            )));
+        }
+        if candidate == tip + 1 {
+            tip = candidate;
+            newly_in_sequence.push(candidate);
+        } else {
+            break;
+        }
+    }
+
+    // Mark the newly contiguous blocks as proven-in-sequence.
+    if let (Some(&from), Some(&to)) = (newly_in_sequence.first(), newly_in_sequence.last()) {
+        models::queries::mark_blocks_as_proven_in_sequence(conn, from, to)?;
+    }
+
+    Ok(newly_in_sequence)
 }

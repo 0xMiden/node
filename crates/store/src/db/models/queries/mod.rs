@@ -26,10 +26,9 @@
 //! considered unnecessary boilerplate by default.
 
 use diesel::SqliteConnection;
-use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::block::{BlockAccountUpdate, BlockHeader};
+use miden_node_proto::BlockProofRequest;
+use miden_protocol::block::SignedBlock;
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::OrderedTransactionHeaders;
 
 use super::DatabaseError;
 use crate::db::NoteRecord;
@@ -46,29 +45,28 @@ pub(crate) use nullifiers::*;
 mod notes;
 pub(crate) use notes::*;
 
-/// Apply a new block to the state
-///
-/// # Arguments
+/// Apply a new block to the state.
 ///
 /// # Returns
 ///
 /// Number of records inserted and/or updated.
 pub(crate) fn apply_block(
     conn: &mut SqliteConnection,
-    block_header: &BlockHeader,
-    signature: &Signature,
+    block: &SignedBlock,
     notes: &[(NoteRecord, Option<Nullifier>)],
-    nullifiers: &[Nullifier],
-    accounts: &[BlockAccountUpdate],
-    transactions: &OrderedTransactionHeaders,
+    proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     // Note: ordering here is important as the relevant tables have FK dependencies.
-    count += insert_block_header(conn, block_header, signature)?;
-    count += upsert_accounts(conn, accounts, block_header.block_num())?;
+    count += insert_block_header(conn, block.header(), block.signature(), proving_inputs)?;
+    count += upsert_accounts(conn, block.body().updated_accounts(), block.header().block_num())?;
     count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(conn, notes)?;
-    count += insert_transactions(conn, block_header.block_num(), transactions)?;
-    count += insert_nullifiers_for_block(conn, nullifiers, block_header.block_num())?;
+    count += insert_transactions(conn, block.header().block_num(), block.body().transactions())?;
+    count += insert_nullifiers_for_block(
+        conn,
+        block.body().created_nullifiers(),
+        block.header().block_num(),
+    )?;
     Ok(count)
 }

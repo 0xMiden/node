@@ -13,6 +13,7 @@ use diesel::{
 };
 use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::BlockProofRequest;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -205,16 +206,8 @@ pub struct BlockHeaderInsert {
     pub block_header: Vec<u8>,
     pub signature: Vec<u8>,
     pub commitment: Vec<u8>,
-}
-impl From<(&BlockHeader, &Signature)> for BlockHeaderInsert {
-    fn from((header, signature): (&BlockHeader, &Signature)) -> Self {
-        Self {
-            block_num: header.block_num().to_raw_sql(),
-            block_header: header.to_bytes(),
-            signature: signature.to_bytes(),
-            commitment: BlockHeaderCommitment::new(header).to_raw_sql(),
-        }
-    }
+    pub proving_inputs: Option<Vec<u8>>,
+    pub proven_in_sequence: bool,
 }
 
 /// Insert a [`BlockHeader`] to the DB using the given [`SqliteConnection`].
@@ -236,10 +229,193 @@ pub(crate) fn insert_block_header(
     conn: &mut SqliteConnection,
     block_header: &BlockHeader,
     signature: &Signature,
+    proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
-    let block_header = BlockHeaderInsert::from((block_header, signature));
-    let count = diesel::insert_into(schema::block_headers::table)
-        .values(&[block_header])
-        .execute(conn)?;
+    // Only the genesis block should be inserted without proving inputs.
+    if proving_inputs.is_none() && block_header.block_num() != BlockNumber::GENESIS {
+        return Err(DatabaseError::DataCorrupted(
+            "Only the genesis block should be inserted without proving inputs".into(),
+        ));
+    }
+    // We treat the genesis as proven.
+    let proven_in_sequence = proving_inputs.is_none();
+    let row = BlockHeaderInsert {
+        block_num: block_header.block_num().to_raw_sql(),
+        block_header: block_header.to_bytes(),
+        signature: signature.to_bytes(),
+        commitment: BlockHeaderCommitment::new(block_header).to_raw_sql(),
+        proving_inputs: proving_inputs.map(|inputs| inputs.to_bytes()),
+        proven_in_sequence,
+    };
+    let count = diesel::insert_into(schema::block_headers::table).values(&[row]).execute(conn)?;
     Ok(count)
+}
+
+/// Select the proving inputs for a given block number.
+///
+/// # Returns
+///
+/// `None` if the block does not exist or has no proving inputs stored.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT proving_inputs
+/// FROM block_headers
+/// WHERE block_num = ?1
+/// ```
+pub(crate) fn select_block_proving_inputs(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Option<BlockProofRequest>, DatabaseError> {
+    let inputs: Option<Option<Vec<u8>>> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::proving_inputs)
+            .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
+            .get_result(conn)
+            .optional()?;
+    inputs
+        .flatten()
+        .map(|bytes| BlockProofRequest::read_from_bytes(&bytes))
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// Clear `proving_inputs` for the given block, marking it as proven.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// UPDATE block_headers
+/// SET proving_inputs = NULL
+/// WHERE block_num = ?
+/// ```
+pub(crate) fn clear_block_proving_inputs(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<(), DatabaseError> {
+    diesel::update(
+        schema::block_headers::table
+            .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
+    )
+    .set(schema::block_headers::proving_inputs.eq(None::<Vec<u8>>))
+    .execute(conn)?;
+
+    Ok(())
+}
+
+/// Select block numbers that are proven (`proving_inputs IS NULL`) but not yet marked
+/// in-sequence, ordered ascending.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num
+/// FROM block_headers
+/// WHERE proving_inputs IS NULL
+///   AND proven_in_sequence = FALSE
+/// ORDER BY block_num ASC
+/// ```
+pub(crate) fn select_proven_not_in_sequence_blocks(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    let block_nums: Vec<i64> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
+            .filter(schema::block_headers::proving_inputs.is_null())
+            .filter(schema::block_headers::proven_in_sequence.eq(false))
+            .order(schema::block_headers::block_num.asc())
+            .load(conn)?;
+
+    block_nums
+        .into_iter()
+        .map(BlockNumber::from_raw_sql)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+/// Mark blocks in the range `[block_from, block_to]` as proven in sequence.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// UPDATE block_headers
+/// SET proven_in_sequence = TRUE
+/// WHERE block_num >= ? AND block_num <= ?
+/// ```
+pub(crate) fn mark_blocks_as_proven_in_sequence(
+    conn: &mut SqliteConnection,
+    block_from: BlockNumber,
+    block_to: BlockNumber,
+) -> Result<(), DatabaseError> {
+    diesel::update(
+        schema::block_headers::table
+            .filter(schema::block_headers::block_num.ge(block_from.to_raw_sql()))
+            .filter(schema::block_headers::block_num.le(block_to.to_raw_sql())),
+    )
+    .set(schema::block_headers::proven_in_sequence.eq(true))
+    .execute(conn)?;
+
+    Ok(())
+}
+
+/// Select unproven block numbers greater than `after`, in ascending order, up to `limit`.
+///
+/// A block is unproven when its `proving_inputs` are non-NULL.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num
+/// FROM block_headers
+/// WHERE proving_inputs IS NOT NULL
+///   AND block_num > ?
+/// ORDER BY block_num ASC
+/// LIMIT ?
+/// ```
+pub(crate) fn select_unproven_blocks(
+    conn: &mut SqliteConnection,
+    after: BlockNumber,
+    limit: usize,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    let block_nums: Vec<i64> =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
+            .filter(schema::block_headers::proving_inputs.is_not_null())
+            .filter(schema::block_headers::block_num.gt(after.to_raw_sql()))
+            .order(schema::block_headers::block_num.asc())
+            .limit(i64::try_from(limit).expect("unproven block number limit should fit in i64"))
+            .load(conn)?;
+
+    block_nums
+        .into_iter()
+        .map(BlockNumber::from_raw_sql)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+/// Select the highest block number that has been proven in an unbroken sequence from genesis.
+///
+/// A block is marked `proven_in_sequence` when it and all its ancestors have been proven. This
+/// is maintained by the proof scheduler as blocks complete proving (potentially out of order).
+///
+/// The genesis block is always inserted with `proven_in_sequence = TRUE`.
+///
+/// This function is expected to only ever be called after a genesis block has been inserted into
+/// the database. As such, if no proven-in-sequence block is found, it is treated as an error.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT MAX(block_num)
+/// FROM block_headers
+/// WHERE proven_in_sequence = TRUE
+/// ```
+pub(crate) fn select_latest_proven_in_sequence_block_num(
+    conn: &mut SqliteConnection,
+) -> Result<BlockNumber, DatabaseError> {
+    let block_num: i64 =
+        SelectDsl::select(schema::block_headers::table, schema::block_headers::block_num)
+            .filter(schema::block_headers::proven_in_sequence.eq(true))
+            .order(schema::block_headers::block_num.desc())
+            .first(conn)?;
+
+    BlockNumber::from_raw_sql(block_num).map_err(Into::into)
 }
