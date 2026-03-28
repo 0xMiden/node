@@ -133,23 +133,31 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+        let block_from = block_range.start();
+        // Clamp block_to to the chain tip to avoid erroring when opening the MMR proof
+        let block_to = block_range.end().min(&chain_tip);
+        let clamped_block_range = *block_from..=*block_to;
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (state, mmr_proof, last_block_included) =
-            self.state.sync_notes(request.note_tags, block_range).await?;
+        let results = self.state.sync_notes(request.note_tags, clamped_block_range).await?;
 
-        let notes = state.notes.into_iter().map(Into::into).collect();
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: mmr_proof.map(|proof| proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(Into::into).collect(),
+            })
+            .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
-                chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+            block_range: Some(proto::rpc::BlockRange {
+                block_from: block_from.as_u32(),
+                block_to: Some(block_to.as_u32()),
             }),
-            block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path().clone().into()),
-            notes,
+            blocks,
         }))
     }
 

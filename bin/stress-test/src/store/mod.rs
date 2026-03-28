@@ -146,15 +146,25 @@ pub async fn bench_sync_nullifiers(
         };
         let response = store_client.sync_notes(sync_request).await.unwrap().into_inner();
 
-        let note_ids = response
-            .notes
-            .iter()
-            .map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
-            .collect::<Vec<proto::note::NoteId>>();
+        let resp_block_range = response.block_range.expect("block_range should exist");
+        let resp_chain_tip = resp_block_range.block_to.expect("block_to should exist");
 
-        // Get the notes nullifiers, limiting to 20 notes maximum
-        let note_ids_to_fetch =
-            note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect::<Vec<_>>();
+        if response.blocks.is_empty() {
+            break;
+        }
+
+        // Collect note IDs from all blocks in the response.
+        let note_ids: Vec<_> = response
+            .blocks
+            .iter()
+            .flat_map(|b| {
+                b.notes.iter().map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
+            })
+            .collect();
+
+        // Get the notes nullifiers, limiting to 20 notes maximum.
+        let note_ids_to_fetch: Vec<_> =
+            note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
         if !note_ids_to_fetch.is_empty() {
             let notes = store_client
                 .get_notes_by_id(proto::note::NoteIdList { ids: note_ids_to_fetch })
@@ -163,23 +173,18 @@ pub async fn bench_sync_nullifiers(
                 .into_inner()
                 .notes;
 
-            nullifier_prefixes.extend(
-                notes
-                    .iter()
-                    .filter_map(|n| {
-                        // Private notes are filtered out because `n.details` is None
-                        let details_bytes = n.note.as_ref()?.details.as_ref()?;
-                        let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
-                        Some(u32::from(details.nullifier().prefix()))
-                    })
-                    .collect::<Vec<u32>>(),
-            );
+            nullifier_prefixes.extend(notes.iter().filter_map(|n| {
+                let details_bytes = n.note.as_ref()?.details.as_ref()?;
+                let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
+                Some(u32::from(details.nullifier().prefix()))
+            }));
         }
 
-        // Update block number from pagination info
-        let pagination_info = response.pagination_info.expect("pagination_info should exist");
-        current_block_num = pagination_info.block_num;
-        if pagination_info.chain_tip == current_block_num {
+        // Advance past the last block in the response.
+        let last_block = response.blocks.last().unwrap();
+        current_block_num =
+            last_block.block_header.as_ref().map_or(resp_chain_tip, |h| h.block_num);
+        if current_block_num >= resp_chain_tip {
             break;
         }
     }

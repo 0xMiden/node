@@ -518,16 +518,19 @@ pub(crate) fn get_note_sync(
     conn: &mut SqliteConnection,
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(NoteSyncUpdate, BlockNumber), NoteSyncError> {
+) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
     QueryParamNoteTagLimit::check(note_tags.len()).map_err(DatabaseError::from)?;
 
-    let (notes, last_included_block) =
-        select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+    let (notes, _) = select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+
+    if notes.is_empty() {
+        return Ok(None);
+    }
 
     let block_header =
         select_block_header_by_block_num(conn, notes.first().map(|note| note.block_num))?
             .ok_or(NoteSyncError::EmptyBlockHeadersTable)?;
-    Ok((NoteSyncUpdate { notes, block_header }, last_included_block))
+    Ok(Some(NoteSyncUpdate { notes, block_header }))
 }
 
 #[derive(Debug, Clone, PartialEq, Selectable, Queryable, QueryableByName)]
