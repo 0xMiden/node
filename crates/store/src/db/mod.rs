@@ -195,22 +195,6 @@ impl From<NoteRecord> for proto::note::CommittedNote {
     }
 }
 
-impl From<NoteRecord> for proto::note::NoteSyncRecord {
-    fn from(value: NoteRecord) -> Self {
-        let note_id = value.note_id.into();
-        let note_index_in_block = value.note_index.leaf_index_value().into();
-        let metadata = value.metadata.into();
-        let inclusion_path = value.inclusion_path.into();
-
-        proto::note::NoteSyncRecord {
-            note_id: Some(note_id),
-            note_index_in_block,
-            metadata: Some(metadata),
-            inclusion_path: Some(inclusion_path),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub struct NoteSyncUpdate {
     pub notes: Vec<NoteSyncRecord>,
@@ -228,12 +212,14 @@ pub struct NoteSyncRecord {
 
 impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
     fn from(note: NoteSyncRecord) -> Self {
-        Self {
-            note_index_in_block: note.note_index.leaf_index_value().into(),
+        let metadata_header = Some(note.metadata.to_header().into());
+        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
             note_id: Some(note.note_id.into()),
-            metadata: Some(note.metadata.into()),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
-        }
+            block_num: note.block_num.as_u32(),
+            note_index_in_block: note.note_index.leaf_index_value().into(),
+            inclusion_path: Some(note.inclusion_path.into()),
+        });
+        Self { metadata_header, inclusion_proof }
     }
 }
 
@@ -684,6 +670,12 @@ impl Db {
 
         values.extend(page.values);
         let mut last_block_included = page.last_block_included;
+
+        // If the first page returned no values, the block at block_range_start has more
+        // entries than the limit allows (e.g. genesis accounts with large storage maps).
+        if values.is_empty() && last_block_included == block_range_start {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
 
         loop {
             if page.last_block_included == block_num || page.last_block_included < block_range_start

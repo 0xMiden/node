@@ -43,6 +43,7 @@
 - NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-account-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
 - Removed gRPC reflection v1-alpha support ([#1795](https://github.com/0xMiden/node/pull/1795)).
 - [BREAKING] Rust requirement bumped from `v1.91` to `v1.93` ([#1803](https://github.com/0xMiden/node/pull/1803)).
+- [BREAKING] Refactored `NoteSyncRecord` to returned a fixed-size `NoteMetadataHeader` ([#1837](https://github.com/0xMiden/node/pull/1837)).
 
 ### Fixes
 
@@ -51,6 +52,8 @@
 - Fixed `bundled bootstrap` requiring `--validator.key.hex` or `--validator.key.kms-id` despite a default key being configured ([#1732](https://github.com/0xMiden/node/pull/1732)).
 - Fixed incorrectly classifying private notes with the network attachment as network notes ([#1378](https://github.com/0xMiden/node/pull/1738)).
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
+- Fixed `GetAccount` returning an internal error for `AllEntries` requests on storage maps where all entries are in a single block (e.g. genesis accounts) ([#1816](https://github.com/0xMiden/node/pull/1816)).
+- Fixed `GetAccount` returning empty storage map entries instead of `too_many_entries` when a genesis account's map exceeds the pagination limit ([#1816](https://github.com/0xMiden/node/pull/1816)).
 
 ## v0.13.8 (2026-03-12)
 
