@@ -12,7 +12,6 @@ use super::{
     DEFAULT_NTX_IDLE_TIMEOUT,
     DEFAULT_NTX_MAX_CYCLES,
     DEFAULT_NTX_SCRIPT_CACHE_SIZE,
-    DEFAULT_NTX_TICKER_INTERVAL,
     ENV_BLOCK_PRODUCER_URL,
     ENV_ENABLE_OTEL,
     ENV_NTX_DATA_DIRECTORY,
@@ -48,15 +47,6 @@ pub enum NtxBuilderCommand {
         /// prover in-process which is expensive.
         #[arg(long = "tx-prover.url", env = ENV_NTX_PROVER_URL, value_name = "URL")]
         tx_prover_url: Option<Url>,
-
-        /// Interval at which to run the network transaction builder's ticker.
-        #[arg(
-            long = "interval",
-            default_value = &duration_to_human_readable_string(DEFAULT_NTX_TICKER_INTERVAL),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        ticker_interval: Duration,
 
         /// Number of note scripts to cache locally.
         ///
@@ -120,7 +110,6 @@ impl NtxBuilderCommand {
             block_producer_url,
             validator_url,
             tx_prover_url,
-            ticker_interval: _,
             script_cache_size,
             idle_timeout,
             max_account_crashes,
