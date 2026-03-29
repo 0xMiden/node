@@ -590,10 +590,11 @@ pub(crate) async fn check_remote_prover_status(
             // Use the new method to convert gRPC status to domain type
             let remote_prover_details = RemoteProverStatusDetails::from_proxy_status(status, url);
 
-            // Determine overall health based on worker statuses
+            // Determine overall health based on worker statuses.
+            // All workers must be healthy for the prover to be considered healthy.
             let overall_health = if remote_prover_details.workers.is_empty() {
                 Status::Unknown
-            } else if remote_prover_details.workers.iter().any(|w| w.status == Status::Healthy) {
+            } else if remote_prover_details.workers.iter().all(|w| w.status == Status::Healthy) {
                 Status::Healthy
             } else {
                 Status::Unhealthy

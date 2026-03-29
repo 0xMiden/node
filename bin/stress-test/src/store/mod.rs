@@ -149,7 +149,7 @@ pub async fn bench_sync_nullifiers(
         let note_ids = response
             .notes
             .iter()
-            .map(|n| n.note_id.unwrap())
+            .map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
             .collect::<Vec<proto::note::NoteId>>();
 
         // Get the notes nullifiers, limiting to 20 notes maximum
@@ -470,6 +470,7 @@ async fn sync_chain_mmr(
 ) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
         block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
+        finality: proto::rpc::Finality::Committed.into(),
     };
 
     let start = Instant::now();
