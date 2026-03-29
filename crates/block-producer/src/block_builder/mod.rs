@@ -128,8 +128,7 @@ impl BlockBuilder {
 
     #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
     async fn select_block(mempool: &SharedMempool) -> SelectedBlock {
-        let (block_number, batches) = mempool.lock().await.select_block();
-        SelectedBlock { block_number, batches }
+        mempool.lock().await.select_block()
     }
 
     /// Fetches block inputs from the store for the [`SelectedBlock`].
@@ -280,9 +279,10 @@ impl BlockBuilder {
 
 /// A wrapper around batches selected for inlucion in a block, primarily used to be able to inject
 /// telemetry in-between the selection and fetching the required [`BlockInputs`].
-struct SelectedBlock {
-    block_number: BlockNumber,
-    batches: Vec<Arc<ProvenBatch>>,
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectedBlock {
+    pub block_number: BlockNumber,
+    pub batches: Vec<Arc<ProvenBatch>>,
 }
 
 impl TelemetryInjectorExt for SelectedBlock {

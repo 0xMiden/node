@@ -28,6 +28,9 @@ use crate::db::{insert_transaction, load, load_chain_tip, upsert_block_header};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
 
+#[cfg(test)]
+mod tests;
+
 // VALIDATOR
 // ================================================================================
 
