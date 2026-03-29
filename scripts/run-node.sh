@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Configuration
-BINARY="./target/debug/miden-node"
+BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 GENESIS_CONFIG="crates/store/src/genesis/config/samples/01-simple.toml"
 KMS_KEY_ID="${KMS_KEY_ID:?error: KMS_KEY_ID environment variable must be set}"
 
