@@ -112,15 +112,11 @@ impl TransactionGraph {
     ///
     /// Returns the identifiers of transactions that were removed from the graph.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
-        let expired = self.inner.expired_and_unselected(chain_tip);
-
-        let mut reverted = HashSet::default();
-
-        for tx in expired {
-            reverted.extend(self.revert_tx_and_descendants(tx));
-        }
-
-        reverted
+        self.inner
+            .revert_expired_unselected(chain_tip)
+            .into_iter()
+            .map(|tx| tx.id())
+            .collect()
     }
 
     /// Reverts the given transaction and _all_ its descendants _IFF_ it is present in the graph.

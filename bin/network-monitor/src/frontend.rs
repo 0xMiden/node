@@ -27,6 +27,8 @@ pub struct ServerState {
     pub ntx_tracking: Option<watch::Receiver<ServiceStatus>>,
     pub explorer: Option<watch::Receiver<ServiceStatus>>,
     pub note_transport: Option<watch::Receiver<ServiceStatus>>,
+    pub monitor_version: String,
+    pub network_name: String,
 }
 
 /// Runs the frontend server.
@@ -109,7 +111,12 @@ async fn get_status(
         services.push(note_transport_rx.borrow().clone());
     }
 
-    let network_status = NetworkStatus { services, last_updated: current_time };
+    let network_status = NetworkStatus {
+        services,
+        last_updated: current_time,
+        monitor_version: server_state.monitor_version.clone(),
+        network_name: server_state.network_name.clone(),
+    };
 
     axum::response::Json(network_status)
 }

@@ -76,13 +76,6 @@ impl proto::api_server::Api for ProverService {
         // This mutex is fair and uses FIFO ordering.
         let prover = self.acquire_prover().await;
 
-        // Blocking in place is fairly safe since we guarantee that only a single request is
-        // processed at a time.
-        //
-        // This has the downside that requests being proven cannot be cancelled since we are now
-        // outside the async runtime. This could occur if the server timeout is exceeded, or
-        // the client cancels the request. A different approach is technically possible, but
-        // would require more complex logic to handle cancellation in tandem with sync.
-        tokio::task::block_in_place(|| prover.prove(request)).map(tonic::Response::new)
+        prover.prove(request).await.map(tonic::Response::new)
     }
 }

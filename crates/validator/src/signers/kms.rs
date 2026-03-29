@@ -5,7 +5,7 @@ use miden_node_utils::signer::BlockSigner;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::keccak::Keccak256;
-use miden_tx::utils::{DeserializationError, Serializable};
+use miden_protocol::utils::serde::{DeserializationError, Serializable};
 
 // KMS SIGNER ERROR
 // ================================================================================================

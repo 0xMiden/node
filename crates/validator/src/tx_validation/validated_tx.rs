@@ -6,7 +6,7 @@ use miden_protocol::transaction::{
     ExecutedTransaction,
     InputNote,
     InputNotes,
-    OutputNotes,
+    RawOutputNotes,
     TransactionId,
 };
 
@@ -49,7 +49,7 @@ impl ValidatedTransaction {
     }
 
     /// Returns the notes created in this transaction.
-    pub fn output_notes(&self) -> &OutputNotes {
+    pub fn output_notes(&self) -> &RawOutputNotes {
         self.0.output_notes()
     }
 

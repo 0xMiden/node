@@ -1,6 +1,6 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
 use miden_protocol::note::Nullifier;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::DatabaseError;
 
@@ -23,7 +23,7 @@ pub(crate) fn serialize_vec<'a, D: Serializable + 'a>(
 
 /// Returns the high 16 bits of the provided nullifier.
 pub fn get_nullifier_prefix(nullifier: &Nullifier) -> u16 {
-    (nullifier.most_significant_felt().as_int() >> 48) as u16
+    (nullifier.most_significant_felt().as_canonical_u64() >> 48) as u16
 }
 
 /// Converts a slice of length `N` to an array, returns `None` if invariant

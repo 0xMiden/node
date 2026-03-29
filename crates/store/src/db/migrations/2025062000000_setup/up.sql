@@ -1,12 +1,17 @@
 CREATE TABLE block_headers (
-    block_num    INTEGER NOT NULL,
-    block_header BLOB    NOT NULL,
-    signature    BLOB    NOT NULL,
-    commitment   BLOB    NOT NULL,
+    block_num           INTEGER NOT NULL,
+    block_header        BLOB    NOT NULL,
+    signature           BLOB    NOT NULL,
+    commitment          BLOB    NOT NULL,
+    proving_inputs      BLOB,             -- Serialized BlockProofRequest needed for deferred proving. NULL if it has been proven or never proven (genesis block).
+    proven_in_sequence  BOOLEAN NOT NULL DEFAULT FALSE, -- TRUE when this block and all its ancestors have been proven.
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );
+
+CREATE INDEX block_headers_proven_desc ON block_headers(block_num DESC) WHERE proving_inputs IS NULL;
+CREATE INDEX block_headers_proven_in_sequence ON block_headers(block_num DESC) WHERE proven_in_sequence = TRUE;
 
 CREATE TABLE account_codes (
     code_commitment BLOB NOT NULL,
@@ -44,6 +49,8 @@ CREATE INDEX idx_accounts_created_at_block ON accounts(created_at_block);
 CREATE INDEX idx_accounts_block_num ON accounts(block_num);
 -- Index for joining with account_codes
 CREATE INDEX idx_accounts_code_commitment ON accounts(code_commitment) WHERE code_commitment IS NOT NULL;
+-- Covering index for the prune_account_codes subquery: filters rows by block_num/is_latest and projects code_commitment
+CREATE INDEX idx_accounts_prune_code ON accounts(block_num, is_latest, code_commitment) WHERE code_commitment IS NOT NULL;
 
 CREATE TABLE notes (
     committed_at                  INTEGER NOT NULL, -- Block number when the note was committed

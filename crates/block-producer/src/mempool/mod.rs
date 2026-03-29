@@ -63,6 +63,7 @@ use subscription::SubscriptionProvider;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
 use tracing::instrument;
 
+use crate::block_builder::SelectedBlock;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{AddTransactionError, StateConflict};
@@ -165,12 +166,12 @@ pub struct Mempool {
     /// Tracks the dependency graph for batches awaiting inclusion in a block.
     batches: graph::BatchGraph,
     /// The block currently being built, if any.
-    pending_block: Option<(BlockNumber, Vec<Arc<ProvenBatch>>)>,
+    pending_block: Option<SelectedBlock>,
     /// The most recently committed blocks in chronological order.
     ///
     /// Limited to the state retention amount defined in the config. Once a pending block is
     /// committed it is appended here, and the oldest block's state is pruned.
-    committed_blocks: VecDeque<Vec<Arc<ProvenBatch>>>,
+    committed_blocks: VecDeque<SelectedBlock>,
 
     chain_tip: BlockNumber,
 
@@ -265,12 +266,22 @@ impl Mempool {
     /// Transactions are re-queued.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
+        // Guards against bugs in the proof scheduler where a retry results in multiple results
+        // coming back for the same batch. If the batch previously succeeded, then yanking it would
+        // corrupt the mempool since the batch might be in a block.
+        //
+        // Either way, we simply ignore rollbacks of batches that have already succeeded as a
+        // precaution.
+        if self.batches.is_proven(&batch) {
+            return;
+        }
+
         let reverted_batches = self.batches.revert_batch_and_descendants(batch);
         for reverted in &reverted_batches {
             self.transactions.requeue_transactions(reverted);
         }
 
-        // Find rolled back batch to mark the txs as failed.
+        // Find rolled back batch to mark its txs as failed.
         //
         // Note that its possible it doesn't exist, since this batch could have already been
         // reverted as part of a separate rollback.
@@ -300,19 +311,19 @@ impl Mempool {
     ///
     /// Panics if there is already a block in flight.
     #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
-    pub fn select_block(&mut self) -> (BlockNumber, Vec<Arc<ProvenBatch>>) {
+    pub fn select_block(&mut self) -> SelectedBlock {
         assert!(
             self.pending_block.is_none(),
             "block {} is already in progress",
-            self.pending_block.as_ref().unwrap().0
+            self.pending_block.as_ref().unwrap().block_number
         );
 
         let block_number = self.chain_tip.child();
         let batches = self.batches.select_block(self.config.block_budget);
-
-        self.pending_block = Some((block_number, batches.clone()));
+        let block = SelectedBlock { block_number, batches };
+        self.pending_block = Some(block.clone());
         self.inject_telemetry();
-        (block_number, batches)
+        block
     }
 
     /// Notify the pool that the in flight block was successfully committed to the chain.
@@ -323,29 +334,32 @@ impl Mempool {
     /// Sends a [`MempoolEvent::BlockCommitted`] event to subscribers, as well as a
     /// [`MempoolEvent::TransactionsReverted`] for transactions that are now considered expired.
     ///
-    /// On success the internal state is updated in place: the chain tip advances, expired data is
-    /// pruned, and subscribers are notified about the committed block and any reverted
-    /// transactions.
+    /// On success the internal state is updated in place: the chain tip advances, expired data
+    /// is pruned, and subscribers are notified about the committed block and any
+    /// reverted transactions.
     ///
     /// # Panics
     ///
     /// Panics if there is no block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
-    pub fn commit_block(&mut self, to_commit: BlockHeader) {
-        let (_, batches) = self
+    pub fn commit_block(&mut self, block_header: BlockHeader) {
+        assert_eq!(self.chain_tip.child(), block_header.block_num());
+        let block = self
             .pending_block
-            .take_if(|(proposed, _)| proposed == &to_commit.block_num())
+            .take_if(|pending| pending.block_number == block_header.block_num())
             .expect("block must be in progress to commit");
-        let tx_ids = batches
+
+        let tx_ids = block
+            .batches
             .iter()
             .flat_map(|batch| batch.transactions().as_slice().iter())
             .map(miden_protocol::transaction::TransactionHeader::id)
             .collect();
 
         self.chain_tip = self.chain_tip.child();
-        self.subscription.block_committed(to_commit, tx_ids);
+        self.subscription.block_committed(block_header, tx_ids);
 
-        self.committed_blocks.push_back(batches);
+        self.committed_blocks.push_back(block);
         self.prune_oldest_block();
 
         let reverted_tx_ids = self.revert_expired();
@@ -359,8 +373,8 @@ impl Mempool {
     ///
     /// Sends a [`MempoolEvent::TransactionsReverted`] event to subscribers.
     ///
-    /// The in-flight block state and all related transactions are discarded, and subscribers are
-    /// notified about the reverted transactions.
+    /// The in-flight block state and all related transactions are discarded, and subscribers
+    /// are notified about the reverted transactions.
     ///
     /// # Panics
     ///
@@ -369,22 +383,18 @@ impl Mempool {
     pub fn rollback_block(&mut self, block: BlockNumber) {
         // Only revert if the given block is actually inflight.
         //
-        // This guards against extreme circumstances where multiple block proofs may be inflight at
-        // once. Due to the distributed nature of the node, one can imagine a scenario where
-        // multiple provers get the same job for example.
-        //
         // FIXME: We should consider a more robust check here to identify the block by a hash.
-        //        If multiple jobs are possible, then so are multiple variants with the same block
-        //        number.
-        if self.pending_block.as_ref().is_none_or(|(num, _)| num != &block) {
+        //        If multiple jobs are possible, then so are multiple variants with the same
+        //        block number.
+        if self.pending_block.as_ref().is_none_or(|pending| pending.block_number != block) {
             return;
         }
 
         // Revert the batches, and requeue the transactions for batch selection.
         //
         // Transactions which have failed excessively are also reverted.
-        let (_, block) = self.pending_block.take().expect("we just checked it is some");
-        for batch in &block {
+        let block = self.pending_block.take().expect("we just checked it is some");
+        for batch in &block.batches {
             let reverted = self.batches.revert_batch_and_descendants(batch.id());
 
             for batch in reverted {
@@ -392,6 +402,7 @@ impl Mempool {
             }
         }
         let failed_txs = block
+            .batches
             .iter()
             .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
         let reverted_txs = self.transactions.increment_failure_count(failed_txs);
@@ -403,7 +414,8 @@ impl Mempool {
     // EVENTS & SUBSCRIPTIONS
     // --------------------------------------------------------------------------------------------
 
-    /// Creates a subscription to [`MempoolEvent`] which will be emitted in the order they occur.
+    /// Creates a subscription to [`MempoolEvent`] which will be emitted in the order they
+    /// occur.
     ///
     /// Only emits events which occurred after the current committed block.
     #[instrument(target = COMPONENT, name = "mempool.subscribe", skip_all)]
@@ -443,7 +455,7 @@ impl Mempool {
         let committed_txs = self
             .committed_blocks
             .iter()
-            .flat_map(|block| block.iter())
+            .flat_map(|block| block.batches.iter())
             .map(|batch| batch.transactions().as_slice().len())
             .sum::<usize>();
         span.set_attribute(
@@ -477,11 +489,12 @@ impl Mempool {
         // it means that a batch's parents would already have been pruned.
         //
         // The same logic follows for transactions.
-        for batch in block.iter().map(|batch| batch.id()) {
+        for batch in block.batches.iter().map(|batch| batch.id()) {
             self.batches.prune(batch);
         }
 
         for tx in block
+            .batches
             .iter()
             .flat_map(|batch| batch.transactions().as_slice())
             .map(TransactionHeader::id)
@@ -494,8 +507,8 @@ impl Mempool {
     ///
     /// Expired batch descendants are also reverted since these are now invalid.
     ///
-    /// Transactions from batches are requeued. Expired transactions and their descendants are then
-    /// reverted as well.
+    /// Transactions from batches are requeued. Expired transactions and their descendants are
+    /// then reverted as well.
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
         let batches = self.batches.revert_expired(self.chain_tip);
         for batch in batches {
@@ -507,8 +520,9 @@ impl Mempool {
     /// Rejects authentication heights that fall outside the overlap guaranteed by the locally
     /// retained state.
     ///
-    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below this
-    /// range are rejected as stale because the mempool no longer tracks the intermediate history.
+    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below
+    /// this range are rejected as stale because the mempool no longer tracks the
+    /// intermediate history.
     ///
     /// # Panics
     ///

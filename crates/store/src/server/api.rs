@@ -9,12 +9,13 @@ use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber};
 use miden_protocol::note::Nullifier;
+use tokio::sync::watch;
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
 
+use crate::COMPONENT;
 use crate::errors::GetBlockInputsError;
 use crate::state::State;
-use crate::{BlockProver, COMPONENT};
 
 // STORE API
 // ================================================================================================
@@ -22,7 +23,8 @@ use crate::{BlockProver, COMPONENT};
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
-    pub(super) block_prover: Arc<BlockProver>,
+    /// Sender used to notify the proof scheduler of the latest committed block number.
+    pub(super) chain_tip_sender: watch::Sender<BlockNumber>,
 }
 
 impl StoreApi {
@@ -42,8 +44,8 @@ impl StoreApi {
 
         Ok(Response::new(proto::rpc::BlockHeaderByNumberResponse {
             block_header: block_header.map(Into::into),
-            chain_length: mmr_proof.as_ref().map(|p| p.forest.num_leaves() as u32),
-            mmr_path: mmr_proof.map(|p| Into::into(&p.merkle_path)),
+            chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
+            mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),
         }))
     }
 
@@ -65,7 +67,7 @@ impl StoreApi {
 
             for note in batch.input_notes().iter() {
                 if let Some(header) = note.header() {
-                    unauthenticated_note_commitments.insert(header.commitment());
+                    unauthenticated_note_commitments.insert(header.to_commitment());
                 }
             }
         }

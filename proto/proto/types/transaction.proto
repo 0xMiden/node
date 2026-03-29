@@ -10,16 +10,16 @@ import "types/primitives.proto";
 
 // Submits proven transaction to the Miden network.
 message ProvenTransaction {
-    // Transaction encoded using [winter_utils::Serializable] implementation for
+    // Transaction encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::transaction::proven_tx::ProvenTransaction].
     bytes transaction = 1;
-    // Transaction inputs encoded using [winter_utils::Serializable] implementation for
+    // Transaction inputs encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::transaction::TransactionInputs].
     optional bytes transaction_inputs = 2;
 }
 
 message ProvenTransactionBatch {
-    // Encoded using [winter_utils::Serializable] implementation for
+    // Encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::transaction::proven_tx::ProvenTransaction].
     bytes encoded = 1;
 }

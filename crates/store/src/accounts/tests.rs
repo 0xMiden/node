@@ -8,7 +8,7 @@ mod account_tree_with_history_tests {
     use miden_protocol::Word;
     use miden_protocol::account::AccountId;
     use miden_protocol::block::BlockNumber;
-    use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+    use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
     use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage};
     use miden_protocol::testing::account_id::AccountIdBuilder;
 
@@ -20,7 +20,7 @@ mod account_tree_with_history_tests {
     ) -> InMemoryAccountTree {
         let smt_entries = entries
             .into_iter()
-            .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
+            .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
         let smt = LargeSmt::with_entries(MemoryStorage::default(), smt_entries)
             .expect("Failed to create LargeSmt from entries");
         AccountTree::new(smt).expect("Failed to create AccountTree")
@@ -30,7 +30,7 @@ mod account_tree_with_history_tests {
     fn assert_verify(root: Word, witness: AccountWitness) {
         let proof = witness.into_proof();
         let (path, leaf) = proof.into_parts();
-        path.verify(leaf.index().value(), leaf.hash(), &root).unwrap();
+        path.verify(leaf.index().position(), leaf.hash(), &root).unwrap();
     }
 
     #[test]
@@ -491,7 +491,7 @@ mod account_tree_with_history_tests {
         let (path, leaf) = proof.into_parts();
 
         // Verify the Merkle proof - this tests the historical reconstruction code path
-        path.verify(leaf.index().value(), leaf.hash(), &root)
+        path.verify(leaf.index().position(), leaf.hash(), &root)
             .expect("Proof verification should succeed");
     }
 
@@ -516,7 +516,7 @@ mod account_tree_with_history_tests {
         let (path, leaf) = proof.into_parts();
 
         // Verify the Merkle proof
-        path.verify(leaf.index().value(), leaf.hash(), &root)
+        path.verify(leaf.index().position(), leaf.hash(), &root)
             .expect("Proof verification should succeed");
     }
 }

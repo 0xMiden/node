@@ -18,9 +18,6 @@ pub struct BatchBudget {
     /// Maximum number of output notes allowed.
     pub output_notes: usize,
     /// Maximum number of updated accounts.
-    ///
-    /// Authenticated transactions are assumed to update at most one account; this field enforces
-    /// how many such single-account updates can fit into a batch.
     pub accounts: usize,
 }
 

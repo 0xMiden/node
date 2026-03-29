@@ -23,7 +23,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 
 use crate::db::models::conv::raw_sql_to_nonce;
@@ -246,9 +246,9 @@ pub(super) fn apply_storage_delta(
         let mut entries = map_entries.get(slot_name).cloned().unwrap_or_default();
         for (key, value) in map_delta.entries() {
             if *value == EMPTY_WORD {
-                entries.remove(&(*key).into_inner());
+                entries.remove(key);
             } else {
-                entries.insert((*key).into_inner(), *value);
+                entries.insert(*key, *value);
             }
         }
 

@@ -11,3 +11,10 @@ diesel::table! {
         fee -> Binary,
     }
 }
+
+diesel::table! {
+    block_headers (block_num) {
+        block_num -> BigInt,
+        block_header -> Binary,
+    }
+}

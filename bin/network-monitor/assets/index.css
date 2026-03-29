@@ -52,6 +52,7 @@ body {
     color: #ff5500;
 }
 
+
 .main-content {
     width: 100%;
     max-width: 1200px;
@@ -167,6 +168,10 @@ body {
     color: rgba(0, 0, 0, 0.4);
     font-weight: 400;
     font-size: 12px;
+}
+
+.footer-center {
+    text-align: center;
 }
 
 .tokens-section {

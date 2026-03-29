@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
 use tracing::{Instrument, info, info_span, instrument};
 
@@ -38,10 +39,18 @@ impl State {
     ///   use the fresh data.
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `proving_inputs` is `None` and the block is not the genesis block.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
     #[expect(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
+    pub async fn apply_block(
+        &self,
+        signed_block: SignedBlock,
+        proving_inputs: Option<BlockProofRequest>,
+    ) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
         let header = signed_block.header();
@@ -179,15 +188,10 @@ impl State {
             .output_notes()
             .map(|(note_index, note)| {
                 let (details, nullifier) = match note {
-                    OutputNote::Full(note) => {
-                        (Some(NoteDetails::from(note)), Some(note.nullifier()))
+                    OutputNote::Public(note) => {
+                        (Some(NoteDetails::from(note.as_note())), Some(note.as_note().nullifier()))
                     },
-                    OutputNote::Header(_) => (None, None),
-                    note @ OutputNote::Partial(_) => {
-                        return Err(InvalidBlockError::InvalidOutputNoteType(Box::new(
-                            note.clone(),
-                        )));
-                    },
+                    OutputNote::Private(_) => (None, None),
                 };
 
                 let inclusion_path = note_tree.open(note_index);
@@ -196,7 +200,7 @@ impl State {
                     block_num,
                     note_index,
                     note_id: note.id().as_word(),
-                    note_commitment: note.commitment(),
+                    note_commitment: note.to_commitment(),
                     metadata: note.metadata().clone(),
                     details,
                     inclusion_path,
@@ -227,8 +231,11 @@ impl State {
         // spawned.
         let db = Arc::clone(&self.db);
         let db_update_task = tokio::spawn(
-            async move { db.apply_block(allow_acquire, acquire_done, signed_block, notes).await }
-                .in_current_span(),
+            async move {
+                db.apply_block(allow_acquire, acquire_done, signed_block, notes, proving_inputs)
+                    .await
+            }
+            .in_current_span(),
         );
 
         // Wait for the message from the DB update task, that we ready to commit the DB transaction.

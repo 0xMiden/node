@@ -29,8 +29,10 @@ diesel::table! {
         nullifier -> Binary,
         account_id -> Binary,
         note_data -> Binary,
+        note_id -> Nullable<Binary>,
         attempt_count -> Integer,
         last_attempt -> Nullable<BigInt>,
+        last_error -> Nullable<Text>,
         created_by -> Nullable<Binary>,
         consumed_by -> Nullable<Binary>,
     }

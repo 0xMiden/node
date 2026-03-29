@@ -12,7 +12,7 @@ use miden_protocol::account::{
     StorageMapWitness,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
+use miden_protocol::asset::{AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -26,7 +26,7 @@ use miden_protocol::crypto::merkle::smt::{
 };
 use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_protocol::errors::{AssetError, StorageMapError};
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 use tracing::instrument;
@@ -409,18 +409,20 @@ impl AccountStateForest {
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
-        for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
+        for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let amount =
                 (*amount_delta).try_into().expect("full-state amount should be non-negative");
-            let asset = FungibleAsset::new(*faucet_id, amount)?;
-            entries.push((asset.vault_key().into(), asset.into()));
+            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?;
+            entries.push((asset.to_key_word(), asset.to_value_word()));
         }
 
         // process non-fungible assets
         for (&asset, action) in vault_delta.non_fungible().iter() {
-            let asset_vault_key = asset.vault_key().into();
+            let asset_vault_key: Word = asset.vault_key().into();
             match action {
-                NonFungibleDeltaAction::Add => entries.push((asset_vault_key, asset.into())),
+                NonFungibleDeltaAction::Add => {
+                    entries.push((asset_vault_key, asset.to_value_word()));
+                },
                 NonFungibleDeltaAction::Remove => entries.push((asset_vault_key, EMPTY_WORD)),
             }
         }
@@ -458,11 +460,7 @@ impl AccountStateForest {
 
             let raw_map_entries: Vec<(StorageMapKey, Word)> =
                 Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
-                    if value == EMPTY_WORD {
-                        None
-                    } else {
-                        Some((key.into_inner(), value))
-                    }
+                    if value == EMPTY_WORD { None } else { Some((key, value)) }
                 }));
 
             if raw_map_entries.is_empty() {
@@ -506,11 +504,6 @@ impl AccountStateForest {
     /// Processes both fungible and non-fungible asset changes, building entries for the vault SMT
     /// and tracking the new root.
     ///
-    /// # Arguments
-    ///
-    /// * `is_full_state` - If `true`, delta values are absolute (new account or DB reconstruction).
-    ///   If `false`, delta values are relative changes applied to previous state.
-    ///
     /// # Returns
     ///
     /// The new vault root after applying the delta.
@@ -534,16 +527,17 @@ impl AccountStateForest {
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
         // Process fungible assets
-        for (faucet_id, amount_delta) in vault_delta.fungible().iter() {
+        for (vault_key, amount_delta) in vault_delta.fungible().iter() {
+            let faucet_id = vault_key.faucet_id();
             let delta_abs = amount_delta.unsigned_abs();
-            let delta = FungibleAsset::new(*faucet_id, delta_abs)?;
+            let delta = FungibleAsset::new(faucet_id, delta_abs)?;
             let key = Word::from(delta.vault_key());
 
-            let empty = FungibleAsset::new(*faucet_id, 0)?;
+            let empty = FungibleAsset::new(faucet_id, 0)?;
             let asset = if let Some(tree) = prev_tree {
                 self.forest
                     .get(tree, key)?
-                    .map(FungibleAsset::try_from)
+                    .map(|value| FungibleAsset::from_key_value(*vault_key, value))
                     .transpose()?
                     .unwrap_or(empty)
             } else {
@@ -559,7 +553,7 @@ impl AccountStateForest {
             let value = if updated.amount() == 0 {
                 EMPTY_WORD
             } else {
-                Word::from(updated)
+                updated.to_value_word()
             };
             entries.push((key, value));
         }
@@ -567,7 +561,7 @@ impl AccountStateForest {
         // Process non-fungible assets
         for (asset, action) in vault_delta.non_fungible().iter() {
             let value = match action {
-                NonFungibleDeltaAction::Add => Word::from(Asset::NonFungible(*asset)),
+                NonFungibleDeltaAction::Add => asset.to_value_word(),
                 NonFungibleDeltaAction::Remove => EMPTY_WORD,
             };
             entries.push((asset.vault_key().into(), value));
@@ -605,11 +599,6 @@ impl AccountStateForest {
 
     /// Updates the forest with storage map changes from a delta.
     ///
-    /// # Arguments
-    ///
-    /// * `is_full_state` - If `true`, delta values are absolute (new account or DB reconstruction).
-    ///   If `false`, delta values are relative changes applied to previous state.
-    ///
     /// # Returns
     ///
     /// A map from slot name to the new storage map root for that slot.
@@ -627,9 +616,8 @@ impl AccountStateForest {
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let lineage = Self::storage_lineage_id(account_id, slot_name);
-            let delta_entries: Vec<(StorageMapKey, Word)> = Vec::from_iter(
-                map_delta.entries().iter().map(|(key, value)| (key.into_inner(), *value)),
-            );
+            let delta_entries: Vec<(StorageMapKey, Word)> =
+                Vec::from_iter(map_delta.entries().iter().map(|(key, value)| (*key, *value)));
 
             let hashed_entries = Vec::from_iter(
                 delta_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),

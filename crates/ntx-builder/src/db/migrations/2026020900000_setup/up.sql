@@ -44,10 +44,14 @@ CREATE TABLE notes (
     account_id      BLOB    NOT NULL,
     -- Serialized SingleTargetNetworkNote.
     note_data       BLOB    NOT NULL,
+    -- Note ID bytes.
+    note_id         BLOB,
     -- Backoff tracking: number of failed execution attempts.
     attempt_count   INTEGER NOT NULL DEFAULT 0,
     -- Backoff tracking: block number of the last failed attempt. NULL if never attempted.
     last_attempt    INTEGER,
+    -- Latest execution error message. NULL if no error recorded.
+    last_error      TEXT,
     -- NULL if the note came from a committed block; transaction ID if created by inflight tx.
     created_by      BLOB,
     -- NULL if unconsumed; transaction ID of the consuming inflight tx.
@@ -60,6 +64,7 @@ CREATE TABLE notes (
 CREATE INDEX idx_notes_account ON notes(account_id);
 CREATE INDEX idx_notes_created_by ON notes(created_by) WHERE created_by IS NOT NULL;
 CREATE INDEX idx_notes_consumed_by ON notes(consumed_by) WHERE consumed_by IS NOT NULL;
+CREATE INDEX idx_notes_note_id ON notes(note_id) WHERE note_id IS NOT NULL;
 
 -- Persistent cache of note scripts, keyed by script root hash.
 -- Survives restarts so scripts don't need to be re-fetched from the store.

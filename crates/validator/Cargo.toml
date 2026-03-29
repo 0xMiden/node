@@ -40,3 +40,8 @@ tracing                = { workspace = true }
 build-rs = { workspace = true }
 
 [dev-dependencies]
+miden-node-store = { workspace = true }
+miden-node-utils = { features = ["testing"], workspace = true }
+miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
+tempfile         = { workspace = true }
+tokio            = { features = ["macros", "rt-multi-thread"], workspace = true }

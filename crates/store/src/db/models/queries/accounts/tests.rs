@@ -40,8 +40,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::{Deserializable, Serializable};
-use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
@@ -154,8 +154,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -165,7 +164,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -218,8 +217,7 @@ fn create_account_with_map_storage(
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -229,7 +227,7 @@ fn create_account_with_map_storage(
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap()
@@ -474,8 +472,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     let component_2 = AccountComponent::new(
         account_component_code,
         component_storage_modified,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -485,7 +482,7 @@ fn test_upsert_accounts_updates_is_latest_flag() {
         .with_component(component_2)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -574,8 +571,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -585,7 +581,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -644,8 +640,7 @@ fn test_upsert_accounts_with_empty_storage() {
     let component = AccountComponent::new(
         account_component_code,
         vec![],
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -655,7 +650,7 @@ fn test_upsert_accounts_with_empty_storage() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -781,8 +776,7 @@ fn test_select_latest_account_storage_multiple_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test")
-            .with_supported_type(AccountType::RegularAccountImmutableCode),
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
     )
     .unwrap();
 
@@ -792,7 +786,7 @@ fn test_select_latest_account_storage_multiple_slots() {
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Rpo,
+            AuthScheme::Falcon512Poseidon2,
         ))
         .build_existing()
         .unwrap();
@@ -883,8 +877,11 @@ fn test_select_latest_account_storage_slot_updates() {
 #[test]
 fn test_select_account_vault_at_block_historical_with_updates() {
     use assert_matches::assert_matches;
-    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
-    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
+    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    };
 
     let mut conn = setup_test_db();
     let (account, _) = create_test_account_with_storage();
@@ -915,13 +912,8 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     }
 
     // Insert vault asset at block 1: vault_key_1 = 1000 tokens
-    let vault_key_1 = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(1),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
     let asset_v1 = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
+    let vault_key_1 = asset_v1.vault_key();
 
     insert_account_vault_asset(&mut conn, account_id, block_1, vault_key_1, Some(asset_v1))
         .expect("insert vault asset failed");
@@ -931,14 +923,10 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_1, Some(asset_v2))
         .expect("insert vault asset update failed");
 
-    // Add a second vault_key at block 2
-    let vault_key_2 = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(2),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
-    let asset_key2 = Asset::Fungible(FungibleAsset::new(faucet_id, 500).unwrap());
+    // Add a second vault_key at block 2 (different faucet for different vault key)
+    let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let asset_key2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 500).unwrap());
+    let vault_key_2 = asset_key2.vault_key();
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_2, Some(asset_key2))
         .expect("insert second vault asset failed");
 
@@ -1017,12 +1005,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
             .expect("upsert_accounts failed");
     }
 
-    let vault_key = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(3),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
+    let vault_key = AssetVaultKey::new_fungible(faucet_id).unwrap();
 
     for (index, block) in blocks.iter().enumerate() {
         let amount = 1u64 << index;
@@ -1049,7 +1032,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
 #[test]
 fn test_select_account_vault_at_block_with_deletion() {
     use assert_matches::assert_matches;
-    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
+    use miden_protocol::asset::FungibleAsset;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
 
     let mut conn = setup_test_db();
@@ -1081,13 +1064,8 @@ fn test_select_account_vault_at_block_with_deletion() {
     }
 
     // Insert vault asset at block 1
-    let vault_key = AssetVaultKey::new_unchecked(Word::from([
-        Felt::new(1),
-        Felt::ZERO,
-        Felt::ZERO,
-        Felt::ZERO,
-    ]));
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
+    let vault_key = asset.vault_key();
 
     insert_account_vault_asset(&mut conn, account_id, block_1, vault_key, Some(asset))
         .expect("insert vault asset failed");
@@ -1116,4 +1094,220 @@ fn test_select_account_vault_at_block_with_deletion() {
         .expect("Query at block 3 should succeed");
     assert_eq!(assets_at_block_3.len(), 1, "Should have 1 asset at block 3");
     assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount() == 2000);
+}
+
+// ACCOUNT CODE PRUNING TESTS
+// ================================================================================================
+
+/// Counts the number of rows in `account_codes`.
+fn count_account_codes(conn: &mut SqliteConnection) -> usize {
+    use schema::account_codes;
+
+    let val =
+        SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
+            .get_result::<i64>(conn)
+            .expect("Failed to count account_codes");
+    usize::try_from(u64::try_from(val).unwrap()).unwrap()
+}
+
+/// Returns whether a specific code commitment exists in `account_codes`.
+fn account_code_exists(conn: &mut SqliteConnection, code_commitment: Word) -> bool {
+    use schema::account_codes;
+
+    let n =
+        SelectDsl::select(account_codes::table, diesel::dsl::count(account_codes::code_commitment))
+            .filter(account_codes::code_commitment.eq(code_commitment.to_bytes()))
+            .get_result::<i64>(conn)
+            .expect("Failed to query account_codes");
+
+    n == 1
+}
+
+/// Creates a full-state [`BlockAccountUpdate`] for the given account.
+fn make_full_state_update(account: &Account) -> BlockAccountUpdate {
+    let delta = AccountDelta::try_from(account.clone()).unwrap();
+    assert!(delta.is_full_state(), "expected full-state delta");
+    BlockAccountUpdate::new(
+        account.id(),
+        account.to_commitment(),
+        AccountUpdateDetails::Delta(delta),
+    )
+}
+
+/// Builds a public account using a fixed account ID seed but a different component code.
+///
+/// All accounts produced here share the same [`AccountId`] because the same seed is used.
+/// The `push_value` must be different for each variant to produce a distinct MAST root and thus a
+/// distinct [`AccountCode::commitment`].
+fn build_account_with_code(push_value: u32) -> Account {
+    let code_src = format!("pub proc variant push.{push_value} end");
+    let component_code = CodeBuilder::default()
+        .compile_component_code("test::code_prune", &code_src)
+        .unwrap();
+    let component = AccountComponent::new(
+        component_code,
+        vec![StorageSlot::with_value(
+            StorageSlotName::mock(0),
+            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        )],
+        AccountComponentMetadata::new(
+            "code_prune_test",
+            [AccountType::RegularAccountUpdatableCode],
+        ),
+    )
+    .unwrap();
+
+    // Seed [2u8; 32] keeps the account ID distinct from the other test helpers.
+    AccountBuilder::new([2u8; 32])
+        .account_type(AccountType::RegularAccountUpdatableCode)
+        .storage_mode(AccountStorageMode::Public)
+        .with_component(component)
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
+        .build_existing()
+        .unwrap()
+}
+
+/// Prune test 2: when an account's code changes, the old code must be pruned after the retention
+/// window, while the new (latest) code is retained.
+#[test]
+fn test_prune_account_code_retains_latest_after_code_change() {
+    let mut conn = setup_test_db();
+
+    // Block 0: account created with code A.
+    // Block RETENTION+1 (=51): account updated to code B — within the retention window at prune
+    //   time.
+    // Block 2*RETENTION+1 (=101): prune → cutoff is block 51; code A (last at block 0) is outside
+    //   the window → pruned; code B (last at block 51) is within the window → retained.
+    let block_0 = BlockNumber::from(0u32);
+    let block_code_b = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 1);
+    let block_prunable = BlockNumber::from(2 * HISTORICAL_BLOCK_RETENTION + 1);
+
+    insert_block_header(&mut conn, block_0);
+    insert_block_header(&mut conn, block_code_b);
+    insert_block_header(&mut conn, block_prunable);
+
+    let account_a = build_account_with_code(1);
+    let account_b = build_account_with_code(2);
+
+    // Both accounts must have the same ID for this to test code replacement.
+    assert_eq!(account_a.id(), account_b.id(), "accounts must share the same ID");
+    assert_ne!(
+        account_a.code().commitment(),
+        account_b.code().commitment(),
+        "accounts must have different codes"
+    );
+
+    let account_id = account_a.id();
+    let code_commitment_a = account_a.code().commitment();
+    let code_commitment_b = account_b.code().commitment();
+
+    // Block 0: insert account with code A.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_a)], block_0)
+        .expect("initial upsert failed");
+
+    // Block RETENTION+1: update the same account ID to code B via a full-state delta.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_b)], block_code_b)
+        .expect("code-change upsert failed");
+
+    assert_eq!(count_account_codes(&mut conn), 2, "both codes must exist before pruning");
+
+    // Advance past retention window and prune.
+    // cutoff = block_prunable - RETENTION = 2*RETENTION+1 - RETENTION = RETENTION+1 = block_code_b
+    let (_, _, codes_deleted) =
+        prune_history(&mut conn, block_prunable).expect("prune_history failed");
+
+    // Only code A was dropped; code B is still referenced by the latest accounts row.
+    assert_eq!(codes_deleted, 1, "exactly one code (A) must be pruned");
+    assert!(!account_code_exists(&mut conn, code_commitment_a), "old code A must be pruned");
+    assert!(
+        account_code_exists(&mut conn, code_commitment_b),
+        "current code B must be retained"
+    );
+
+    // Confirm the latest account row still points to code B.
+    let (latest_header, _) =
+        select_account_header_with_storage_header_at_block(&mut conn, account_id, block_prunable)
+            .expect("query failed")
+            .expect("account must still exist");
+    assert_eq!(
+        latest_header.code_commitment(),
+        account_b.code().commitment(),
+        "latest account must reference code B"
+    );
+}
+
+/// Prune test 3: code A → code B → code A; after the retention window, code B must be pruned
+/// but code A must be retained because it is still the latest.
+#[test]
+fn test_prune_account_code_retains_revisited_code() {
+    let mut conn = setup_test_db();
+
+    // Block 0:           code A.
+    // Block RETENTION+1: code B (will be outside retention window at prune time).
+    // Block RETENTION+2: back to code A (within the retention window at prune time).
+    // Block 2*RETENTION+2: prune.
+    //   cutoff = 2*RETENTION+2 - RETENTION = RETENTION+2.
+    //   Code A: last referenced at block RETENTION+2 >= cutoff → retained.
+    //   Code B: last referenced at block RETENTION+1 < cutoff → pruned.
+    let block_0 = BlockNumber::from(0u32);
+    let block_code_b = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 1);
+    let block_code_a_again = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
+    let block_prunable = BlockNumber::from(2 * HISTORICAL_BLOCK_RETENTION + 2);
+
+    insert_block_header(&mut conn, block_0);
+    insert_block_header(&mut conn, block_code_b);
+    insert_block_header(&mut conn, block_code_a_again);
+    insert_block_header(&mut conn, block_prunable);
+
+    let account_a = build_account_with_code(1);
+    let account_b = build_account_with_code(2);
+
+    assert_eq!(account_a.id(), account_b.id(), "accounts must share the same ID");
+    assert_ne!(
+        account_a.code().commitment(),
+        account_b.code().commitment(),
+        "accounts must have different codes"
+    );
+
+    let account_id = account_a.id();
+    let code_commitment_a = account_a.code().commitment();
+    let code_commitment_b = account_b.code().commitment();
+
+    // Block 0: code A.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_a)], block_0)
+        .expect("block 0 upsert failed");
+    // Block RETENTION+1: code B.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_b)], block_code_b)
+        .expect("block code_b upsert failed");
+    // Block RETENTION+2: back to code A.
+    upsert_accounts(&mut conn, &[make_full_state_update(&account_a)], block_code_a_again)
+        .expect("block code_a_again upsert failed");
+
+    // Before pruning: both codes must be in account_codes (code A inserted once via ON CONFLICT DO
+    // NOTHING, code B inserted once).
+    assert_eq!(count_account_codes(&mut conn), 2, "both codes must exist before pruning");
+
+    // Advance past retention window and prune.
+    let (_, _, codes_deleted) =
+        prune_history(&mut conn, block_prunable).expect("prune_history failed");
+
+    // Code B is no longer referenced by any account row within the retention window → pruned.
+    // Code A is still referenced by the block_code_a_again accounts row (within cutoff) → retained.
+    assert_eq!(codes_deleted, 1, "exactly one code (B) must be pruned");
+    assert!(account_code_exists(&mut conn, code_commitment_a), "code A must be retained");
+    assert!(!account_code_exists(&mut conn, code_commitment_b), "code B must be pruned");
+
+    // Confirm the latest account row still points to code A.
+    let (latest_header, _) =
+        select_account_header_with_storage_header_at_block(&mut conn, account_id, block_prunable)
+            .expect("query failed")
+            .expect("account must still exist");
+    assert_eq!(
+        latest_header.code_commitment(),
+        account_a.code().commitment(),
+        "latest account must reference code A"
+    );
 }

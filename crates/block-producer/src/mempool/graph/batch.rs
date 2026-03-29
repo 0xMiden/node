@@ -14,6 +14,9 @@ use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
+// BATCH IMPL FOR GRAPH NODE
+// ================================================================================================
+
 impl GraphNode for SelectedBatch {
     type Id = BatchId;
 
@@ -43,6 +46,9 @@ impl GraphNode for SelectedBatch {
         self.expires_at()
     }
 }
+
+// BATCH GRAPH
+// ================================================================================================
 
 /// Tracks [`SelectedBatch`] instances that are pending proof generation.
 ///
@@ -92,11 +98,10 @@ impl BatchGraph {
     ///
     /// Batches are returned in reverse-chronological order.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> Vec<SelectedBatch> {
-        let expired = self.inner.expired_and_unselected(chain_tip);
-        let mut reverted = Vec::new();
+        let reverted = self.inner.revert_expired_unselected(chain_tip);
 
-        for batch in expired {
-            reverted.extend(self.revert_batch_and_descendants(batch));
+        for batch in &reverted {
+            self.proven.remove(&batch.id());
         }
 
         reverted
@@ -110,6 +115,17 @@ impl BatchGraph {
         }
     }
 
+    /// Returns `true` if the batch has been proven previously.
+    pub fn is_proven(&mut self, batch: &BatchId) -> bool {
+        self.proven.contains_key(batch)
+    }
+
+    /// Selects a set of batches for inclusion in the next block.
+    ///
+    /// A batch is available for selection if:
+    /// - all the batches it depends on have been selected for a previous block, or are selected in
+    ///   this block as well, and
+    /// - the batch has had a proof submitted
     pub fn select_block(&mut self, mut budget: BlockBudget) -> Vec<Arc<ProvenBatch>> {
         let mut selected = Vec::default();
 

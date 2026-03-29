@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use hex::{FromHex, ToHex};
 use miden_protocol::account::StorageMapKey;
 use miden_protocol::note::NoteId;
-use miden_protocol::{Felt, StarkField, Word};
+use miden_protocol::{Felt, Word};
 
 use crate::errors::ConversionError;
 use crate::generated as proto;
@@ -106,10 +106,10 @@ impl From<&[u64; 4]> for proto::primitives::Digest {
 impl From<[Felt; 4]> for proto::primitives::Digest {
     fn from(value: [Felt; 4]) -> Self {
         Self {
-            d0: value[0].as_int(),
-            d1: value[1].as_int(),
-            d2: value[2].as_int(),
-            d3: value[3].as_int(),
+            d0: value[0].as_canonical_u64(),
+            d1: value[1].as_canonical_u64(),
+            d2: value[2].as_canonical_u64(),
+            d3: value[3].as_canonical_u64(),
         }
     }
 }
@@ -123,10 +123,10 @@ impl From<&[Felt; 4]> for proto::primitives::Digest {
 impl From<Word> for proto::primitives::Digest {
     fn from(value: Word) -> Self {
         Self {
-            d0: value[0].as_int(),
-            d1: value[1].as_int(),
-            d2: value[2].as_int(),
-            d3: value[3].as_int(),
+            d0: value[0].as_canonical_u64(),
+            d1: value[1].as_canonical_u64(),
+            d2: value[2].as_canonical_u64(),
+            d3: value[3].as_canonical_u64(),
         }
     }
 }
@@ -174,10 +174,7 @@ impl TryFrom<proto::primitives::Digest> for [Felt; 4] {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
-        if [value.d0, value.d1, value.d2, value.d3]
-            .iter()
-            .any(|v| *v >= <Felt as StarkField>::MODULUS)
-        {
+        if [value.d0, value.d1, value.d2, value.d3].iter().any(|v| *v >= Felt::ORDER) {
             return Err(ConversionError::NotAValidFelt);
         }
 

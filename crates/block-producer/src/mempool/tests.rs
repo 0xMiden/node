@@ -141,19 +141,20 @@ fn block_commit_reverts_expired_txns() {
     uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
         tx_to_commit.raw_proven_transaction()
     ])));
-    let (block, _) = uut.select_block();
+    let block = uut.select_block();
     // A reverted transaction behaves as if it never existed, the current state is the expected
     // outcome, plus an extra committed block at the end.
     let mut reference = uut.clone();
 
     // Add a new transaction which will expire when the pending block is committed.
-    let tx_to_revert =
-        MockProvenTxBuilder::with_account_index(1).expiration_block_num(block).build();
+    let tx_to_revert = MockProvenTxBuilder::with_account_index(1)
+        .expiration_block_num(block.block_number)
+        .build();
     let tx_to_revert = Arc::new(AuthenticatedTransaction::from_inner(tx_to_revert));
     uut.add_transaction(tx_to_revert).unwrap();
 
     // Commit the pending block which should revert the above tx.
-    let arb_header = BlockHeader::mock(block, None, None, &[], Word::empty());
+    let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
     uut.commit_block(arb_header.clone());
     reference.commit_block(arb_header);
 
@@ -165,8 +166,8 @@ fn empty_block_commitment() {
     let (mut uut, _) = Mempool::for_tests();
 
     for _ in 0..3 {
-        let (number, _) = uut.select_block();
-        let arb_header = BlockHeader::mock(number, None, None, &[], Word::empty());
+        let block = uut.select_block();
+        let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
         uut.commit_block(arb_header);
     }
 }
@@ -187,6 +188,28 @@ fn cannot_have_multiple_inflight_blocks() {
     uut.select_block();
 }
 
+/// This ensures we've guarded against a batch being marked as proven and then rolled back.
+///
+/// This shouldn't be possible in a well behaving system, but if a bug leads to this outcome,
+/// then yanking a previously proven batch could result in mempool corruption (since the batch
+/// could be in a block).
+#[test]
+fn rollbacks_of_already_proven_batches_are_ignored() {
+    let txs = MockProvenTxBuilder::sequential();
+
+    let (mut uut, _) = Mempool::for_tests();
+    uut.add_transaction(txs[0].clone()).unwrap();
+    let batch = uut.select_batch().unwrap();
+
+    let proof = Arc::new(ProvenBatch::mocked_from_transactions([txs[0].raw_proven_transaction()]));
+    uut.commit_batch(Arc::clone(&proof));
+    let reference = uut.clone();
+
+    uut.rollback_batch(batch.id());
+
+    assert_eq!(uut, reference);
+}
+
 // BLOCK FAILED TESTS
 // ================================================================================================
 
@@ -203,7 +226,7 @@ fn block_failure_increments_tx_failures() {
     ])));
 
     // Block 1 will contain just the first batch.
-    let (number, block) = uut.select_block();
+    let block = uut.select_block();
 
     // Create another dependent batch.
     uut.add_transaction(reverted_txs[1].clone()).unwrap();
@@ -211,7 +234,7 @@ fn block_failure_increments_tx_failures() {
     // Create another dependent transaction.
     uut.add_transaction(reverted_txs[2].clone()).unwrap();
 
-    uut.rollback_block(number);
+    uut.rollback_block(block.block_number);
 
     // Reference should contain all transactions, no batches, with tx failure from just that block.
     reference.add_transaction(reverted_txs[0].clone()).unwrap();
@@ -220,6 +243,7 @@ fn block_failure_increments_tx_failures() {
 
     reference.transactions.increment_failure_count(
         block
+            .batches
             .iter()
             .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id)),
     );

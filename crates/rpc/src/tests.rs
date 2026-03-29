@@ -7,8 +7,8 @@ use http::{HeaderMap, HeaderValue};
 use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
-use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
@@ -30,8 +30,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
-use miden_protocol::transaction::{ProvenTransaction, ProvenTransactionBuilder};
-use miden_protocol::utils::Serializable;
+use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
 use tempfile::TempDir;
@@ -74,19 +74,25 @@ fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransa
         AccountStorageMode::Public,
     );
 
-    ProvenTransactionBuilder::new(
+    let account_update = TxAccountUpdate::new(
         account_id,
         [8; 32].try_into().unwrap(),
         account.to_commitment(),
         delta.to_commitment(),
+        AccountUpdateDetails::Delta(delta.clone()),
+    )
+    .unwrap();
+
+    ProvenTransaction::new(
+        account_update,
+        Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
+        Vec::<miden_protocol::transaction::OutputNote>::new(),
         0.into(),
         Word::default(),
         test_fee(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .account_update_details(AccountUpdateDetails::Delta(delta.clone()))
-    .build()
     .unwrap()
 }
 
@@ -431,6 +437,7 @@ async fn start_rpc_with_options(
             store_url,
             block_producer_url: Some(block_producer_url),
             validator_url,
+            ntx_builder_url: None,
             grpc_options,
         }
         .serve()
@@ -457,7 +464,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
         .into_block()
         .await
         .expect("genesis block should be created");
-    Store::bootstrap(&genesis_block, data_directory.path()).expect("store should bootstrap");
+    Store::bootstrap(genesis_block, data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let store_addr =
         store_listener.local_addr().expect("store listener should get a local address");
@@ -480,6 +487,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
             block_producer_listener,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::test(),
+            max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             storage_options: StorageOptions::default(),
         }
         .serve()
@@ -523,6 +531,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
             block_producer_listener,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::test(),
+            max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             storage_options: StorageOptions::default(),
         }
         .serve()
@@ -599,6 +608,7 @@ async fn sync_chain_mmr_returns_delta() {
 
     let request = proto::rpc::SyncChainMmrRequest {
         block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: None }),
+        finality: proto::rpc::Finality::Committed.into(),
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();

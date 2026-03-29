@@ -1,5 +1,5 @@
 mod block_validation;
-mod db;
+pub mod db;
 mod server;
 mod signers;
 mod tx_validation;

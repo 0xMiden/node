@@ -5,9 +5,9 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{NoteScript, Nullifier};
+use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
-use miden_tx::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 // SERIALIZATION (domain → DB)
 // ================================================================================================
@@ -30,6 +30,10 @@ pub fn transaction_id_to_bytes(id: &TransactionId) -> Vec<u8> {
 
 pub fn nullifier_to_bytes(nullifier: &Nullifier) -> Vec<u8> {
     nullifier.to_bytes()
+}
+
+pub fn note_id_to_bytes(note_id: &NoteId) -> Vec<u8> {
+    note_id.to_bytes()
 }
 
 pub fn block_num_to_i64(block_num: BlockNumber) -> i64 {
