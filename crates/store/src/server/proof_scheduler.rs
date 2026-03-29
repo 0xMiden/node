@@ -8,7 +8,7 @@
 //!    as proven, the database atomically advances the `proven_in_sequence` column for all blocks
 //!    that now form a contiguous proven sequence from genesis.
 //! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is retried
-//!    internally within its proving task.
+//!    internally within its proving task, subject to an overall per-block time budget.
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
@@ -34,8 +34,11 @@ use crate::server::block_prover_client::{BlockProver, StoreProverError};
 // CONSTANTS
 // ================================================================================================
 
-/// Overall timeout for proving a single block.
-const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
+/// Timeout for a single block proof attempt (per-retry).
+const BLOCK_PROVE_ATTEMPT_TIMEOUT: Duration = Duration::from_mins(4);
+
+/// Overall timeout for proving a single block (across all retries).
+const BLOCK_PROVE_OVERALL_TIMEOUT: Duration = Duration::from_mins(12);
 
 /// Default maximum number of blocks being proven concurrently.
 pub const DEFAULT_MAX_CONCURRENT_PROOFS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
@@ -173,45 +176,47 @@ async fn prove_block(
     block_store: &BlockStore,
     block_num: BlockNumber,
 ) -> anyhow::Result<()> {
-    const MAX_RETRIES: u32 = 10;
+    tokio::time::timeout(BLOCK_PROVE_OVERALL_TIMEOUT, async {
+        let mut attempt: u32 = 0;
+        loop {
+            attempt += 1;
+            match tokio::time::timeout(
+                BLOCK_PROVE_ATTEMPT_TIMEOUT,
+                generate_block_proof(db, block_prover, block_num),
+            )
+            .await
+            {
+                Ok(Ok(proof)) => {
+                    // Save the block proof to file.
+                    block_store.save_proof(block_num, &proof.to_bytes()).await?;
 
-    for _ in 0..MAX_RETRIES {
-        match tokio::time::timeout(
-            BLOCK_PROVE_TIMEOUT,
-            generate_block_proof(db, block_prover, block_num),
-        )
-        .await
-        {
-            Ok(Ok(proof)) => {
-                // Save the block proof to file.
-                block_store.save_proof(block_num, &proof.to_bytes()).await?;
+                    // Mark the block as proven and advance the sequence in the database.
+                    let new_tip = db.mark_proven_and_advance_sequence(block_num).await?;
+                    if new_tip == block_num {
+                        info!(target = COMPONENT, block.number = %block_num, "Block proven");
+                    } else {
+                        info!(
+                            target = COMPONENT,
+                            block.number = %block_num,
+                            %new_tip,
+                            "Block proven and in-sequence advanced",
+                        );
+                    }
 
-                // Mark the block as proven and advance the sequence in the database.
-                let new_tip = db.mark_proven_and_advance_sequence(block_num).await?;
-                if new_tip == block_num {
-                    info!(target = COMPONENT, block.number = %block_num, "Block proven");
-                } else {
-                    info!(
-                        target = COMPONENT,
-                        block.number = %block_num,
-                        %new_tip,
-                        "Block proven and in-sequence advanced",
-                    );
-                }
-
-                return Ok(());
-            },
-            Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
-            Ok(Err(ProveBlockError::Transient(err))) => {
-                error!(target = COMPONENT, block.number = %block_num, err = ?err, "transient error proving block, retrying");
-            },
-            Err(elapsed) => {
-                error!(target = COMPONENT, block.number = %block_num, %elapsed, "block proving timed out, retrying");
-            },
+                    return Ok(());
+                },
+                Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
+                Ok(Err(ProveBlockError::Transient(err))) => {
+                    error!(target = COMPONENT, block.number = %block_num, attempt, err = ?err, "transient error proving block, retrying");
+                },
+                Err(elapsed) => {
+                    error!(target = COMPONENT, block.number = %block_num, attempt, %elapsed, "block proving attempt timed out, retrying");
+                },
+            }
         }
-    }
-
-    anyhow::bail!("maximum retries ({MAX_RETRIES}) exceeded");
+    })
+    .await
+    .context(format!("block proving overall timeout ({BLOCK_PROVE_OVERALL_TIMEOUT:?}) exceeded"))?
 }
 
 /// Generates a block proof by loading inputs from the DB and invoking the block prover.
