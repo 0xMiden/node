@@ -7,7 +7,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteHeader, Nullifier};
 use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
 
-use crate::errors::VerifyTxError;
+use crate::errors::StateConflict;
 use crate::store::TransactionInputs;
 
 /// A transaction who's proof has been verified, and which has been authenticated against the store.
@@ -48,13 +48,13 @@ impl AuthenticatedTransaction {
     pub fn new_unchecked(
         tx: ProvenTransaction,
         inputs: TransactionInputs,
-    ) -> Result<AuthenticatedTransaction, VerifyTxError> {
+    ) -> Result<AuthenticatedTransaction, StateConflict> {
         let nullifiers_already_spent = tx
             .nullifiers()
             .filter(|nullifier| inputs.nullifiers.get(nullifier).copied().flatten().is_some())
             .collect::<Vec<_>>();
         if !nullifiers_already_spent.is_empty() {
-            return Err(VerifyTxError::InputNotesAlreadyConsumed(nullifiers_already_spent));
+            return Err(StateConflict::NullifiersAlreadyExist(nullifiers_already_spent));
         }
 
         Ok(AuthenticatedTransaction {

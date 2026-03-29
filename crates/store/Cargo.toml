@@ -21,7 +21,6 @@ deadpool-diesel                 = { features = ["sqlite"], version = "0.6" }
 diesel                          = { features = ["numeric", "sqlite"], version = "2.3" }
 diesel_migrations               = { features = ["sqlite"], version = "2.3" }
 fs-err                          = { workspace = true }
-futures                         = { workspace = true }
 hex                             = { version = "0.4" }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }

@@ -3323,7 +3323,6 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "fs-err",
- "futures",
  "hex",
  "indexmap",
  "libsqlite3-sys",
