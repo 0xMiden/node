@@ -260,9 +260,8 @@ impl Db {
         // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
-        // Insert genesis block data. Deconstruct into signed block.
-        let (header, body, signature, _proof) = genesis.into_inner().into_parts();
-        let genesis_block = SignedBlock::new_unchecked(header, body, signature);
+        // Insert genesis block data.
+        let genesis_block = genesis.into_inner();
         conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[], None))
             .context("failed to insert genesis block")?;
         Ok(())
