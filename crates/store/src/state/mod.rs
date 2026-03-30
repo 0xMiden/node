@@ -200,7 +200,7 @@ impl State {
 
         // Initialize the proven tip from database.
         let proven_tip =
-            db.select_proven_tip().await.map_err(StateInitializationError::DatabaseError)?;
+            db.proven_chain_tip().await.map_err(StateInitializationError::DatabaseError)?;
         let (proven_tip_tx, proven_tip_rx) = watch::channel(proven_tip);
 
         Ok((

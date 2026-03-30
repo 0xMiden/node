@@ -141,7 +141,7 @@ async fn run(
     // Highest block number that is in-flight or has been proven. Used to avoid re-querying
     // blocks we've already scheduled. Initialized from the in-sequence tip so we skip
     // already-proven blocks on restart.
-    let mut highest_scheduled = db.select_proven_tip().await?;
+    let mut highest_scheduled = db.proven_chain_tip().await?;
 
     loop {
         // Query the DB for unproven blocks beyond what we've already scheduled.
