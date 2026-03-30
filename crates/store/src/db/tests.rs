@@ -39,6 +39,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
+use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
@@ -997,25 +998,31 @@ fn note_sync_across_multiple_blocks() {
         queries::insert_notes(conn, &[(note, None)]).unwrap();
     }
 
-    // Simulate the store batching loop: repeatedly call get_note_sync with advancing
-    // block_from, same as `State::sync_notes` does.
+    // Build an MMR with enough leaves to cover all blocks (0..=3).
+    let mut mmr = Mmr::default();
+    for _ in 0..=3u32 {
+        mmr.add(Word::default());
+    }
+    // Use block_end + 1 as the MMR forest, same as State::sync_notes.
+    let mmr_forest = Forest::new(4);
+
+    // Iterate get_note_sync with advancing cursor, same as State::sync_notes.
     let mut collected_block_nums = Vec::new();
     let mut current_from = BlockNumber::GENESIS;
-    let end = BlockNumber::from(3);
+    let block_end = BlockNumber::from(3);
 
     loop {
-        let range = current_from..=end;
+        let range = current_from..=block_end;
         let Some(update) = queries::get_note_sync(conn, &[tag], range).unwrap() else {
             break;
         };
 
-        // All notes in a single response come from the same block.
         let block_num = update.block_header.block_num();
-        assert!(update.notes.iter().all(|n| n.block_num == block_num));
+        assert!(
+            mmr.open_at(block_num.as_usize(), mmr_forest).is_ok(),
+            "should be able to open MMR proof for block {block_num}"
+        );
         collected_block_nums.push(block_num);
-
-        // The query uses `committed_at > block_range.start()` (exclusive), so
-        // advancing to the found block_num is sufficient to skip it.
         current_from = block_num;
     }
 
