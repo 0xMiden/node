@@ -15,6 +15,7 @@ use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
@@ -143,10 +144,10 @@ impl Store {
         state: &Arc<State>,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
-        proven_tip_sender: tokio::sync::watch::Sender<miden_protocol::block::BlockNumber>,
+        proven_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
     ) -> (
         tokio::task::JoinHandle<anyhow::Result<()>>,
-        tokio::sync::watch::Sender<miden_protocol::block::BlockNumber>,
+        watch::Sender<miden_protocol::block::BlockNumber>,
     ) {
         let block_prover = if let Some(url) = block_prover_url {
             Arc::new(BlockProver::remote(url))
@@ -155,7 +156,7 @@ impl Store {
         };
 
         let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
-        let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
+        let (chain_tip_sender, chain_tip_rx) = watch::channel(chain_tip);
 
         let handle = proof_scheduler::spawn(
             state.db().clone(),
@@ -172,7 +173,7 @@ impl Store {
     /// Spawns the gRPC servers and the DB maintenance background task.
     fn spawn_grpc_servers(
         state: &Arc<State>,
-        chain_tip_sender: tokio::sync::watch::Sender<miden_protocol::block::BlockNumber>,
+        chain_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
         ntx_builder_listener: TcpListener,
