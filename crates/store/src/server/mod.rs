@@ -204,7 +204,11 @@ impl Store {
         let mut join_set = JoinSet::new();
 
         join_set.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            // Manual tests on testnet indicate each iteration takes ~2s once things are OS cached.
+            //
+            // 5 minutes seems like a reasonable interval, where this should have minimal database
+            // IO impact while providing a decent view into table growth over time.
+            let mut interval = tokio::time::interval(Duration::from_mins(5));
             loop {
                 interval.tick().await;
                 let _ = state.analyze_table_sizes().await;
