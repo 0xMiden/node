@@ -99,7 +99,6 @@ impl Store {
             State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?;
-        let state = Arc::new(state);
 
         let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
             &state,
@@ -141,7 +140,7 @@ impl Store {
     /// Returns the scheduler task handle and the chain tip sender (needed by gRPC services to
     /// notify the scheduler of new blocks).
     async fn spawn_proof_scheduler(
-        state: &Arc<State>,
+        state: &State,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
         proven_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
@@ -172,13 +171,14 @@ impl Store {
 
     /// Spawns the gRPC servers and the DB maintenance background task.
     fn spawn_grpc_servers(
-        state: Arc<State>,
+        state: State,
         chain_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
         ntx_builder_listener: TcpListener,
         block_producer_listener: TcpListener,
     ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
+        let state = Arc::new(state);
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),
             chain_tip_sender: chain_tip_sender.clone(),
