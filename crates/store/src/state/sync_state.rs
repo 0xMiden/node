@@ -119,9 +119,8 @@ impl State {
         }
 
         // if results is empty, return `block_end` since the sync is complete.
-        let last_block_checked = results
-            .last()
-            .map_or(block_end, |(update, _)| update.block_header.block_num());
+        let last_block_checked =
+            results.last().map_or(block_end, |(update, _)| update.block_header.block_num());
 
         Ok((results, last_block_checked))
     }
