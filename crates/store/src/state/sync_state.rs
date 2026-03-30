@@ -79,16 +79,17 @@ impl State {
     ///
     /// Returns as many blocks with matching notes as fit within the response payload limit
     /// ([`MAX_RESPONSE_PAYLOAD_BYTES`](miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES)).
-    /// Each block includes its header and MMR proof at `block_range.end()`.
+    /// Each block includes its header and MMR proof at forest `block_range.end() + 1`.
+    ///
+    /// Also returns the last block number checked. If this equals `block_range.end()`, the
+    /// sync is complete.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<Vec<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
+    ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
         let block_end = *block_range.end();
-        // Use block_end + 1 as the MMR checkpoint so that block_end itself can be proven.
-        let mmr_checkpoint = block_end + 1;
         let note_tags: Arc<[u32]> = note_tags.into();
 
         let mut results = Vec::new();
@@ -109,7 +110,7 @@ impl State {
             }
 
             let block_num = note_sync.block_header.block_num();
-
+            let mmr_checkpoint = block_end + 1;
             let mmr_proof =
                 self.inner.read().await.blockchain.open_at(block_num, mmr_checkpoint)?;
             results.push((note_sync, mmr_proof));
@@ -117,7 +118,13 @@ impl State {
             current_from = block_num;
         }
 
-        Ok(results)
+        // if results is empty, return `block_end` since the sync is complete.
+        let last_block_checked = results
+            .last()
+            .map(|(update, _)| update.block_header.block_num())
+            .unwrap_or(block_end);
+
+        Ok((results, last_block_checked))
     }
 
     pub async fn sync_nullifiers(

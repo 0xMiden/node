@@ -143,7 +143,8 @@ impl rpc_server::Rpc for StoreApi {
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let results = self.state.sync_notes(request.note_tags, block_range).await?;
+        let (results, last_block_checked) =
+            self.state.sync_notes(request.note_tags, block_range).await?;
 
         let blocks = results
             .into_iter()
@@ -157,7 +158,7 @@ impl rpc_server::Rpc for StoreApi {
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             block_range: Some(proto::rpc::BlockRange {
                 block_from: block_from.as_u32(),
-                block_to: Some(block_to.as_u32()),
+                block_to: Some(last_block_checked.as_u32()),
             }),
             blocks,
         }))

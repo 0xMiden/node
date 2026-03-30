@@ -147,7 +147,7 @@ pub async fn bench_sync_nullifiers(
         let response = store_client.sync_notes(sync_request).await.unwrap().into_inner();
 
         let resp_block_range = response.block_range.expect("block_range should exist");
-        let resp_chain_tip = resp_block_range.block_to.expect("block_to should exist");
+        let last_block_checked = resp_block_range.block_to.expect("block_to should exist");
 
         if response.blocks.is_empty() {
             break;
@@ -180,13 +180,8 @@ pub async fn bench_sync_nullifiers(
             }));
         }
 
-        // Advance past the last block in the response.
-        let last_block = response.blocks.last().unwrap();
-        current_block_num =
-            last_block.block_header.as_ref().map_or(resp_chain_tip, |h| h.block_num);
-        if current_block_num >= resp_chain_tip {
-            break;
-        }
+        // Resume from the last block checked
+        current_block_num = last_block_checked;
     }
     let mut nullifiers = nullifier_prefixes.into_iter().cycle();
 
