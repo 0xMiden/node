@@ -23,7 +23,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierLimit,
     QueryParamStorageMapKeyTotalLimit,
 };
-use miden_protocol::batch::ProposedBatch;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{
     OutputNote,
@@ -426,7 +426,7 @@ impl api_server::Api for RpcService {
 
     /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
     /// the batch, then forwards it to the block producer.
-    async fn submit_batch(
+    async fn submit_proven_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
@@ -436,22 +436,32 @@ impl api_server::Api for RpcService {
 
         let request = request.into_inner();
 
-        let batch = ProposedBatch::read_from_bytes(&request.proposed_batch).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
+        let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
+            Status::invalid_argument(err.as_report_context("invalid proven_batch"))
         })?;
+
+        let proposed_batch = request
+            .proposed_batch
+            .as_deref()
+            .map(ProposedBatch::read_from_bytes)
+            .transpose()
+            .map_err(|err| {
+                Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
+            })?
+            .ok_or(Status::invalid_argument("missing `proposed_batch` field"))?;
 
         // Perform this check here since its cheap. If this passes we can safely zip inputs and
         // transactions.
-        if request.transaction_inputs.len() != batch.transactions().len() {
+        if request.transaction_inputs.len() != proposed_batch.transactions().len() {
             return Err(Status::invalid_argument(format!(
                 "Number of inputs {} does not match number of transaction {} in batch",
                 request.transaction_inputs.len(),
-                batch.transactions().len()
+                proposed_batch.transactions().len()
             )));
         }
 
         // Only allow deployment transactions for new network accounts.
-        for tx in batch.transactions() {
+        for tx in proposed_batch.transactions() {
             if tx.account_id().is_network()
                 && !tx.account_update().initial_state_commitment().is_empty()
             {
@@ -462,13 +472,23 @@ impl api_server::Api for RpcService {
         }
 
         // Verify batch transaction proofs.
-        let proof = LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(batch.clone()).map_err(
-            |err| Status::invalid_argument(err.as_report_context("proposed block proof failed")),
-        )?;
+        //
+        // Need to do this because ProvenBatch has no real kernel yet, so we can only
+        // really check that the calculated proof matches the one given in the request.
+        let expected_proof = LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
+            .prove(proposed_batch.clone())
+            .map_err(|err| {
+                Status::invalid_argument(err.as_report_context("proposed block proof failed"))
+            })?;
+
+        if expected_proof != proven_batch {
+            return Err(Status::invalid_argument("batch proof did not match proposed batch"));
+        }
+
         // Verify the reference header matches the canonical chain.
         let reference_header = self
             .get_block_header_by_number(Request::new(proto::rpc::BlockHeaderByNumberRequest {
-                block_num: proof.reference_block_num().as_u32().into(),
+                block_num: expected_proof.reference_block_num().as_u32().into(),
                 include_mmr_proof: false.into(),
             }))
             .await?
@@ -479,14 +499,14 @@ impl api_server::Api for RpcService {
             .ok_or_else(|| {
                 Status::invalid_argument(format!(
                     "unknown reference block {}",
-                    proof.reference_block_num()
+                    expected_proof.reference_block_num()
                 ))
             })?;
-        if reference_header.commitment() != proof.reference_block_commitment() {
+        if reference_header.commitment() != expected_proof.reference_block_commitment() {
             return Err(Status::invalid_argument(format!(
                 "batch reference commitment {} at block {} does not match canonical chain's commitemnt of {}",
-                proof.reference_block_num(),
-                proof.reference_block_commitment(),
+                expected_proof.reference_block_num(),
+                expected_proof.reference_block_commitment(),
                 reference_header.commitment()
             )));
         }
@@ -494,7 +514,7 @@ impl api_server::Api for RpcService {
         // Submit each transaction to the validator.
         //
         // SAFETY: We checked earlier that the two iterators are the same length.
-        for (tx, inputs) in batch.transactions().iter().zip(&request.transaction_inputs) {
+        for (tx, inputs) in proposed_batch.transactions().iter().zip(&request.transaction_inputs) {
             let request = proto::transaction::ProvenTransaction {
                 transaction: tx.to_bytes(),
                 transaction_inputs: inputs.clone().into(),
@@ -502,7 +522,7 @@ impl api_server::Api for RpcService {
             self.validator.clone().submit_proven_transaction(request).await?;
         }
 
-        block_producer.clone().submit_batch(request).await
+        block_producer.clone().submit_proven_batch(request).await
     }
 
     // -- Status & utility endpoints ----------------------------------------------------------

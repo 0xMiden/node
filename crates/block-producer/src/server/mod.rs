@@ -345,11 +345,14 @@ impl BlockProducerRpcServer {
          skip_all,
          err
      )]
-    async fn submit_batch(
+    async fn submit_proven_batch(
         &self,
         request: proto::transaction::TransactionBatch,
     ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
-        let batch = ProposedBatch::read_from_bytes(&request.proposed_batch)
+        let proposed = request
+            .proposed_batch
+            .expect("proposed batch existence is enforced by RPC component");
+        let batch = ProposedBatch::read_from_bytes(&proposed)
             .map_err(MempoolSubmissionError::DeserializationFailed)?;
 
         // We assume that the rpc component has verified everything, including the transaction
@@ -390,11 +393,11 @@ impl api_server::Api for BlockProducerRpcServer {
              .map_err(Into::into)
     }
 
-    async fn submit_batch(
+    async fn submit_proven_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        self.submit_batch(request.into_inner())
+        self.submit_proven_batch(request.into_inner())
              .await
              .map(tonic::Response::new)
              // This Status::from mapping takes care of hiding internal errors.
