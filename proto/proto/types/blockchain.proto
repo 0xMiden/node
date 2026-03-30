@@ -28,6 +28,24 @@ message MaybeBlock {
     optional bytes block = 1;
 }
 
+// Request for retrieving a block by its number, optionally including the block proof.
+message GetBlockByNumberRequest {
+    // The block number of the target block.
+    fixed32 block_num = 1;
+    // Whether to include the block proof in the response.
+    optional bool include_proof = 2;
+}
+
+// Response containing the block data and optionally its proof.
+message GetBlockByNumberResponse {
+    // The requested block data encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::Block].
+    optional bytes block = 1;
+    // The block proof encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::BlockProof], if requested and available.
+    optional bytes proof = 2;
+}
+
 // Represents a block number.
 message BlockNumber {
     // The block number of the target block.

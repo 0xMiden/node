@@ -237,19 +237,24 @@ impl rpc_server::Rpc for StoreApi {
 
     async fn get_block_by_number(
         &self,
-        request: Request<proto::blockchain::BlockNumber>,
-    ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
+        request: Request<proto::blockchain::GetBlockByNumberRequest>,
+    ) -> Result<Response<proto::blockchain::GetBlockByNumberResponse>, Status> {
         let request = request.into_inner();
 
         debug!(target: COMPONENT, ?request);
 
-        let block = self
-            .state
-            .load_block(request.block_num.into())
-            .await
-            .map_err(GetBlockByNumberError::from)?;
+        // Load block from state.
+        let block_num = BlockNumber::from(request.block_num);
+        let block = self.state.load_block(block_num).await.map_err(GetBlockByNumberError::from)?;
 
-        Ok(Response::new(proto::blockchain::MaybeBlock { block }))
+        // Load proof from state.
+        let proof = if request.include_proof.unwrap_or(false) {
+            self.state.load_proof(block_num).await.map_err(GetBlockByNumberError::from)?
+        } else {
+            None
+        };
+
+        Ok(Response::new(proto::blockchain::GetBlockByNumberResponse { block, proof }))
     }
 
     async fn get_account(

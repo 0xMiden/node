@@ -842,6 +842,17 @@ impl State {
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
+    /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
+    pub async fn load_proof(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<Vec<u8>>, DatabaseError> {
+        if block_num > self.latest_block_num().await {
+            return Ok(None);
+        }
+        self.block_store.load_proof(block_num).await.map_err(Into::into)
+    }
+
     /// Returns the latest block number.
     pub async fn latest_block_num(&self) -> BlockNumber {
         self.inner.read().await.latest_block_num()
