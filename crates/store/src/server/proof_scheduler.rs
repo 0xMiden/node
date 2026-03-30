@@ -65,9 +65,11 @@ impl ProofTaskJoinSet {
         let db = Arc::clone(db);
         let block_prover = Arc::clone(block_prover);
         let block_store = Arc::clone(block_store);
-        let proven_tip_sender = proven_tip_sender.clone();
-        self.0.spawn(async move {
-            prove_block(&db, &block_prover, &block_store, &proven_tip_sender, block_num).await
+        self.0.spawn({
+            let proven_tip_sender = proven_tip_sender.clone();
+            async move {
+                prove_block(&db, &block_prover, &block_store, &proven_tip_sender, block_num).await
+            }
         });
     }
 
