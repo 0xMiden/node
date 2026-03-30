@@ -100,99 +100,26 @@ impl Store {
                 .context("failed to load state")?;
         let state = Arc::new(state);
 
-        // Initialize local or remote block prover.
-        let block_prover = if let Some(url) = self.block_prover_url {
-            Arc::new(BlockProver::remote(url))
-        } else {
-            Arc::new(BlockProver::local())
-        };
-
-        // Initialize the chain tip watch channel.
-        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
-        let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
-
-        // Spawn the proof scheduler as a background task. It will immediately pick up any
-        // unproven blocks from previous runs and begin proving them.
-        let proof_scheduler_task = proof_scheduler::spawn(
-            state.db().clone(),
-            block_prover,
-            state.block_store(),
-            chain_tip_rx,
-            proven_tip_sender,
+        let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
+            &state,
+            self.block_prover_url,
             self.max_concurrent_proofs,
-        );
+            proven_tip_sender,
+        )
+        .await;
 
-        let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
-            state: Arc::clone(&state),
-            chain_tip_sender: chain_tip_sender.clone(),
-        });
-        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
-            state: Arc::clone(&state),
-            chain_tip_sender: chain_tip_sender.clone(),
-        });
-        let block_producer_service =
-            store::block_producer_server::BlockProducerServer::new(api::StoreApi {
-                state: Arc::clone(&state),
-                chain_tip_sender,
-            });
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(store_rpc_api_descriptor())
-            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
-            .register_file_descriptor_set(store_block_producer_api_descriptor())
-            .build_v1()
-            .context("failed to build reflection service")?;
+        let mut join_set = Self::spawn_grpc_servers(
+            &state,
+            chain_tip_sender,
+            self.grpc_options,
+            self.rpc_listener,
+            self.ntx_builder_listener,
+            self.block_producer_listener,
+        )?;
 
-        info!(target: COMPONENT, "Database loaded");
-
-        let mut join_set = JoinSet::new();
-
-        join_set.spawn(async move {
-            // Manual tests on testnet indicate each iteration takes ~2s once things are OS cached.
-            //
-            // 5 minutes seems like a reasonable interval, where this should have minimal database
-            // IO impact while providing a decent view into table growth over time.
-            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
-            let database = Arc::clone(&state);
-            loop {
-                interval.tick().await;
-                let _ = database.analyze_table_sizes().await;
-            }
-        });
-
-        // Build the gRPC server with the API services and trace layer.
-        join_set.spawn(
-            tonic::transport::Server::builder()
-                .timeout(self.grpc_options.request_timeout)
-                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .add_service(rpc_service)
-                .add_service(reflection_service.clone())
-                .serve_with_incoming(TcpListenerStream::new(self.rpc_listener)),
-        );
-
-        join_set.spawn(
-            tonic::transport::Server::builder()
-                .timeout(self.grpc_options.request_timeout)
-                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .add_service(ntx_builder_service)
-                .add_service(reflection_service.clone())
-                .serve_with_incoming(TcpListenerStream::new(self.ntx_builder_listener)),
-        );
-
-        join_set.spawn(
-            tonic::transport::Server::builder()
-                .accept_http1(true)
-                .timeout(self.grpc_options.request_timeout)
-                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .add_service(block_producer_service)
-                .add_service(reflection_service)
-                .serve_with_incoming(TcpListenerStream::new(self.block_producer_listener)),
-        );
-
-        // SAFETY: The joinset is definitely not empty.
-        let service = async move { join_set.join_next().await.unwrap()?.map_err(Into::into) };
+        let service = async move {
+            join_set.join_next().await.expect("joinset is not empty")?.map_err(Into::into)
+        };
         tokio::select! {
             result = service => result,
             Some(err) = termination_signal.recv() => {
@@ -206,6 +133,116 @@ impl Store {
                 }
             }
         }
+    }
+
+    /// Initializes the block prover client and spawns the proof scheduler as a background task.
+    ///
+    /// Returns the scheduler task handle and the chain tip sender (needed by gRPC services to
+    /// notify the scheduler of new blocks).
+    async fn spawn_proof_scheduler(
+        state: &Arc<State>,
+        block_prover_url: Option<Url>,
+        max_concurrent_proofs: NonZeroUsize,
+        proven_tip_sender: tokio::sync::watch::Sender<miden_protocol::block::BlockNumber>,
+    ) -> (
+        tokio::task::JoinHandle<anyhow::Result<()>>,
+        tokio::sync::watch::Sender<miden_protocol::block::BlockNumber>,
+    ) {
+        let block_prover = if let Some(url) = block_prover_url {
+            Arc::new(BlockProver::remote(url))
+        } else {
+            Arc::new(BlockProver::local())
+        };
+
+        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
+        let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
+
+        let handle = proof_scheduler::spawn(
+            state.db().clone(),
+            block_prover,
+            state.block_store(),
+            chain_tip_rx,
+            proven_tip_sender,
+            max_concurrent_proofs,
+        );
+
+        (handle, chain_tip_sender)
+    }
+
+    /// Spawns the gRPC servers and the DB maintenance background task.
+    fn spawn_grpc_servers(
+        state: &Arc<State>,
+        chain_tip_sender: tokio::sync::watch::Sender<miden_protocol::block::BlockNumber>,
+        grpc_options: GrpcOptionsInternal,
+        rpc_listener: TcpListener,
+        ntx_builder_listener: TcpListener,
+        block_producer_listener: TcpListener,
+    ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
+        let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
+            state: Arc::clone(state),
+            chain_tip_sender: chain_tip_sender.clone(),
+        });
+        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
+            state: Arc::clone(state),
+            chain_tip_sender: chain_tip_sender.clone(),
+        });
+        let block_producer_service =
+            store::block_producer_server::BlockProducerServer::new(api::StoreApi {
+                state: Arc::clone(state),
+                chain_tip_sender,
+            });
+        let reflection_service = tonic_reflection::server::Builder::configure()
+            .register_file_descriptor_set(store_rpc_api_descriptor())
+            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
+            .register_file_descriptor_set(store_block_producer_api_descriptor())
+            .build_v1()
+            .context("failed to build reflection service")?;
+
+        info!(target: COMPONENT, "Database loaded");
+
+        let mut join_set = JoinSet::new();
+
+        let state_clone = Arc::clone(state);
+        join_set.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            loop {
+                interval.tick().await;
+                let _ = state_clone.analyze_table_sizes().await;
+            }
+        });
+
+        join_set.spawn(
+            tonic::transport::Server::builder()
+                .timeout(grpc_options.request_timeout)
+                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+                .add_service(rpc_service)
+                .add_service(reflection_service.clone())
+                .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
+        );
+
+        join_set.spawn(
+            tonic::transport::Server::builder()
+                .timeout(grpc_options.request_timeout)
+                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+                .add_service(ntx_builder_service)
+                .add_service(reflection_service.clone())
+                .serve_with_incoming(TcpListenerStream::new(ntx_builder_listener)),
+        );
+
+        join_set.spawn(
+            tonic::transport::Server::builder()
+                .accept_http1(true)
+                .timeout(grpc_options.request_timeout)
+                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+                .add_service(block_producer_service)
+                .add_service(reflection_service)
+                .serve_with_incoming(TcpListenerStream::new(block_producer_listener)),
+        );
+
+        Ok(join_set)
     }
 }
 
