@@ -141,7 +141,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
     account_ids: &[AccountId],
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(Vec<NoteSyncRecord>, BlockNumber), DatabaseError> {
+) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
     QueryParamAccountIdLimit::check(account_ids.len())?;
     QueryParamNoteTagLimit::check(note_tags.len())?;
     let desired_note_tags = Vec::from_iter(note_tags.iter().map(|tag| *tag as i32));
@@ -158,14 +158,14 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
                     .eq_any(&desired_note_tags[..])
                     .or(schema::notes::sender.eq_any(&desired_senders[..])),
             )
-            .filter(schema::notes::committed_at.gt(start_block_num))
+            .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
             .limit(1)
             .get_result(conn)
             .optional()?
     else {
-        return Ok((Vec::new(), *block_range.end()));
+        return Ok(Vec::new());
     };
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
@@ -185,7 +185,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
             .get_results::<NoteSyncRecordRawRow>(conn)
             .map_err(DatabaseError::from)?;
 
-    Ok((vec_raw_try_into(notes)?, BlockNumber::from_raw_sql(desired_block_num)?))
+    vec_raw_try_into(notes)
 }
 
 /// Select all notes matching the given set of identifiers
@@ -521,7 +521,7 @@ pub(crate) fn get_note_sync(
 ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
     QueryParamNoteTagLimit::check(note_tags.len()).map_err(DatabaseError::from)?;
 
-    let (notes, _) = select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+    let notes = select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
 
     if notes.is_empty() {
         return Ok(None);

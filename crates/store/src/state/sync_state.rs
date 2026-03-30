@@ -115,7 +115,7 @@ impl State {
                 self.inner.read().await.blockchain.open_at(block_num, mmr_checkpoint)?;
             results.push((note_sync, mmr_proof));
 
-            current_from = block_num;
+            current_from = block_num + 1;
         }
 
         // if results is empty, return `block_end` since the sync is complete.

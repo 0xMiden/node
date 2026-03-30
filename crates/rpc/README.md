@@ -198,7 +198,7 @@ Returns info which can be used by the client to sync up to the tip of chain for 
 
 Client specifies the `note_tags` they are interested in, and the block range to search. The response contains all blocks with matching notes that fit within the response payload limit, along with each note's metadata, inclusion proof, and MMR authentication path.
 
-If `response.pagination_info.block_num` is less than the requested range end, make another request starting from `response.pagination_info.block_num` to continue syncing.
+If `response.pagination_info.block_num` is less than the requested range end, make another request starting from `response.pagination_info.block_num + 1` to continue syncing.
 
 #### Error Handling
 

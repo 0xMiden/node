@@ -180,8 +180,8 @@ pub async fn bench_sync_nullifiers(
             }));
         }
 
-        // Resume from the last block checked
-        current_block_num = last_block_checked;
+        // Resume from the next block after the last one checked.
+        current_block_num = last_block_checked + 1;
     }
     let mut nullifiers = nullifier_prefixes.into_iter().cycle();
 

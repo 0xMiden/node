@@ -837,14 +837,12 @@ fn notes() {
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
             .unwrap();
-
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
-    let (res, last_included_block) = queries::select_notes_since_block_by_tag_and_sender(
+    let res = queries::select_notes_since_block_by_tag_and_sender(
         conn,
         &[],
         &[1, 2, 3],
@@ -852,7 +850,6 @@ fn notes() {
     )
     .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
@@ -883,27 +880,22 @@ fn notes() {
     queries::insert_notes(conn, &[(note.clone(), None)]).unwrap();
 
     // test empty tags
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
             .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
-    let block_range_1 = 1.into()..=1.into();
-
+    let block_range_1 = 2.into()..=2.into();
     // test no updates
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
+        .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
     // test match
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range.clone())
             .unwrap();
     assert_eq!(res, vec![note.clone().into()]);
-    assert_eq!(last_included_block, 1.into());
 
     let block_num_2 = note.block_num + 1;
     create_block(conn, block_num_2);
@@ -924,20 +916,16 @@ fn notes() {
     let block_range = 0.into()..=2.into();
 
     // only first note is returned
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
+        .unwrap();
     assert_eq!(res, vec![note.clone().into()]);
-    assert_eq!(last_included_block, 1.into());
 
-    let block_range = 1.into()..=2.into();
+    let block_range = 2.into()..=2.into();
 
     // only the second note is returned
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
+        .unwrap();
     assert_eq!(res, vec![note2.clone().into()]);
-    assert_eq!(last_included_block, 2.into());
 
     // test query notes by id
     let notes = vec![note.clone(), note2];
@@ -1023,7 +1011,7 @@ fn note_sync_across_multiple_blocks() {
             "should be able to open MMR proof for block {block_num}"
         );
         collected_block_nums.push(block_num);
-        current_from = block_num;
+        current_from = block_num + 1;
     }
 
     assert_eq!(
