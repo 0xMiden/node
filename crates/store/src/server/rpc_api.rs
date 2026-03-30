@@ -168,12 +168,12 @@ impl rpc_server::Rpc for StoreApi {
             .map(SyncTarget::try_from)
             .transpose()
             .map_err(SyncChainMmrError::DeserializationFailed)?
-            .unwrap_or(SyncTarget::LastCommitted);
+            .unwrap_or(SyncTarget::CommittedChainTip);
 
         let block_to = match sync_target {
             SyncTarget::BlockNumber(block_num) => block_num.min(chain_tip),
-            SyncTarget::LastCommitted => chain_tip,
-            SyncTarget::LastProven => self
+            SyncTarget::CommittedChainTip => chain_tip,
+            SyncTarget::ProvenChainTip => self
                 .state
                 .db()
                 .select_latest_proven_in_sequence_block_num()

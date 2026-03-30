@@ -367,9 +367,9 @@ pub enum SyncTarget {
     /// Sync up to a specific block number (inclusive).
     BlockNumber(BlockNumber),
     /// Sync up to the latest committed block (chain tip).
-    LastCommitted,
+    CommittedChainTip,
     /// Sync up to the latest proven block.
-    LastProven,
+    ProvenChainTip,
 }
 
 impl TryFrom<proto::rpc::sync_chain_mmr_request::UpperBound> for SyncTarget {
@@ -382,8 +382,8 @@ impl TryFrom<proto::rpc::sync_chain_mmr_request::UpperBound> for SyncTarget {
 
         match value {
             UpperBound::BlockNum(block_num) => Ok(Self::BlockNumber(block_num.into())),
-            UpperBound::LastCommitted(_) => Ok(Self::LastCommitted),
-            UpperBound::LastProven(_) => Ok(Self::LastProven),
+            UpperBound::CommittedChainTip(_) => Ok(Self::CommittedChainTip),
+            UpperBound::ProvenChainTip(_) => Ok(Self::ProvenChainTip),
         }
     }
 }

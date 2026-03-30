@@ -608,7 +608,7 @@ async fn sync_chain_mmr_returns_delta() {
 
     let request = proto::rpc::SyncChainMmrRequest {
         block_from: 0,
-        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::LastCommitted(true)),
+        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::CommittedChainTip(true)),
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();

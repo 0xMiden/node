@@ -503,9 +503,9 @@ message SyncChainMmrRequest {
         // Sync up to this specific block number (inclusive), clamped to the committed chain tip.
         fixed32 block_num = 3;
         // Sync up to the latest committed block (chain tip).
-        bool last_committed = 4;
+        bool committed_chain_tip = 4;
         // Sync up to the latest proven block.
-        bool last_proven = 5;
+        bool proven_chain_tip = 5;
     }
 }
 
