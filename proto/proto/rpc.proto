@@ -477,7 +477,7 @@ message SyncNotesResponse {
         // Block header of the block containing the matching notes.
         blockchain.BlockHeader block_header = 1;
 
-        // Merkle path to verify the block's inclusion in the MMR at the returned
+        // Merkle path to verify the block's inclusion in the MMR at the requested
         // `block_range.block_to`.
         //
         // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
