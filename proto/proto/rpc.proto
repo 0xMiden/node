@@ -498,8 +498,6 @@ message SyncChainMmrRequest {
     // already present in the caller's MMR so the delta begins at the next block.
     fixed32 block_from = 1;
 
-    reserved 2;
-
     // Upper bound for the block range. Determines how far ahead to sync.
     oneof upper_bound {
         // Sync up to this specific block number (inclusive), clamped to the committed chain tip.
