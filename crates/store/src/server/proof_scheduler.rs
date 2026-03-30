@@ -23,7 +23,7 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
-use tracing::{error, info, instrument};
+use tracing::{Instrument, info, instrument};
 
 use crate::COMPONENT;
 use crate::blocks::BlockStore;
@@ -184,12 +184,20 @@ async fn prove_block(
         let mut attempt: u32 = 0;
         loop {
             attempt += 1;
-            match tokio::time::timeout(
+            let attempt_span = tracing::info_span!(
+                target: COMPONENT,
+                "prove_attempt",
+                attempt,
+                error = tracing::field::Empty,
+                timed_out = tracing::field::Empty,
+            );
+            let result = tokio::time::timeout(
                 BLOCK_PROVE_ATTEMPT_TIMEOUT,
                 generate_block_proof(db, block_prover, block_num),
             )
-            .await
-            {
+            .instrument(attempt_span.clone())
+            .await;
+            match result {
                 Ok(Ok(proof)) => {
                     // Save the block proof to file.
                     block_store.save_proof(block_num, &proof.to_bytes()).await?;
@@ -202,16 +210,18 @@ async fn prove_block(
                 },
                 Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
                 Ok(Err(ProveBlockError::Transient(err))) => {
-                    error!(target = COMPONENT, block.number = %block_num, attempt, err = ?err, "transient error proving block, retrying");
+                    attempt_span.record("error", tracing::field::display(&err));
                 },
                 Err(elapsed) => {
-                    error!(target = COMPONENT, block.number = %block_num, attempt, %elapsed, "block proving attempt timed out, retrying");
+                    attempt_span.record("timed_out", elapsed.to_string());
                 },
             }
         }
     })
     .await
-    .context(format!("block proving overall timeout ({BLOCK_PROVE_OVERALL_TIMEOUT:?}) exceeded"))?
+    .context(format!(
+        "block proving overall timeout ({BLOCK_PROVE_OVERALL_TIMEOUT:?}) exceeded"
+    ))?
 }
 
 /// Generates a block proof by loading inputs from the DB and invoking the block prover.
