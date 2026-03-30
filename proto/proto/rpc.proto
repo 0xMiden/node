@@ -502,7 +502,7 @@ message SyncChainMmrRequest {
 
     // Upper bound for the block range. Determines how far ahead to sync.
     oneof upper_bound {
-        // Sync up to this specific block number (inclusive), clamped to the effective tip.
+        // Sync up to this specific block number (inclusive), clamped to the committed chain tip.
         fixed32 block_num = 3;
         // Sync up to the latest committed block (chain tip).
         bool last_committed = 4;
