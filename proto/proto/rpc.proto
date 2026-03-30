@@ -86,8 +86,8 @@ service Api {
     // The response contains all blocks with matching notes that fit within the response payload
     // limit, along with each note's metadata and inclusion proof.
     //
-    // If `response.block_range.block_to` is less than the requested range end, make another
-    // request starting from `response.block_range.block_to` to continue syncing.
+    // If `response.pagination_info.block_num` is less than the requested range end, make
+    // another request starting from `response.pagination_info.block_num + 1` to continue syncing.
     rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
 
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
@@ -488,13 +488,13 @@ message SyncNotesResponse {
         repeated note.NoteSyncRecord notes = 3;
     }
 
-    // The block range covered by this response.
+    // Pagination information.
     //
-    // `block_from` matches the request's `block_range.block_from`.
-    // `block_to` is the last block checked. If it equals the requested `block_to` (or the
-    // chain tip when unset), the sync is complete. Otherwise the response was truncated due
-    // to the payload size limit and the client should resume from `block_to`.
-    BlockRange block_range = 1;
+    // `chain_tip` is the current chain tip.
+    // `block_num` is the last block checked. If it equals the requested `block_to` (or the chain
+    // tip when unset), the sync is complete. Otherwise the response was truncated and the client
+    // should resume from `block_num`.
+    PaginationInfo pagination_info = 1;
 
     // Blocks containing matching notes, ordered by block number ascending.
     // May be empty if no notes matched in the range.

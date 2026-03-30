@@ -146,8 +146,8 @@ pub async fn bench_sync_nullifiers(
         };
         let response = store_client.sync_notes(sync_request).await.unwrap().into_inner();
 
-        let resp_block_range = response.block_range.expect("block_range should exist");
-        let last_block_checked = resp_block_range.block_to.expect("block_to should exist");
+        let pagination = response.pagination_info.expect("pagination_info should exist");
+        let last_block_checked = pagination.block_num;
 
         if response.blocks.is_empty() {
             break;

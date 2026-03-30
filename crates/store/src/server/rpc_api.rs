@@ -133,11 +133,8 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
-        let block_from = *block_range.start();
-        let block_to = *block_range.end();
-
-        if block_to > chain_tip {
-            Err(NoteSyncError::FutureBlock { chain_tip, block_to })?;
+        if *block_range.end() > chain_tip {
+            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
         }
 
         // Validate note tags count
@@ -156,9 +153,9 @@ impl rpc_server::Rpc for StoreApi {
             .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
-            block_range: Some(proto::rpc::BlockRange {
-                block_from: block_from.as_u32(),
-                block_to: Some(last_block_checked.as_u32()),
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: last_block_checked.as_u32(),
             }),
             blocks,
         }))
