@@ -85,8 +85,10 @@ impl State {
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<Vec<(NoteSyncUpdate, Option<MmrProof>)>, NoteSyncError> {
-        let checkpoint = *block_range.end();
+    ) -> Result<Vec<(NoteSyncUpdate, MmrProof)>, NoteSyncError> {
+        let block_end = *block_range.end();
+        // Use block_end + 1 as the MMR checkpoint so that block_end itself can be proven.
+        let mmr_checkpoint = block_end + 1;
         let note_tags: Arc<[u32]> = note_tags.into();
 
         let mut results = Vec::new();
@@ -94,7 +96,7 @@ impl State {
         let mut current_from = *block_range.start();
 
         loop {
-            let range = current_from..=checkpoint;
+            let range = current_from..=block_end;
             let Some(note_sync) = self.db.get_note_sync(range, Arc::clone(&note_tags)).await?
             else {
                 break;
@@ -108,15 +110,9 @@ impl State {
 
             let block_num = note_sync.block_header.block_num();
 
-            // The MMR at `checkpoint` contains proofs for blocks 0..checkpoint-1. When we reach the
-            // last block, we return the note without a MMR proof.
-            if block_num >= checkpoint {
-                results.push((note_sync, None));
-                break;
-            }
-
-            let mmr_proof = self.inner.read().await.blockchain.open_at(block_num, checkpoint)?;
-            results.push((note_sync, Some(mmr_proof)));
+            let mmr_proof =
+                self.inner.read().await.blockchain.open_at(block_num, mmr_checkpoint)?;
+            results.push((note_sync, mmr_proof));
 
             current_from = block_num;
         }

@@ -477,11 +477,10 @@ message SyncNotesResponse {
         // Block header of the block containing the matching notes.
         blockchain.BlockHeader block_header = 1;
 
-        // Merkle path to verify the block's inclusion in the MMR at the requested
-        // `block_range.block_to`.
+        // Merkle path to verify the block's inclusion in the MMR.
         //
         // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
-        // an MMR of forest `block_range.block_to` with this path.
+        // an MMR of forest `block_range.block_to + 1` with this path.
         primitives.MerklePath mmr_path = 2;
 
         // List of notes matching the specified criteria in this block, together with the
