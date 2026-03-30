@@ -469,8 +469,8 @@ async fn sync_chain_mmr(
     block_to: u32,
 ) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
-        finality: proto::rpc::Finality::Committed.into(),
+        block_from,
+        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::BlockNum(block_to)),
     };
 
     let start = Instant::now();

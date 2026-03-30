@@ -1,6 +1,5 @@
 use miden_node_proto::convert;
-use miden_node_proto::domain::block::InvalidBlockRange;
-use miden_node_proto::errors::MissingFieldHelper;
+use miden_node_proto::domain::block::SyncTarget;
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -161,15 +160,20 @@ impl rpc_server::Rpc for StoreApi {
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
 
-        let block_range = request
-            .block_range
-            .ok_or_else(|| proto::rpc::SyncChainMmrRequest::missing_field(stringify!(block_range)))
-            .map_err(SyncChainMmrError::DeserializationFailed)?;
+        let block_from = BlockNumber::from(request.block_from);
 
-        // Determine the effective tip based on the requested finality level.
-        let effective_tip = match request.finality() {
-            proto::rpc::Finality::Unspecified | proto::rpc::Finality::Committed => chain_tip,
-            proto::rpc::Finality::Proven => self
+        // Determine upper bound to sync to or default to last committed block.
+        let sync_target = request
+            .upper_bound
+            .map(SyncTarget::try_from)
+            .transpose()
+            .map_err(SyncChainMmrError::DeserializationFailed)?
+            .unwrap_or(SyncTarget::LastCommitted);
+
+        let block_to = match sync_target {
+            SyncTarget::BlockNumber(block_num) => block_num.min(chain_tip),
+            SyncTarget::LastCommitted => chain_tip,
+            SyncTarget::LastProven => self
                 .state
                 .db()
                 .select_latest_proven_in_sequence_block_num()
@@ -177,19 +181,8 @@ impl rpc_server::Rpc for StoreApi {
                 .map_err(SyncChainMmrError::DatabaseError)?,
         };
 
-        let block_from = BlockNumber::from(block_range.block_from);
-        if block_from > effective_tip {
-            Err(SyncChainMmrError::FutureBlock { chain_tip: effective_tip, block_from })?;
-        }
-
-        let block_to =
-            block_range.block_to.map_or(effective_tip, BlockNumber::from).min(effective_tip);
-
         if block_from > block_to {
-            Err(SyncChainMmrError::InvalidBlockRange(InvalidBlockRange::StartGreaterThanEnd {
-                start: block_from,
-                end: block_to,
-            }))?;
+            Err(SyncChainMmrError::FutureBlock { chain_tip: block_to, block_from })?;
         }
         let block_range = block_from..=block_to;
         let mmr_delta =

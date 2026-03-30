@@ -358,6 +358,36 @@ impl From<&FeeParameters> for proto::blockchain::FeeParameters {
     }
 }
 
+// SYNC TARGET
+// ================================================================================================
+
+/// The target block to sync up to in a chain MMR sync request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncTarget {
+    /// Sync up to a specific block number (inclusive).
+    BlockNumber(BlockNumber),
+    /// Sync up to the latest committed block (chain tip).
+    LastCommitted,
+    /// Sync up to the latest proven block.
+    LastProven,
+}
+
+impl TryFrom<proto::rpc::sync_chain_mmr_request::UpperBound> for SyncTarget {
+    type Error = ConversionError;
+
+    fn try_from(
+        value: proto::rpc::sync_chain_mmr_request::UpperBound,
+    ) -> Result<Self, Self::Error> {
+        use proto::rpc::sync_chain_mmr_request::UpperBound;
+
+        match value {
+            UpperBound::BlockNum(block_num) => Ok(Self::BlockNumber(block_num.into())),
+            UpperBound::LastCommitted(_) => Ok(Self::LastCommitted),
+            UpperBound::LastProven(_) => Ok(Self::LastProven),
+        }
+    }
+}
+
 // BLOCK RANGE
 // ================================================================================================
 
