@@ -34,7 +34,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 use tracing::{info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
@@ -68,6 +68,18 @@ use loader::{
 
 mod apply_block;
 mod sync_state;
+
+// FINALITY
+// ================================================================================================
+
+/// The finality level for chain tip queries.
+#[derive(Debug, Clone, Copy)]
+pub enum Finality {
+    /// The latest committed (but not necessarily proven) block.
+    Committed,
+    /// The latest block that has been proven in an unbroken sequence from genesis.
+    Proven,
+}
 
 // STRUCTURES
 // ================================================================================================
@@ -125,6 +137,9 @@ pub struct State {
 
     /// Request termination of the process due to a fatal internal state error.
     termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
+
+    /// The latest proven-in-sequence block number, updated by the proof scheduler.
+    proven_tip: watch::Receiver<BlockNumber>,
 }
 
 impl State {
@@ -137,7 +152,7 @@ impl State {
         data_path: &Path,
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<Self, StateInitializationError> {
+    ) -> Result<(Self, watch::Sender<BlockNumber>), StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -183,14 +198,25 @@ impl State {
         let writer = Mutex::new(());
         let db = Arc::new(db);
 
-        Ok(Self {
-            db,
-            block_store,
-            inner,
-            forest,
-            writer,
-            termination_ask,
-        })
+        // Initialize the proven tip from database.
+        let proven_tip = db
+            .select_latest_proven_in_sequence_block_num()
+            .await
+            .map_err(StateInitializationError::DatabaseError)?;
+        let (proven_tip_sender, proven_tip) = watch::channel(proven_tip);
+
+        Ok((
+            Self {
+                db,
+                block_store,
+                inner,
+                forest,
+                writer,
+                termination_ask,
+                proven_tip,
+            },
+            proven_tip_sender,
+        ))
     }
 
     /// Returns the database.
@@ -264,7 +290,7 @@ impl State {
     ) -> Result<Option<(BlockHeader, MmrPeaks)>, GetCurrentBlockchainDataError> {
         let blockchain = &self.inner.read().await.blockchain;
         if let Some(number) = block_num
-            && number == self.latest_block_num().await
+            && number == self.chain_tip(Finality::Committed).await
         {
             return Ok(None);
         }
@@ -836,15 +862,22 @@ impl State {
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
-        if block_num > self.latest_block_num().await {
+        if block_num > self.chain_tip(Finality::Committed).await {
             return Ok(None);
         }
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
-    /// Returns the latest block number.
-    pub async fn latest_block_num(&self) -> BlockNumber {
-        self.inner.read().await.latest_block_num()
+    /// Returns the effective chain tip for the given finality level.
+    ///
+    /// - [`Finality::Committed`]: returns the latest committed block number (from in-memory MMR).
+    /// - [`Finality::Proven`]: returns the latest proven-in-sequence block number (cached via watch
+    ///   channel, updated by the proof scheduler).
+    pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
+        match finality {
+            Finality::Committed => self.inner.read().await.latest_block_num(),
+            Finality::Proven => *self.proven_tip.borrow(),
+        }
     }
 
     /// Emits metrics for each database table's size.

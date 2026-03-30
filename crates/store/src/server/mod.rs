@@ -94,11 +94,11 @@ impl Store {
 
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
-        let state = Arc::new(
+        let (state, proven_tip_sender) =
             State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
-                .context("failed to load state")?,
-        );
+                .context("failed to load state")?;
+        let state = Arc::new(state);
 
         // Initialize local or remote block prover.
         let block_prover = if let Some(url) = self.block_prover_url {
@@ -108,7 +108,7 @@ impl Store {
         };
 
         // Initialize the chain tip watch channel.
-        let chain_tip = state.latest_block_num().await;
+        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
         let (chain_tip_sender, chain_tip_rx) = tokio::sync::watch::channel(chain_tip);
 
         // Spawn the proof scheduler as a background task. It will immediately pick up any
@@ -118,6 +118,7 @@ impl Store {
             block_prover,
             state.block_store(),
             chain_tip_rx,
+            proven_tip_sender,
             self.max_concurrent_proofs,
         );
 
