@@ -303,7 +303,9 @@ impl Mempool {
 
     /// Drops the proposed batch and all of its descendants.
     ///
-    /// Transactions are re-queued.
+    /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
+    /// transactions have their failure count incremented, reverting them if they now exceed the
+    /// failure limit.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
@@ -323,8 +325,12 @@ impl Mempool {
 
         // Find rolled back batch to mark the txs as failed.
         //
-        // Note that its possible it doesn't exist, since this batch could have already been
+        // Note that it's possible it doesn't exist, since this batch could have already been
         // reverted as part of a separate rollback.
+        //
+        // This could occur if this batch is the descendent of a separate batch or block rollback.
+        // The batch and transaction graphs already ignore unknown reversions, alternatively we
+        // could check this precondition above.
         if let Some(batch) = reverted_batches.iter().find(|reverted| reverted.id() == batch) {
             let failed_txs = batch.transactions().iter().map(|tx| tx.id());
             let reverted_txs = self.transactions.increment_failure_count(failed_txs);

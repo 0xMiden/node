@@ -148,7 +148,7 @@ impl BatchGraph {
         selected
     }
 
-    /// Prunes the given batch.
+    /// Prunes the given batch and returns it.
     ///
     /// # Panics
     ///

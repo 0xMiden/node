@@ -213,7 +213,7 @@ where
         self.edges.children_of(id).is_empty()
     }
 
-    /// Removes the node _IFF_ it has no ancestor nodes.
+    /// Removes the node _IFF_ it has no ancestor nodes and returns the pruned node.
     ///
     /// # Panics
     ///

@@ -77,7 +77,11 @@ pub struct TransactionGraph {
     /// used to identify potentially buggy transactions that should be evicted.
     failures: HashMap<TransactionId, u32>,
 
+    /// Defines the transactions that belong to a user batch.
     user_batch_txs: HashMap<BatchId, Vec<TransactionId>>,
+    /// A mapping of transactions to their user batch (if any).
+    ///
+    /// Inverse map of `user_batch_txs`.
     txs_user_batch: HashMap<TransactionId, BatchId>,
 }
 
@@ -195,10 +199,19 @@ impl TransactionGraph {
 
     /// Reverts expired transactions and their descendants.
     ///
-    /// Only unselected transactions are considered; selected transactions are assumed to be in
-    /// committed blocks and should not be reverted.
+    /// This is because we don't distinguish between committed and selected transactions. If we
+    /// didn't ignore selected transactions here, we would revert committed ones as well, which
+    /// breaks the state.
     ///
     /// Returns the identifiers of transactions that were removed from the graph.
+    ///
+    /// # Note
+    ///
+    /// Since this _ignores_ selected transactions, and the purpose is to revert expired
+    /// transactions after a block is committed, the caller **must** ensure that selected
+    /// transactions from expired batches (and therefore not committed) are deselected
+    /// _before_ calling this function. i.e. first revert expired batches and deselect their
+    /// transactions, then call this.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
         // We only revert transactions which are _not_ included in batches.
         let mut to_revert = self.inner.expired(chain_tip);
@@ -272,6 +285,10 @@ impl TransactionGraph {
     ///
     /// This weeds out transactions which participate in batch and block failures, and might be the
     /// root cause.
+    ///
+    /// # Returns
+    ///
+    /// Returns the set of reverted transactions.
     pub fn increment_failure_count(
         &mut self,
         txs: impl Iterator<Item = TransactionId>,
