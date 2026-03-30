@@ -169,7 +169,11 @@ async fn run(
 
 /// Proves a single block, saves the proof to the block store, marks the block as proven in the
 /// DB, and advances the proven-in-sequence tip.
-#[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(block.number=block_num.as_u32()), err)]
+#[instrument(target = COMPONENT, name = "prove_block", skip_all,
+    fields(
+        block.number=block_num.as_u32(),
+        proven_chain_tip = tracing::field::Empty
+    ), err)]
 async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
@@ -191,17 +195,8 @@ async fn prove_block(
                     block_store.save_proof(block_num, &proof.to_bytes()).await?;
 
                     // Mark the block as proven and advance the sequence in the database.
-                    let new_tip = db.mark_proven_and_advance_sequence(block_num).await?;
-                    if new_tip == block_num {
-                        info!(target = COMPONENT, block.number = %block_num, "Block proven");
-                    } else {
-                        info!(
-                            target = COMPONENT,
-                            block.number = %block_num,
-                            %new_tip,
-                            "Block proven and in-sequence advanced",
-                        );
-                    }
+                    let tip = db.mark_proven_and_advance_sequence(block_num).await?;
+                    tracing::Span::current().record("proven_chain_tip", tip.as_u32());
 
                     return Ok(());
                 },

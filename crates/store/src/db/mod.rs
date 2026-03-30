@@ -565,7 +565,10 @@ impl Db {
     ///
     /// Atomically clears `proving_inputs` for the given block, then walks forward from the
     /// current proven-in-sequence tip through consecutive proven blocks, marking each as
-    /// proven-in-sequence. Returns the block number of the last marked in-sequence block.
+    /// proven-in-sequence.
+    ///
+    /// Returns the new tip of blocks that are proven in-sequence (which may have been unchanged by
+    /// this function).
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn mark_proven_and_advance_sequence(
         &self,
@@ -829,7 +832,8 @@ impl Db {
 /// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
 ///    sets `proven_in_sequence = TRUE` for each.
 ///
-/// Returns the new tip of blocks that are proven in-sequence.
+/// Returns the new tip of blocks that are proven in-sequence (which may have been unchanged by this
+/// function).
 ///
 /// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
 /// or below the current tip, as that indicates a consistency bug.
@@ -854,16 +858,19 @@ pub(crate) fn mark_proven_and_advance_sequence(
                 "block {candidate} is proven but not marked in-sequence while the tip is at {current_tip}"
             )));
         }
-        if candidate == new_tip + 1 {
+        if candidate == new_tip.child() {
+            // Walk the tip forward.
             new_tip = candidate;
         } else {
+            // Sequence has been broken. Discontinue walking tip forward.
             break;
         }
     }
 
     // Mark the newly contiguous blocks as proven-in-sequence.
     if new_tip > current_tip {
-        models::queries::mark_blocks_as_proven_in_sequence(conn, current_tip + 1, new_tip)?;
+        let block_from = current_tip.child();
+        models::queries::mark_blocks_as_proven_in_sequence(conn, block_from, new_tip)?;
     }
 
     Ok(new_tip)
