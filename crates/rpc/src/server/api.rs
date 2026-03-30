@@ -474,18 +474,20 @@ impl api_server::Api for RpcService {
             .await?
             .into_inner()
             .block_header
-            .expect("store should always send block header");
-        let reference_commitment: Word = reference_header
-            .chain_commitment
-            .expect("store should always fill block header")
-            .try_into()
-            .expect("store Word should be okay");
-        if reference_commitment != proof.reference_block_commitment() {
+            .map(BlockHeader::try_from)
+            .transpose()?
+            .ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "unknown reference block {}",
+                    proof.reference_block_num()
+                ))
+            })?;
+        if reference_header.commitment() != proof.reference_block_commitment() {
             return Err(Status::invalid_argument(format!(
                 "batch reference commitment {} at block {} does not match canonical chain's commitemnt of {}",
                 proof.reference_block_num(),
                 proof.reference_block_commitment(),
-                reference_commitment
+                reference_header.commitment()
             )));
         }
 
