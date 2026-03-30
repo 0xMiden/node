@@ -95,7 +95,7 @@ impl Store {
 
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
-        let (state, proven_tip_sender) =
+        let (state, tx_proven_tip) =
             State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?;
@@ -104,7 +104,7 @@ impl Store {
             &state,
             self.block_prover_url,
             self.max_concurrent_proofs,
-            proven_tip_sender,
+            tx_proven_tip,
         )
         .await;
 
@@ -143,7 +143,7 @@ impl Store {
         state: &State,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
-        proven_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
+        proven_tip_tx: watch::Sender<miden_protocol::block::BlockNumber>,
     ) -> (
         tokio::task::JoinHandle<anyhow::Result<()>>,
         watch::Sender<miden_protocol::block::BlockNumber>,
@@ -155,18 +155,18 @@ impl Store {
         };
 
         let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
-        let (chain_tip_sender, chain_tip_rx) = watch::channel(chain_tip);
+        let (chain_tip_tx, chain_tip_rx) = watch::channel(chain_tip);
 
         let handle = proof_scheduler::spawn(
             state.db().clone(),
             block_prover,
             state.block_store(),
             chain_tip_rx,
-            proven_tip_sender,
+            proven_tip_tx,
             max_concurrent_proofs,
         );
 
-        (handle, chain_tip_sender)
+        (handle, chain_tip_tx)
     }
 
     /// Spawns the gRPC servers and the DB maintenance background task.

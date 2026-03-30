@@ -139,7 +139,7 @@ pub struct State {
     termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
 
     /// The latest proven-in-sequence block number, updated by the proof scheduler.
-    proven_tip: watch::Receiver<BlockNumber>,
+    proven_tip_rx: watch::Receiver<BlockNumber>,
 }
 
 impl State {
@@ -203,7 +203,7 @@ impl State {
             .select_latest_proven_in_sequence_block_num()
             .await
             .map_err(StateInitializationError::DatabaseError)?;
-        let (proven_tip_sender, proven_tip) = watch::channel(proven_tip);
+        let (proven_tip_tx, proven_tip_rx) = watch::channel(proven_tip);
 
         Ok((
             Self {
@@ -213,9 +213,9 @@ impl State {
                 forest,
                 writer,
                 termination_ask,
-                proven_tip,
+                proven_tip_rx,
             },
-            proven_tip_sender,
+            proven_tip_tx,
         ))
     }
 
@@ -876,7 +876,7 @@ impl State {
     pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
         match finality {
             Finality::Committed => self.inner.read().await.latest_block_num(),
-            Finality::Proven => *self.proven_tip.borrow(),
+            Finality::Proven => *self.proven_tip_rx.borrow(),
         }
     }
 
