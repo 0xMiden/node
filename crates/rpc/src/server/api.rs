@@ -505,8 +505,8 @@ impl api_server::Api for RpcService {
         if reference_header.commitment() != expected_proof.reference_block_commitment() {
             return Err(Status::invalid_argument(format!(
                 "batch reference commitment {} at block {} does not match canonical chain's commitment of {}",
-                expected_proof.reference_block_num(),
                 expected_proof.reference_block_commitment(),
+                expected_proof.reference_block_num(),
                 reference_header.commitment()
             )));
         }
