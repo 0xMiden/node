@@ -112,8 +112,8 @@ impl State {
             let block_num = note_sync.block_header.block_num();
             // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_end + 1 to
             // include the proof for block_end.
-            // SAFETY: is ensured that block_end <= chain_tip, and the blockchain MMR always has at
-            // least chain_tip + 1 leaves.
+            // SAFETY: it is ensured that block_end <= chain_tip, and the blockchain MMR always has
+            // at least chain_tip + 1 leaves.
             let mmr_checkpoint = block_end + 1;
             let mmr_proof =
                 self.inner.read().await.blockchain.open_at(block_num, mmr_checkpoint)?;
