@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miden_node_proto::decode::{ConversionResultExt, GrpcStructDecoder};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated as proto;
+use miden_node_proto::{decode, generated as proto};
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -162,14 +162,13 @@ where
 }
 
 pub fn read_account_id<M: miden_node_proto::prost::Message, E>(
-    id: Option<proto::account::AccountId>,
+    account_id: Option<proto::account::AccountId>,
 ) -> Result<AccountId, E>
 where
     E: From<ConversionError>,
 {
-    GrpcStructDecoder::<M>::default()
-        .decode_field("account_id", id)
-        .map_err(|e: ConversionError| e.into())
+    let decoder = GrpcStructDecoder::<M>::default();
+    decode!(decoder, account_id).map_err(|e: ConversionError| e.into())
 }
 
 #[instrument(
