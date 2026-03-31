@@ -2,8 +2,9 @@ use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 
-use crate::errors::{ConversionError, MissingFieldHelper};
-use crate::generated as proto;
+use crate::decode::{ConversionResultExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
+use crate::{decode, generated as proto};
 
 // FROM TRANSACTION ID
 // ================================================================================================
@@ -48,13 +49,8 @@ impl TryFrom<proto::transaction::TransactionId> for TransactionId {
     type Error = ConversionError;
 
     fn try_from(value: proto::transaction::TransactionId) -> Result<Self, Self::Error> {
-        value
-            .id
-            .ok_or(ConversionError::MissingFieldInProtobufRepresentation {
-                entity: "TransactionId",
-                field_name: "id",
-            })?
-            .try_into()
+        let decoder = value.decoder();
+        decode!(decoder, value.id)
     }
 }
 
@@ -74,15 +70,11 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
     type Error = ConversionError;
 
     fn try_from(value: proto::transaction::InputNoteCommitment) -> Result<Self, Self::Error> {
-        let nullifier: Nullifier = value
-            .nullifier
-            .ok_or_else(|| {
-                proto::transaction::InputNoteCommitment::missing_field(stringify!(nullifier))
-            })?
-            .try_into()?;
+        let decoder = value.decoder();
+        let nullifier: Nullifier = decode!(decoder, value.nullifier)?;
 
         let header: Option<miden_protocol::note::NoteHeader> =
-            value.header.map(TryInto::try_into).transpose()?;
+            value.header.map(TryInto::try_into).transpose().context("header")?;
 
         Ok(InputNoteCommitment::from_parts_unchecked(nullifier, header))
     }

@@ -1,5 +1,7 @@
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
@@ -10,6 +12,17 @@ use crate::COMPONENT;
 use crate::db::models::queries::StorageMapValuesPage;
 use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
+
+/// Estimated byte size of a [`NoteSyncBlock`] excluding its notes.
+///
+/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
+const BLOCK_OVERHEAD_BYTES: usize = 1600;
+
+/// Estimated byte size of a single [`NoteSyncRecord`].
+///
+/// Note ID (~38 bytes) + index + metadata (~26 bytes) + sparse merkle path with 16
+/// siblings (~608 bytes).
+const NOTE_RECORD_BYTES: usize = 700;
 
 // STATE SYNCHRONIZATION ENDPOINTS
 // ================================================================================================
@@ -64,29 +77,56 @@ impl State {
 
     /// Loads data to synchronize a client's notes.
     ///
-    /// The client's request contains a list of tags, this method will return the first
-    /// block with a matching tag, or the chain tip. All the other values are filter based on this
-    /// block range.
+    /// Returns as many blocks with matching notes as fit within the response payload limit
+    /// ([`MAX_RESPONSE_PAYLOAD_BYTES`](miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES)).
+    /// Each block includes its header and MMR proof at forest `block_range.end() + 1`.
     ///
-    /// # Arguments
-    ///
-    /// - `note_tags`: The tags the client is interested in, resulting notes are restricted to the
-    ///   first block containing a matching note.
-    /// - `block_range`: The range of blocks from which to synchronize notes.
+    /// Also returns the last block number checked. If this equals `block_range.end()`, the
+    /// sync is complete.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(NoteSyncUpdate, MmrProof, BlockNumber), NoteSyncError> {
-        let inner = self.inner.read().await;
+    ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
+        let block_end = *block_range.end();
+        let note_tags: Arc<[u32]> = note_tags.into();
 
-        let (note_sync, last_included_block) =
-            self.db.get_note_sync(block_range, note_tags).await?;
+        let mut results = Vec::new();
+        let mut accumulated_size: usize = 0;
+        let mut current_from = *block_range.start();
 
-        let mmr_proof = inner.blockchain.open(note_sync.block_header.block_num())?;
+        loop {
+            let range = current_from..=block_end;
+            let Some(note_sync) = self.db.get_note_sync(range, Arc::clone(&note_tags)).await?
+            else {
+                break;
+            };
 
-        Ok((note_sync, mmr_proof, last_included_block))
+            accumulated_size += BLOCK_OVERHEAD_BYTES + note_sync.notes.len() * NOTE_RECORD_BYTES;
+
+            if !results.is_empty() && accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
+                break;
+            }
+
+            let block_num = note_sync.block_header.block_num();
+            // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_end + 1 to
+            // include the proof for block_end.
+            // SAFETY: it is ensured that block_end <= chain_tip, and the blockchain MMR always has
+            // at least chain_tip + 1 leaves.
+            let mmr_checkpoint = block_end + 1;
+            let mmr_proof =
+                self.inner.read().await.blockchain.open_at(block_num, mmr_checkpoint)?;
+            results.push((note_sync, mmr_proof));
+
+            current_from = block_num + 1;
+        }
+
+        // if results is empty, return `block_end` since the sync is complete.
+        let last_block_checked =
+            results.last().map_or(block_end, |(update, _)| update.block_header.block_num());
+
+        Ok((results, last_block_checked))
     }
 
     pub async fn sync_nullifiers(

@@ -17,8 +17,8 @@
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
+- Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746), [#1865](https://github.com/0xMiden/node/pull/1865)).
 - Added finality field for `SyncChainMmr` requests ([#1725](https://github.com/0xMiden/miden-node/pull/1725)).
-- Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
 - Added limit to execution cycles for a transaction network, configurable through CLI args (`--ntx-builder.max-tx-cycles`) ([#1801](https://github.com/0xMiden/node/issues/1801)).
 - Added monitor version and network name to the network monitor dashboard, network name is configurable via `--network-name` / `MIDEN_MONITOR_NETWORK_NAME` ([#1838](https://github.com/0xMiden/node/pull/1838)).
 - Users can now submit atomic transaction batches via `SubmitBatch` gRPC endpoint ([#1846](https://github.com/0xMiden/node/pull/1846)).
@@ -34,7 +34,7 @@
 - Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/node/pull/1651)).
 - Added support for generic account loading at genesis ([#1624](https://github.com/0xMiden/node/pull/1624)).
 - Improved tracing span fields ([#1650](https://github.com/0xMiden/node/pull/1650))
- - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/node/pull/1662)).
+- Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/node/pull/1662)).
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/node/pull/1688)).
 - [BREAKING] Renamed `NoteRoot` protobuf message used in `GetNoteScriptByRoot` gRPC endpoints into `NoteScriptRoot` ([#1722](https://github.com/0xMiden/node/pull/1722)).
 - NTX Builder actors now deactivate after being idle for a configurable idle timeout (`--ntx-builder.idle-timeout`, default 5 min) and are re-activated when new notes target their account ([#1705](https://github.com/0xMiden/node/pull/1705)).
@@ -44,6 +44,7 @@
 - NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-account-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
 - Removed gRPC reflection v1-alpha support ([#1795](https://github.com/0xMiden/node/pull/1795)).
 - [BREAKING] Rust requirement bumped from `v1.91` to `v1.93` ([#1803](https://github.com/0xMiden/node/pull/1803)).
+- [BREAKING] Updated `SyncNotes` endpoint to returned multiple note updates (([#1843](https://github.com/0xMiden/node/pull/1843))).
 - [BREAKING] Refactored `NoteSyncRecord` to returned a fixed-size `NoteMetadataHeader` ([#1837](https://github.com/0xMiden/node/pull/1837)).
 
 ### Fixes
