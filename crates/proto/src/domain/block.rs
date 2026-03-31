@@ -382,8 +382,14 @@ impl TryFrom<proto::rpc::sync_chain_mmr_request::UpperBound> for SyncTarget {
 
         match value {
             UpperBound::BlockNum(block_num) => Ok(Self::BlockNumber(block_num.into())),
-            UpperBound::CommittedChainTip(_) => Ok(Self::CommittedChainTip),
-            UpperBound::ProvenChainTip(_) => Ok(Self::ProvenChainTip),
+            UpperBound::ChainTip(tip) => match proto::rpc::ChainTip::try_from(tip) {
+                Ok(proto::rpc::ChainTip::Committed) => Ok(Self::CommittedChainTip),
+                Ok(proto::rpc::ChainTip::Proven) => Ok(Self::ProvenChainTip),
+                Ok(proto::rpc::ChainTip::Unspecified) | Err(_) => {
+                    // TODO(currentpr): conversion error
+                    Err(ConversionError::NotAValidFelt)
+                },
+            },
         }
     }
 }

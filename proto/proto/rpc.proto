@@ -492,6 +492,15 @@ message SyncNotesResponse {
 // SYNC CHAIN MMR
 // ================================================================================================
 
+// The chain tip variant to sync up to.
+enum ChainTip {
+    CHAIN_TIP_UNSPECIFIED = 0;
+    // Sync up to the latest committed block (chain tip).
+    CHAIN_TIP_COMMITTED = 1;
+    // Sync up to the latest proven block.
+    CHAIN_TIP_PROVEN = 2;
+}
+
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
     // Block number from which to synchronize (inclusive). Set this to the last block
@@ -501,12 +510,12 @@ message SyncChainMmrRequest {
     // Upper bound for the block range. Determines how far ahead to sync.
     oneof upper_bound {
         // Sync up to this specific block number (inclusive), clamped to the committed chain tip.
-        fixed32 block_num = 3;
-        // Sync up to the latest committed block (chain tip).
-        bool committed_chain_tip = 4;
-        // Sync up to the latest proven block.
-        bool proven_chain_tip = 5;
+        fixed32 block_num = 2;
+        // Sync up to a chain tip variant (committed or proven).
+        ChainTip chain_tip = 3;
     }
+
+    reserved 4;
 }
 
 // Represents the result of syncing chain MMR.
