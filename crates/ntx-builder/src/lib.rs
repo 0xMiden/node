@@ -71,7 +71,7 @@ const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 ///
 /// This limits the computational cost of network transactions. The protocol maximum is
 /// `1 << 29` but network transactions should be much cheaper.
-const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 16;
+const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 
 // CONFIGURATION
 // =================================================================================================
@@ -128,7 +128,7 @@ pub struct NtxBuilderConfig {
     /// Maximum number of VM execution cycles allowed for a single network transaction.
     ///
     /// Network transactions that exceed this limit will fail with an execution error.
-    /// Defaults to 64k cycles.
+    /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
     /// Path to the SQLite database file used for persistent state.

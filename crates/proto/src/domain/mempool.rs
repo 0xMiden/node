@@ -10,7 +10,7 @@ use miden_standards::note::AccountTargetNetworkNote;
 use crate::errors::{ConversionError, MissingFieldHelper};
 use crate::generated as proto;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MempoolEvent {
     TransactionAdded {
         id: TransactionId,
