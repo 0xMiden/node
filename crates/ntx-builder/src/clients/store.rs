@@ -265,7 +265,7 @@ impl StoreClient {
         if current_height >= chain_tip {
             Ok(None)
         } else {
-            Ok(Some(BlockNumber::from(current_height)))
+            Ok(Some(BlockNumber::from(current_height + 1)))
         }
     }
 
