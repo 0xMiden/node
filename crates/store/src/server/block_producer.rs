@@ -1,11 +1,12 @@
 use std::convert::Infallible;
 
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::decode::GrpcDecodeExt;
 use miden_node_proto::domain::proof_request::BlockProofRequest;
-use miden_node_proto::errors::MissingFieldHelper;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::try_convert;
+use miden_node_proto::{decode, try_convert};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -57,22 +58,12 @@ impl block_producer_server::BlockProducer for StoreApi {
         // Read block.
         let block = request
             .block
-            .ok_or(proto::store::ApplyBlockRequest::missing_field(stringify!(block)))?;
-        // Read block header.
-        let header: BlockHeader = block
-            .header
-            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(header)))?
-            .try_into()?;
-        // Read block body.
-        let body: BlockBody = block
-            .body
-            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(body)))?
-            .try_into()?;
-        // Read signature.
-        let signature: Signature = block
-            .signature
-            .ok_or(proto::blockchain::SignedBlock::missing_field(stringify!(signature)))?
-            .try_into()?;
+            .ok_or(ConversionError::missing_field::<proto::store::ApplyBlockRequest>("block"))?;
+        // Decode block fields.
+        let decoder = block.decoder();
+        let header: BlockHeader = decode!(decoder, block.header)?;
+        let body: BlockBody = decode!(decoder, block.body)?;
+        let signature: Signature = decode!(decoder, block.signature)?;
 
         // Get block inputs from ordered batches.
         let block_inputs =
@@ -202,7 +193,8 @@ impl block_producer_server::BlockProducer for StoreApi {
     ) -> Result<Response<proto::store::TransactionInputs>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<Status>(request.account_id)?;
+        let account_id =
+            read_account_id::<proto::store::TransactionInputsRequest, Status>(request.account_id)?;
         let nullifiers = validate_nullifiers(&request.nullifiers)
             .map_err(|err| conversion_error_to_status(&err))?;
         let unauthenticated_note_commitments =

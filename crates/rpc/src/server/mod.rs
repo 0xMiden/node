@@ -87,19 +87,20 @@ impl Rpc {
                 .make_span_with(grpc_trace_fn),
             )
             .layer(HealthCheckLayer)
+            .layer(cors_for_grpc_web_layer())
+            // Note: must wrap the accept/rate-limit layers so grpc-web callers receive
+            // grpc-web-compatible error responses instead of opaque transport failures.
+            .layer(GrpcWebLayer::new())
             .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
             .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
-            // Note: must come before the accept layer, as otherwise accept rejections
+            // Note: must come after the CORS layer, as otherwise accept rejections
             // do _not_ get CORS headers applied, masking the accept error in
             // web-clients (which would experience CORS rejection).
-            .layer(cors_for_grpc_web_layer())
             .layer(
                 AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
                     .with_genesis_enforced_method("SubmitProvenTransaction")
                     .with_genesis_enforced_method("SubmitProvenBatch"),
             )
-            // Enables gRPC-web support.
-            .layer(GrpcWebLayer::new())
             .add_service(api_service)
             // Enables gRPC reflection service.
             .add_service(reflection_service)

@@ -132,23 +132,31 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+        if *block_range.end() > chain_tip {
+            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
+        }
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (state, mmr_proof, last_block_included) =
+        let (results, last_block_checked) =
             self.state.sync_notes(request.note_tags, block_range).await?;
 
-        let notes = state.notes.into_iter().map(Into::into).collect();
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(Into::into).collect(),
+            })
+            .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+                block_num: last_block_checked.as_u32(),
             }),
-            block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path().clone().into()),
-            notes,
+            blocks,
         }))
     }
 
@@ -265,7 +273,10 @@ impl rpc_server::Rpc for StoreApi {
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
 
-        let account_id: AccountId = read_account_id::<SyncAccountVaultError>(request.account_id)?;
+        let account_id: AccountId = read_account_id::<
+            proto::rpc::SyncAccountVaultRequest,
+            SyncAccountVaultError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             return Err(SyncAccountVaultError::AccountNotPublic(account_id).into());
@@ -313,7 +324,10 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<SyncAccountStorageMapsError>(request.account_id)?;
+        let account_id = read_account_id::<
+            proto::rpc::SyncAccountStorageMapsRequest,
+            SyncAccountStorageMapsError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;

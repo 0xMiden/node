@@ -39,6 +39,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
+use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
@@ -836,14 +837,12 @@ fn notes() {
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
             .unwrap();
-
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
-    let (res, last_included_block) = queries::select_notes_since_block_by_tag_and_sender(
+    let res = queries::select_notes_since_block_by_tag_and_sender(
         conn,
         &[],
         &[1, 2, 3],
@@ -851,7 +850,6 @@ fn notes() {
     )
     .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
@@ -882,27 +880,22 @@ fn notes() {
     queries::insert_notes(conn, &[(note.clone(), None)]).unwrap();
 
     // test empty tags
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
             .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
-    let block_range_1 = 1.into()..=1.into();
-
+    let block_range_1 = 2.into()..=2.into();
     // test no updates
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
+        .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
     // test match
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range.clone())
             .unwrap();
     assert_eq!(res, vec![note.clone().into()]);
-    assert_eq!(last_included_block, 1.into());
 
     let block_num_2 = note.block_num + 1;
     create_block(conn, block_num_2);
@@ -923,20 +916,16 @@ fn notes() {
     let block_range = 0.into()..=2.into();
 
     // only first note is returned
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
+        .unwrap();
     assert_eq!(res, vec![note.clone().into()]);
-    assert_eq!(last_included_block, 1.into());
 
-    let block_range = 1.into()..=2.into();
+    let block_range = 2.into()..=2.into();
 
     // only the second note is returned
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
+        .unwrap();
     assert_eq!(res, vec![note2.clone().into()]);
-    assert_eq!(last_included_block, 2.into());
 
     // test query notes by id
     let notes = vec![note.clone(), note2];
@@ -951,6 +940,123 @@ fn notes() {
     let note_1 = res[1].clone();
     assert_eq!(note_0.details, note.details);
     assert_eq!(note_1.details, None);
+}
+
+/// Creates notes across 3 blocks with different tags, then iterates
+/// `select_notes_since_block_by_tag_and_sender` advancing the cursor each time,
+/// verifying that each call returns the next block's notes.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_across_multiple_blocks() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+
+    // Create 3 blocks with notes.
+    let tag = 42u32;
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+
+    for block_num_raw in 1..=3u32 {
+        let block_num = BlockNumber::from(block_num_raw);
+        create_block(conn, block_num);
+        queries::upsert_accounts(
+            conn,
+            &[mock_block_account_update(sender, block_num_raw.into())],
+            block_num,
+        )
+        .unwrap();
+
+        let new_note = create_note(sender);
+        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
+        let values = [(note_index, new_note.id(), &note_metadata)];
+        let notes_db = BlockNoteTree::with_entries(values).unwrap();
+        let inclusion_path = notes_db.open(note_index);
+
+        let note = NoteRecord {
+            block_num,
+            note_index,
+            note_id: new_note.id().as_word(),
+            note_commitment: new_note.commitment(),
+            metadata: note_metadata,
+            details: Some(NoteDetails::from(&new_note)),
+            inclusion_path,
+        };
+        queries::insert_scripts(conn, [&note]).unwrap();
+        queries::insert_notes(conn, &[(note, None)]).unwrap();
+    }
+
+    // Build an MMR with enough leaves to cover all blocks (0..=3).
+    let mut mmr = Mmr::default();
+    for _ in 0..=3u32 {
+        mmr.add(Word::default());
+    }
+    // Use block_end + 1 as the MMR forest, same as State::sync_notes.
+    let mmr_forest = Forest::new(4);
+
+    // Iterate get_note_sync with advancing cursor, same as State::sync_notes.
+    let mut collected_block_nums = Vec::new();
+    let mut current_from = BlockNumber::GENESIS;
+    let block_end = BlockNumber::from(3);
+
+    loop {
+        let range = current_from..=block_end;
+        let Some(update) = queries::get_note_sync(conn, &[tag], range).unwrap() else {
+            break;
+        };
+
+        let block_num = update.block_header.block_num();
+        assert!(
+            mmr.open_at(block_num.as_usize(), mmr_forest).is_ok(),
+            "should be able to open MMR proof for block {block_num}"
+        );
+        collected_block_nums.push(block_num);
+        current_from = block_num + 1;
+    }
+
+    assert_eq!(
+        collected_block_nums,
+        vec![BlockNumber::from(1), BlockNumber::from(2), BlockNumber::from(3)],
+        "should iterate through all 3 blocks with matching notes"
+    );
+}
+
+/// Tests that note sync returns an empty result when no notes match the requested tags.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_no_matching_tags() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let block_num = BlockNumber::from(1);
+    create_block(conn, block_num);
+    queries::upsert_accounts(conn, &[mock_block_account_update(sender, 0)], block_num).unwrap();
+
+    // Insert a note with tag 10.
+    let new_note = create_note(sender);
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into());
+    let values = [(note_index, new_note.id(), &note_metadata)];
+    let notes_db = BlockNoteTree::with_entries(values).unwrap();
+    let inclusion_path = notes_db.open(note_index);
+
+    let note = NoteRecord {
+        block_num,
+        note_index,
+        note_id: new_note.id().as_word(),
+        note_commitment: new_note.commitment(),
+        metadata: note_metadata,
+        details: Some(NoteDetails::from(&new_note)),
+        inclusion_path,
+    };
+    queries::insert_scripts(conn, [&note]).unwrap();
+    queries::insert_notes(conn, &[(note, None)]).unwrap();
+
+    // Query with a different tag — should return None.
+    let range = BlockNumber::GENESIS..=BlockNumber::from(1);
+    let result = queries::get_note_sync(conn, &[999], range).unwrap();
+    assert!(result.is_none());
 }
 
 fn insert_account_delta(
