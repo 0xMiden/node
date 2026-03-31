@@ -133,23 +133,31 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+        if *block_range.end() > chain_tip {
+            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
+        }
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (state, mmr_proof, last_block_included) =
+        let (results, last_block_checked) =
             self.state.sync_notes(request.note_tags, block_range).await?;
 
-        let notes = state.notes.into_iter().map(Into::into).collect();
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(Into::into).collect(),
+            })
+            .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+                block_num: last_block_checked.as_u32(),
             }),
-            block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path().clone().into()),
-            notes,
+            blocks,
         }))
     }
 
