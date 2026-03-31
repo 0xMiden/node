@@ -492,7 +492,7 @@ message SyncNotesResponse {
     //
     // `chain_tip` is the current chain tip.
     // `block_num` is the last block checked. If it equals the requested `block_to` (or the chain
-    // tip when unset), the sync is complete. Otherwise the response was truncated and the client
+    // tip when unset), the sync is complete. Otherwise the response was paginated and the client
     // should resume from `block_num + 1`.
     PaginationInfo pagination_info = 1;
 
