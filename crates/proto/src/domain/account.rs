@@ -25,8 +25,8 @@ use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
 use thiserror::Error;
 
 use super::try_convert;
-use crate::decode::{ConversionResultExt, GrpcDecodeExt};
 use crate::decode;
+use crate::decode::{ConversionResultExt, GrpcDecodeExt};
 use crate::errors::ConversionError;
 use crate::generated::{self as proto};
 
