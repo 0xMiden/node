@@ -17,7 +17,8 @@ use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 
-use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::decode::{ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
 use crate::{AccountWitnessRecord, NullifierWitnessRecord, decode, generated as proto};
 
 // BLOCK NUMBER

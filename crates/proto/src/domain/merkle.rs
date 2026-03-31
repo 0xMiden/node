@@ -3,8 +3,9 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
 use miden_protocol::crypto::merkle::smt::{LeafIndex, SmtLeaf, SmtProof};
 use miden_protocol::crypto::merkle::{MerklePath, SparseMerklePath};
 
+use crate::decode::{ConversionResultExt, GrpcDecodeExt};
 use crate::domain::{convert, try_convert};
-use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
 use crate::{decode, generated as proto};
 
 // MERKLE PATH

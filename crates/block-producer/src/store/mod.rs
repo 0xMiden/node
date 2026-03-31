@@ -4,8 +4,9 @@ use std::num::NonZeroU32;
 
 use itertools::Itertools;
 use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
+use miden_node_proto::decode::{ConversionResultExt, GrpcDecodeExt};
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{AccountState, decode, generated as proto};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;

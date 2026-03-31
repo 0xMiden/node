@@ -2,7 +2,8 @@ use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 
-use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
+use crate::decode::{ConversionResultExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
 use crate::{decode, generated as proto};
 
 // FROM TRANSACTION ID

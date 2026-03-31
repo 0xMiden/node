@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use miden_node_proto::errors::{ConversionError, ConversionResultExt, GrpcStructDecoder};
+use miden_node_proto::decode::{ConversionResultExt, GrpcStructDecoder};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;

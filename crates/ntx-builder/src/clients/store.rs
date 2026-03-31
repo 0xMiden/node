@@ -3,8 +3,9 @@ use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
+use miden_node_proto::decode::ConversionResultExt;
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
-use miden_node_proto::errors::{ConversionError, ConversionResultExt};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;

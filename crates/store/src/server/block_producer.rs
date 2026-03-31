@@ -1,8 +1,9 @@
 use std::convert::Infallible;
 
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::decode::GrpcDecodeExt;
 use miden_node_proto::domain::proof_request::BlockProofRequest;
-use miden_node_proto::errors::{ConversionError, GrpcDecodeExt};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::{decode, try_convert};

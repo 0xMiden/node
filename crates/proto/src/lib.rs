@@ -1,4 +1,5 @@
 pub mod clients;
+pub mod decode;
 pub mod domain;
 pub mod errors;
 

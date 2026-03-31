@@ -19,7 +19,8 @@ use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::decode::{ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
 use crate::{decode, generated as proto};
 
 // NOTE TYPE

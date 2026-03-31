@@ -5,7 +5,8 @@ use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::serde::Serializable;
 
-use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::decode::{ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
 use crate::generated as proto;
 
 /// Data required for a transaction batch.

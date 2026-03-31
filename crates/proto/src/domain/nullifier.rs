@@ -2,7 +2,8 @@ use miden_protocol::Word;
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::Nullifier;
 
-use crate::errors::{ConversionError, GrpcDecodeExt};
+use crate::decode::GrpcDecodeExt;
+use crate::errors::ConversionError;
 use crate::{decode, generated as proto};
 
 // FROM NULLIFIER
