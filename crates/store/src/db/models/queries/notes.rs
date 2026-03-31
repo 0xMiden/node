@@ -127,7 +127,7 @@ impl From<NetworkNoteType> for i32 {
 ///             notes
 ///         WHERE
 ///             (tag IN (?1) OR sender IN (?2)) AND
-///             block_num > ?3 AND
+///             block_num >= ?3 AND
 ///             block_num <= ?4
 ///         ORDER BY
 ///             block_num ASC
