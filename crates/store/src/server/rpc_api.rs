@@ -248,7 +248,7 @@ impl rpc_server::Rpc for StoreApi {
         let block = self.state.load_block(block_num).await.map_err(GetBlockByNumberError::from)?;
 
         // Load proof from state.
-        let proof = if request.include_proof.unwrap_or(false) {
+        let proof = if request.include_proof.unwrap_or_default() {
             self.state.load_proof(block_num).await.map_err(GetBlockByNumberError::from)?
         } else {
             None
