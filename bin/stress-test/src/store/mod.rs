@@ -149,7 +149,7 @@ pub async fn bench_sync_nullifiers(
         let pagination = response.pagination_info.expect("pagination_info should exist");
         let last_block_checked = pagination.block_num;
 
-        if response.blocks.is_empty() {
+        if response.blocks.is_empty() || last_block_checked >= pagination.chain_tip {
             break;
         }
 
@@ -400,8 +400,8 @@ async fn sync_transactions_paginated(
             break;
         }
 
-        // Request the remaining range up to the reported chain tip
-        next_block_from = reached_block;
+        // Resume from the next block after the last one fully included.
+        next_block_from = reached_block + 1;
         target_block_to = chain_tip;
     }
 
