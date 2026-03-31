@@ -18,7 +18,7 @@ use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 
 use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
-use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
+use crate::{AccountWitnessRecord, NullifierWitnessRecord, decode, generated as proto};
 
 // BLOCK NUMBER
 // ================================================================================================
@@ -76,17 +76,15 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
 
     fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let prev_block_commitment =
-            decoder.decode_field("prev_block_commitment", value.prev_block_commitment)?;
-        let chain_commitment = decoder.decode_field("chain_commitment", value.chain_commitment)?;
-        let account_root = decoder.decode_field("account_root", value.account_root)?;
-        let nullifier_root = decoder.decode_field("nullifier_root", value.nullifier_root)?;
-        let note_root = decoder.decode_field("note_root", value.note_root)?;
-        let tx_commitment = decoder.decode_field("tx_commitment", value.tx_commitment)?;
-        let tx_kernel_commitment =
-            decoder.decode_field("tx_kernel_commitment", value.tx_kernel_commitment)?;
-        let validator_key = decoder.decode_field("validator_key", value.validator_key)?;
-        let fee_parameters = decoder.decode_field("fee_parameters", value.fee_parameters)?;
+        let prev_block_commitment = decode!(decoder, value.prev_block_commitment)?;
+        let chain_commitment = decode!(decoder, value.chain_commitment)?;
+        let account_root = decode!(decoder, value.account_root)?;
+        let nullifier_root = decode!(decoder, value.nullifier_root)?;
+        let note_root = decode!(decoder, value.note_root)?;
+        let tx_commitment = decode!(decoder, value.tx_commitment)?;
+        let tx_kernel_commitment = decode!(decoder, value.tx_kernel_commitment)?;
+        let validator_key = decode!(decoder, value.validator_key)?;
+        let fee_parameters = decode!(decoder, value.fee_parameters)?;
 
         Ok(BlockHeader::new(
             value.version,
@@ -166,9 +164,9 @@ impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
     type Error = ConversionError;
     fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let header = decoder.decode_field("header", value.header)?;
-        let body = decoder.decode_field("body", value.body)?;
-        let signature = decoder.decode_field("signature", value.signature)?;
+        let header = decode!(decoder, value.header)?;
+        let body = decode!(decoder, value.body)?;
+        let signature = decode!(decoder, value.signature)?;
 
         Ok(SignedBlock::new_unchecked(header, body, signature))
     }
@@ -214,8 +212,7 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
 
     fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
         let decoder = response.decoder();
-        let latest_block_header: BlockHeader =
-            decoder.decode_field("latest_block_header", response.latest_block_header)?;
+        let latest_block_header: BlockHeader = decode!(decoder, response.latest_block_header)?;
 
         let account_witnesses = response
             .account_witnesses

@@ -8,7 +8,7 @@ use miden_protocol::utils::serde::Serializable;
 use miden_standards::note::AccountTargetNetworkNote;
 
 use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
-use crate::generated as proto;
+use crate::{decode, generated as proto};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MempoolEvent {
@@ -89,7 +89,7 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
         match event {
             proto::block_producer::mempool_event::Event::TransactionAdded(tx) => {
                 let decoder = tx.decoder();
-                let id = decoder.decode_field("id", tx.id)?;
+                let id = decode!(decoder, tx.id)?;
                 let nullifiers = tx
                     .nullifiers
                     .into_iter()
@@ -117,7 +117,7 @@ impl TryFrom<proto::block_producer::MempoolEvent> for MempoolEvent {
             },
             proto::block_producer::mempool_event::Event::BlockCommitted(block_committed) => {
                 let decoder = block_committed.decoder();
-                let header = decoder.decode_field("block_header", block_committed.block_header)?;
+                let header = decode!(decoder, block_committed.block_header)?;
                 let header = Box::new(header);
                 let txs = block_committed
                     .transactions

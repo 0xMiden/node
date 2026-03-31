@@ -5,7 +5,7 @@ use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::errors::{ConversionError, GrpcDecodeExt};
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::try_convert;
+use miden_node_proto::{decode, try_convert};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -60,9 +60,9 @@ impl block_producer_server::BlockProducer for StoreApi {
             .ok_or(ConversionError::missing_field::<proto::store::ApplyBlockRequest>("block"))?;
         // Decode block fields.
         let decoder = block.decoder();
-        let header: BlockHeader = decoder.decode_field("header", block.header)?;
-        let body: BlockBody = decoder.decode_field("body", block.body)?;
-        let signature: Signature = decoder.decode_field("signature", block.signature)?;
+        let header: BlockHeader = decode!(decoder, block.header)?;
+        let body: BlockBody = decode!(decoder, block.body)?;
+        let signature: Signature = decode!(decoder, block.signature)?;
 
         // Get block inputs from ordered batches.
         let block_inputs =

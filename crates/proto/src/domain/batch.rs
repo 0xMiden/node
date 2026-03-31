@@ -32,8 +32,10 @@ impl TryFrom<proto::store::BatchInputs> for BatchInputs {
     fn try_from(response: proto::store::BatchInputs) -> Result<Self, ConversionError> {
         let decoder = response.decoder();
         let result = Self {
-            batch_reference_block_header: decoder
-                .decode_field("block_header", response.batch_reference_block_header)?,
+            batch_reference_block_header: crate::decode!(
+                decoder,
+                response.batch_reference_block_header
+            )?,
             note_proofs: response
                 .note_proofs
                 .iter()

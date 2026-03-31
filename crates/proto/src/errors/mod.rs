@@ -188,8 +188,8 @@ impl<T, E: Into<ConversionError>> ConversionResultExt<T> for Result<T, E> {
 ///
 /// // After:
 /// let decoder = block.decoder();
-/// let body = decoder.decode_field("body", block.body)?;
-/// let header = decoder.decode_field("header", block.header)?;
+/// let body = decode!(decoder, block.body);
+/// let header = decode!(decoder, block.header);
 /// ```
 pub struct GrpcStructDecoder<M>(PhantomData<M>);
 
@@ -232,6 +232,29 @@ pub trait GrpcDecodeExt: prost::Message + Sized {
 }
 
 impl<T: prost::Message> GrpcDecodeExt for T {}
+
+/// Decodes a required optional field from a protobuf message using the message's decoder.
+///
+/// Shorthand for `decoder.decode_field("field", value.field)`.
+///
+/// # Usage
+///
+/// ```ignore
+/// let decoder = value.decoder();
+/// // With a field access:
+/// let sender = decode!(decoder, value.sender)?;
+/// // With a bare identifier (after destructuring):
+/// let sender = decode!(decoder, sender)?;
+/// ```
+#[macro_export]
+macro_rules! decode {
+    ($decoder:ident, $msg:ident . $field:ident) => {
+        $decoder.decode_field(stringify!($field), $msg.$field)
+    };
+    ($decoder:ident, $field:ident) => {
+        $decoder.decode_field(stringify!($field), $field)
+    };
+}
 
 // BYTE DESERIALIZATION EXTENSION TRAIT
 // ================================================================================================
@@ -346,7 +369,7 @@ mod tests {
 
         let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
         let field: Option<Digest> = None;
-        let result: Result<[Felt; 4], _> = decoder.decode_field("account_root", field);
+        let result: Result<[Felt; 4], _> = decode!(decoder, field);
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("account_root") && err.to_string().contains("missing"),
@@ -362,8 +385,8 @@ mod tests {
 
         let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
         // Create a digest with an out-of-range value.
-        let bad_digest = Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 };
-        let result: Result<[Felt; 4], _> = decoder.decode_field("account_root", Some(bad_digest));
+        let bad_digest = Some(Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 });
+        let result: Result<[Felt; 4], _> = decode!(decoder, bad_digest);
         let err = result.unwrap_err();
         assert!(
             err.to_string().starts_with("account_root: "),

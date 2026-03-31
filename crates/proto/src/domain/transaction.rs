@@ -3,7 +3,7 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
 
 use crate::errors::{ConversionError, ConversionResultExt, GrpcDecodeExt};
-use crate::generated as proto;
+use crate::{decode, generated as proto};
 
 // FROM TRANSACTION ID
 // ================================================================================================
@@ -49,7 +49,7 @@ impl TryFrom<proto::transaction::TransactionId> for TransactionId {
 
     fn try_from(value: proto::transaction::TransactionId) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        decoder.decode_field("id", value.id)
+        decode!(decoder, value.id)
     }
 }
 
@@ -70,7 +70,7 @@ impl TryFrom<proto::transaction::InputNoteCommitment> for InputNoteCommitment {
 
     fn try_from(value: proto::transaction::InputNoteCommitment) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let nullifier: Nullifier = decoder.decode_field("nullifier", value.nullifier)?;
+        let nullifier: Nullifier = decode!(decoder, value.nullifier)?;
 
         let header: Option<miden_protocol::note::NoteHeader> =
             value.header.map(TryInto::try_into).transpose().context("header")?;

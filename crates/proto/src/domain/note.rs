@@ -20,7 +20,7 @@ use miden_protocol::{MastForest, MastNodeId, Word};
 use miden_standards::note::AccountTargetNetworkNote;
 
 use crate::errors::{ConversionError, ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
-use crate::generated as proto;
+use crate::{decode, generated as proto};
 
 // NOTE TYPE
 // ================================================================================================
@@ -99,7 +99,7 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
 
     fn try_from(value: proto::note::NoteMetadata) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let sender = decoder.decode_field("sender", value.sender)?;
+        let sender = decode!(decoder, value.sender)?;
         let note_type = proto::note::NoteType::try_from(value.note_type)
             .map_err(|_| ConversionError::message("enum variant discriminant out of range"))?
             .try_into()
@@ -152,7 +152,7 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
         let decoder = value.decoder();
         let details = NoteDetails::decode_bytes(&value.details, "NoteDetails")?;
         let (assets, recipient) = details.into_parts();
-        let metadata: NoteMetadata = decoder.decode_field("metadata", value.metadata)?;
+        let metadata: NoteMetadata = decode!(decoder, value.metadata)?;
         let note = Note::new(assets, metadata, recipient);
         AccountTargetNetworkNote::new(note).map_err(ConversionError::from)
     }
@@ -250,7 +250,7 @@ impl TryFrom<proto::note::Note> for Note {
 
     fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
         let decoder = proto_note.decoder();
-        let metadata: NoteMetadata = decoder.decode_field("metadata", proto_note.metadata)?;
+        let metadata: NoteMetadata = decode!(decoder, proto_note.metadata)?;
 
         let details = proto_note
             .details
@@ -280,8 +280,8 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
 
     fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let note_id_word: Word = decoder.decode_field("note_id", value.note_id)?;
-        let metadata: NoteMetadata = decoder.decode_field("metadata", value.metadata)?;
+        let note_id_word: Word = decode!(decoder, value.note_id)?;
+        let metadata: NoteMetadata = decode!(decoder, value.metadata)?;
 
         Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
     }
