@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.1 (2025-04-02)
+
+- Fixed batch building issue with unauthenticated notes consumed in the same batch as they were created ([#1875](https://github.com/0xMiden/node/issues/1875)).
+
 ## v0.14.0 (2025-04-01)
 
 ### Enhancements
