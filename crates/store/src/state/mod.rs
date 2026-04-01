@@ -40,7 +40,7 @@ use miden_protocol::note::{NoteDetails, NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::{OutputNote, PartialBlockchain};
 use miden_protocol::utils::Serializable;
 use tokio::sync::{Mutex, RwLock, oneshot};
-use tracing::{Instrument, info, instrument};
+use tracing::{Instrument, info, info_span, instrument};
 
 use crate::accounts::{AccountTreeWithHistory, HistoricalError};
 use crate::blocks::BlockStore;
@@ -277,7 +277,10 @@ impl State {
         );
 
         // Wait for the message from the DB update task, that we ready to commit the DB transaction
-        acquired_allowed.await.map_err(ApplyBlockError::ClosedChannel)?;
+        acquired_allowed
+            .instrument(info_span!(target: COMPONENT, "await_db_readiness"))
+            .await
+            .map_err(ApplyBlockError::ClosedChannel)?;
 
         // Awaiting the block saving task to complete without errors
         block_save_task.await??;
@@ -287,7 +290,11 @@ impl State {
             // We need to hold the write lock here to prevent inconsistency between the in-memory
             // state and the DB state. Thus, we need to wait for the DB update task to complete
             // successfully.
-            let mut inner = self.inner.write().await;
+            let mut inner = self
+                .inner
+                .write()
+                .instrument(info_span!(target: COMPONENT, "acquire_inner_write_lock"))
+                .await;
 
             // We need to check that neither the nullifier tree nor the account tree have changed
             // while we were waiting for the DB preparation task to complete. If either of them
@@ -329,7 +336,12 @@ impl State {
         .in_current_span()
         .await?;
 
-        self.forest.write().await.apply_block_updates(block_num, account_deltas)?;
+        let mut forest = self
+            .forest
+            .write()
+            .instrument(info_span!(target: COMPONENT, "acquire_forest_write_lock"))
+            .await;
+        forest.apply_block_updates(block_num, account_deltas)?;
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 
