@@ -21,6 +21,7 @@
 - Added finality field for `SyncChainMmr` requests ([#1725](https://github.com/0xMiden/miden-node/pull/1725)).
 - Added limit to execution cycles for a transaction network, configurable through CLI args (`--ntx-builder.max-tx-cycles`) ([#1801](https://github.com/0xMiden/node/issues/1801)).
 - Added monitor version and network name to the network monitor dashboard, network name is configurable via `--network-name` / `MIDEN_MONITOR_NETWORK_NAME` ([#1838](https://github.com/0xMiden/node/pull/1838)).
+- Users can now submit atomic transaction batches via `SubmitBatch` gRPC endpoint ([#1846](https://github.com/0xMiden/node/pull/1846)).
 
 ### Changes
 

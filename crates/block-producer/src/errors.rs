@@ -35,12 +35,12 @@ pub enum BlockProducerError {
     },
 }
 
-// Transaction adding errors
+// Add transaction and add user batch errors
 // =================================================================================================
 
 #[derive(Debug, Error, GrpcError)]
-pub enum AddTransactionError {
-    #[error("failed to retrieve transaction inputs from the store")]
+pub enum MempoolSubmissionError {
+    #[error("failed to retrieve inputs from the store")]
     #[grpc(internal)]
     StoreConnectionFailed(#[source] StoreError),
 
@@ -56,8 +56,8 @@ pub enum AddTransactionError {
         stale_limit: BlockNumber,
     },
 
-    #[error("transaction deserialization failed")]
-    TransactionDeserializationFailed(#[source] DeserializationError),
+    #[error("request deserialization failed")]
+    DeserializationFailed(#[source] DeserializationError),
 
     #[error(
         "transaction expired at block height {expired_at} but the block height limit was {limit}"
@@ -74,8 +74,9 @@ pub enum AddTransactionError {
     CapacityExceeded,
 }
 
-// Submitted transaction conflicts with current state
+// Mempool submission conflicts with current state
 // =================================================================================================
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StateConflict {
     #[error("nullifiers already exist: {0:?}")]
@@ -92,16 +93,6 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
-}
-
-// Submit proven batch by user errors
-// =================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-#[grpc(internal)]
-pub enum SubmitProvenBatchError {
-    #[error("batch deserialization failed")]
-    Deserialization(#[source] DeserializationError),
 }
 
 // Batch building errors

@@ -14,7 +14,7 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::batch::ProvenBatch;
+use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
@@ -29,7 +29,7 @@ use url::Url;
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, BlockProducerError, StoreError, SubmitProvenBatchError};
+use crate::errors::{BlockProducerError, MempoolSubmissionError, StoreError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
@@ -304,11 +304,11 @@ impl BlockProducerRpcServer {
     async fn submit_proven_transaction(
         &self,
         request: proto::transaction::ProvenTransaction,
-    ) -> Result<proto::blockchain::BlockNumber, AddTransactionError> {
+    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
         debug!(target: COMPONENT, ?request);
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction)
-            .map_err(AddTransactionError::TransactionDeserializationFailed)?;
+            .map_err(MempoolSubmissionError::DeserializationFailed)?;
 
         let tx_id = tx.id();
 
@@ -329,20 +329,14 @@ impl BlockProducerRpcServer {
             .store
             .get_tx_inputs(&tx)
             .await
-            .map_err(AddTransactionError::StoreConnectionFailed)?;
+            .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
 
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
-        let tx = AuthenticatedTransaction::new_unchecked(tx, inputs)
+        let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
             .map(Arc::new)
-            .map_err(AddTransactionError::StateConflict)?;
+            .map_err(MempoolSubmissionError::StateConflict)?;
 
-        self.mempool
-            .lock()
-            .await
-            .lock()
-            .await
-            .add_transaction(tx)
-            .map(|block_height| proto::blockchain::BlockNumber { block_num: block_height.as_u32() })
+        self.mempool.lock().await.lock().await.add_transaction(tx).map(Into::into)
     }
 
     #[instrument(
@@ -353,12 +347,34 @@ impl BlockProducerRpcServer {
      )]
     async fn submit_proven_batch(
         &self,
-        request: proto::transaction::ProvenTransactionBatch,
-    ) -> Result<proto::blockchain::BlockNumber, SubmitProvenBatchError> {
-        let _batch = ProvenBatch::read_from_bytes(&request.encoded)
-            .map_err(SubmitProvenBatchError::Deserialization)?;
+        request: proto::transaction::TransactionBatch,
+    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
+        let proposed = request
+            .proposed_batch
+            .expect("proposed batch existence is enforced by RPC component");
+        let batch = ProposedBatch::read_from_bytes(&proposed)
+            .map_err(MempoolSubmissionError::DeserializationFailed)?;
 
-        todo!();
+        // We assume that the rpc component has verified everything, including the transaction
+        // proofs.
+
+        let mut txs = Vec::with_capacity(batch.transactions().len());
+        for tx in batch.transactions() {
+            let inputs = self
+                .store
+                .get_tx_inputs(tx)
+                .await
+                .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
+
+            // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
+            // as the batch integrity itself.
+            let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
+                .map(Arc::new)
+                .map_err(MempoolSubmissionError::StateConflict)?;
+            txs.push(tx);
+        }
+
+        self.mempool.lock().await.lock().await.add_user_batch(&txs).map(Into::into)
     }
 }
 
@@ -379,7 +395,7 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn submit_proven_batch(
         &self,
-        request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
+        request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         self.submit_proven_batch(request.into_inner())
              .await
