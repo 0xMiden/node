@@ -27,8 +27,12 @@ use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{AccountId, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
-use miden_protocol::block::account_tree::AccountWitness;
-use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
+use miden_protocol::block::account_tree::{AccountMutationSet, AccountWitness};
+use miden_protocol::block::nullifier_tree::{
+    NullifierMutationSet,
+    NullifierTree,
+    NullifierWitness,
+};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain, ProvenBlock};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
@@ -36,7 +40,7 @@ use miden_protocol::note::{NoteDetails, NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::{OutputNote, PartialBlockchain};
 use miden_protocol::utils::Serializable;
 use tokio::sync::{Mutex, RwLock, oneshot};
-use tracing::{Instrument, info, info_span, instrument};
+use tracing::{Instrument, info, instrument};
 
 use crate::accounts::{AccountTreeWithHistory, HistoricalError};
 use crate::blocks::BlockStore;
@@ -217,44 +221,14 @@ impl State {
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
-    #[allow(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(&self, block: ProvenBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
-        let header = block.header();
+        self.validate_block_header(&block).await?;
 
-        let tx_commitment = block.body().transactions().commitment();
-
-        if header.tx_commitment() != tx_commitment {
-            return Err(InvalidBlockError::InvalidBlockTxCommitment {
-                expected: tx_commitment,
-                actual: header.tx_commitment(),
-            }
-            .into());
-        }
-
-        let block_num = header.block_num();
-        let block_commitment = header.commitment();
-
-        // ensures the right block header is being processed
-        let prev_block = self
-            .db
-            .select_block_header_by_block_num(None)
-            .await?
-            .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
-
-        let expected_block_num = prev_block.block_num().child();
-        if block_num != expected_block_num {
-            return Err(InvalidBlockError::NewBlockInvalidBlockNum {
-                expected: expected_block_num,
-                submitted: block_num,
-            }
-            .into());
-        }
-        if header.prev_block_commitment() != prev_block.commitment() {
-            return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
-        }
+        let block_num = block.header().block_num();
+        let block_commitment = block.header().commitment();
 
         let block_data = block.to_bytes();
 
@@ -268,130 +242,14 @@ impl State {
             async move { store.save_block(block_num, &block_data).await }.in_current_span(),
         );
 
-        // scope to read in-memory data, compute mutations required for updating account
-        // and nullifier trees, and validate the request
         let (
             nullifier_tree_old_root,
             nullifier_tree_update,
             account_tree_old_root,
             account_tree_update,
-        ) = {
-            let inner = self.inner.read().await;
+        ) = self.compute_tree_mutations(&block).await?;
 
-            let _span = info_span!(target: COMPONENT, "update_in_memory_structs").entered();
-
-            // nullifiers can be produced only once
-            let duplicate_nullifiers: Vec<_> = block
-                .body()
-                .created_nullifiers()
-                .iter()
-                .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
-                .copied()
-                .collect();
-            if !duplicate_nullifiers.is_empty() {
-                return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
-            }
-
-            // compute updates for the in-memory data structures
-
-            // new_block.chain_root must be equal to the chain MMR root prior to the update
-            let peaks = inner.blockchain.peaks();
-            if peaks.hash_peaks() != header.chain_commitment() {
-                return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
-            }
-
-            // compute update for nullifier tree
-            let nullifier_tree_update = inner
-                .nullifier_tree
-                .compute_mutations(
-                    block
-                        .body()
-                        .created_nullifiers()
-                        .iter()
-                        .map(|nullifier| (*nullifier, block_num)),
-                )
-                .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
-
-            if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
-                // We do our best here to notify the serve routine, if it doesn't care (dropped the
-                // receiver) we can't do much.
-                let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                    InvalidBlockError::NewBlockInvalidNullifierRoot,
-                ));
-                return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
-            }
-
-            // compute update for account tree
-            let account_tree_update = inner
-                .account_tree
-                .compute_mutations(
-                    block
-                        .body()
-                        .updated_accounts()
-                        .iter()
-                        .map(|update| (update.account_id(), update.final_state_commitment())),
-                )
-                .map_err(|e| match e {
-                    HistoricalError::AccountTreeError(err) => {
-                        InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-                    },
-                    HistoricalError::MerkleError(_) => {
-                        panic!("Unexpected MerkleError during account tree mutation computation")
-                    },
-                })?;
-
-            if account_tree_update.as_mutation_set().root() != header.account_root() {
-                let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                    InvalidBlockError::NewBlockInvalidAccountRoot,
-                ));
-                return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
-            }
-
-            (
-                inner.nullifier_tree.root(),
-                nullifier_tree_update,
-                inner.account_tree.root_latest(),
-                account_tree_update,
-            )
-        };
-
-        // build note tree
-        let note_tree = block.body().compute_block_note_tree();
-        if note_tree.root() != header.note_root() {
-            return Err(InvalidBlockError::NewBlockInvalidNoteRoot.into());
-        }
-
-        let notes = block
-            .body()
-            .output_notes()
-            .map(|(note_index, note)| {
-                let (details, nullifier) = match note {
-                    OutputNote::Full(note) => {
-                        (Some(NoteDetails::from(note)), Some(note.nullifier()))
-                    },
-                    OutputNote::Header(_) => (None, None),
-                    note @ OutputNote::Partial(_) => {
-                        return Err(InvalidBlockError::InvalidOutputNoteType(Box::new(
-                            note.clone(),
-                        )));
-                    },
-                };
-
-                let inclusion_path = note_tree.open(note_index);
-
-                let note_record = NoteRecord {
-                    block_num,
-                    note_index,
-                    note_id: note.id().as_word(),
-                    note_commitment: note.commitment(),
-                    metadata: note.metadata().clone(),
-                    details,
-                    inclusion_path,
-                };
-
-                Ok((note_record, nullifier))
-            })
-            .collect::<Result<Vec<_>, InvalidBlockError>>()?;
+        let notes = Self::build_note_records(&block)?;
 
         // Signals the transaction is ready to be committed, and the write lock can be acquired
         let (allow_acquire, acquired_allowed) = oneshot::channel::<()>();
@@ -476,6 +334,176 @@ impl State {
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 
         Ok(())
+    }
+
+    /// Validates the block header against the current state: checks tx commitment, block number
+    /// sequencing, and previous block commitment.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    async fn validate_block_header(&self, block: &ProvenBlock) -> Result<(), ApplyBlockError> {
+        let header = block.header();
+
+        let tx_commitment = block.body().transactions().commitment();
+        if header.tx_commitment() != tx_commitment {
+            return Err(InvalidBlockError::InvalidBlockTxCommitment {
+                expected: tx_commitment,
+                actual: header.tx_commitment(),
+            }
+            .into());
+        }
+
+        let block_num = header.block_num();
+
+        // ensures the right block header is being processed
+        let prev_block = self
+            .db
+            .select_block_header_by_block_num(None)
+            .await?
+            .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
+
+        let expected_block_num = prev_block.block_num().child();
+        if block_num != expected_block_num {
+            return Err(InvalidBlockError::NewBlockInvalidBlockNum {
+                expected: expected_block_num,
+                submitted: block_num,
+            }
+            .into());
+        }
+        if header.prev_block_commitment() != prev_block.commitment() {
+            return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
+        }
+
+        Ok(())
+    }
+
+    /// Reads the in-memory state, validates nullifiers and chain/account/nullifier commitments,
+    /// and computes the mutation sets for the nullifier and account trees.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    async fn compute_tree_mutations(
+        &self,
+        block: &ProvenBlock,
+    ) -> Result<(Word, NullifierMutationSet, Word, AccountMutationSet), ApplyBlockError> {
+        let header = block.header();
+        let block_num = header.block_num();
+        let inner = self.inner.read().await;
+
+        // nullifiers can be produced only once
+        let duplicate_nullifiers: Vec<_> = block
+            .body()
+            .created_nullifiers()
+            .iter()
+            .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
+            .copied()
+            .collect();
+        if !duplicate_nullifiers.is_empty() {
+            return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
+        }
+
+        // new_block.chain_root must be equal to the chain MMR root prior to the update
+        let peaks = inner.blockchain.peaks();
+        if peaks.hash_peaks() != header.chain_commitment() {
+            return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
+        }
+
+        // compute update for nullifier tree
+        let nullifier_tree_update = inner
+            .nullifier_tree
+            .compute_mutations(
+                block
+                    .body()
+                    .created_nullifiers()
+                    .iter()
+                    .map(|nullifier| (*nullifier, block_num)),
+            )
+            .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
+
+        if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
+            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
+                InvalidBlockError::NewBlockInvalidNullifierRoot,
+            ));
+            return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
+        }
+
+        // compute update for account tree
+        let account_tree_update = inner
+            .account_tree
+            .compute_mutations(
+                block
+                    .body()
+                    .updated_accounts()
+                    .iter()
+                    .map(|update| (update.account_id(), update.final_state_commitment())),
+            )
+            .map_err(|e| match e {
+                HistoricalError::AccountTreeError(err) => {
+                    InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
+                },
+                HistoricalError::MerkleError(_) => {
+                    panic!("Unexpected MerkleError during account tree mutation computation")
+                },
+            })?;
+
+        if account_tree_update.as_mutation_set().root() != header.account_root() {
+            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
+                InvalidBlockError::NewBlockInvalidAccountRoot,
+            ));
+            return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
+        }
+
+        Ok((
+            inner.nullifier_tree.root(),
+            nullifier_tree_update,
+            inner.account_tree.root_latest(),
+            account_tree_update,
+        ))
+    }
+
+    /// Builds the note tree from the block body, validates the note root, and constructs
+    /// `NoteRecord`s with their inclusion proofs.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    fn build_note_records(
+        block: &ProvenBlock,
+    ) -> Result<Vec<(NoteRecord, Option<Nullifier>)>, ApplyBlockError> {
+        let header = block.header();
+        let block_num = header.block_num();
+
+        let note_tree = block.body().compute_block_note_tree();
+        if note_tree.root() != header.note_root() {
+            return Err(InvalidBlockError::NewBlockInvalidNoteRoot.into());
+        }
+
+        let notes = block
+            .body()
+            .output_notes()
+            .map(|(note_index, note)| {
+                let (details, nullifier) = match note {
+                    OutputNote::Full(note) => {
+                        (Some(NoteDetails::from(note)), Some(note.nullifier()))
+                    },
+                    OutputNote::Header(_) => (None, None),
+                    note @ OutputNote::Partial(_) => {
+                        return Err(InvalidBlockError::InvalidOutputNoteType(Box::new(
+                            note.clone(),
+                        )));
+                    },
+                };
+
+                let inclusion_path = note_tree.open(note_index);
+
+                let note_record = NoteRecord {
+                    block_num,
+                    note_index,
+                    note_id: note.id().as_word(),
+                    note_commitment: note.commitment(),
+                    metadata: note.metadata().clone(),
+                    details,
+                    inclusion_path,
+                };
+
+                Ok((note_record, nullifier))
+            })
+            .collect::<Result<Vec<_>, InvalidBlockError>>()?;
+
+        Ok(notes)
     }
 
     // STATE ACCESSORS
