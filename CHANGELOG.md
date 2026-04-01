@@ -56,6 +56,9 @@
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
 - Fixed `GetAccount` returning an internal error for `AllEntries` requests on storage maps where all entries are in a single block (e.g. genesis accounts) ([#1816](https://github.com/0xMiden/node/pull/1816)).
 - Fixed `GetAccount` returning empty storage map entries instead of `too_many_entries` when a genesis account's map exceeds the pagination limit ([#1816](https://github.com/0xMiden/node/pull/1816)).
+## v0.13.9 (2026-03-26)
+
+- Network transaction actors now share the same gRPC clients, limiting the number of file descriptors being used ([#1808](https://github.com/0xMiden/node/issues/1808)).
 
 ## v0.13.8 (2026-03-12)
 
@@ -211,6 +214,9 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/node/pull/1508)).
+- Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
+- Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
+- Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
   - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)
