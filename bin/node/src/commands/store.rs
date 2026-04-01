@@ -7,7 +7,7 @@ use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
-use miden_protocol::block::ProvenBlock;
+use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
@@ -175,10 +175,10 @@ impl StoreCommand {
 pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyhow::Result<()> {
     // Read and deserialize the genesis block file.
     let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
-    let proven_block = ProvenBlock::read_from_bytes(&bytes)
+    let signed_block = SignedBlock::read_from_bytes(&bytes)
         .context("failed to deserialize genesis block from file")?;
     let genesis_block =
-        GenesisBlock::try_from(proven_block).context("genesis block validation failed")?;
+        GenesisBlock::try_from(signed_block).context("genesis block validation failed")?;
 
     Store::bootstrap(genesis_block, data_directory)
 }
