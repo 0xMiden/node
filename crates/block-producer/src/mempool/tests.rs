@@ -406,3 +406,40 @@ fn pass_through_txs_with_note_dependencies() {
 
     assert_eq!(uut, reference);
 }
+
+/// Tests that a batch containing transactions with intra-batch unauthenticated note dependencies
+/// can be appended to the batch graph.
+#[test]
+fn intra_batch_unauthenticated_note() {
+    let (mut uut, _) = Mempool::for_tests();
+
+    let tx_final = MockProvenTxBuilder::with_account_index(0).build();
+    let account_update = tx_final.account_update();
+
+    let tx_pass_through = MockProvenTxBuilder::with_account(
+        account_update.account_id(),
+        account_update.initial_state_commitment(),
+        account_update.initial_state_commitment(),
+    );
+
+    // Transaction A creates note.
+    let tx_a = tx_pass_through
+        .clone()
+        .nullifiers_range(0..2)
+        .private_notes_created_range(3..4)
+        .build();
+    let tx_a = Arc::new(AuthenticatedTransaction::from_inner(tx_a));
+
+    // Transaction B consumes the note (unauthenticated).
+    let tx_b = tx_pass_through.unauthenticated_notes_range(3..4).build();
+    let tx_b = Arc::new(AuthenticatedTransaction::from_inner(tx_b));
+
+    // Add both transactions before selecting a batch so they end up in the same batch.
+    uut.add_transaction(tx_a.clone()).unwrap();
+    uut.add_transaction(tx_b.clone()).unwrap();
+
+    let batch = uut.select_batch().unwrap();
+
+    assert!(batch.transactions().contains(&tx_a));
+    assert!(batch.transactions().contains(&tx_b));
+}

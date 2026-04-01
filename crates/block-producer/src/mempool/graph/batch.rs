@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -29,7 +29,14 @@ impl GraphNode for SelectedBatch {
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.transactions().iter().flat_map(|tx| tx.unauthenticated_note_commitments()))
+        // Filter notes that are produced within this batch.
+        let output_notes: HashSet<Word> = self.output_notes().collect();
+        Box::new(
+            self.transactions()
+                .iter()
+                .flat_map(|tx| tx.unauthenticated_note_commitments())
+                .filter(move |note| !output_notes.contains(note)),
+        )
     }
 
     fn account_updates(
