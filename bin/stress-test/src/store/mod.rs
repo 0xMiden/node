@@ -146,15 +146,25 @@ pub async fn bench_sync_nullifiers(
         };
         let response = store_client.sync_notes(sync_request).await.unwrap().into_inner();
 
-        let note_ids = response
-            .notes
-            .iter()
-            .map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
-            .collect::<Vec<proto::note::NoteId>>();
+        let pagination = response.pagination_info.expect("pagination_info should exist");
+        let last_block_checked = pagination.block_num;
 
-        // Get the notes nullifiers, limiting to 20 notes maximum
-        let note_ids_to_fetch =
-            note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect::<Vec<_>>();
+        if response.blocks.is_empty() || last_block_checked >= pagination.chain_tip {
+            break;
+        }
+
+        // Collect note IDs from all blocks in the response.
+        let note_ids: Vec<_> = response
+            .blocks
+            .iter()
+            .flat_map(|b| {
+                b.notes.iter().map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
+            })
+            .collect();
+
+        // Get the notes nullifiers, limiting to 20 notes maximum.
+        let note_ids_to_fetch: Vec<_> =
+            note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
         if !note_ids_to_fetch.is_empty() {
             let notes = store_client
                 .get_notes_by_id(proto::note::NoteIdList { ids: note_ids_to_fetch })
@@ -163,25 +173,15 @@ pub async fn bench_sync_nullifiers(
                 .into_inner()
                 .notes;
 
-            nullifier_prefixes.extend(
-                notes
-                    .iter()
-                    .filter_map(|n| {
-                        // Private notes are filtered out because `n.details` is None
-                        let details_bytes = n.note.as_ref()?.details.as_ref()?;
-                        let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
-                        Some(u32::from(details.nullifier().prefix()))
-                    })
-                    .collect::<Vec<u32>>(),
-            );
+            nullifier_prefixes.extend(notes.iter().filter_map(|n| {
+                let details_bytes = n.note.as_ref()?.details.as_ref()?;
+                let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
+                Some(u32::from(details.nullifier().prefix()))
+            }));
         }
 
-        // Update block number from pagination info
-        let pagination_info = response.pagination_info.expect("pagination_info should exist");
-        current_block_num = pagination_info.block_num;
-        if pagination_info.chain_tip == current_block_num {
-            break;
-        }
+        // Resume from the next block after the last one checked.
+        current_block_num = last_block_checked + 1;
     }
     let mut nullifiers = nullifier_prefixes.into_iter().cycle();
 
@@ -400,8 +400,8 @@ async fn sync_transactions_paginated(
             break;
         }
 
-        // Request the remaining range up to the reported chain tip
-        next_block_from = reached_block;
+        // Resume from the next block after the last one fully included.
+        next_block_from = reached_block + 1;
         target_block_to = chain_tip;
     }
 
@@ -469,8 +469,8 @@ async fn sync_chain_mmr(
     block_to: u32,
 ) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
-        finality: proto::rpc::Finality::Committed.into(),
+        block_from,
+        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::BlockNum(block_to)),
     };
 
     let start = Instant::now();

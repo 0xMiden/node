@@ -66,7 +66,8 @@ use tracing::instrument;
 use crate::block_builder::SelectedBlock;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, StateConflict};
+use crate::errors::{MempoolSubmissionError, StateConflict};
+use crate::mempool::budget::BudgetStatus;
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -230,17 +231,56 @@ impl Mempool {
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
-    ) -> Result<BlockNumber, AddTransactionError> {
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
         if self.unbatched_transactions_count() >= self.config.tx_capacity.get() {
-            return Err(AddTransactionError::CapacityExceeded);
+            return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
+
+        // Insert the transaction node.
         self.transactions
             .append(Arc::clone(&tx))
-            .map_err(AddTransactionError::StateConflict)?;
+            .map_err(MempoolSubmissionError::StateConflict)?;
         self.subscription.transaction_added(&tx);
+        self.inject_telemetry();
+
+        Ok(self.chain_tip)
+    }
+
+    #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
+    pub fn add_user_batch(
+        &mut self,
+        txs: &[Arc<AuthenticatedTransaction>],
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
+        assert!(!txs.is_empty(), "Cannot have a batch with no transactions");
+
+        if self.unbatched_transactions_count() + txs.len() > self.config.tx_capacity.get() {
+            return Err(MempoolSubmissionError::CapacityExceeded);
+        }
+
+        // Ensure the batch doesn't exceed the mempool budget for batches.
+        let mut budget = self.config.batch_budget;
+        for tx in txs {
+            if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+                // TODO: better error plox.
+                return Err(MempoolSubmissionError::CapacityExceeded);
+            }
+        }
+
+        for tx in txs {
+            self.authentication_staleness_check(tx.authentication_height())?;
+            self.expiration_check(tx.expires_at())?;
+        }
+
+        self.transactions
+            .append_user_batch(txs)
+            .map_err(MempoolSubmissionError::StateConflict)?;
+
+        for tx in txs {
+            self.subscription.transaction_added(tx);
+        }
         self.inject_telemetry();
 
         Ok(self.chain_tip)
@@ -263,7 +303,9 @@ impl Mempool {
 
     /// Drops the proposed batch and all of its descendants.
     ///
-    /// Transactions are re-queued.
+    /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
+    /// transactions have their failure count incremented, reverting them if they now exceed the
+    /// failure limit.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
@@ -281,10 +323,14 @@ impl Mempool {
             self.transactions.requeue_transactions(reverted);
         }
 
-        // Find rolled back batch to mark its txs as failed.
+        // Find rolled back batch to mark the txs as failed.
         //
-        // Note that its possible it doesn't exist, since this batch could have already been
+        // Note that it's possible it doesn't exist, since this batch could have already been
         // reverted as part of a separate rollback.
+        //
+        // This could occur if this batch is the descendent of a separate batch or block rollback.
+        // The batch and transaction graphs already ignore unknown reversions, alternatively we
+        // could check this precondition above.
         if let Some(batch) = reverted_batches.iter().find(|reverted| reverted.id() == batch) {
             let failed_txs = batch.transactions().iter().map(|tx| tx.id());
             let reverted_txs = self.transactions.increment_failure_count(failed_txs);
@@ -334,13 +380,13 @@ impl Mempool {
     /// Sends a [`MempoolEvent::BlockCommitted`] event to subscribers, as well as a
     /// [`MempoolEvent::TransactionsReverted`] for transactions that are now considered expired.
     ///
-    /// On success the internal state is updated in place: the chain tip advances, expired data
-    /// is pruned, and subscribers are notified about the committed block and any
-    /// reverted transactions.
+    /// On success the internal state is updated in place: the chain tip advances, expired data is
+    /// pruned, and subscribers are notified about the committed block and any reverted
+    /// transactions.
     ///
     /// # Panics
     ///
-    /// Panics if there is no block in flight.
+    /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
     pub fn commit_block(&mut self, block_header: BlockHeader) {
         assert_eq!(self.chain_tip.child(), block_header.block_num());
@@ -369,31 +415,28 @@ impl Mempool {
 
     /// Notify the pool that construction of the in flight block failed.
     ///
-    /// The pool will purge the block and all of its contents from the pool.
+    /// The block's batches are reverted and transactions are requeued for batch selection.
+    /// Additionally, the transactions from this block have their failure count incremented,
+    /// potentially reverting them if they exceed the failure limit.
     ///
     /// Sends a [`MempoolEvent::TransactionsReverted`] event to subscribers.
     ///
-    /// The in-flight block state and all related transactions are discarded, and subscribers
-    /// are notified about the reverted transactions.
-    ///
     /// # Panics
     ///
-    /// Panics if there is no block in flight.
+    /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.rollback_block", skip_all)]
     pub fn rollback_block(&mut self, block: BlockNumber) {
-        // Only revert if the given block is actually inflight.
-        //
         // FIXME: We should consider a more robust check here to identify the block by a hash.
         //        If multiple jobs are possible, then so are multiple variants with the same
         //        block number.
-        if self.pending_block.as_ref().is_none_or(|pending| pending.block_number != block) {
-            return;
-        }
+        let block = self
+            .pending_block
+            .take_if(|pending| pending.block_number == block)
+            .expect("pending block must match block to rollback");
 
         // Revert the batches, and requeue the transactions for batch selection.
         //
         // Transactions which have failed excessively are also reverted.
-        let block = self.pending_block.take().expect("we just checked it is some");
         for batch in &block.batches {
             let reverted = self.batches.revert_batch_and_descendants(batch.id());
 
@@ -471,9 +514,6 @@ impl Mempool {
         span.set_attribute("mempool.output_notes", self.transactions.output_note_count());
     }
 
-    /// Prunes the oldest locally retained block if the number of blocks exceeds the configured
-    /// limit.
-    ///
     /// This includes pruning the block's batches and transactions from their graphs.
     fn prune_oldest_block(&mut self) {
         if self.committed_blocks.len() <= self.config.state_retention.get() {
@@ -490,16 +530,8 @@ impl Mempool {
         //
         // The same logic follows for transactions.
         for batch in block.batches.iter().map(|batch| batch.id()) {
-            self.batches.prune(batch);
-        }
-
-        for tx in block
-            .batches
-            .iter()
-            .flat_map(|batch| batch.transactions().as_slice())
-            .map(TransactionHeader::id)
-        {
-            self.transactions.prune(tx);
+            let batch = self.batches.prune(batch);
+            self.transactions.prune(&batch);
         }
     }
 
@@ -507,8 +539,8 @@ impl Mempool {
     ///
     /// Expired batch descendants are also reverted since these are now invalid.
     ///
-    /// Transactions from batches are requeued. Expired transactions and their descendants are
-    /// then reverted as well.
+    /// Transactions from batches are requeued. Expired transactions and their descendants are then
+    /// reverted as well.
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
         let batches = self.batches.revert_expired(self.chain_tip);
         for batch in batches {
@@ -520,9 +552,8 @@ impl Mempool {
     /// Rejects authentication heights that fall outside the overlap guaranteed by the locally
     /// retained state.
     ///
-    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below
-    /// this range are rejected as stale because the mempool no longer tracks the
-    /// intermediate history.
+    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below this
+    /// range are rejected as stale because the mempool no longer tracks the intermediate history.
     ///
     /// # Panics
     ///
@@ -532,14 +563,14 @@ impl Mempool {
     fn authentication_staleness_check(
         &self,
         authentication_height: BlockNumber,
-    ) -> Result<(), AddTransactionError> {
+    ) -> Result<(), MempoolSubmissionError> {
         let limit = self
             .chain_tip
             .checked_sub(self.committed_blocks.len() as u32)
-            .expect("amount of committed blocks cannot exceed the chain tip");
+            .expect("number of committed blocks cannot exceed the chain tip");
 
         if authentication_height < limit {
-            return Err(AddTransactionError::StaleInputs {
+            return Err(MempoolSubmissionError::StaleInputs {
                 input_block: authentication_height,
                 stale_limit: limit,
             });
@@ -554,10 +585,10 @@ impl Mempool {
         Ok(())
     }
 
-    fn expiration_check(&self, expired_at: BlockNumber) -> Result<(), AddTransactionError> {
+    fn expiration_check(&self, expired_at: BlockNumber) -> Result<(), MempoolSubmissionError> {
         let limit = self.chain_tip + self.config.expiration_slack;
         if expired_at <= limit {
-            return Err(AddTransactionError::Expired { expired_at, limit });
+            return Err(MempoolSubmissionError::Expired { expired_at, limit });
         }
 
         Ok(())

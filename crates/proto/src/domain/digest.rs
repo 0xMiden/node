@@ -65,12 +65,12 @@ impl FromHex for proto::primitives::Digest {
         let data = hex::decode(hex)?;
 
         match data.len() {
-            size if size < DIGEST_DATA_SIZE => {
-                Err(ConversionError::InsufficientData { expected: DIGEST_DATA_SIZE, got: size })
-            },
-            size if size > DIGEST_DATA_SIZE => {
-                Err(ConversionError::TooMuchData { expected: DIGEST_DATA_SIZE, got: size })
-            },
+            size if size < DIGEST_DATA_SIZE => Err(ConversionError::message(format!(
+                "not enough data, expected {DIGEST_DATA_SIZE}, got {size}"
+            ))),
+            size if size > DIGEST_DATA_SIZE => Err(ConversionError::message(format!(
+                "too much data, expected {DIGEST_DATA_SIZE}, got {size}"
+            ))),
             _ => {
                 let d0 = u64::from_be_bytes(data[..8].try_into().unwrap());
                 let d1 = u64::from_be_bytes(data[8..16].try_into().unwrap());
@@ -175,7 +175,7 @@ impl TryFrom<proto::primitives::Digest> for [Felt; 4] {
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         if [value.d0, value.d1, value.d2, value.d3].iter().any(|v| *v >= Felt::ORDER) {
-            return Err(ConversionError::NotAValidFelt);
+            return Err(ConversionError::message("value is not in the range 0..MODULUS"));
         }
 
         Ok([

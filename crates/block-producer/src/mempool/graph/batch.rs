@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -21,15 +21,22 @@ impl GraphNode for SelectedBatch {
     type Id = BatchId;
 
     fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_> {
-        Box::new(self.txs().iter().flat_map(|tx| tx.nullifiers()))
+        Box::new(self.transactions().iter().flat_map(|tx| tx.nullifiers()))
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.txs().iter().flat_map(|tx| tx.output_note_commitments()))
+        Box::new(self.transactions().iter().flat_map(|tx| tx.output_note_commitments()))
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.txs().iter().flat_map(|tx| tx.unauthenticated_note_commitments()))
+        // Filter notes that are produced within this batch.
+        let output_notes: HashSet<Word> = self.output_notes().collect();
+        Box::new(
+            self.transactions()
+                .iter()
+                .flat_map(|tx| tx.unauthenticated_note_commitments())
+                .filter(move |note| !output_notes.contains(note)),
+        )
     }
 
     fn account_updates(
@@ -98,10 +105,14 @@ impl BatchGraph {
     ///
     /// Batches are returned in reverse-chronological order.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> Vec<SelectedBatch> {
-        let reverted = self.inner.revert_expired_unselected(chain_tip);
+        // We only revert transactions which are _not_ included in batches.
+        let mut to_revert = self.inner.expired(chain_tip);
+        to_revert.retain(|batch| !self.inner.is_selected(batch));
 
-        for batch in &reverted {
-            self.proven.remove(&batch.id());
+        let mut reverted = Vec::with_capacity(to_revert.len());
+
+        for batch in to_revert {
+            reverted.extend_from_slice(&self.revert_batch_and_descendants(batch));
         }
 
         reverted
@@ -144,15 +155,15 @@ impl BatchGraph {
         selected
     }
 
-    /// Prunes the given batch.
+    /// Prunes the given batch and returns it.
     ///
     /// # Panics
     ///
     /// Panics if the batch does not exist, or has existing ancestors in the batch
     /// graph.
-    pub fn prune(&mut self, batch: BatchId) {
-        self.inner.prune(batch);
+    pub fn prune(&mut self, batch: BatchId) -> SelectedBatch {
         self.proven.remove(&batch);
+        self.inner.prune(batch)
     }
 
     pub fn proven_count(&self) -> usize {
