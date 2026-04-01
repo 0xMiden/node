@@ -7,8 +7,8 @@ help:
 # -- variables ------------------------------------------------------------------------------------
 
 WARNINGS=RUSTDOCFLAGS="-D warnings"
-BUILD_PROTO=BUILD_PROTO=1
 CONTAINER_RUNTIME ?= docker
+STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 
 # -- linting --------------------------------------------------------------------------------------
 
@@ -85,7 +85,7 @@ test:  ## Runs all tests
 
 .PHONY: check
 check: ## Check all targets and features for errors without code generation
-	${BUILD_PROTO} cargo check --all-features --all-targets --locked --workspace
+	cargo check --all-features --all-targets --locked --workspace
 
 .PHONY: check-features
 check-features: ## Checks all feature combinations compile without warnings using cargo-hack
@@ -95,18 +95,27 @@ check-features: ## Checks all feature combinations compile without warnings usin
 
 .PHONY: build
 build: ## Builds all crates and re-builds protobuf bindings for proto crates
-	${BUILD_PROTO} cargo build --locked --workspace
-	${BUILD_PROTO} cargo build --locked -p miden-remote-prover-client --target wasm32-unknown-unknown --no-default-features --features batch-prover,block-prover,tx-prover # no-std compatible build
+	cargo build --locked --workspace
+	cargo build --locked -p miden-remote-prover-client --target wasm32-unknown-unknown --no-default-features --features batch-prover,block-prover,tx-prover # no-std compatible build
 
 # --- installing ----------------------------------------------------------------------------------
 
 .PHONY: install-node
 install-node: ## Installs node
-	${BUILD_PROTO} cargo install --path bin/node --locked
+	cargo install --path bin/node --locked
 
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
-	$(BUILD_PROTO) cargo install --path bin/remote-prover --bin miden-remote-prover --features concurrent --locked
+	cargo install --path bin/remote-prover --bin miden-remote-prover --locked
+
+.PHONY: stress-test-smoke
+stress-test: ## Runs stress-test benchmarks
+	cargo build --release --locked -p miden-node-stress-test
+	@mkdir -p $(STRESS_TEST_DATA_DIR)
+	./target/release/miden-node-stress-test seed-store --data-directory $(STRESS_TEST_DATA_DIR) --num-accounts 500 --public-accounts-percentage 50
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-state
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-notes
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
 .PHONY: install-stress-test
 install-stress-test: ## Installs stress-test binary

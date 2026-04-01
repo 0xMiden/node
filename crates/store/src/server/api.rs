@@ -1,17 +1,21 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use miden_node_proto::decode::{ConversionResultExt, GrpcStructDecoder};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated as proto;
+use miden_node_proto::{decode, generated as proto};
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::BlockNumber;
+use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::{BlockInputs, BlockNumber};
 use miden_protocol::note::Nullifier;
+use tokio::sync::watch;
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
+use crate::errors::GetBlockInputsError;
 use crate::state::State;
 
 // STORE API
@@ -20,6 +24,8 @@ use crate::state::State;
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
+    /// Sender used to notify the proof scheduler of the latest committed block number.
+    pub(super) chain_tip_sender: watch::Sender<BlockNumber>,
 }
 
 impl StoreApi {
@@ -39,9 +45,43 @@ impl StoreApi {
 
         Ok(Response::new(proto::rpc::BlockHeaderByNumberResponse {
             block_header: block_header.map(Into::into),
-            chain_length: mmr_proof.as_ref().map(|p| p.forest.num_leaves() as u32),
-            mmr_path: mmr_proof.map(|p| Into::into(&p.merkle_path)),
+            chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
+            mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),
         }))
+    }
+
+    /// Retrieves block inputs from state based on the contents of the supplied ordered batches.
+    pub(crate) async fn block_inputs_from_ordered_batches(
+        &self,
+        batches: &OrderedBatches,
+    ) -> Result<BlockInputs, GetBlockInputsError> {
+        // Construct fields required to retrieve block inputs.
+        let mut account_ids = BTreeSet::new();
+        let mut nullifiers = Vec::new();
+        let mut unauthenticated_note_commitments = BTreeSet::new();
+        let mut reference_blocks = BTreeSet::new();
+
+        for batch in batches.as_slice() {
+            account_ids.extend(batch.updated_accounts());
+            nullifiers.extend(batch.created_nullifiers());
+            reference_blocks.insert(batch.reference_block_num());
+
+            for note in batch.input_notes().iter() {
+                if let Some(header) = note.header() {
+                    unauthenticated_note_commitments.insert(header.to_commitment());
+                }
+            }
+        }
+
+        // Retrieve block inputs from the store.
+        self.state
+            .get_block_inputs(
+                account_ids.into_iter().collect(),
+                nullifiers,
+                unauthenticated_note_commitments,
+                reference_blocks,
+            )
+            .await
     }
 }
 
@@ -72,8 +112,7 @@ where
     E: From<ConversionError>,
 {
     block_range.ok_or_else(|| {
-        ConversionError::MissingFieldInProtobufRepresentation { entity, field_name: "block_range" }
-            .into()
+        ConversionError::message(format!("{entity}: missing field `block_range`")).into()
     })
 }
 
@@ -86,12 +125,10 @@ pub fn read_root<E>(
 where
     E: From<ConversionError>,
 {
-    root.ok_or_else(|| ConversionError::MissingFieldInProtobufRepresentation {
-        entity,
-        field_name: "root",
-    })?
-    .try_into()
-    .map_err(Into::into)
+    root.ok_or_else(|| ConversionError::message(format!("{entity}: missing field `root`")))?
+        .try_into()
+        .context("root")
+        .map_err(|e: ConversionError| e.into())
 }
 
 /// Converts a collection of proto primitives to Words, returning a specific error type if
@@ -106,6 +143,7 @@ where
         .into_iter()
         .map(TryInto::try_into)
         .collect::<Result<Vec<_>, ConversionError>>()
+        .context("digests")
         .map_err(Into::into)
 }
 
@@ -119,27 +157,27 @@ where
         .cloned()
         .map(AccountId::try_from)
         .collect::<Result<_, ConversionError>>()
+        .context("account_ids")
         .map_err(Into::into)
 }
 
-pub fn read_account_id<E>(id: Option<proto::account::AccountId>) -> Result<AccountId, E>
+pub fn read_account_id<M: miden_node_proto::prost::Message, E>(
+    account_id: Option<proto::account::AccountId>,
+) -> Result<AccountId, E>
 where
     E: From<ConversionError>,
 {
-    id.ok_or_else(|| {
-        ConversionError::deserialization_error(
-            "AccountId",
-            miden_protocol::crypto::utils::DeserializationError::InvalidValue(
-                "Missing account ID".to_string(),
-            ),
-        )
-    })?
-    .try_into()
-    .map_err(Into::into)
+    let decoder = GrpcStructDecoder::<M>::default();
+    decode!(decoder, account_id).map_err(|e: ConversionError| e.into())
 }
 
-#[allow(clippy::result_large_err)]
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    fields(nullifiers = nullifiers.len()),
+    err
+)]
 pub fn validate_nullifiers<E>(nullifiers: &[proto::primitives::Digest]) -> Result<Vec<Nullifier>, E>
 where
     E: From<ConversionError> + std::fmt::Display,
@@ -147,13 +185,19 @@ where
     nullifiers
         .iter()
         .copied()
-        .map(TryInto::try_into)
+        .map(Nullifier::try_from)
         .collect::<Result<_, ConversionError>>()
+        .context("nullifiers")
         .map_err(Into::into)
 }
 
-#[allow(clippy::result_large_err)]
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    fields(notes = notes.len()),
+    err
+)]
 pub fn validate_note_commitments(notes: &[proto::primitives::Digest]) -> Result<Vec<Word>, Status> {
     notes
         .iter()
@@ -162,7 +206,12 @@ pub fn validate_note_commitments(notes: &[proto::primitives::Digest]) -> Result<
         .map_err(|_| invalid_argument("Digest field is not in the modulus range"))
 }
 
-#[instrument(level = "debug",target = COMPONENT, skip_all)]
+#[instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    fields(block_numbers = block_numbers.len())
+)]
 pub fn read_block_numbers(block_numbers: &[u32]) -> BTreeSet<BlockNumber> {
     BTreeSet::from_iter(block_numbers.iter().map(|raw_number| BlockNumber::from(*raw_number)))
 }

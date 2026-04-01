@@ -29,6 +29,15 @@ pub struct MonitorConfig {
     )]
     pub rpc_url: Url,
 
+    /// The display name of the network (e.g., "Testnet", "Devnet").
+    #[arg(
+        long = "network-name",
+        env = "MIDEN_MONITOR_NETWORK_NAME",
+        default_value = "Localhost",
+        help = "The display name of the network (e.g., Testnet, Devnet)"
+    )]
+    pub network_name: String,
+
     /// The URLs of the remote provers for status checking (comma-separated).
     #[arg(
         long = "remote-prover-urls",

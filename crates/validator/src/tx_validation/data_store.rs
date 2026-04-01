@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, PartialAccount, StorageMapWitness};
+use miden_protocol::account::{AccountId, PartialAccount, StorageMapKey, StorageMapWitness};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteScript;
@@ -83,7 +83,7 @@ impl DataStore for TransactionInputsDataStore {
         &self,
         _account_id: AccountId,
         _map_root: Word,
-        _map_key: Word,
+        _map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
             unimplemented!(

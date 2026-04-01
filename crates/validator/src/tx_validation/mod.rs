@@ -1,11 +1,15 @@
 mod data_store;
+mod validated_tx;
 
 pub use data_store::TransactionInputsDataStore;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError, TransactionVerifier};
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, info_span, instrument};
+pub use validated_tx::ValidatedTransaction;
+
+use crate::COMPONENT;
 
 // TRANSACTION VALIDATION ERROR
 // ================================================================================================
@@ -30,10 +34,11 @@ pub enum TransactionValidationError {
 /// provided proven transaction.
 ///
 /// Returns the header of the executed transaction if successful.
+#[instrument(target = COMPONENT, skip_all, err)]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
-) -> Result<TransactionHeader, TransactionValidationError> {
+) -> Result<ValidatedTransaction, TransactionValidationError> {
     // First, verify the transaction proof
     info_span!("verify").in_scope(|| {
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
@@ -56,7 +61,7 @@ pub async fn validate_transaction(
     let executed_tx_header: TransactionHeader = (&executed_tx).into();
     let proven_tx_header: TransactionHeader = (&proven_tx).into();
     if executed_tx_header == proven_tx_header {
-        Ok(executed_tx_header)
+        Ok(ValidatedTransaction::new(executed_tx))
     } else {
         Err(TransactionValidationError::Mismatch {
             proven_tx_header: proven_tx_header.into(),

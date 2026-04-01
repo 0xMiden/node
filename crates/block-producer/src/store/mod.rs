@@ -4,16 +4,18 @@ use std::num::NonZeroU32;
 
 use itertools::Itertools;
 use miden_node_proto::clients::{Builder, StoreBlockProducerClient};
+use miden_node_proto::decode::{ConversionResultExt, GrpcDecodeExt};
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::errors::{ConversionError, MissingFieldHelper};
-use miden_node_proto::{AccountState, generated as proto};
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::{AccountState, decode, generated as proto};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, ProvenBlock};
+use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
 use tracing::{debug, info, instrument};
 use url::Url;
 
@@ -69,21 +71,14 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
     type Error = ConversionError;
 
     fn try_from(response: proto::store::TransactionInputs) -> Result<Self, Self::Error> {
-        let AccountState { account_id, account_commitment } = response
-            .account_state
-            .ok_or(proto::store::TransactionInputs::missing_field(stringify!(account_state)))?
-            .try_into()?;
+        let decoder = response.decoder();
+        let AccountState { account_id, account_commitment } =
+            decode!(decoder, response.account_state)?;
 
         let mut nullifiers = HashMap::new();
         for nullifier_record in response.nullifiers {
-            let nullifier = nullifier_record
-                .nullifier
-                .ok_or(
-                    proto::store::transaction_inputs::NullifierTransactionInputRecord::missing_field(
-                        stringify!(nullifier),
-                    ),
-                )?
-                .try_into()?;
+            let decoder = nullifier_record.decoder();
+            let nullifier = decode!(decoder, nullifier_record.nullifier)?;
 
             // Note that this intentionally maps 0 to None as this is the definition used in
             // protobuf.
@@ -94,7 +89,8 @@ impl TryFrom<proto::store::TransactionInputs> for TransactionInputs {
             .found_unauthenticated_notes
             .into_iter()
             .map(Word::try_from)
-            .collect::<Result<_, ConversionError>>()?;
+            .collect::<Result<_, ConversionError>>()
+            .context("found_unauthenticated_notes")?;
 
         let current_block_height = response.block_height.into();
 
@@ -147,11 +143,13 @@ impl StoreClient {
             .await?
             .into_inner()
             .block_header
-            .ok_or(miden_node_proto::generated::blockchain::BlockHeader::missing_field(
-                "block_header",
-            ))?;
+            .ok_or_else(|| {
+                StoreError::DeserializationError(ConversionError::missing_field::<
+                    miden_node_proto::generated::blockchain::BlockHeader,
+                >("block_header"))
+            })?;
 
-        BlockHeader::try_from(response).map_err(Into::into)
+        BlockHeader::try_from(response).map_err(StoreError::DeserializationError)
     }
 
     #[instrument(target = COMPONENT, name = "store.client.get_tx_inputs", skip_all, err)]
@@ -164,7 +162,7 @@ impl StoreClient {
             nullifiers: proven_tx.nullifiers().map(Into::into).collect(),
             unauthenticated_notes: proven_tx
                 .unauthenticated_notes()
-                .map(|note| note.commitment().into())
+                .map(|note| note.to_commitment().into())
                 .collect(),
         };
 
@@ -218,7 +216,7 @@ impl StoreClient {
 
         let store_response = self.client.clone().get_block_inputs(request).await?.into_inner();
 
-        store_response.try_into().map_err(Into::into)
+        store_response.try_into().map_err(StoreError::DeserializationError)
     }
 
     #[instrument(target = COMPONENT, name = "store.client.get_batch_inputs", skip_all, err)]
@@ -234,12 +232,19 @@ impl StoreClient {
 
         let store_response = self.client.clone().get_batch_inputs(request).await?.into_inner();
 
-        store_response.try_into().map_err(Into::into)
+        store_response.try_into().map_err(StoreError::DeserializationError)
     }
 
     #[instrument(target = COMPONENT, name = "store.client.apply_block", skip_all, err)]
-    pub async fn apply_block(&self, block: &ProvenBlock) -> Result<(), StoreError> {
-        let request = tonic::Request::new(proto::blockchain::Block { block: block.to_bytes() });
+    pub async fn apply_block(
+        &self,
+        ordered_batches: &OrderedBatches,
+        signed_block: &SignedBlock,
+    ) -> Result<(), StoreError> {
+        let request = tonic::Request::new(proto::store::ApplyBlockRequest {
+            ordered_batches: ordered_batches.to_bytes(),
+            block: Some(signed_block.into()),
+        });
 
         self.client.clone().apply_block(request).await.map(|_| ()).map_err(Into::into)
     }

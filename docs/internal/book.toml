@@ -6,7 +6,7 @@ multilingual = false
 title        = "The Miden Node Developer Guide"
 
 [output.html]
-git-repository-url = "https://github.com/0xMiden/miden-node"
+git-repository-url = "https://github.com/0xMiden/node"
 
 [preprocessor.katex]
 after = ["links"]

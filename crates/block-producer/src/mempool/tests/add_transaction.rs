@@ -5,7 +5,7 @@ use miden_protocol::Word;
 use miden_protocol::block::BlockHeader;
 
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::AddTransactionError;
+use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
 use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
 
@@ -68,8 +68,8 @@ mod tx_expiration {
         // Create at least some locally retained state.
         let slack = uut.config.expiration_slack;
         for _ in 0..slack + 10 {
-            let (number, _) = uut.select_block();
-            let header = BlockHeader::mock(number, None, None, &[], Word::default());
+            let block = uut.select_block();
+            let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
             uut.commit_block(header);
         }
 
@@ -105,7 +105,7 @@ mod tx_expiration {
 
             assert_matches!(
                 result,
-                Err(AddTransactionError::Expired { .. }),
+                Err(MempoolSubmissionError::Expired { .. }),
                 "Failed run with expiration {i} and limit {limit}"
             );
         }
@@ -121,7 +121,7 @@ mod tx_expiration {
         let tx = Arc::new(tx);
         let result = uut.add_transaction(tx);
 
-        assert_matches!(result, Err(AddTransactionError::Expired { .. }));
+        assert_matches!(result, Err(MempoolSubmissionError::Expired { .. }));
     }
 }
 
@@ -140,8 +140,8 @@ mod authentication_height {
         // Create at least some locally retained state.
         let retention = uut.config.state_retention.get();
         for _ in 0..retention + 10 {
-            let (number, _) = uut.select_block();
-            let header = BlockHeader::mock(number, None, None, &[], Word::default());
+            let block = uut.select_block();
+            let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
             uut.commit_block(header);
         }
 
@@ -233,7 +233,10 @@ fn duplicate_nullifiers_are_rejected() {
     let result = uut.add_transaction(tx_b);
 
     // We overlap with one nullifier.
-    assert_matches!(result, Err(AddTransactionError::InputNotesAlreadyConsumed(..)));
+    assert_matches!(
+        result,
+        Err(MempoolSubmissionError::StateConflict(StateConflict::NullifiersAlreadyExist(..)))
+    );
 }
 
 #[test]
@@ -263,7 +266,12 @@ fn duplicate_output_notes_are_rejected() {
     uut.add_transaction(tx_a).unwrap();
     let result = uut.add_transaction(tx_b);
 
-    assert_matches!(result, Err(AddTransactionError::OutputNotesAlreadyExist(..)));
+    assert_matches!(
+        result,
+        Err(MempoolSubmissionError::StateConflict(StateConflict::OutputNotesAlreadyExist(
+            ..
+        )))
+    );
 }
 
 #[test]
@@ -293,7 +301,12 @@ fn unknown_unauthenticated_notes_are_rejected() {
     uut.add_transaction(tx_a).unwrap();
     let result = uut.add_transaction(tx_b);
 
-    assert_matches!(result, Err(AddTransactionError::UnauthenticatedNotesNotFound(..)));
+    assert_matches!(
+        result,
+        Err(MempoolSubmissionError::StateConflict(
+            StateConflict::UnauthenticatedNotesMissing(..)
+        ))
+    );
 }
 
 mod account_state {
@@ -390,7 +403,12 @@ mod account_state {
         uut.add_transaction(tx_a).unwrap();
         let result = uut.add_transaction(tx_b);
 
-        assert_matches!(result, Err(AddTransactionError::IncorrectAccountInitialCommitment { .. }));
+        assert_matches!(
+            result,
+            Err(MempoolSubmissionError::StateConflict(
+                StateConflict::AccountCommitmentMismatch { .. }
+            ))
+        );
     }
 
     /// Ensures that store state is checked if there is no local mempool state.
@@ -415,12 +433,18 @@ mod account_state {
         let tx = Arc::new(tx);
 
         let result = uut.add_transaction(tx);
-        assert_matches!(result, Err(AddTransactionError::IncorrectAccountInitialCommitment { .. }));
+        assert_matches!(
+            result,
+            Err(MempoolSubmissionError::StateConflict(
+                StateConflict::AccountCommitmentMismatch { .. }
+            ))
+        );
     }
 }
 
 mod new_account {
     use super::*;
+    use crate::errors::StateConflict;
 
     #[test]
     fn is_valid() {
@@ -459,7 +483,12 @@ mod new_account {
         ]));
         let tx = Arc::new(tx);
         let result = uut.add_transaction(tx);
-        assert_matches!(result, Err(AddTransactionError::IncorrectAccountInitialCommitment { .. }));
+        assert_matches!(
+            result,
+            Err(MempoolSubmissionError::StateConflict(
+                StateConflict::AccountCommitmentMismatch { .. }
+            ))
+        );
     }
 
     #[test]
@@ -480,6 +509,11 @@ mod new_account {
         uut.add_transaction(tx.clone()).unwrap();
 
         let result = uut.add_transaction(tx);
-        assert_matches!(result, Err(AddTransactionError::IncorrectAccountInitialCommitment { .. }));
+        assert_matches!(
+            result,
+            Err(MempoolSubmissionError::StateConflict(
+                StateConflict::AccountCommitmentMismatch { .. }
+            ))
+        );
     }
 }

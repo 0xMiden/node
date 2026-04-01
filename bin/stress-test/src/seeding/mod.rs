@@ -4,21 +4,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use metrics::SeedingMetrics;
-use miden_air::ExecutionProof;
-use miden_block_prover::LocalBlockProver;
 use miden_node_block_producer::store::StoreClient;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_store::{DataDirectory, GenesisState, Store};
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountDelta,
     AccountId,
-    AccountStorage,
     AccountStorageMode,
     AccountType,
 };
@@ -31,27 +29,31 @@ use miden_protocol::block::{
     FeeParameters,
     ProposedBlock,
     ProvenBlock,
+    SignedBlock,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
-use miden_protocol::crypto::dsa::falcon512_rpo::{PublicKey, SecretKey};
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
 use miden_protocol::note::{Note, NoteHeader, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
     InputNote,
+    InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
     OutputNote,
     ProvenTransaction,
-    ProvenTransactionBuilder,
+    PublicOutputNote,
     TransactionHeader,
+    TxAccountUpdate,
 };
-use miden_protocol::utils::Serializable;
+use miden_protocol::utils::serde::Serializable;
+use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
-use miden_standards::account::auth::AuthFalcon512Rpo;
+use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::BasicFungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
-use miden_standards::note::create_p2id_note;
+use miden_standards::note::P2idNote;
 use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSlice;
@@ -93,8 +95,13 @@ pub async fn seed_store(
     let faucet = create_faucet();
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
     let signer = EcdsaSecretKey::new();
-    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer);
-    Store::bootstrap(genesis_state.clone(), &data_directory).expect("store should bootstrap");
+    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer.clone());
+    let genesis_block = genesis_state
+        .clone()
+        .into_block()
+        .await
+        .expect("genesis block should be created");
+    Store::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
 
     // start the store
     let (_, store_url) = start_store(data_directory.clone()).await;
@@ -104,7 +111,7 @@ pub async fn seed_store(
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
     let data_directory =
         miden_node_store::DataDirectory::load(data_directory).expect("data directory should exist");
-    let genesis_header = genesis_state.into_block().unwrap().into_inner();
+    let genesis_header = genesis_state.into_block().await.unwrap().into_inner();
     let metrics = generate_blocks(
         num_accounts,
         public_accounts_percentage,
@@ -113,6 +120,7 @@ pub async fn seed_store(
         &store_client,
         data_directory,
         accounts_filepath,
+        &signer,
     )
     .await;
 
@@ -124,6 +132,7 @@ pub async fn seed_store(
 ///
 /// The first transaction in each batch sends assets from the faucet to 255 accounts.
 /// The rest of the transactions consume the notes created by the faucet in the previous block.
+#[expect(clippy::too_many_arguments)]
 async fn generate_blocks(
     num_accounts: usize,
     public_accounts_percentage: u8,
@@ -132,6 +141,7 @@ async fn generate_blocks(
     store_client: &StoreClient,
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
+    signer: &EcdsaSecretKey,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
     // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx
@@ -146,7 +156,7 @@ async fn generate_blocks(
     let mut consume_notes_txs = vec![];
 
     let consumes_per_block = TRANSACTIONS_PER_BATCH * BATCHES_PER_BLOCK - 1;
-    #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[expect(clippy::cast_sign_loss, clippy::cast_precision_loss)]
     let num_public_accounts = (consumes_per_block as f64
         * (f64::from(public_accounts_percentage) / 100.0))
         .round() as usize;
@@ -156,13 +166,13 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
         SecretKey::with_rng(&mut *rng)
     };
 
-    let mut prev_block = genesis_block.clone();
+    let mut prev_block_header = genesis_block.header().clone();
     let mut current_anchor_header = genesis_block.header().clone();
 
     for i in 0..total_blocks {
@@ -194,7 +204,7 @@ async fn generate_blocks(
         note_nullifiers.extend(notes.iter().map(|n| n.nullifier().prefix()));
 
         // create the tx that creates the notes
-        let emit_note_tx = create_emit_note_tx(prev_block.header(), &mut faucet, notes.clone());
+        let emit_note_tx = create_emit_note_tx(&prev_block_header, &mut faucet, notes.clone());
 
         // collect all the txs
         block_txs.push(emit_note_tx);
@@ -203,27 +213,24 @@ async fn generate_blocks(
         // create the batches with [TRANSACTIONS_PER_BATCH] txs each
         let batches: Vec<ProvenBatch> = block_txs
             .par_chunks(TRANSACTIONS_PER_BATCH)
-            .map(|txs| create_batch(txs, prev_block.header()))
+            .map(|txs| create_batch(txs, &prev_block_header))
             .collect();
 
         // create the block and send it to the store
         let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
 
         // update blocks
-        prev_block = apply_block(batches, block_inputs, store_client, &mut metrics).await;
-        if current_anchor_header.block_epoch() != prev_block.header().block_epoch() {
-            current_anchor_header = prev_block.header().clone();
+        prev_block_header =
+            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+        if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
+            current_anchor_header = prev_block_header.clone();
         }
 
         // create the consume notes txs to be used in the next block
         let batch_inputs =
-            get_batch_inputs(store_client, prev_block.header(), &notes, &mut metrics).await;
-        consume_notes_txs = create_consume_note_txs(
-            prev_block.header(),
-            accounts,
-            notes,
-            &batch_inputs.note_proofs,
-        );
+            get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
+        consume_notes_txs =
+            create_consume_note_txs(&prev_block_header, accounts, notes, &batch_inputs.note_proofs);
 
         // track store size every 50 blocks
         if i % 50 == 0 {
@@ -249,21 +256,22 @@ async fn apply_block(
     block_inputs: BlockInputs,
     store_client: &StoreClient,
     metrics: &mut SeedingMetrics,
-) -> ProvenBlock {
-    let proposed_block = ProposedBlock::new(block_inputs.clone(), batches).unwrap();
+    signer: &EcdsaSecretKey,
+) -> BlockHeader {
+    let proposed_block = ProposedBlock::new(block_inputs, batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
-    let block_proof = LocalBlockProver::new(0)
-        .prove_dummy(proposed_block.batches().clone(), header.clone(), block_inputs)
-        .unwrap();
-    let signature = EcdsaSecretKey::new().sign(header.commitment());
-    let proven_block = ProvenBlock::new_unchecked(header, body, signature, block_proof);
-    let block_size: usize = proven_block.to_bytes().len();
+    let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
+    let signature = signer.sign(header.commitment());
+    // SAFETY: The header, body, and signature are known to correspond to each other.
+    let signed_block = SignedBlock::new_unchecked(header, body, signature);
+    let ordered_batches = proposed_block.batches().clone();
 
     let start = Instant::now();
-    store_client.apply_block(&proven_block).await.unwrap();
+    store_client.apply_block(&ordered_batches, &signed_block).await.unwrap();
     metrics.track_block_insertion(start.elapsed(), block_size);
 
-    proven_block
+    let (header, ..) = signed_block.into_parts();
+    header
 }
 
 // HELPER FUNCTIONS
@@ -286,7 +294,7 @@ fn create_accounts_and_notes(
     num_accounts: usize,
     storage_mode: AccountStorageMode,
     key_pair: &SecretKey,
-    rng: &Arc<Mutex<RpoRandomCoin>>,
+    rng: &Arc<Mutex<RandomCoin>>,
     faucet_id: AccountId,
     block_num: usize,
 ) -> (Vec<Account>, Vec<Note>) {
@@ -309,9 +317,9 @@ fn create_accounts_and_notes(
 
 /// Creates a public P2ID note containing 10 tokens of the fungible asset associated with the
 /// specified `faucet_id` and sent to the specified target account.
-fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RpoRandomCoin) -> Note {
+fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RandomCoin) -> Note {
     let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
-    create_p2id_note(
+    P2idNote::create(
         faucet_id,
         target_id,
         vec![asset],
@@ -329,7 +337,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(storage_mode)
-        .with_auth_component(AuthFalcon512Rpo::new(public_key.into()))
+        .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet)
         .build()
         .unwrap()
@@ -338,7 +346,7 @@ fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorag
 /// Creates a new faucet account.
 fn create_faucet() -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RpoRandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed = [0_u8; 32];
 
@@ -347,7 +355,10 @@ fn create_faucet() -> Account {
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
         .with_component(BasicFungibleFaucet::new(token_symbol, 2, Felt::new(u64::MAX)).unwrap())
-        .with_auth_component(AuthFalcon512Rpo::new(key_pair.public_key().into()))
+        .with_auth_component(AuthSingleSig::new(
+            key_pair.public_key().into(),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build()
         .unwrap()
 }
@@ -367,7 +378,7 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         account_updates,
         InputNotes::new(input_notes).unwrap(),
         output_notes,
-        BlockNumber::from(u32::MAX),
+        BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
     )
     .unwrap()
@@ -418,20 +429,24 @@ fn create_consume_note_tx(
         (AccountUpdateDetails::Private, Word::empty())
     };
 
-    ProvenTransactionBuilder::new(
+    let account_update = TxAccountUpdate::new(
         account.id(),
         init_hash,
-        account.commitment(),
+        account.to_commitment(),
         account_delta_commitment,
+        details,
+    )
+    .unwrap();
+    ProvenTransaction::new(
+        account_update,
+        vec![InputNoteCommitment::from(input_note)],
+        Vec::<OutputNote>::new(),
         block_ref.block_num(),
         block_ref.commitment(),
         fee_from_block(block_ref).unwrap(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .add_input_notes(vec![input_note])
-    .account_update_details(details)
-    .build()
     .unwrap()
 }
 
@@ -442,22 +457,32 @@ fn create_emit_note_tx(
     faucet: &mut Account,
     output_notes: Vec<Note>,
 ) -> ProvenTransaction {
-    let initial_account_hash = faucet.commitment();
+    let initial_account_hash = faucet.to_commitment();
 
-    let metadata_slot_name = AccountStorage::faucet_sysdata_slot();
+    let metadata_slot_name = BasicFungibleFaucet::metadata_slot();
     let slot = faucet.storage().get_item(metadata_slot_name).unwrap();
     faucet
         .storage_mut()
-        .set_item(metadata_slot_name, [slot[0], slot[1], slot[2], slot[3] + Felt::new(10)].into())
+        .set_item(metadata_slot_name, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
         .unwrap();
 
     faucet.increment_nonce(ONE).unwrap();
 
-    ProvenTransactionBuilder::new(
+    let account_update = TxAccountUpdate::new(
         faucet.id(),
         initial_account_hash,
-        faucet.commitment(),
+        faucet.to_commitment(),
         Word::empty(),
+        AccountUpdateDetails::Private,
+    )
+    .unwrap();
+    ProvenTransaction::new(
+        account_update,
+        Vec::<InputNoteCommitment>::new(),
+        output_notes
+            .into_iter()
+            .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
+            .collect::<Vec<OutputNote>>(),
         block_ref.block_num(),
         block_ref.commitment(),
         FungibleAsset::new(
@@ -468,8 +493,6 @@ fn create_emit_note_tx(
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .add_output_notes(output_notes.into_iter().map(OutputNote::Full).collect::<Vec<OutputNote>>())
-    .build()
     .unwrap()
 }
 
@@ -509,7 +532,7 @@ async fn get_block_inputs(
                 batch
                     .input_notes()
                     .into_iter()
-                    .filter_map(|note| note.header().map(NoteHeader::commitment))
+                    .filter_map(|note| note.header().map(NoteHeader::to_commitment))
             }),
             batches.iter().map(ProvenBatch::reference_block_num),
         )
@@ -523,6 +546,8 @@ async fn get_block_inputs(
 /// Runs the store with the given data directory. Returns a tuple with:
 /// - a gRPC client to access the store
 /// - the URL of the store
+///
+/// The store uses a local prover.
 pub async fn start_store(
     data_directory: PathBuf,
 ) -> (RpcClient<InterceptedService<Channel, OtelInterceptor>>, Url) {
@@ -544,10 +569,13 @@ pub async fn start_store(
     task::spawn(async move {
         Store {
             rpc_listener,
+            block_prover_url: None,
             ntx_builder_listener,
             block_producer_listener,
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::bench(),
+            max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
+            storage_options: StorageOptions::bench(),
         }
         .serve()
         .await

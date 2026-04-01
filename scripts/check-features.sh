@@ -7,9 +7,8 @@ set -euo pipefail
 
 echo "Checking all feature combinations with cargo-hack..."
 
-# Set environment variables to treat warnings as errors and build protos
+# Set environment variables to treat warnings as errors
 export RUSTFLAGS="-D warnings"
-export BUILD_PROTO=1
 
 # Run cargo-hack with comprehensive feature checking
 cargo hack check \

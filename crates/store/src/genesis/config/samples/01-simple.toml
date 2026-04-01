@@ -1,11 +1,6 @@
 timestamp = 1717344256
 version   = 1
 
-[native_faucet]
-decimals   = 3
-max_supply = 100_000_000
-symbol     = "MIDEN"
-
 [fee_parameters]
 verification_base_fee = 0
 

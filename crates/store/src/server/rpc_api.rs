@@ -1,4 +1,6 @@
 use miden_node_proto::convert;
+use miden_node_proto::domain::block::InvalidBlockRange;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -10,6 +12,7 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteId;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
@@ -17,12 +20,14 @@ use tracing::{debug, info};
 use crate::COMPONENT;
 use crate::errors::{
     CheckNullifiersError,
+    GetAccountError,
     GetBlockByNumberError,
     GetNoteScriptByRootError,
     GetNotesByIdError,
     NoteSyncError,
     SyncAccountStorageMapsError,
     SyncAccountVaultError,
+    SyncChainMmrError,
     SyncNullifiersError,
     SyncTransactionsError,
 };
@@ -117,54 +122,6 @@ impl rpc_server::Rpc for StoreApi {
         }))
     }
 
-    /// Returns info which can be used by the client to sync up to the latest state of the chain
-    /// for the objects the client is interested in.
-    async fn sync_state(
-        &self,
-        request: Request<proto::rpc::SyncStateRequest>,
-    ) -> Result<Response<proto::rpc::SyncStateResponse>, Status> {
-        let request = request.into_inner();
-
-        let account_ids: Vec<AccountId> = read_account_ids::<Status>(&request.account_ids)?;
-
-        let (state, delta) = self
-            .state
-            .sync_state(request.block_num.into(), account_ids, request.note_tags)
-            .await
-            .map_err(internal_error)?;
-
-        let accounts = state
-            .account_updates
-            .into_iter()
-            .map(|account_info| proto::account::AccountSummary {
-                account_id: Some(account_info.account_id.into()),
-                account_commitment: Some(account_info.account_commitment.into()),
-                block_num: account_info.block_num.as_u32(),
-            })
-            .collect();
-
-        let transactions = state
-            .transactions
-            .into_iter()
-            .map(|transaction_summary| proto::transaction::TransactionSummary {
-                account_id: Some(transaction_summary.account_id.into()),
-                block_num: transaction_summary.block_num.as_u32(),
-                transaction_id: Some(transaction_summary.transaction_id.into()),
-            })
-            .collect();
-
-        let notes = state.notes.into_iter().map(Into::into).collect();
-
-        Ok(Response::new(proto::rpc::SyncStateResponse {
-            chain_tip: self.state.latest_block_num().await.as_u32(),
-            block_header: Some(state.block_header.into()),
-            mmr_delta: Some(delta.into()),
-            accounts,
-            transactions,
-            notes,
-        }))
-    }
-
     /// Returns info which can be used by the client to sync note state.
     async fn sync_notes(
         &self,
@@ -176,23 +133,84 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+        if *block_range.end() > chain_tip {
+            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
+        }
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (state, mmr_proof, last_block_included) =
+        let (results, last_block_checked) =
             self.state.sync_notes(request.note_tags, block_range).await?;
 
-        let notes = state.notes.into_iter().map(Into::into).collect();
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(Into::into).collect(),
+            })
+            .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+                block_num: last_block_checked.as_u32(),
             }),
-            block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path.into()),
-            notes,
+            blocks,
+        }))
+    }
+
+    /// Returns chain MMR updates within a block range.
+    async fn sync_chain_mmr(
+        &self,
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
+        let request = request.into_inner();
+        let chain_tip = self.state.latest_block_num().await;
+
+        let block_range = request
+            .block_range
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::rpc::SyncChainMmrRequest>("block_range")
+            })
+            .map_err(SyncChainMmrError::DeserializationFailed)?;
+
+        // Determine the effective tip based on the requested finality level.
+        let effective_tip = match request.finality() {
+            proto::rpc::Finality::Unspecified | proto::rpc::Finality::Committed => chain_tip,
+            proto::rpc::Finality::Proven => self
+                .state
+                .db()
+                .select_latest_proven_in_sequence_block_num()
+                .await
+                .map_err(SyncChainMmrError::DatabaseError)?,
+        };
+
+        let block_from = BlockNumber::from(block_range.block_from);
+        if block_from > effective_tip {
+            Err(SyncChainMmrError::FutureBlock { chain_tip: effective_tip, block_from })?;
+        }
+
+        let block_to =
+            block_range.block_to.map_or(effective_tip, BlockNumber::from).min(effective_tip);
+
+        if block_from > block_to {
+            Err(SyncChainMmrError::InvalidBlockRange(InvalidBlockRange::StartGreaterThanEnd {
+                start: block_from,
+                end: block_to,
+            }))?;
+        }
+        let block_range = block_from..=block_to;
+        let mmr_delta =
+            self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;
+
+        Ok(Response::new(proto::rpc::SyncChainMmrResponse {
+            block_range: Some(proto::rpc::BlockRange {
+                block_from: block_range.start().as_u32(),
+                block_to: Some(block_range.end().as_u32()),
+            }),
+            mmr_delta: Some(mmr_delta.into()),
         }))
     }
 
@@ -250,7 +268,7 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         debug!(target: COMPONENT, ?request);
         let request = request.into_inner();
-        let account_request = request.try_into()?;
+        let account_request = request.try_into().map_err(GetAccountError::DeserializationFailed)?;
 
         let account_data = self.state.get_account(account_request).await?;
 
@@ -264,7 +282,10 @@ impl rpc_server::Rpc for StoreApi {
         let request = request.into_inner();
         let chain_tip = self.state.latest_block_num().await;
 
-        let account_id: AccountId = read_account_id::<SyncAccountVaultError>(request.account_id)?;
+        let account_id: AccountId = read_account_id::<
+            proto::rpc::SyncAccountVaultRequest,
+            SyncAccountVaultError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             return Err(SyncAccountVaultError::AccountNotPublic(account_id).into());
@@ -312,7 +333,10 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<SyncAccountStorageMapsError>(request.account_id)?;
+        let account_id = read_account_id::<
+            proto::rpc::SyncAccountStorageMapsRequest,
+            SyncAccountStorageMapsError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
@@ -327,7 +351,7 @@ impl rpc_server::Rpc for StoreApi {
 
         let storage_maps_page = self
             .state
-            .get_storage_map_sync_values(account_id, block_range)
+            .sync_account_storage_maps(account_id, block_range)
             .await
             .map_err(SyncAccountStorageMapsError::from)?;
 
@@ -364,11 +388,12 @@ impl rpc_server::Rpc for StoreApi {
 
     async fn get_note_script_by_root(
         &self,
-        request: Request<proto::note::NoteRoot>,
+        request: Request<proto::note::NoteScriptRoot>,
     ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let root = read_root::<GetNoteScriptByRootError>(request.into_inner().root, "NoteRoot")?;
+        let root =
+            read_root::<GetNoteScriptByRootError>(request.into_inner().root, "NoteScriptRoot")?;
 
         let note_script = self
             .state
@@ -408,41 +433,12 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncTransactionsError::from)?;
 
-        // Collect all note IDs from all transactions to make a single query
-        let all_notes_ids = transaction_records_db
-            .iter()
-            .flat_map(|tx| tx.output_notes.iter())
-            .copied()
-            .collect::<Vec<_>>();
-
-        // Retrieve all note data in a single query
-        let all_note_records = self
-            .state
-            .get_notes_by_id(all_notes_ids)
-            .await
-            .map_err(SyncTransactionsError::from)?;
-
-        // Create a map from note ID to note record for efficient lookup
-        let note_map: std::collections::HashMap<_, _> = all_note_records
+        // Convert database TransactionRecords directly to proto TransactionRecords.
+        // All data needed for the proto TransactionHeader is stored in the transactions table.
+        let transactions: Vec<_> = transaction_records_db
             .into_iter()
-            .map(|note_record| (note_record.note_id, note_record))
+            .map(crate::db::TransactionRecord::into_proto)
             .collect();
-
-        // Convert database TransactionRecord to proto TransactionRecord
-        let mut transactions = Vec::with_capacity(transaction_records_db.len());
-
-        for tx_header in transaction_records_db {
-            // Get note records for this transaction's output notes
-            let note_records: Vec<_> = tx_header
-                .output_notes
-                .iter()
-                .filter_map(|note_id| note_map.get(&note_id.as_word()).cloned())
-                .collect();
-
-            // Convert to proto using the helper method
-            let proto_record = tx_header.into_proto_with_note_records(note_records);
-            transactions.push(proto_record);
-        }
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {

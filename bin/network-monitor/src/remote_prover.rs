@@ -8,12 +8,13 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::clients::{Builder as ClientBuilder, RemoteProverClient};
 use miden_node_proto::generated as proto;
+use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::transaction::TransactionInputs;
+use miden_protocol::utils::serde::Serializable;
 use miden_testing::{Auth, MockChainBuilder};
-use miden_tx::utils::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -277,7 +278,9 @@ pub async fn generate_mock_transaction() -> anyhow::Result<TransactionInputs> {
 
     // Create an account with basic authentication
     let account = mock_chain_builder
-        .add_existing_wallet(Auth::BasicAuth)
+        .add_existing_wallet(Auth::BasicAuth {
+            auth_scheme: AuthScheme::Falcon512Poseidon2,
+        })
         .context("Failed to add wallet to mock chain")?;
 
     // Create a fungible asset

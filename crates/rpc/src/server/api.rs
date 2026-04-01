@@ -1,8 +1,14 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::clients::{BlockProducerClient, Builder, StoreRpcClient, ValidatorClient};
+use miden_node_proto::clients::{
+    BlockProducerClient,
+    Builder,
+    NtxBuilderClient,
+    StoreRpcClient,
+    ValidatorClient,
+};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
@@ -17,13 +23,18 @@ use miden_node_utils::limiter::{
     QueryParamNullifierLimit,
     QueryParamStorageMapKeyTotalLimit,
 };
-use miden_protocol::batch::ProvenBatch;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{Note, NoteRecipient, NoteScript};
-use miden_protocol::transaction::{OutputNote, ProvenTransaction, ProvenTransactionBuilder};
+use miden_protocol::transaction::{
+    OutputNote,
+    ProvenTransaction,
+    PublicOutputNote,
+    TxAccountUpdate,
+};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
+use miden_tx_batch_prover::LocalBatchProver;
 use tonic::{IntoRequest, Request, Response, Status};
 use tracing::{debug, info};
 use url::Url;
@@ -37,11 +48,17 @@ pub struct RpcService {
     store: StoreRpcClient,
     block_producer: Option<BlockProducerClient>,
     validator: ValidatorClient,
+    ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
 }
 
 impl RpcService {
-    pub(super) fn new(store_url: Url, block_producer_url: Option<Url>, validator_url: Url) -> Self {
+    pub(super) fn new(
+        store_url: Url,
+        block_producer_url: Option<Url>,
+        validator_url: Url,
+        ntx_builder_url: Option<Url>,
+    ) -> Self {
         let store = {
             info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
             Builder::new(store_url)
@@ -83,10 +100,26 @@ impl RpcService {
                 .connect_lazy::<ValidatorClient>()
         };
 
+        let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
+            info!(
+                target: COMPONENT,
+                ntx_builder_endpoint = %ntx_builder_url,
+                "Initializing ntx-builder client",
+            );
+            Builder::new(ntx_builder_url)
+                .without_tls()
+                .without_timeout()
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<NtxBuilderClient>()
+        });
+
         Self {
             store,
             block_producer,
             validator,
+            ntx_builder,
             genesis_commitment: None,
         }
     }
@@ -152,8 +185,13 @@ impl RpcService {
     }
 }
 
+// API IMPLEMENTATION
+// ================================================================================================
+
 #[tonic::async_trait]
 impl api_server::Api for RpcService {
+    // -- Nullifier endpoints -----------------------------------------------------------------
+
     async fn check_nullifiers(
         &self,
         request: Request<proto::rpc::NullifierList>,
@@ -183,6 +221,8 @@ impl api_server::Api for RpcService {
         self.store.clone().sync_nullifiers(request).await
     }
 
+    // -- Block endpoints ---------------------------------------------------------------------
+
     async fn get_block_header_by_number(
         &self,
         request: Request<proto::rpc::BlockHeaderByNumberRequest>,
@@ -192,26 +232,27 @@ impl api_server::Api for RpcService {
         self.store.clone().get_block_header_by_number(request).await
     }
 
-    async fn sync_state(
+    async fn get_block_by_number(
         &self,
-        request: Request<proto::rpc::SyncStateRequest>,
-    ) -> Result<Response<proto::rpc::SyncStateResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request.get_ref());
+        request: Request<proto::blockchain::BlockNumber>,
+    ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
+        let request = request.into_inner();
 
-        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
-        check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
+        debug!(target: COMPONENT, ?request);
 
-        self.store.clone().sync_state(request).await
+        self.store.clone().get_block_by_number(request).await
     }
 
-    async fn sync_account_storage_maps(
+    async fn sync_chain_mmr(
         &self,
-        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
-    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_account_storage_maps(request).await
+        self.store.clone().sync_chain_mmr(request).await
     }
+
+    // -- Note endpoints ----------------------------------------------------------------------
 
     async fn sync_notes(
         &self,
@@ -245,6 +286,26 @@ impl api_server::Api for RpcService {
         self.store.clone().get_notes_by_id(request).await
     }
 
+    async fn get_note_script_by_root(
+        &self,
+        request: Request<proto::note::NoteScriptRoot>,
+    ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
+        debug!(target: COMPONENT, request = ?request);
+
+        self.store.clone().get_note_script_by_root(request).await
+    }
+
+    // -- Account endpoints -------------------------------------------------------------------
+
+    async fn sync_account_storage_maps(
+        &self,
+        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
+    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request.get_ref());
+
+        self.store.clone().sync_account_storage_maps(request).await
+    }
+
     async fn sync_account_vault(
         &self,
         request: tonic::Request<proto::rpc::SyncAccountVaultRequest>,
@@ -255,6 +316,41 @@ impl api_server::Api for RpcService {
         self.store.clone().sync_account_vault(request).await
     }
 
+    /// Validates storage map key limits before forwarding the account request to the store.
+    async fn get_account(
+        &self,
+        request: Request<proto::rpc::AccountRequest>,
+    ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
+        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
+            SlotData::AllEntries as ProtoMapAllEntries, SlotData::MapKeys as ProtoMapKeys,
+        };
+
+        let request = request.into_inner();
+
+        debug!(target: COMPONENT, ?request);
+
+        // Validate total storage map key limit before forwarding to store
+        if let Some(details) = &request.details {
+            let total_keys: usize = details
+                .storage_maps
+                .iter()
+                .filter_map(|m| m.slot_data.as_ref())
+                .filter_map(|d| match d {
+                    ProtoMapKeys(keys) => Some(keys.map_keys.len()),
+                    ProtoMapAllEntries(_) => None,
+                })
+                .sum();
+            check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
+        }
+
+        self.store.clone().get_account(request).await
+    }
+
+    // -- Transaction submission --------------------------------------------------------------
+
+    /// Deserializes and rebuilds the transaction with MAST decorators stripped from output note
+    /// scripts, verifies the transaction proof, optionally re-executes via the validator if
+    /// transaction inputs are provided, then forwards the transaction to the block producer.
     async fn submit_proven_transaction(
         &self,
         request: Request<proto::transaction::ProvenTransaction>,
@@ -274,34 +370,27 @@ impl api_server::Api for RpcService {
         })?;
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
-        let mut builder = ProvenTransactionBuilder::new(
+        let account_update = TxAccountUpdate::new(
             tx.account_id(),
             tx.account_update().initial_state_commitment(),
             tx.account_update().final_state_commitment(),
             tx.account_update().account_delta_commitment(),
+            tx.account_update().details().clone(),
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let stripped_outputs = strip_output_note_decorators(tx.output_notes().iter());
+        let rebuilt_tx = ProvenTransaction::new(
+            account_update,
+            tx.input_notes().iter().cloned(),
+            stripped_outputs,
             tx.ref_block_num(),
             tx.ref_block_commitment(),
             tx.fee(),
             tx.expiration_block_num(),
             tx.proof().clone(),
         )
-        .account_update_details(tx.account_update().details().clone())
-        .add_input_notes(tx.input_notes().iter().cloned());
-
-        let stripped_outputs = tx.output_notes().iter().map(|note| match note {
-            OutputNote::Full(note) => {
-                let mut mast = note.script().mast().clone();
-                Arc::make_mut(&mut mast).strip_decorators();
-                let script = NoteScript::from_parts(mast, note.script().entrypoint());
-                let recipient =
-                    NoteRecipient::new(note.serial_num(), script, note.inputs().clone());
-                let new_note = Note::new(note.assets().clone(), note.metadata().clone(), recipient);
-                OutputNote::Full(new_note)
-            },
-            other => other.clone(),
-        });
-        builder = builder.add_output_notes(stripped_outputs);
-        let rebuilt_tx = builder.build().map_err(|e| Status::invalid_argument(e.to_string()))?;
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let mut request = request;
         request.transaction = rebuilt_tx.to_bytes();
 
@@ -324,112 +413,129 @@ impl api_server::Api for RpcService {
             ))
         })?;
 
-        // If transaction inputs are provided, re-execute the transaction to validate it.
+        // Transaction inputs must be provided in order to allow for transaction re-execution via
+        // the Validator.
         if request.transaction_inputs.is_some() {
-            // Re-execute the transaction via the Validator.
             self.validator.clone().submit_proven_transaction(request.clone()).await?;
+        } else {
+            return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
         block_producer.clone().submit_proven_transaction(request).await
     }
 
+    /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
+    /// the batch, then forwards it to the block producer.
     async fn submit_proven_batch(
         &self,
-        request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
+        request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         let Some(block_producer) = &self.block_producer else {
             return Err(Status::unavailable("Batch submission not available in read-only mode"));
         };
 
-        let mut request = request.into_inner();
+        let request = request.into_inner();
 
-        let batch = ProvenBatch::read_from_bytes(&request.encoded)
-            .map_err(|err| Status::invalid_argument(err.as_report_context("invalid batch")))?;
+        let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
+            Status::invalid_argument(err.as_report_context("invalid proven_batch"))
+        })?;
 
-        // Build a new batch with output notes' decorators removed
-        let stripped_outputs: Vec<OutputNote> = batch
-            .output_notes()
-            .iter()
-            .map(|note| match note {
-                OutputNote::Full(note) => {
-                    let mut mast = note.script().mast().clone();
-                    Arc::make_mut(&mut mast).strip_decorators();
-                    let script = NoteScript::from_parts(mast, note.script().entrypoint());
-                    let recipient =
-                        NoteRecipient::new(note.serial_num(), script, note.inputs().clone());
-                    let new_note =
-                        Note::new(note.assets().clone(), note.metadata().clone(), recipient);
-                    OutputNote::Full(new_note)
-                },
-                other => other.clone(),
-            })
-            .collect();
+        let proposed_batch = request
+            .proposed_batch
+            .as_deref()
+            .map(ProposedBatch::read_from_bytes)
+            .transpose()
+            .map_err(|err| {
+                Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
+            })?
+            .ok_or(Status::invalid_argument("missing `proposed_batch` field"))?;
 
-        let rebuilt_batch = ProvenBatch::new(
-            batch.id(),
-            batch.reference_block_commitment(),
-            batch.reference_block_num(),
-            batch.account_updates().clone(),
-            batch.input_notes().clone(),
-            stripped_outputs,
-            batch.batch_expiration_block_num(),
-            batch.transactions().clone(),
-        )
-        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        // Perform this check here since its cheap. If this passes we can safely zip inputs and
+        // transactions.
+        if request.transaction_inputs.len() != proposed_batch.transactions().len() {
+            return Err(Status::invalid_argument(format!(
+                "Number of inputs {} does not match number of transaction {} in batch",
+                request.transaction_inputs.len(),
+                proposed_batch.transactions().len()
+            )));
+        }
 
-        request.encoded = rebuilt_batch.to_bytes();
-
-        // Only allow deployment transactions for new network accounts
-        for tx in batch.transactions().as_slice() {
-            if tx.account_id().is_network() && !tx.initial_state_commitment().is_empty() {
+        // Only allow deployment transactions for new network accounts.
+        for tx in proposed_batch.transactions() {
+            if tx.account_id().is_network()
+                && !tx.account_update().initial_state_commitment().is_empty()
+            {
                 return Err(Status::invalid_argument(
                     "Network transactions may not be submitted by users yet",
                 ));
             }
         }
 
+        // Verify batch transaction proofs.
+        //
+        // Need to do this because ProvenBatch has no real kernel yet, so we can only
+        // really check that the calculated proof matches the one given in the request.
+        let expected_proof = LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
+            .prove(proposed_batch.clone())
+            .map_err(|err| {
+                Status::invalid_argument(err.as_report_context("proposed block proof failed"))
+            })?;
+
+        if expected_proof != proven_batch {
+            return Err(Status::invalid_argument("batch proof did not match proposed batch"));
+        }
+
+        // Verify the reference header matches the canonical chain.
+        let reference_header = self
+            .get_block_header_by_number(Request::new(proto::rpc::BlockHeaderByNumberRequest {
+                block_num: expected_proof.reference_block_num().as_u32().into(),
+                include_mmr_proof: false.into(),
+            }))
+            .await?
+            .into_inner()
+            .block_header
+            .map(BlockHeader::try_from)
+            .transpose()?
+            .ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "unknown reference block {}",
+                    expected_proof.reference_block_num()
+                ))
+            })?;
+        if reference_header.commitment() != expected_proof.reference_block_commitment() {
+            return Err(Status::invalid_argument(format!(
+                "batch reference commitment {} at block {} does not match canonical chain's commitment of {}",
+                expected_proof.reference_block_commitment(),
+                expected_proof.reference_block_num(),
+                reference_header.commitment()
+            )));
+        }
+
+        // Submit each transaction to the validator.
+        //
+        // SAFETY: We checked earlier that the two iterators are the same length.
+        for (tx, inputs) in proposed_batch.transactions().iter().zip(&request.transaction_inputs) {
+            let request = proto::transaction::ProvenTransaction {
+                transaction: tx.to_bytes(),
+                transaction_inputs: inputs.clone().into(),
+            };
+            self.validator.clone().submit_proven_transaction(request).await?;
+        }
+
         block_producer.clone().submit_proven_batch(request).await
     }
 
-    async fn get_block_by_number(
+    // -- Status & utility endpoints ----------------------------------------------------------
+
+    async fn sync_transactions(
         &self,
-        request: Request<proto::blockchain::BlockNumber>,
-    ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
-        let request = request.into_inner();
+        request: Request<proto::rpc::SyncTransactionsRequest>,
+    ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request);
 
-        debug!(target: COMPONENT, ?request);
+        check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
 
-        self.store.clone().get_block_by_number(request).await
-    }
-
-    async fn get_account(
-        &self,
-        request: Request<proto::rpc::AccountRequest>,
-    ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
-        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
-            SlotData::MapKeys as ProtoMapKeys,
-            SlotData::AllEntries as ProtoMapAllEntries
-        };
-
-        let request = request.into_inner();
-
-        debug!(target: COMPONENT, ?request);
-
-        // Validate total storage map key limit before forwarding to store
-        if let Some(details) = &request.details {
-            let total_keys: usize = details
-                .storage_maps
-                .iter()
-                .filter_map(|m| m.slot_data.as_ref())
-                .filter_map(|d| match d {
-                    ProtoMapKeys(keys) => Some(keys.map_keys.len()),
-                    ProtoMapAllEntries(_) => None,
-                })
-                .sum();
-            check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
-        }
-
-        self.store.clone().get_account(request).await
+        self.store.clone().sync_transactions(request).await
     }
 
     async fn status(
@@ -468,24 +574,6 @@ impl api_server::Api for RpcService {
         }))
     }
 
-    async fn get_note_script_by_root(
-        &self,
-        request: Request<proto::note::NoteRoot>,
-    ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
-        debug!(target: COMPONENT, request = ?request);
-
-        self.store.clone().get_note_script_by_root(request).await
-    }
-
-    async fn sync_transactions(
-        &self,
-        request: Request<proto::rpc::SyncTransactionsRequest>,
-    ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request);
-
-        self.store.clone().sync_transactions(request).await
-    }
-
     async fn get_limits(
         &self,
         request: Request<()>,
@@ -494,6 +582,51 @@ impl api_server::Api for RpcService {
 
         Ok(Response::new(RPC_LIMITS.clone()))
     }
+
+    // -- Note debugging endpoints ----------------------------------------------------------------
+
+    async fn get_note_error(
+        &self,
+        request: Request<proto::note::NoteId>,
+    ) -> Result<Response<proto::rpc::GetNoteErrorResponse>, Status> {
+        debug!(target: COMPONENT, request = ?request.get_ref());
+
+        let Some(ntx_builder) = &self.ntx_builder else {
+            return Err(Status::unavailable("Network transaction builder is not enabled"));
+        };
+
+        let response = ntx_builder.clone().get_note_error(request).await?.into_inner();
+
+        Ok(Response::new(proto::rpc::GetNoteErrorResponse {
+            error: response.error,
+            attempt_count: response.attempt_count,
+            last_attempt_block_num: response.last_attempt_block_num,
+        }))
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Strips decorators from public output notes' scripts.
+///
+/// This removes MAST decorators from note scripts before forwarding to the block producer,
+/// as decorators are not needed for transaction processing.
+///
+/// Note: `PublicOutputNote::new()` already calls `note.minify_script()` internally, so
+/// reconstructing the public note through it handles decorator stripping automatically.
+fn strip_output_note_decorators<'a>(
+    notes: impl Iterator<Item = &'a OutputNote> + 'a,
+) -> impl Iterator<Item = OutputNote> + 'a {
+    notes.map(|note| match note {
+        OutputNote::Public(public_note) => {
+            // Reconstruct via PublicOutputNote::new which calls minify_script() internally.
+            let rebuilt = PublicOutputNote::new(public_note.as_note().clone())
+                .expect("rebuilding an already-valid public output note should not fail");
+            OutputNote::Public(rebuilt)
+        },
+        OutputNote::Private(header) => OutputNote::Private(header.clone()),
+    })
 }
 
 // LIMIT HELPERS
@@ -505,7 +638,6 @@ fn out_of_range_error<E: core::fmt::Display>(err: E) -> Status {
 }
 
 /// Check, but don't repeat ourselves mapping the error
-#[allow(clippy::result_large_err)]
 fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
@@ -536,11 +668,8 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
                 endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
             ),
             (
-                "SyncState".into(),
-                endpoint_limits(&[
-                    (AccountId::PARAM_NAME, AccountId::LIMIT),
-                    (NoteTag::PARAM_NAME, NoteTag::LIMIT),
-                ]),
+                "SyncTransactions".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),

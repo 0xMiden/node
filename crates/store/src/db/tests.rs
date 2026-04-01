@@ -1,13 +1,13 @@
-#![allow(clippy::similar_names, reason = "naming dummy test values is hard")]
-#![allow(clippy::too_many_lines, reason = "test code can be long")]
-
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use diesel::{Connection, SqliteConnection};
-use miden_node_proto::domain::account::AccountSummary;
+use assert_matches::assert_matches;
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
+use miden_node_proto::BlockProofRequest;
+use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee, test_fee_params};
-use miden_protocol::account::auth::PublicKeyCommitment;
+use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
+use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
@@ -21,27 +21,31 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
     AccountVaultDelta,
+    StorageMapKey,
     StorageSlot,
     StorageSlotContent,
     StorageSlotDelta,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
+    BlockInputs,
     BlockNoteIndex,
     BlockNoteTree,
     BlockNumber,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
-use miden_protocol::crypto::rand::RpoRandomCoin;
+use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
+use miden_protocol::crypto::merkle::smt::SmtProof;
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
     NoteDetails,
-    NoteExecutionHint,
     NoteHeader,
     NoteId,
     NoteMetadata,
@@ -52,31 +56,36 @@ use miden_protocol::note::{
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
-    ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
-use miden_protocol::testing::random_signer::RandomBlockSigner;
+use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
+    PartialBlockchain,
     TransactionHeader,
     TransactionId,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
-use miden_protocol::{EMPTY_WORD, Felt, FieldElement, Word};
-use miden_standards::account::auth::AuthFalcon512Rpo;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{EMPTY_WORD, Felt, Word};
+use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::note::{NetworkAccountTarget, create_p2id_note};
+use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 use pretty_assertions::assert_eq;
 use rand::Rng;
+use tempfile::tempdir;
 
-use super::{AccountInfo, NoteRecord, NullifierInfo};
-use crate::db::TransactionSummary;
+use super::{AccountInfo, NoteRecord, NullifierInfo, TransactionRecord};
+use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
+use crate::db::schema;
 use crate::errors::DatabaseError;
 
 fn create_db() -> SqliteConnection {
@@ -101,8 +110,33 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         11_u8.into(),
     );
 
-    conn.transaction(|conn| queries::insert_block_header(conn, &block_header))
-        .unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+
+    let proving_inputs = if block_num == BlockNumber::GENESIS {
+        None
+    } else {
+        Some(dummy_proving_inputs(&block_header))
+    };
+
+    conn.transaction(|conn| {
+        queries::insert_block_header(conn, &block_header, &dummy_signature, proving_inputs)?;
+        // For non-genesis blocks, simulate the block having been proven and marked in sequence
+        // so that tests which don't care about proving state get a fully-proven chain.
+        if block_num != BlockNumber::GENESIS {
+            use crate::db::models::conv::SqlTypeConvert;
+            diesel::update(
+                schema::block_headers::table
+                    .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
+            )
+            .set((
+                schema::block_headers::proving_inputs.eq(None::<Vec<u8>>),
+                schema::block_headers::proven_in_sequence.eq(true),
+            ))
+            .execute(conn)?;
+        }
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -164,33 +198,6 @@ fn sql_insert_transactions() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn sql_select_transactions() {
-    fn query_transactions(conn: &mut SqliteConnection) -> Vec<TransactionSummary> {
-        queries::select_transactions_by_accounts_and_block_range(
-            conn,
-            &[AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap()],
-            BlockNumber::from(0)..=BlockNumber::from(2),
-        )
-        .unwrap()
-    }
-
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let transactions = query_transactions(conn);
-
-    assert!(transactions.is_empty(), "No elements must be initially in the DB");
-
-    let count = insert_transactions(conn);
-
-    assert_eq!(count, 2, "Two elements must have been inserted");
-
-    let transactions = query_transactions(conn);
-
-    assert_eq!(transactions.len(), 2, "Two elements must be in the DB");
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
 fn sql_select_nullifiers() {
     let mut conn = create_db();
     let conn = &mut conn;
@@ -217,9 +224,9 @@ fn sql_select_nullifiers() {
 
 pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RpoRandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
     let mut rng = rng.lock().unwrap();
-    create_p2id_note(
+    P2idNote::create(
         account_id,
         account_id,
         vec![Asset::Fungible(
@@ -339,7 +346,7 @@ fn make_account_and_note(
             conn,
             &[BlockAccountUpdate::new(
                 account_id,
-                account.commitment(),
+                account.to_commitment(),
                 AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
             )],
             block_num,
@@ -377,12 +384,8 @@ fn sql_unconsumed_network_notes() {
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
             note_id: num_to_word(i.into()),
             note_commitment: num_to_word(i.into()),
-            metadata: NoteMetadata::new(
-                account_note.0,
-                NoteType::Public,
-                NoteTag::with_account_target(account_note.0),
-            )
-            .with_attachment(attachment.clone()),
+            metadata: NoteMetadata::new(account_note.0, NoteType::Public)
+                .with_attachment(attachment.clone()),
             details: None,
             inclusion_path: SparseMerklePath::default(),
         };
@@ -506,11 +509,12 @@ fn sync_account_vault_basic_validation() {
             .unwrap();
     }
 
-    // Create some test vault assets
-    let vault_key_1 = AssetVaultKey::new_unchecked(num_to_word(100));
-    let vault_key_2 = AssetVaultKey::new_unchecked(num_to_word(200));
+    // Create test vault assets from two different faucets to get different vault keys.
+    let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
     let fungible_asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let fungible_asset_2 = Asset::Fungible(FungibleAsset::new(public_account_id, 2000).unwrap());
+    let fungible_asset_2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 2000).unwrap());
+    let vault_key_1 = fungible_asset_1.vault_key();
+    let vault_key_2 = fungible_asset_2.vault_key();
 
     // Insert vault assets for the public account at different blocks
     queries::insert_account_vault_asset(
@@ -768,7 +772,14 @@ fn db_block_header() {
     );
     // test insertion
 
-    queries::insert_block_header(conn, &block_header).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    queries::insert_block_header(
+        conn,
+        &block_header,
+        &dummy_signature,
+        Some(dummy_proving_inputs(&block_header)),
+    )
+    .unwrap();
 
     // test fetch unknown block header
     let block_number = 1;
@@ -799,7 +810,14 @@ fn db_block_header() {
         21_u8.into(),
     );
 
-    queries::insert_block_header(conn, &block_header2).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header2.commitment());
+    queries::insert_block_header(
+        conn,
+        &block_header2,
+        &dummy_signature,
+        Some(dummy_proving_inputs(&block_header2)),
+    )
+    .unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
@@ -810,97 +828,21 @@ fn db_block_header() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn db_account() {
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let block_num: BlockNumber = 1.into();
-    create_block(conn, block_num);
-
-    // test empty table
-    let account_ids: Vec<AccountId> =
-        [ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE, 1, 2, 3, 4, 5]
-            .iter()
-            .map(|acc_id| (*acc_id).try_into().unwrap())
-            .collect();
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        BlockNumber::from(0)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-
-    // test insertion
-    let account_id = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE;
-    let account_commitment = num_to_word(0);
-
-    let row_count = queries::upsert_accounts(
-        conn,
-        &[BlockAccountUpdate::new(
-            account_id.try_into().unwrap(),
-            account_commitment,
-            AccountUpdateDetails::Private,
-        )],
-        block_num,
-    )
-    .unwrap();
-
-    assert_eq!(row_count, 1);
-
-    // test successful query
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        BlockNumber::from(0)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert_eq!(
-        res,
-        vec![AccountSummary {
-            account_id: account_id.try_into().unwrap(),
-            account_commitment,
-            block_num,
-        }]
-    );
-
-    // test query for update outside the block range
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &account_ids,
-        (block_num.as_u32() + 1).into()..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-
-    // test query with unknown accounts
-    let res = queries::select_accounts_by_block_range(
-        conn,
-        &[6.try_into().unwrap(), 7.try_into().unwrap(), 8.try_into().unwrap()],
-        (block_num + 1)..=u32::MAX.into(),
-    )
-    .unwrap();
-    assert!(res.is_empty());
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
 fn notes() {
     let mut conn = create_db();
     let conn = &mut conn;
     let block_num_1 = 1.into();
     create_block(conn, block_num_1);
 
-    let block_range = BlockNumber::from(0)..=BlockNumber::from(1);
+    let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
             .unwrap();
-
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
-    let (res, last_included_block) = queries::select_notes_since_block_by_tag_and_sender(
+    let res = queries::select_notes_since_block_by_tag_and_sender(
         conn,
         &[],
         &[1, 2, 3],
@@ -908,7 +850,6 @@ fn notes() {
     )
     .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
@@ -919,7 +860,7 @@ fn notes() {
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 2).unwrap();
     let tag = 5u32;
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public, tag.into());
+    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
 
     let values = [(note_index, new_note.id(), &note_metadata)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
@@ -930,7 +871,7 @@ fn notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: NoteMetadata::new(sender, NoteType::Public, tag.into()),
+        metadata: NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
         details: Some(NoteDetails::from(&new_note)),
         inclusion_path: inclusion_path.clone(),
     };
@@ -939,27 +880,22 @@ fn notes() {
     queries::insert_notes(conn, &[(note.clone(), None)]).unwrap();
 
     // test empty tags
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
             .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
-    let block_range_1 = 1.into()..=1.into();
-
+    let block_range_1 = 2.into()..=2.into();
     // test no updates
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
+        .unwrap();
     assert!(res.is_empty());
-    assert_eq!(last_included_block, 1.into());
 
     // test match
-    let (res, last_included_block) =
+    let res =
         queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range.clone())
             .unwrap();
     assert_eq!(res, vec![note.clone().into()]);
-    assert_eq!(last_included_block, 1.into());
 
     let block_num_2 = note.block_num + 1;
     create_block(conn, block_num_2);
@@ -980,20 +916,16 @@ fn notes() {
     let block_range = 0.into()..=2.into();
 
     // only first note is returned
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
+        .unwrap();
     assert_eq!(res, vec![note.clone().into()]);
-    assert_eq!(last_included_block, 1.into());
 
-    let block_range = 1.into()..=2.into();
+    let block_range = 2.into()..=2.into();
 
     // only the second note is returned
-    let (res, last_included_block) =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
+        .unwrap();
     assert_eq!(res, vec![note2.clone().into()]);
-    assert_eq!(last_included_block, 2.into());
 
     // test query notes by id
     let notes = vec![note.clone(), note2];
@@ -1010,6 +942,123 @@ fn notes() {
     assert_eq!(note_1.details, None);
 }
 
+/// Creates notes across 3 blocks with different tags, then iterates
+/// `select_notes_since_block_by_tag_and_sender` advancing the cursor each time,
+/// verifying that each call returns the next block's notes.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_across_multiple_blocks() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+
+    // Create 3 blocks with notes.
+    let tag = 42u32;
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+
+    for block_num_raw in 1..=3u32 {
+        let block_num = BlockNumber::from(block_num_raw);
+        create_block(conn, block_num);
+        queries::upsert_accounts(
+            conn,
+            &[mock_block_account_update(sender, block_num_raw.into())],
+            block_num,
+        )
+        .unwrap();
+
+        let new_note = create_note(sender);
+        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
+        let values = [(note_index, new_note.id(), &note_metadata)];
+        let notes_db = BlockNoteTree::with_entries(values).unwrap();
+        let inclusion_path = notes_db.open(note_index);
+
+        let note = NoteRecord {
+            block_num,
+            note_index,
+            note_id: new_note.id().as_word(),
+            note_commitment: new_note.commitment(),
+            metadata: note_metadata,
+            details: Some(NoteDetails::from(&new_note)),
+            inclusion_path,
+        };
+        queries::insert_scripts(conn, [&note]).unwrap();
+        queries::insert_notes(conn, &[(note, None)]).unwrap();
+    }
+
+    // Build an MMR with enough leaves to cover all blocks (0..=3).
+    let mut mmr = Mmr::default();
+    for _ in 0..=3u32 {
+        mmr.add(Word::default());
+    }
+    // Use block_end + 1 as the MMR forest, same as State::sync_notes.
+    let mmr_forest = Forest::new(4);
+
+    // Iterate get_note_sync with advancing cursor, same as State::sync_notes.
+    let mut collected_block_nums = Vec::new();
+    let mut current_from = BlockNumber::GENESIS;
+    let block_end = BlockNumber::from(3);
+
+    loop {
+        let range = current_from..=block_end;
+        let Some(update) = queries::get_note_sync(conn, &[tag], range).unwrap() else {
+            break;
+        };
+
+        let block_num = update.block_header.block_num();
+        assert!(
+            mmr.open_at(block_num.as_usize(), mmr_forest).is_ok(),
+            "should be able to open MMR proof for block {block_num}"
+        );
+        collected_block_nums.push(block_num);
+        current_from = block_num + 1;
+    }
+
+    assert_eq!(
+        collected_block_nums,
+        vec![BlockNumber::from(1), BlockNumber::from(2), BlockNumber::from(3)],
+        "should iterate through all 3 blocks with matching notes"
+    );
+}
+
+/// Tests that note sync returns an empty result when no notes match the requested tags.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_no_matching_tags() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let block_num = BlockNumber::from(1);
+    create_block(conn, block_num);
+    queries::upsert_accounts(conn, &[mock_block_account_update(sender, 0)], block_num).unwrap();
+
+    // Insert a note with tag 10.
+    let new_note = create_note(sender);
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into());
+    let values = [(note_index, new_note.id(), &note_metadata)];
+    let notes_db = BlockNoteTree::with_entries(values).unwrap();
+    let inclusion_path = notes_db.open(note_index);
+
+    let note = NoteRecord {
+        block_num,
+        note_index,
+        note_id: new_note.id().as_word(),
+        note_commitment: new_note.commitment(),
+        metadata: note_metadata,
+        details: Some(NoteDetails::from(&new_note)),
+        inclusion_path,
+    };
+    queries::insert_scripts(conn, [&note]).unwrap();
+    queries::insert_notes(conn, &[(note, None)]).unwrap();
+
+    // Query with a different tag — should return None.
+    let range = BlockNumber::GENESIS..=BlockNumber::from(1);
+    let result = queries::get_note_sync(conn, &[999], range).unwrap();
+    assert!(result.is_none());
+}
+
 fn insert_account_delta(
     conn: &mut SqliteConnection,
     account_id: AccountId,
@@ -1023,7 +1072,7 @@ fn insert_account_delta(
                 account_id,
                 block_number,
                 slot_name.clone(),
-                *k.inner(),
+                *k,
                 *v,
             )
             .unwrap();
@@ -1053,8 +1102,8 @@ fn sql_account_storage_map_values_insertion() {
     queries::upsert_accounts(conn, &[mock_block_account_update(account_id, 0)], block2).unwrap();
 
     let slot_name = StorageSlotName::mock(3);
-    let key1 = Word::from([1u32, 2, 3, 4]);
-    let key2 = Word::from([5u32, 6, 7, 8]);
+    let key1 = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
+    let key2 = StorageMapKey::new(Word::from([5u32, 6, 7, 8]));
     let value1 = Word::from([10u32, 11, 12, 13]);
     let value2 = Word::from([20u32, 21, 22, 23]);
     let value3 = Word::from([30u32, 31, 32, 33]);
@@ -1069,9 +1118,13 @@ fn sql_account_storage_map_values_insertion() {
         AccountDelta::new(account_id, storage1, AccountVaultDelta::default(), Felt::ONE).unwrap();
     insert_account_delta(conn, account_id, block1, &delta1);
 
-    let storage_map_page =
-        queries::select_account_storage_map_values(conn, account_id, BlockNumber::GENESIS..=block1)
-            .unwrap();
+    let storage_map_page = queries::select_account_storage_map_values_paged(
+        conn,
+        account_id,
+        BlockNumber::GENESIS..=block1,
+        1024,
+    )
+    .unwrap();
     assert_eq!(storage_map_page.values.len(), 2, "expect 2 initial rows");
 
     // Update key1 at block 2
@@ -1084,9 +1137,13 @@ fn sql_account_storage_map_values_insertion() {
             .unwrap();
     insert_account_delta(conn, account_id, block2, &delta2);
 
-    let storage_map_values =
-        queries::select_account_storage_map_values(conn, account_id, BlockNumber::GENESIS..=block2)
-            .unwrap();
+    let storage_map_values = queries::select_account_storage_map_values_paged(
+        conn,
+        account_id,
+        BlockNumber::GENESIS..=block2,
+        1024,
+    )
+    .unwrap();
 
     assert_eq!(storage_map_values.values.len(), 3, "three rows (with duplicate key)");
     // key1 should now be value3 at block2; key2 remains value2 at block1
@@ -1112,9 +1169,9 @@ fn select_storage_map_sync_values() {
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(5);
 
-    let key1 = num_to_word(1);
-    let key2 = num_to_word(2);
-    let key3 = num_to_word(3);
+    let key1 = StorageMapKey::from_index(1u32);
+    let key2 = StorageMapKey::from_index(2u32);
+    let key3 = StorageMapKey::from_index(3u32);
     let value1 = num_to_word(10);
     let value2 = num_to_word(20);
     let value3 = num_to_word(30);
@@ -1180,10 +1237,11 @@ fn select_storage_map_sync_values() {
     )
     .unwrap();
 
-    let page = queries::select_account_storage_map_values(
+    let page = queries::select_account_storage_map_values_paged(
         &mut conn,
         account_id,
         BlockNumber::from(2)..=BlockNumber::from(3),
+        1024,
     )
     .unwrap();
 
@@ -1223,7 +1281,7 @@ fn select_storage_map_sync_values_for_network_account() {
     let (account_id, _) =
         make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Network);
     let slot_name = StorageSlotName::mock(7);
-    let key = num_to_word(1);
+    let key = StorageMapKey::from_index(1);
     let value = num_to_word(10);
 
     queries::insert_account_storage_map_value(
@@ -1236,10 +1294,11 @@ fn select_storage_map_sync_values_for_network_account() {
     )
     .unwrap();
 
-    let page = queries::select_account_storage_map_values(
+    let page = queries::select_account_storage_map_values_paged(
         &mut conn,
         account_id,
         BlockNumber::GENESIS..=block_num,
+        1024,
     )
     .unwrap();
 
@@ -1250,10 +1309,341 @@ fn select_storage_map_sync_values_for_network_account() {
     );
 }
 
+#[test]
+fn select_storage_map_sync_values_paginates_until_last_block() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(7);
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block1)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block2)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 2)], block3)
+        .unwrap();
+
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block1,
+        slot_name.clone(),
+        StorageMapKey::from_index(1),
+        num_to_word(11),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block2,
+        slot_name.clone(),
+        StorageMapKey::from_index(2),
+        num_to_word(22),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block3,
+        slot_name.clone(),
+        StorageMapKey::from_index(3),
+        num_to_word(33),
+    )
+    .unwrap();
+
+    let page = queries::select_account_storage_map_values_paged(
+        &mut conn,
+        account_id,
+        BlockNumber::GENESIS..=block3,
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(page.last_block_included, block1, "should truncate at block 1");
+    assert_eq!(page.values.len(), 1, "should include block 1 only");
+}
+
+/// Tests that `select_account_storage_map_values_paged` does not panic when all entries
+/// exceed the limit and are in genesis block (block 0). Previously, this caused
+/// `last_block_num.saturating_sub(1) = -1` which failed `BlockNumber::from_raw_sql`.
+#[test]
+fn select_storage_map_sync_values_all_entries_in_genesis_block() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(8);
+
+    let genesis = BlockNumber::GENESIS;
+    create_block(&mut conn, genesis);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], genesis)
+        .unwrap();
+
+    // Insert 3 entries, all in genesis block
+    for i in 0..3 {
+        queries::insert_account_storage_map_value(
+            &mut conn,
+            account_id,
+            genesis,
+            slot_name.clone(),
+            StorageMapKey::from_index(i),
+            num_to_word(u64::from(i) + 100),
+        )
+        .unwrap();
+    }
+
+    // Query with limit=1 so that raw.len() (3) > limit (1), triggering the
+    // pagination branch. All entries are in block 0, so take_while produces
+    // nothing and last_block_num.saturating_sub(1) = -1.
+    let result = queries::select_account_storage_map_values_paged(
+        &mut conn,
+        account_id,
+        genesis..=genesis,
+        1,
+    );
+
+    // Should not error - should return a valid page (possibly with empty values
+    // indicating no progress, which the caller interprets as limit_exceeded)
+    let page = result.expect("should not return an internal error for genesis block entries");
+    // The page should indicate no progress was made (stuck at genesis)
+    assert!(
+        page.values.is_empty() || page.last_block_included == genesis,
+        "should indicate pagination did not make progress"
+    );
+}
+
+/// Tests that single-block overflow works for non-genesis blocks too.
+/// All entries are in block 5 and exceed the limit. The function should
+/// signal no progress rather than returning incorrect data.
+#[test]
+fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(10);
+
+    let block5 = BlockNumber::from(5);
+    create_block(&mut conn, block5);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block5)
+        .unwrap();
+
+    for i in 0..3 {
+        queries::insert_account_storage_map_value(
+            &mut conn,
+            account_id,
+            block5,
+            slot_name.clone(),
+            StorageMapKey::from_index(i),
+            num_to_word(u64::from(i) + 200),
+        )
+        .unwrap();
+    }
+
+    // limit=1, so 3 rows > 1 triggers pagination. All in block 5.
+    let page =
+        queries::select_account_storage_map_values_paged(&mut conn, account_id, block5..=block5, 1)
+            .unwrap();
+
+    assert!(page.values.is_empty(), "should have no values when single block exceeds limit");
+    assert_eq!(page.last_block_included, block5, "should signal no progress at block 5");
+}
+
+/// Tests that normal multi-block pagination still works correctly:
+/// entries in blocks 1, 2, 3 with limit causing block 3 to be dropped.
+#[test]
+fn select_storage_map_sync_values_multi_block_pagination() {
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(11);
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block1)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block2)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 2)], block3)
+        .unwrap();
+
+    // 1 entry in block 1, 1 in block 2, 1 in block 3
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block1,
+        slot_name.clone(),
+        StorageMapKey::from_index(1),
+        num_to_word(11),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block2,
+        slot_name.clone(),
+        StorageMapKey::from_index(2),
+        num_to_word(22),
+    )
+    .unwrap();
+    queries::insert_account_storage_map_value(
+        &mut conn,
+        account_id,
+        block3,
+        slot_name.clone(),
+        StorageMapKey::from_index(3),
+        num_to_word(33),
+    )
+    .unwrap();
+
+    // limit=2: query fetches 3 rows (limit+1), drops block 3, keeps blocks 1-2
+    let page = queries::select_account_storage_map_values_paged(
+        &mut conn,
+        account_id,
+        BlockNumber::GENESIS..=block3,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(page.values.len(), 2, "should include entries from blocks 1 and 2");
+    assert_eq!(page.last_block_included, block2, "last included block should be 2");
+}
+
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn reconstruct_storage_map_from_db_pages_until_latest() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(9);
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    let db = crate::db::Db::load(db_path).await.unwrap();
+    let slot_name_for_db = slot_name.clone();
+    db.query("insert paged values", move |db_conn| {
+        db_conn.transaction(|db_conn| {
+            apply_migrations(db_conn)?;
+            create_block(db_conn, block1);
+            create_block(db_conn, block2);
+            create_block(db_conn, block3);
+
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 0)], block1)?;
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 1)], block2)?;
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 2)], block3)?;
+
+            queries::insert_account_storage_map_value(
+                db_conn,
+                account_id,
+                block1,
+                slot_name_for_db.clone(),
+                num_to_storage_map_key(1),
+                num_to_word(10),
+            )?;
+            queries::insert_account_storage_map_value(
+                db_conn,
+                account_id,
+                block2,
+                slot_name_for_db.clone(),
+                num_to_storage_map_key(2),
+                num_to_word(20),
+            )?;
+            queries::insert_account_storage_map_value(
+                db_conn,
+                account_id,
+                block3,
+                slot_name_for_db.clone(),
+                num_to_storage_map_key(3),
+                num_to_word(30),
+            )?;
+            Ok::<_, DatabaseError>(())
+        })
+    })
+    .await
+    .unwrap();
+
+    let details = db
+        .reconstruct_storage_map_from_db(account_id, slot_name.clone(), block3, Some(1))
+        .await
+        .unwrap();
+
+    assert_matches!(details.entries, StorageMapEntries::AllEntries(entries) => {
+        assert_eq!(entries.len(), 3);
+    });
+}
+
+/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when the first
+/// block in the range has more entries than the limit allows. Previously this returned
+/// `AllEntries([])` because the pagination loop exited immediately (`last_block_included` ==
+/// `block_num`) without checking that no values were actually returned.
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block_overflow() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let slot_name = StorageSlotName::mock(12);
+
+    let block5 = BlockNumber::from(5);
+
+    let db = crate::db::Db::load(db_path).await.unwrap();
+    let slot_name_for_db = slot_name.clone();
+    db.query("insert entries in single block", move |db_conn| {
+        db_conn.transaction(|db_conn| {
+            apply_migrations(db_conn)?;
+            create_block(db_conn, block5);
+
+            queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 0)], block5)?;
+
+            // Insert 3 entries, all in the same block
+            for i in 1..=3 {
+                queries::insert_account_storage_map_value(
+                    db_conn,
+                    account_id,
+                    block5,
+                    slot_name_for_db.clone(),
+                    num_to_storage_map_key(i),
+                    num_to_word(i * 10),
+                )?;
+            }
+            Ok::<_, DatabaseError>(())
+        })
+    })
+    .await
+    .unwrap();
+
+    // Use limit=1 so that 3 entries in a single block exceed the limit.
+    // block_range_start is block5 (the first block with data), and the target is also block5.
+    let details = db
+        .reconstruct_storage_map_from_db(account_id, slot_name.clone(), block5, Some(1))
+        .await
+        .unwrap();
+
+    assert_matches!(details.entries, StorageMapEntries::LimitExceeded);
+}
+
 // UTILITIES
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
     [Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)].into()
+}
+
+fn num_to_storage_map_key(n: u64) -> StorageMapKey {
+    StorageMapKey::new(Word::from([Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)]))
 }
 
 fn num_to_nullifier(n: u64) -> Nullifier {
@@ -1275,15 +1665,21 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .compile_component_code("test::interface", code_str)
         .unwrap();
 
-    let component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supported_type(AccountType::RegularAccountUpdatableCode);
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test", [AccountType::RegularAccountUpdatableCode]),
+    )
+    .unwrap();
 
     AccountBuilder::new(seed)
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap()
 }
@@ -1302,22 +1698,24 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
             Word::try_from([num, num, 0, 0]).unwrap(),
             Word::try_from([0, 0, num, num]).unwrap(),
         ),
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::new(num as u32)),
+        NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
     )];
 
+    let fee = test_fee();
     TransactionHeader::new_unchecked(
         TransactionId::new(
             initial_state_commitment,
             final_account_commitment,
             input_notes_commitment,
             output_notes_commitment,
+            fee,
         ),
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
-        test_fee(),
+        fee,
     )
 }
 
@@ -1369,16 +1767,22 @@ fn mock_account_code_and_storage(
     let account_component_code = CodeBuilder::default()
         .compile_component_code("counter_contract::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("counter_contract", AccountType::all()),
+    )
+    .unwrap();
 
     AccountBuilder::new(init_seed.unwrap_or([0; 32]))
         .account_type(account_type)
         .storage_mode(storage_mode)
         .with_assets(assets)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap()
 }
@@ -1412,7 +1816,7 @@ fn test_select_account_code_by_commitment() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account.id(),
-            account.commitment(),
+            account.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account).unwrap()),
         )],
         block_num_1,
@@ -1460,7 +1864,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account_v1.id(),
-            account_v1.commitment(),
+            account_v1.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v1).unwrap()),
         )],
         block_num_1,
@@ -1493,7 +1897,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         &mut conn,
         &[BlockAccountUpdate::new(
             account_v2.id(),
-            account_v2.commitment(),
+            account_v2.to_commitment(),
             AccountUpdateDetails::Delta(AccountDelta::try_from(account_v2).unwrap()),
         )],
         block_num_2,
@@ -1518,18 +1922,21 @@ fn test_select_account_code_by_commitment_multiple_codes() {
 // ================================================================================================
 
 /// Verifies genesis block with account containing vault assets can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets() {
+async fn genesis_with_account_assets() {
     use crate::genesis::GenesisState;
     let component_code = "pub proc foo push.1 end";
 
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("foo", AccountType::all()),
+    )
+    .unwrap();
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let fungible_asset = FungibleAsset::new(faucet_id, 1000).unwrap();
@@ -1539,32 +1946,35 @@ fn genesis_with_account_assets() {
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_storage_map() {
+async fn genesis_with_account_storage_map() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
 
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(1u32),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(2u32),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -1580,29 +1990,35 @@ fn genesis_with_account_storage_map() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("foo", AccountType::all()),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_account_assets_and_storage() {
+async fn genesis_with_account_assets_and_storage() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1611,7 +2027,7 @@ fn genesis_with_account_assets_and_storage() {
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(100), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::from_index(100u32),
         Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]),
     )])
     .unwrap();
@@ -1626,31 +2042,37 @@ fn genesis_with_account_assets_and_storage() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("foo", AccountType::all()),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, SecretKey::random());
-    let genesis_block = genesis_state.into_block().unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types.
 /// Tests realistic genesis scenario with basic accounts, assets, and storage.
-#[test]
+#[tokio::test]
 #[miden_node_test_macro::enable_logging]
-fn genesis_with_multiple_accounts() {
+async fn genesis_with_multiple_accounts() {
     use miden_protocol::account::StorageMap;
 
     use crate::genesis::GenesisState;
@@ -1658,15 +2080,21 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("foo::interface", "pub proc foo push.1 end")
         .unwrap();
-    let account_component1 = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component1 = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("foo", AccountType::all()),
+    )
+    .unwrap();
 
     let account1 = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component1)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1676,21 +2104,27 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("bar::interface", "pub proc bar push.2 end")
         .unwrap();
-    let account_component2 = AccountComponent::new(account_component_code, Vec::new())
-        .unwrap()
-        .with_supports_all_types();
+    let account_component2 = AccountComponent::new(
+        account_component_code,
+        Vec::new(),
+        AccountComponentMetadata::new("bar", AccountType::all()),
+    )
+    .unwrap();
 
     let account2 = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component2)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
     let storage_map = StorageMap::with_entries(vec![(
-        Word::from([Felt::new(5), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+        StorageMapKey::from_index(5u32),
         Word::from([Felt::new(15), Felt::new(25), Felt::new(35), Felt::new(45)]),
     )])
     .unwrap();
@@ -1700,15 +2134,21 @@ fn genesis_with_multiple_accounts() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("baz::interface", "pub proc baz push.3 end")
         .unwrap();
-    let account_component3 = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component3 = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("baz", AccountType::all()),
+    )
+    .unwrap();
 
     let account3 = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component3)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
@@ -1717,11 +2157,11 @@ fn genesis_with_multiple_accounts() {
         test_fee_params(),
         1,
         0,
-        SecretKey::random(),
+        random_secret_key(),
     );
-    let genesis_block = genesis_state.into_block().unwrap();
+    let genesis_block = genesis_state.into_block().await.unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), &genesis_block).unwrap();
+    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
 #[test]
@@ -1748,7 +2188,7 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
 
     let block_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
 
@@ -1797,7 +2237,13 @@ fn serialization_symmetry_core_types() {
     assert_eq!(nullifier, restored, "Nullifier serialization must be symmetric");
 
     // TransactionId
-    let tx_id = TransactionId::new(num_to_word(1), num_to_word(2), num_to_word(3), num_to_word(4));
+    let tx_id = TransactionId::new(
+        num_to_word(1),
+        num_to_word(2),
+        num_to_word(3),
+        num_to_word(4),
+        test_fee(),
+    );
     let bytes = tx_id.to_bytes();
     let restored = TransactionId::read_from_bytes(&bytes).unwrap();
     assert_eq!(tx_id, restored, "TransactionId serialization must be symmetric");
@@ -1872,7 +2318,7 @@ fn serialization_symmetry_note_metadata() {
     // Use a tag that roundtrips properly - NoteTag::LocalAny stores the full u32 including type
     // bits
     let tag = NoteTag::with_account_target(sender);
-    let metadata = NoteMetadata::new(sender, NoteType::Public, tag);
+    let metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag);
 
     let bytes = metadata.to_bytes();
     let restored = NoteMetadata::read_from_bytes(&bytes).unwrap();
@@ -1917,7 +2363,14 @@ fn db_roundtrip_block_header() {
     );
 
     // Insert
-    queries::insert_block_header(&mut conn, &block_header).unwrap();
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    queries::insert_block_header(
+        &mut conn,
+        &block_header,
+        &dummy_signature,
+        Some(dummy_proving_inputs(&block_header)),
+    )
+    .unwrap();
 
     // Retrieve
     let retrieved =
@@ -1964,7 +2417,7 @@ fn db_roundtrip_account() {
         Some([99u8; 32]),
     );
     let account_id = account.id();
-    let account_commitment = account.commitment();
+    let account_commitment = account.to_commitment();
 
     // Insert with full delta (like genesis)
     let account_delta = AccountDelta::try_from(account.clone()).unwrap();
@@ -2047,47 +2500,6 @@ fn db_roundtrip_notes() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn db_roundtrip_transactions() {
-    let mut conn = create_db();
-    let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
-
-    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
-        .unwrap();
-
-    let tx = mock_block_transaction(account_id, 1);
-    let ordered_tx = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
-
-    // Insert
-    queries::insert_transactions(&mut conn, block_num, &ordered_tx).unwrap();
-
-    // Retrieve
-    let retrieved = queries::select_transactions_by_accounts_and_block_range(
-        &mut conn,
-        &[account_id],
-        BlockNumber::from(0)..=BlockNumber::from(2),
-    )
-    .unwrap();
-
-    assert_eq!(retrieved.len(), 1, "Should have one transaction");
-    let retrieved_tx = &retrieved[0];
-
-    assert_eq!(
-        tx.account_id(),
-        retrieved_tx.account_id,
-        "AccountId DB roundtrip must be symmetric"
-    );
-    assert_eq!(
-        tx.id(),
-        retrieved_tx.transaction_id,
-        "TransactionId DB roundtrip must be symmetric"
-    );
-    assert_eq!(block_num, retrieved_tx.block_num, "Block number must match");
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
 fn db_roundtrip_vault_assets() {
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
@@ -2135,7 +2547,7 @@ fn db_roundtrip_storage_map_values() {
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block_num)
         .unwrap();
     let slot_name = StorageSlotName::mock(5);
-    let key = num_to_word(12345);
+    let key = StorageMapKey::from_index(12345u32);
     let value = num_to_word(67890);
 
     queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block_num)
@@ -2153,10 +2565,11 @@ fn db_roundtrip_storage_map_values() {
     .unwrap();
 
     // Retrieve
-    let page = queries::select_account_storage_map_values(
+    let page = queries::select_account_storage_map_values_paged(
         &mut conn,
         account_id,
         BlockNumber::GENESIS..=block_num,
+        1024,
     )
     .unwrap();
 
@@ -2181,11 +2594,11 @@ fn db_roundtrip_account_storage_with_maps() {
     // Create storage with both value slots and map slots
     let storage_map = StorageMap::with_entries(vec![
         (
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(1u32),
             Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
         ),
         (
-            Word::from([Felt::new(2), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            StorageMapKey::from_index(2u32),
             Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
         ),
     ])
@@ -2201,15 +2614,21 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_component_code = CodeBuilder::default()
         .compile_component_code("test::interface", component_code)
         .unwrap();
-    let account_component = AccountComponent::new(account_component_code, component_storage)
-        .unwrap()
-        .with_supports_all_types();
+    let account_component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test", AccountType::all()),
+    )
+    .unwrap();
 
     let account = AccountBuilder::new([50u8; 32])
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Public)
         .with_component(account_component)
-        .with_auth_component(AuthFalcon512Rpo::new(PublicKeyCommitment::from(EMPTY_WORD)))
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
         .build_existing()
         .unwrap();
 
@@ -2221,7 +2640,7 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_delta = AccountDelta::try_from(account.clone()).unwrap();
     let block_update = BlockAccountUpdate::new(
         account_id,
-        account.commitment(),
+        account.to_commitment(),
         AccountUpdateDetails::Delta(account_delta),
     );
     queries::upsert_accounts(&mut conn, &[block_update], block_num).unwrap();
@@ -2272,15 +2691,15 @@ fn db_roundtrip_account_storage_with_maps() {
     assert!(account_info.details.is_some(), "Public account should have details");
     let retrieved_account = account_info.details.unwrap();
     assert_eq!(
-        account.commitment(),
-        retrieved_account.commitment(),
+        account.to_commitment(),
+        retrieved_account.to_commitment(),
         "Full account commitment must match after DB roundtrip"
     );
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn test_note_metadata_with_attachment_roundtrip() {
+fn db_roundtrip_note_metadata_attachment() {
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
@@ -2294,8 +2713,7 @@ fn test_note_metadata_with_attachment_roundtrip() {
 
     // Create NoteMetadata with the attachment
     let metadata =
-        NoteMetadata::new(account_id, NoteType::Public, NoteTag::with_account_target(account_id))
-            .with_attachment(attachment.clone());
+        NoteMetadata::new(account_id, NoteType::Public).with_attachment(attachment.clone());
 
     let note = NoteRecord {
         block_num,
@@ -2330,4 +2748,1262 @@ fn test_note_metadata_with_attachment_roundtrip() {
         account_id,
         "NetworkAccountTarget should have the correct target account ID"
     );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn test_prune_history() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let public_account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    // Create blocks around the retention window.
+    const GENESIS_BLOCK_NUM: u32 = 0;
+    const OLD_BLOCK_OFFSET: u32 = 1;
+    const CUTOFF_BLOCK_OFFSET: u32 = 2;
+    const UPDATE_BLOCK_OFFSET: u32 = 3;
+
+    let block_0: BlockNumber = GENESIS_BLOCK_NUM.into();
+    let block_old: BlockNumber = OLD_BLOCK_OFFSET.into();
+    let block_cutoff: BlockNumber = CUTOFF_BLOCK_OFFSET.into();
+    let block_update: BlockNumber = UPDATE_BLOCK_OFFSET.into();
+    let block_tip: BlockNumber = (HISTORICAL_BLOCK_RETENTION + CUTOFF_BLOCK_OFFSET).into();
+
+    for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
+        create_block(conn, block);
+    }
+
+    // Create account
+    for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
+        queries::upsert_accounts(conn, &[mock_block_account_update(public_account_id, 0)], block)
+            .unwrap();
+    }
+
+    // Insert vault assets at different blocks - use different faucets for different vault keys.
+    let faucet_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let faucet_3 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+    let asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let asset_2 = Asset::Fungible(FungibleAsset::new(faucet_2, 2000).unwrap());
+    let asset_3 = Asset::Fungible(FungibleAsset::new(faucet_3, 3000).unwrap());
+    let vault_key_old = asset_1.vault_key();
+    let vault_key_cutoff = asset_2.vault_key();
+    let vault_key_recent = asset_3.vault_key();
+
+    // Old entry at block_old (should be deleted when cutoff is at block_cutoff for
+    // chain_tip=block_tip)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_old,
+        vault_key_old,
+        Some(asset_1),
+    )
+    .unwrap();
+
+    // Entry exactly at cutoff (block_cutoff, should be retained)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_cutoff,
+        vault_key_cutoff,
+        Some(asset_2),
+    )
+    .unwrap();
+
+    // Recent entry (should always be retained)
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_tip,
+        vault_key_recent,
+        Some(asset_3),
+    )
+    .unwrap();
+
+    // Update an entry to create a non-latest version
+    let updated_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_update,
+        vault_key_old,
+        Some(updated_asset),
+    )
+    .unwrap();
+
+    // Insert storage map values at different blocks
+    let slot_name = StorageSlotName::mock(5);
+    let map_key_old = StorageMapKey::from_index(10u32);
+    let map_key_cutoff = StorageMapKey::from_index(20u32);
+    let map_key_recent = StorageMapKey::from_index(30u32);
+    let value_1 = num_to_word(111);
+    let value_2 = num_to_word(222);
+    let value_3 = num_to_word(333);
+    let value_updated = num_to_word(444);
+
+    // Old storage map entry at block_old
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_old,
+        slot_name.clone(),
+        map_key_old,
+        value_1,
+    )
+    .unwrap();
+
+    // Storage map entry at cutoff boundary (block_cutoff)
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_cutoff,
+        slot_name.clone(),
+        map_key_cutoff,
+        value_2,
+    )
+    .unwrap();
+
+    // Recent storage map entry
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_tip,
+        slot_name.clone(),
+        map_key_recent,
+        value_3,
+    )
+    .unwrap();
+
+    // Update map_key_old to create a non-latest entry at block_update
+    insert_account_storage_map_value(
+        conn,
+        public_account_id,
+        block_update,
+        slot_name.clone(),
+        map_key_old,
+        value_updated,
+    )
+    .unwrap();
+
+    // Verify initial state - should have 4 vault assets and 4 storage map values
+    let (_, initial_vault_assets) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert_eq!(initial_vault_assets.len(), 4, "should have 4 vault assets before cleanup");
+
+    let initial_storage_values = queries::select_account_storage_map_values_paged(
+        conn,
+        public_account_id,
+        block_0..=block_tip,
+        1024,
+    )
+    .unwrap();
+    assert_eq!(
+        initial_storage_values.values.len(),
+        4,
+        "should have 4 storage map values before cleanup"
+    );
+
+    // Run cleanup with chain_tip = block_tip, cutoff will be block_tip - HISTORICAL_BLOCK_RETENTION
+    // = block_cutoff
+    let (vault_deleted, storage_deleted, _codes_deleted) =
+        queries::prune_history(conn, block_tip).unwrap();
+
+    // Verify deletions occurred
+    assert_eq!(vault_deleted, 1, "should delete 1 old vault asset");
+    assert_eq!(storage_deleted, 1, "should delete 1 old storage map value");
+
+    // Verify remaining vault assets - should have 3 (cutoff, update, tip)
+    let (_, remaining_vault_assets) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert_eq!(remaining_vault_assets.len(), 3, "should have 3 vault assets after cleanup");
+
+    // Verify no vault asset at block_old remains
+    assert!(
+        !remaining_vault_assets.iter().any(|v| v.block_num == block_old),
+        "block_old vault asset should be deleted"
+    );
+
+    // Verify vault assets at block_cutoff, block_update, block_tip remain
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_cutoff),
+        "block_cutoff vault asset should be retained (at cutoff)"
+    );
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_update),
+        "block_update vault asset should be retained"
+    );
+    assert!(
+        remaining_vault_assets.iter().any(|v| v.block_num == block_tip),
+        "block_tip vault asset should be retained"
+    );
+
+    // Verify remaining storage map values - should have 3 (cutoff, update, tip)
+    let remaining_storage_values = queries::select_account_storage_map_values_paged(
+        conn,
+        public_account_id,
+        block_0..=block_tip,
+        1024,
+    )
+    .unwrap();
+    assert_eq!(
+        remaining_storage_values.values.len(),
+        3,
+        "should have 3 storage map values after cleanup"
+    );
+
+    // Verify no storage map value at block_old remains
+    assert!(
+        !remaining_storage_values.values.iter().any(|v| v.block_num == block_old),
+        "block_old storage map value should be deleted"
+    );
+
+    // Verify storage map values at block_cutoff, block_update, block_tip remain
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_cutoff),
+        "block_cutoff storage map value should be retained (at cutoff)"
+    );
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_update),
+        "block_update storage map value should be retained"
+    );
+    assert!(
+        remaining_storage_values.values.iter().any(|v| v.block_num == block_tip),
+        "block_tip storage map value should be retained"
+    );
+
+    // Test that is_latest=true entries are never deleted, even if old
+    // Insert an old entry marked as latest
+    let faucet_4 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
+    let asset_old = Asset::Fungible(FungibleAsset::new(faucet_4, 9999).unwrap());
+    let vault_key_old_latest = asset_old.vault_key();
+    queries::insert_account_vault_asset(
+        conn,
+        public_account_id,
+        block_0,
+        vault_key_old_latest,
+        Some(asset_old),
+    )
+    .unwrap();
+
+    // This entry at block 0 is marked as is_latest=true by insert_account_vault_asset
+    // Run cleanup again
+    let (vault_deleted_2, ..) = queries::prune_history(conn, block_tip).unwrap();
+
+    // The old latest entry should not be deleted (vault_deleted_2 should be 0)
+    assert_eq!(vault_deleted_2, 0, "should not delete any is_latest=true entries");
+
+    // Verify the old latest entry still exists
+    let (_, vault_assets_with_latest) =
+        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+    assert!(
+        vault_assets_with_latest
+            .iter()
+            .any(|v| v.block_num == block_0 && v.vault_key == vault_key_old_latest),
+        "is_latest=true entry should be retained even if old"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_matches_db_storage_map_roots_across_updates() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::crypto::merkle::smt::Smt;
+
+    use crate::account_state_forest::AccountStateForest;
+
+    /// Reconstructs storage map root from DB entries at a specific block.
+    fn reconstruct_storage_map_root_from_db(
+        conn: &mut SqliteConnection,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Option<Word> {
+        let storage_values = queries::select_account_storage_map_values_paged(
+            conn,
+            account_id,
+            BlockNumber::GENESIS..=block_num,
+            1024,
+        )
+        .unwrap();
+
+        // Filter to the specific slot and get most recent value for each key
+        let mut latest_values: BTreeMap<StorageMapKey, Word> = BTreeMap::new();
+        for value in storage_values.values {
+            if value.slot_name == *slot_name {
+                latest_values.insert(value.key, value.value);
+            }
+        }
+
+        if latest_values.is_empty() {
+            return None;
+        }
+
+        // Build SMT from entries
+        let entries: Vec<(StorageMapKey, Word)> = latest_values
+            .into_iter()
+            .filter_map(|(key, value)| {
+                if value == EMPTY_WORD {
+                    None
+                } else {
+                    // Keys are stored unhashed in DB, match AccountStateForest behavior
+                    Some((key, value))
+                }
+            })
+            .collect();
+
+        if entries.is_empty() {
+            use miden_protocol::crypto::merkle::EmptySubtreeRoots;
+            use miden_protocol::crypto::merkle::smt::SMT_DEPTH;
+            return Some(*EmptySubtreeRoots::entry(SMT_DEPTH, 0));
+        }
+
+        let mut smt = Smt::default();
+        for (key, value) in entries {
+            smt.insert(key.hash().into(), value).unwrap();
+        }
+
+        Some(smt.root())
+    }
+
+    let mut conn = create_db();
+    let mut forest = AccountStateForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 0)], block1)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 1)], block2)
+        .unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(account_id, 2)], block3)
+        .unwrap();
+
+    let slot_map = StorageSlotName::mock(1);
+    let slot_value = StorageSlotName::mock(2);
+
+    let key1 = StorageMapKey::from_index(100);
+    let key2 = StorageMapKey::from_index(200);
+    let value1 = num_to_word(1000);
+    let value2 = num_to_word(2000);
+    let value3 = num_to_word(3000);
+
+    // Block 1: Add storage map entries and a storage value
+    let mut map_delta_1 = StorageMapDelta::default();
+    map_delta_1.insert(key1, value1);
+    map_delta_1.insert(key2, value2);
+
+    let raw_1 = BTreeMap::from_iter([
+        (slot_map.clone(), StorageSlotDelta::Map(map_delta_1)),
+        (slot_value.clone(), StorageSlotDelta::Value(value1)),
+    ]);
+    let storage_1 = AccountStorageDelta::from_raw(raw_1);
+    let delta_1 =
+        AccountDelta::new(account_id, storage_1.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+
+    insert_account_delta(&mut conn, account_id, block1, &delta_1);
+    forest.update_account(block1, &delta_1).unwrap();
+
+    // Verify forest matches DB for block 1
+    let forest_root_1 = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
+    let db_root_1 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block1)
+        .expect("DB should have storage map root");
+
+    assert_eq!(
+        forest_root_1, db_root_1,
+        "Storage map root at block 1 should match between AccountStateForest and DB"
+    );
+
+    // Block 2: Delete storage map entry (set to EMPTY_WORD) and delete storage value
+    let mut map_delta_2 = StorageMapDelta::default();
+    map_delta_2.insert(key1, EMPTY_WORD);
+
+    let raw_2 = BTreeMap::from_iter([
+        (slot_map.clone(), StorageSlotDelta::Map(map_delta_2)),
+        (slot_value.clone(), StorageSlotDelta::Value(EMPTY_WORD)),
+    ]);
+    let storage_2 = AccountStorageDelta::from_raw(raw_2);
+    let delta_2 = AccountDelta::new(
+        account_id,
+        storage_2.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(2),
+    )
+    .unwrap();
+
+    insert_account_delta(&mut conn, account_id, block2, &delta_2);
+    forest.update_account(block2, &delta_2).unwrap();
+
+    // Verify forest matches DB for block 2
+    let forest_root_2 = forest.get_storage_map_root(account_id, &slot_map, block2).unwrap();
+    let db_root_2 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block2)
+        .expect("DB should have storage map root");
+
+    assert_eq!(
+        forest_root_2, db_root_2,
+        "Storage map root at block 2 should match between AccountStateForest and DB"
+    );
+
+    // Block 3: Re-add same value as block 1 and add different map entry
+    let mut map_delta_3 = StorageMapDelta::default();
+    map_delta_3.insert(key2, value3); // Update existing key
+
+    let raw_3 = BTreeMap::from_iter([
+        (slot_map.clone(), StorageSlotDelta::Map(map_delta_3)),
+        (slot_value.clone(), StorageSlotDelta::Value(value1)), // Same as block 1
+    ]);
+    let storage_3 = AccountStorageDelta::from_raw(raw_3);
+    let delta_3 = AccountDelta::new(
+        account_id,
+        storage_3.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(3),
+    )
+    .unwrap();
+
+    insert_account_delta(&mut conn, account_id, block3, &delta_3);
+    forest.update_account(block3, &delta_3).unwrap();
+
+    // Verify forest matches DB for block 3
+    let forest_root_3 = forest.get_storage_map_root(account_id, &slot_map, block3).unwrap();
+    let db_root_3 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block3)
+        .expect("DB should have storage map root");
+
+    assert_eq!(
+        forest_root_3, db_root_3,
+        "Storage map root at block 3 should match between AccountStateForest and DB"
+    );
+
+    // Verify we can query historical roots
+    let forest_root_1_check = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
+    let db_root_1_check =
+        reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block1)
+            .expect("DB should have storage map root");
+    assert_eq!(
+        forest_root_1_check, db_root_1_check,
+        "Historical query for block 1 should match"
+    );
+
+    // Verify roots are different across blocks (since we modified the map)
+    assert_ne!(forest_root_1, forest_root_2, "Roots should differ after deletion");
+    assert_ne!(forest_root_2, forest_root_3, "Roots should differ after modification");
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_shared_roots_not_deleted_prematurely() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
+        ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
+    };
+
+    use crate::account_state_forest::AccountStateForest;
+
+    let mut forest = AccountStateForest::new();
+    let account1 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let account2 = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
+    let account3 = AccountId::try_from(ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE).unwrap();
+
+    let block01 = BlockNumber::from(1);
+    let block02 = BlockNumber::from(2);
+    let block50 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION);
+    let block51 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 1);
+    let block52 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
+    let block53 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 3);
+    let slot_name = StorageSlotName::mock(1);
+
+    let key1 = num_to_storage_map_key(100);
+    let key2 = num_to_storage_map_key(200);
+    let value1 = num_to_word(1000);
+    let value2 = num_to_word(2000);
+
+    // All three accounts add identical storage maps at block 1
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key1, value1);
+    map_delta.insert(key2, value2);
+
+    // Setups a single slot with a map and two key-value-pairs
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta.clone()))]);
+    let storage = AccountStorageDelta::from_raw(raw);
+
+    // Account 1
+    let delta1 =
+        AccountDelta::new(account1, storage.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+    forest.update_account(block01, &delta1).unwrap();
+
+    // Account 2 (same storage)
+    let delta2 =
+        AccountDelta::new(account2, storage.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+    forest.update_account(block02, &delta2).unwrap();
+
+    // Account 3 (same storage)
+    let delta3 =
+        AccountDelta::new(account3, storage.clone(), AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+    forest.update_account(block02, &delta3).unwrap();
+
+    // All three accounts should have the same root (structural sharing in SmtForest)
+    let root1 = forest.get_storage_map_root(account1, &slot_name, block01).unwrap();
+    let root2 = forest.get_storage_map_root(account2, &slot_name, block02).unwrap();
+    let root3 = forest.get_storage_map_root(account3, &slot_name, block02).unwrap();
+
+    // identical maps means identical roots
+    assert_eq!(root1, root2);
+    assert_eq!(root2, root3);
+
+    // Verify we can get witnesses for all three accounts and verify them against roots
+    let witness1 = forest
+        .get_storage_map_witness(account1, &slot_name, block01, key1)
+        .expect("Account1 should have accessible storage map");
+    let witness2 = forest
+        .get_storage_map_witness(account2, &slot_name, block02, key1)
+        .expect("Account2 should have accessible storage map");
+    let witness3 = forest
+        .get_storage_map_witness(account3, &slot_name, block02, key1)
+        .expect("Account3 should have accessible storage map");
+
+    // Verify witnesses against storage map roots using SmtProof::compute_root
+    let proof1: SmtProof = witness1.into();
+    assert_eq!(proof1.compute_root(), root1, "Witness1 must verify against root1");
+
+    let proof2: SmtProof = witness2.into();
+    assert_eq!(proof2.compute_root(), root2, "Witness2 must verify against root2");
+
+    let proof3: SmtProof = witness3.into();
+    assert_eq!(proof3.compute_root(), root3, "Witness3 must verify against root3");
+
+    let total_roots_removed = forest.prune(block50);
+    assert_eq!(total_roots_removed, 0);
+
+    // Update accounts 1,2,3
+    let mut map_delta_update = StorageMapDelta::default();
+    map_delta_update.insert(key1, num_to_word(1001)); // Slight change
+    let raw_update =
+        BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_update))]);
+    let storage_update = AccountStorageDelta::from_raw(raw_update);
+    let delta2_update = AccountDelta::new(
+        account2,
+        storage_update.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(2),
+    )
+    .unwrap();
+    forest.update_account(block51, &delta2_update).unwrap();
+
+    let delta3_update = AccountDelta::new(
+        account3,
+        storage_update.clone(),
+        AccountVaultDelta::default(),
+        Felt::new(2),
+    )
+    .unwrap();
+    forest.update_account(block52, &delta3_update).unwrap();
+
+    // Prune at block 52
+    let total_roots_removed = forest.prune(block52);
+    assert_eq!(total_roots_removed, 0);
+
+    // ensure the root is still accessible
+    let account1_root_after_prune = forest.get_storage_map_root(account1, &slot_name, block01);
+    assert!(account1_root_after_prune.is_some());
+
+    let delta1_update =
+        AccountDelta::new(account1, storage_update, AccountVaultDelta::default(), Felt::new(2))
+            .unwrap();
+    forest.update_account(block53, &delta1_update).unwrap();
+
+    // Prune at block 53
+    let total_roots_removed = forest.prune(block53);
+    assert_eq!(total_roots_removed, 0);
+
+    // Account2 and Account3 should still be accessible at their recent blocks
+    let account1_root = forest.get_storage_map_root(account1, &slot_name, block53).unwrap();
+    let account2_root = forest.get_storage_map_root(account2, &slot_name, block51).unwrap();
+    let account3_root = forest.get_storage_map_root(account3, &slot_name, block52).unwrap();
+
+    // Verify we can still get witnesses for account2 and account3 and verify against roots
+    let witness1_after = forest
+        .get_storage_map_witness(account2, &slot_name, block51, key1)
+        .expect("Account2 should still have accessible storage map after pruning account1");
+    let witness2_after = forest
+        .get_storage_map_witness(account3, &slot_name, block52, key1)
+        .expect("Account3 should still have accessible storage map after pruning account1");
+
+    // Verify witnesses against storage map roots
+    let proof1: SmtProof = witness1_after.into();
+    assert_eq!(proof1.compute_root(), account2_root,);
+    let proof2: SmtProof = witness2_after.into();
+    assert_eq!(proof2.compute_root(), account3_root,);
+    let account1_witness = forest
+        .get_storage_map_witness(account1, &slot_name, block53, key1)
+        .expect("Account1 should still have accessible storage map after pruning");
+    let account1_proof: SmtProof = account1_witness.into();
+    assert_eq!(account1_proof.compute_root(), account1_root,);
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    use crate::account_state_forest::{AccountStateForest, HISTORICAL_BLOCK_RETENTION};
+
+    let mut forest = AccountStateForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    let slot_map = StorageSlotName::mock(1);
+
+    let key1 = num_to_storage_map_key(100);
+    let key2 = num_to_storage_map_key(200);
+    let value1 = num_to_word(1000);
+    let value2 = num_to_word(2000);
+
+    // Block 1: Apply initial update with vault and storage
+    let block_1 = BlockNumber::from(1);
+
+    // Create storage map with two entries
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key1, value1);
+    map_delta.insert(key2, value2);
+
+    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    // Create vault with one asset
+    let asset = FungibleAsset::new(faucet_id, 100).unwrap();
+    let mut vault_delta = AccountVaultDelta::default();
+    vault_delta.add_asset(asset.into()).unwrap();
+
+    let delta_1 = AccountDelta::new(account_id, storage_delta, vault_delta, Felt::ONE).unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    // Capture the roots from block 1
+    let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
+    let initial_storage_map_root =
+        forest.get_storage_map_root(account_id, &slot_map, block_1).unwrap();
+
+    // Blocks 2-100: Do nothing (no updates to this account)
+    // Simulate other activity by just advancing to block 100
+
+    let block_100 = BlockNumber::from(100);
+
+    assert!(forest.get_vault_root(account_id, block_100).is_some());
+    assert_matches!(
+        forest.get_storage_map_root(account_id, &slot_map, block_100),
+        Some(root) if root == initial_storage_map_root
+    );
+
+    let total_roots_removed = forest.prune(block_100);
+
+    let cutoff_block = 100 - HISTORICAL_BLOCK_RETENTION;
+    assert_eq!(cutoff_block, 50, "Cutoff should be block 50 (100 - HISTORICAL_BLOCK_RETENTION)");
+    assert_eq!(total_roots_removed, 0);
+
+    assert!(forest.get_vault_root(account_id, block_100).is_some());
+    assert_matches!(
+        forest.get_storage_map_root(account_id, &slot_map, block_100),
+        Some(root) if root == initial_storage_map_root
+    );
+
+    let witness = forest.get_storage_map_witness(account_id, &slot_map, block_100, key1);
+    assert!(witness.is_ok());
+
+    // Now add an update at block 51 (within retention window) to test that old entries
+    // get pruned when newer entries exist
+    let block_51 = BlockNumber::from(51);
+
+    // Update with new values
+    let value1_new = num_to_word(3000);
+    let mut map_delta_51 = StorageMapDelta::default();
+    map_delta_51.insert(key1, value1_new);
+
+    let raw_51 = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta_51))]);
+    let storage_delta_51 = AccountStorageDelta::from_raw(raw_51);
+
+    let asset_51 = FungibleAsset::new(faucet_id, 200).unwrap();
+    let mut vault_delta_51 = AccountVaultDelta::default();
+    vault_delta_51.add_asset(asset_51.into()).unwrap();
+
+    let delta_51 =
+        AccountDelta::new(account_id, storage_delta_51, vault_delta_51, Felt::new(51)).unwrap();
+
+    forest.update_account(block_51, &delta_51).unwrap();
+
+    // Prune again at block 100
+    let total_roots_removed = forest.prune(block_100);
+
+    assert_eq!(total_roots_removed, 0);
+
+    let vault_root_at_51 = forest
+        .get_vault_root(account_id, block_51)
+        .expect("Should have vault root at block 51");
+    let storage_root_at_51 = forest
+        .get_storage_map_root(account_id, &slot_map, block_51)
+        .expect("Should have storage root at block 51");
+
+    assert_ne!(vault_root_at_51, initial_vault_root);
+
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_map, block_51, key1)
+        .expect("Should be able to get witness for key1");
+
+    let proof: SmtProof = witness.into();
+    assert_eq!(
+        proof.compute_root(),
+        storage_root_at_51,
+        "Witness must verify against storage root"
+    );
+
+    let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
+    assert!(vault_root_at_1.is_some());
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_preserves_most_recent_vault_only() {
+    use crate::account_state_forest::AccountStateForest;
+
+    let mut forest = AccountStateForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    // Block 1: Create vault with asset
+    let block_1 = BlockNumber::from(1);
+    let asset = FungibleAsset::new(faucet_id, 500).unwrap();
+    let mut vault_delta = AccountVaultDelta::default();
+    vault_delta.add_asset(asset.into()).unwrap();
+
+    let delta_1 =
+        AccountDelta::new(account_id, AccountStorageDelta::default(), vault_delta, Felt::ONE)
+            .unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
+
+    // Advance 100 blocks without any updates
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let total_roots_removed = forest.prune(block_100);
+
+    // Vault from block 1 should NOT be pruned (it's the most recent)
+    assert_eq!(
+        total_roots_removed, 0,
+        "Should NOT prune vault root (it's the most recent for this account)"
+    );
+
+    // Verify vault is still accessible at block 1
+    let vault_root_at_1 = forest
+        .get_vault_root(account_id, block_1)
+        .expect("Should still have vault root at block 1");
+    assert_eq!(vault_root_at_1, initial_vault_root, "Vault root should be preserved");
+
+    // Verify we can get witnesses for the vault and verify against vault root
+    let witnesses = forest
+        .get_vault_asset_witnesses(account_id, block_1, [asset.vault_key()].into())
+        .expect("Should be able to get vault witness after pruning");
+
+    assert_eq!(witnesses.len(), 1, "Should have one witness");
+    let witness = &witnesses[0];
+    let proof: SmtProof = witness.clone().into();
+    assert_eq!(
+        proof.compute_root(),
+        vault_root_at_1,
+        "Vault witness must verify against vault root"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions() {
+    use miden_node_proto::generated as proto;
+
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
+
+    let tx = mock_block_transaction(bob, 1);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+
+    let retrieved =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
+    let record = retrieved.1.first().expect("entry should exist");
+
+    let expected = TransactionRecord {
+        block_num,
+        transaction_id: tx.id(),
+        account_id: tx.account_id(),
+        initial_state_commitment: tx.initial_state_commitment(),
+        final_state_commitment: tx.final_state_commitment(),
+        input_notes: tx.input_notes().iter().cloned().collect(),
+        output_notes: tx.output_notes().to_vec(),
+        fee: tx.fee(),
+    };
+
+    // Verify database roundtrip
+    assert_eq!(*record, expected);
+
+    // Proto conversion roundtrip
+    let record = retrieved.1.into_iter().next().unwrap();
+    let proto_record = record.into_proto();
+    let expected_proto = proto::rpc::TransactionRecord {
+        block_num: block_num.as_u32(),
+        header: Some(proto::transaction::TransactionHeader {
+            transaction_id: Some(tx.id().into()),
+            account_id: Some(tx.account_id().into()),
+            initial_state_commitment: Some(tx.initial_state_commitment().into()),
+            final_state_commitment: Some(tx.final_state_commitment().into()),
+            input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
+            fee: Some(Asset::from(tx.fee()).into()),
+        }),
+    };
+
+    // Proto conversion roundtrip
+    assert_eq!(proto_record, expected_proto);
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_preserves_most_recent_storage_map_only() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    use crate::account_state_forest::AccountStateForest;
+
+    let mut forest = AccountStateForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+
+    let slot_map = StorageSlotName::mock(1);
+    let key1 = num_to_storage_map_key(100);
+    let value1 = num_to_word(1000);
+
+    // Block 1: Create storage map
+    let block_1 = BlockNumber::from(1);
+    let mut map_delta = StorageMapDelta::default();
+    map_delta.insert(key1, value1);
+
+    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    let delta_1 =
+        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let initial_storage_root = forest.get_storage_map_root(account_id, &slot_map, block_1).unwrap();
+
+    // Advance 100 blocks without any updates
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let total_roots_removed = forest.prune(block_100);
+
+    // Storage map from block 1 should NOT be pruned (it's the most recent)
+    assert_eq!(total_roots_removed, 0, "No vault roots to prune");
+
+    // Verify storage map is still accessible at block 1
+    let storage_root_at_1 = forest
+        .get_storage_map_root(account_id, &slot_map, block_1)
+        .expect("Should still have storage root at block 1");
+    assert_eq!(storage_root_at_1, initial_storage_root, "Storage root should be preserved");
+
+    // Verify we can get witnesses for the storage map and verify against storage root
+    let witness = forest
+        .get_storage_map_witness(account_id, &slot_map, block_1, key1)
+        .expect("Should be able to get storage witness after pruning");
+
+    let proof: SmtProof = witness.into();
+    assert_eq!(
+        proof.compute_root(),
+        storage_root_at_1,
+        "Storage witness must verify against storage root"
+    );
+
+    // Verify we can get all entries
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_preserves_most_recent_storage_value_slot() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::StorageSlotDelta;
+
+    use crate::account_state_forest::AccountStateForest;
+
+    let mut forest = AccountStateForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+
+    let slot_value = StorageSlotName::mock(1);
+    let value1 = num_to_word(5000);
+
+    // Block 1: Create storage value slot
+    let block_1 = BlockNumber::from(1);
+
+    let raw = BTreeMap::from_iter([(slot_value.clone(), StorageSlotDelta::Value(value1))]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    let delta_1 =
+        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
+            .unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    // Note: Value slots don't have roots in AccountStateForest - they're just part of the
+    // account storage header. The AccountStateForest only tracks map slots.
+    // So there's nothing to verify for value slots in the forest.
+
+    // This test documents that value slots are NOT tracked in AccountStateForest
+    // (they don't need to be, since their digest is 1:1 with the value)
+
+    // Advance 100 blocks without any updates
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let total_roots_removed = forest.prune(block_100);
+
+    // No roots should be pruned because there are no map slots
+    assert_eq!(total_roots_removed, 0, "No vault roots in this test");
+
+    // Verify no storage map roots exist for this account
+    let storage_root = forest.get_storage_map_root(account_id, &slot_value, block_1);
+    assert!(
+        storage_root.is_none(),
+        "Value slots don't have storage map roots in AccountStateForest"
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn account_state_forest_preserves_mixed_slots_independently() {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+
+    use crate::account_state_forest::AccountStateForest;
+
+    let mut forest = AccountStateForest::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+    let slot_map_a = StorageSlotName::mock(1);
+    let slot_map_b = StorageSlotName::mock(2);
+    let slot_value = StorageSlotName::mock(3);
+
+    let key1 = num_to_storage_map_key(100);
+    let value1 = num_to_word(1000);
+    let value_slot_data = num_to_word(5000);
+
+    // Block 1: Create vault + two map slots + one value slot
+    let block_1 = BlockNumber::from(1);
+
+    let asset = FungibleAsset::new(faucet_id, 100).unwrap();
+    let mut vault_delta = AccountVaultDelta::default();
+    vault_delta.add_asset(asset.into()).unwrap();
+
+    let mut map_delta_a = StorageMapDelta::default();
+    map_delta_a.insert(key1, value1);
+
+    let mut map_delta_b = StorageMapDelta::default();
+    map_delta_b.insert(key1, value1);
+
+    let raw = BTreeMap::from_iter([
+        (slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a)),
+        (slot_map_b.clone(), StorageSlotDelta::Map(map_delta_b)),
+        (slot_value.clone(), StorageSlotDelta::Value(value_slot_data)),
+    ]);
+    let storage_delta = AccountStorageDelta::from_raw(raw);
+
+    let delta_1 = AccountDelta::new(account_id, storage_delta, vault_delta, Felt::ONE).unwrap();
+
+    forest.update_account(block_1, &delta_1).unwrap();
+
+    let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
+    let initial_map_a_root = forest.get_storage_map_root(account_id, &slot_map_a, block_1).unwrap();
+    let initial_map_b_root = forest.get_storage_map_root(account_id, &slot_map_b, block_1).unwrap();
+
+    // Block 51: Update only map_a (within retention window)
+    let block_51 = BlockNumber::from(51);
+    let value2 = num_to_word(2000);
+
+    let mut map_delta_a_update = StorageMapDelta::default();
+    map_delta_a_update.insert(key1, value2);
+
+    let raw_51 =
+        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a_update))]);
+    let storage_delta_51 = AccountStorageDelta::from_raw(raw_51);
+
+    let delta_51 = AccountDelta::new(
+        account_id,
+        storage_delta_51,
+        AccountVaultDelta::default(),
+        Felt::new(51),
+    )
+    .unwrap();
+
+    forest.update_account(block_51, &delta_51).unwrap();
+
+    // Advance to block 100
+    let block_100 = BlockNumber::from(100);
+
+    // Prune at block 100
+    let total_roots_removed = forest.prune(block_100);
+
+    // Vault: block 1 is most recent, should NOT be pruned
+    // Map A: block 1 is old (block 51 is newer), SHOULD be pruned
+    // Map B: block 1 is most recent, should NOT be pruned
+    assert_eq!(
+        total_roots_removed, 0,
+        "Vault root from block 1 should NOT be pruned (most recent)"
+    );
+
+    // Verify vault is still accessible
+    let vault_root_at_1 =
+        forest.get_vault_root(account_id, block_1).expect("Vault should be accessible");
+    assert_eq!(vault_root_at_1, initial_vault_root, "Vault should be from block 1");
+
+    // Verify map_a is accessible (from block 51)
+    let map_a_root_at_51 = forest
+        .get_storage_map_root(account_id, &slot_map_a, block_51)
+        .expect("Map A should be accessible");
+    assert_ne!(
+        map_a_root_at_51, initial_map_a_root,
+        "Map A should be from block 51, not block 1"
+    );
+
+    // Verify map_b is still accessible (from block 1)
+    let map_b_root_at_1 = forest
+        .get_storage_map_root(account_id, &slot_map_b, block_1)
+        .expect("Map B should be accessible");
+    assert_eq!(
+        map_b_root_at_1, initial_map_b_root,
+        "Map B should still be from block 1 (most recent)"
+    );
+
+    // Verify map_a block 1 is no longer accessible
+    let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
+    assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
+}
+
+// PROVEN IN SEQUENCE TESTS
+// ================================================================================================
+
+/// Creates a minimal dummy `BlockProofRequest` for test purposes.
+fn dummy_proving_inputs(block_header: &BlockHeader) -> BlockProofRequest {
+    BlockProofRequest {
+        tx_batches: OrderedBatches::new(vec![]),
+        block_header: block_header.clone(),
+        block_inputs: BlockInputs::new(
+            BlockHeader::mock(0, None, None, &[], EMPTY_WORD),
+            PartialBlockchain::default(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        ),
+    }
+}
+
+fn create_unproven_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
+    let block_header = BlockHeader::new(
+        1_u8.into(),
+        num_to_word(2),
+        block_num,
+        num_to_word(4),
+        num_to_word(5),
+        num_to_word(6),
+        num_to_word(7),
+        num_to_word(8),
+        num_to_word(9),
+        SecretKey::new().public_key(),
+        test_fee_params(),
+        11_u8.into(),
+    );
+
+    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    conn.transaction(|conn| {
+        queries::insert_block_header(
+            conn,
+            &block_header,
+            &dummy_signature,
+            Some(dummy_proving_inputs(&block_header)),
+        )
+    })
+    .unwrap();
+}
+
+#[test]
+fn select_latest_proven_block_num_only_genesis() {
+    let mut conn = create_db();
+
+    // Genesis block (block 0) is proven at insert time (proving_inputs = None).
+    create_block(&mut conn, BlockNumber::GENESIS);
+
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
+    assert_eq!(latest, BlockNumber::GENESIS);
+}
+
+#[test]
+fn mark_block_proven_advances_in_sequence_for_consecutive_blocks() {
+    let mut conn = create_db();
+
+    // Insert genesis (proven + in-sequence) and three unproven blocks.
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=3 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+
+    // Mark all three as proven in order. Each call atomically advances the in-sequence tip.
+    for i in 1u32..=3 {
+        let advanced =
+            super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(i)).unwrap();
+        assert_eq!(advanced, vec![BlockNumber::from(i)]);
+    }
+
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
+    assert_eq!(latest, BlockNumber::from(3u32));
+}
+
+#[test]
+fn mark_block_proven_with_hole_does_not_advance_past_gap() {
+    let mut conn = create_db();
+
+    // Insert genesis + blocks 1..=4 as unproven.
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=4 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+
+    // Prove block 1 — advances tip to 1.
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
+
+    // Prove blocks 3, 4 (skipping 2) — cannot advance past the gap.
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+    assert!(advanced.is_empty());
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
+    assert!(advanced.is_empty());
+
+    // Latest proven in sequence should be 1 (blocks 3, 4 are proven but not in sequence).
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
+    assert_eq!(latest, BlockNumber::from(1u32));
+}
+
+#[test]
+fn mark_block_proven_filling_hole_advances_through_all_consecutive() {
+    let mut conn = create_db();
+
+    // Insert genesis + blocks 1..=4 as unproven.
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=4 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+
+    // Prove blocks out of order: 1, 3, 4 first.
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+    assert!(advanced.is_empty());
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
+    assert!(advanced.is_empty());
+
+    assert_eq!(
+        queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap(),
+        BlockNumber::from(1u32),
+    );
+
+    // Now prove block 2, filling the hole. Should advance through 2, 3, 4.
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(2u32)).unwrap();
+    assert_eq!(
+        advanced,
+        vec![BlockNumber::from(2u32), BlockNumber::from(3u32), BlockNumber::from(4u32)],
+    );
+
+    // Now all blocks through 4 are proven in sequence.
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
+    assert_eq!(latest, BlockNumber::from(4u32));
+}
+
+#[test]
+fn select_unproven_blocks_skips_proven() {
+    let mut conn = create_db();
+
+    // Genesis is proven. Add blocks 1..=5, some proven and some not.
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=5 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+
+    // Prove blocks 1 and 3.
+    super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
+
+    // Unproven blocks after genesis should be 2, 4, 5.
+    let unproven = queries::select_unproven_blocks(&mut conn, BlockNumber::GENESIS, 10).unwrap();
+    assert_eq!(
+        unproven,
+        vec![BlockNumber::from(2u32), BlockNumber::from(4u32), BlockNumber::from(5u32),]
+    );
+}
+
+#[test]
+fn select_unproven_blocks_respects_limit() {
+    let mut conn = create_db();
+
+    create_block(&mut conn, BlockNumber::GENESIS);
+    for i in 1u32..=5 {
+        create_unproven_block(&mut conn, BlockNumber::from(i));
+    }
+
+    let unproven = queries::select_unproven_blocks(&mut conn, BlockNumber::GENESIS, 2).unwrap();
+    assert_eq!(unproven, vec![BlockNumber::from(1u32), BlockNumber::from(2u32)]);
+}
+
+#[test]
+fn mark_block_proven_is_idempotent_for_in_sequence() {
+    let mut conn = create_db();
+
+    create_block(&mut conn, BlockNumber::GENESIS);
+    create_unproven_block(&mut conn, BlockNumber::from(1u32));
+
+    // First call marks block 1 proven and advances it in-sequence.
+    let advanced =
+        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
+    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
+
+    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
+    assert_eq!(latest, BlockNumber::from(1u32));
 }

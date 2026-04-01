@@ -2,12 +2,12 @@
 syntax = "proto3";
 package block_producer;
 
+import "google/protobuf/empty.proto";
 import "rpc.proto";
-import "types/note.proto";
 import "types/blockchain.proto";
+import "types/note.proto";
 import "types/primitives.proto";
 import "types/transaction.proto";
-import "google/protobuf/empty.proto";
 
 // BLOCK PRODUCER SERVICE
 // ================================================================================================
@@ -19,43 +19,28 @@ service Api {
     // Submits proven transaction to the Miden network. Returns the node's current block height.
     rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
-    // Submits a proven batch to the Miden network.
+    // Submits a batch of transactions to the Miden network.
     //
-    // The batch may include transactions which were are:
-    //
-    //   - already in the mempool i.e. previously successfully submitted
-    //   - will be submitted to the mempool in the future
-    //   - won't be submitted to the mempool at all
-    //
-    // All transactions in the batch but not in the mempool must build on the current mempool
-    // state following normal transaction submission rules.
+    // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
     // Subscribe to mempool events.
     //
-    // The request will be rejected if the caller and the mempool disagree on the current chain tip.
-    // This prevents potential desync issues. The caller can resolve this by resync'ing its chain state.
+    // The event stream will contain all events after the current chain tip. This includes all
+    // currently inflight events that have not yet been committed to the chain.
     //
-    // The event stream will contain all events after the chain tip. This includes all currently inflight
-    // events that have not yet been committed to the chain.
-    //
-    // Currently only a single active subscription is supported. Subscription requests will cancel the active
-    // subscription, if any.
-    rpc MempoolSubscription(MempoolSubscriptionRequest) returns (stream MempoolEvent) {}
+    // Currently only a single active subscription is supported. Subscription requests will cancel
+    // the active subscription, if any.
+    rpc MempoolSubscription(google.protobuf.Empty) returns (stream MempoolEvent) {}
 }
 
 // MEMPOOL SUBSCRIPTION
 // ================================================================================================
 
 // Request to subscribe to mempool events.
-message MempoolSubscriptionRequest {
-    // The caller's current chain height.
-    //
-    // Request will be rejected if this does not match the mempool's current view.
-    fixed32 chain_tip = 1;
-}
+message MempoolSubscriptionRequest {}
 
 // Event from the mempool.
 message MempoolEvent {
@@ -79,7 +64,7 @@ message MempoolEvent {
         repeated note.NetworkNote network_notes = 3;
         // Changes to a network account, if any. This includes creation of new network accounts.
         //
-        // The account delta is encoded using [winter_utils::Serializable] implementation
+        // The account delta is encoded using [miden_serde_utils::Serializable] implementation
         // for [miden_protocol::account::delta::AccountDelta].
         optional bytes network_account_delta = 4;
     }
@@ -95,5 +80,5 @@ message MempoolEvent {
         TransactionAdded transaction_added = 1;
         BlockCommitted block_committed = 2;
         TransactionsReverted transactions_reverted = 3;
-    };
+    }
 }

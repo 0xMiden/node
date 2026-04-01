@@ -1,0 +1,46 @@
+name: Publish crates
+
+permissions:
+  contents: read
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-release:
+    name: Cargo publish release
+    runs-on: Linux-ARM64-Runner
+    if: ${{ github.repository_owner == '0xMiden' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
+      - name: Log release info
+        run: |
+          echo "Publishing release ${{ github.event.release.tag_name }}"
+          echo "Commit: $(git rev-parse HEAD)"
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall@1.16.6
+      # - name: Install cargo-msrv
+      #   run: cargo binstall --no-confirm --force cargo-msrv
+      # - name: Check MSRV for each workspace member
+      #   run: |
+      #     export PATH="$HOME/.cargo/bin:$PATH"
+      #     ./scripts/check-msrv.sh
+      - name: Run cargo publish
+        run: cargo publish --workspace
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

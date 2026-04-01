@@ -11,7 +11,7 @@ import "types/primitives.proto";
 // A Miden account ID is a 120-bit value derived from the commitments to account code and storage,
 // and a random user-provided seed.
 message AccountId {
-    // 15 bytes (120 bits) encoded using [winter_utils::Serializable] implementation for
+    // 15 bytes (120 bits) encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::account::account_id::AccountId].
     bytes id = 1;
 }
@@ -53,7 +53,7 @@ message AccountDetails {
     // Account summary.
     AccountSummary summary = 1;
 
-    // Account details encoded using [winter_utils::Serializable] implementation for
+    // Account details encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::account::Account].
     optional bytes details = 2;
 }

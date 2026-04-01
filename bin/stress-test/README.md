@@ -20,14 +20,14 @@ This command allows to run stress tests against the Store component. These tests
 
 The endpoints that you can test are:
 - `load_state`
-- `sync_state`
 - `sync_notes`
 - `sync_nullifiers`
 - `sync_transactions`
+- `sync-chain-mmr`
 
 Most benchmarks accept options to control the number of iterations and concurrency level. The `load_state` endpoint is different - it simply measures the one-time startup cost of loading the state from disk.
 
-**Note on Concurrency**: For the endpoints that support it (`sync_state`, `sync_notes`, `sync_nullifiers`), the concurrency parameter controls how many requests are sent in parallel to the store. Since these benchmarks run against a local store (no network overhead), higher concurrency values can help identify bottlenecks in the store's internal processing. The latency measurements exclude network time and represent pure store processing time.
+**Note on Concurrency**: For the endpoints that support it (`sync_notes`, `sync_nullifiers`), the concurrency parameter controls how many requests are sent in parallel to the store. Since these benchmarks run against a local store (no network overhead), higher concurrency values can help identify bottlenecks in the store's internal processing. The latency measurements exclude network time and represent pure store processing time.
 
 Example usage:
 
@@ -119,18 +119,6 @@ Database contains 99961 accounts and 99960 nullifiers
 
 **Performance Note**: The load-state benchmark shows that account tree loading (~21.3s) and nullifier tree loading (~21.5s) are the primary bottlenecks, while MMR loading and database connection are negligible (<3ms each).
 
-- sync-state
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-state
-
-Average request latency: 1.120061ms
-P50 request latency: 1.106042ms
-P95 request latency: 1.530708ms
-P99 request latency: 1.919209ms
-P99.9 request latency: 5.795125ms
-Average notes per response: 1.3159
-```
-
 - sync-notes
 ``` bash
 $ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-notes
@@ -169,6 +157,22 @@ Pagination statistics:
   Runs triggering pagination: 9971
   Pagination rate: 99.71%
   Average pages per run: 2.00
+```
+
+- sync-chain-mmr
+``` bash
+$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-chain-mmr --block-range 1000
+
+Average request latency: 1.021ms
+P50 request latency: 0.981ms
+P95 request latency: 1.412ms
+P99 request latency: 1.822ms
+P99.9 request latency: 3.174ms
+Pagination statistics:
+  Total runs: 10000
+  Runs triggering pagination: 1
+  Pagination rate: 0.01%
+  Average pages per run: 1.00
 ```
 
 ## License

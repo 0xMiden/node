@@ -1,6 +1,6 @@
 # Miden node
 
-[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/0xMiden/miden-node/blob/main/LICENSE)
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/0xMiden/node/blob/main/LICENSE)
 [![CI](https://github.com/0xMiden/node/actions/workflows/ci.yml/badge.svg)](https://github.com/0xMiden/node/actions/workflows/ci.yml)
 [![RUST_VERSION](https://img.shields.io/badge/rustc-1.90+-lightgray.svg)](https://www.rust-lang.org/tools/install)
 [![crates.io](https://img.shields.io/crates/v/miden-node)](https://crates.io/crates/miden-node)
@@ -33,15 +33,17 @@ The documentation in the `docs/external` folder is built using Docusaurus and is
 Developer documentation and onboarding guide is available
 [here](https://0xMiden.github.io/miden-node/developer/index.html).
 
-At minimum, please see our [contributing](CONTRIBUTING.md) guidelines and our [makefile](Makefile) for example workflows
+At minimum, please see our [contributing](https://github.com/0xMiden/.github?tab=contributing-ov-file) guidelines and our [makefile](Makefile) for example workflows
 e.g. run the testsuite using
 
 ```sh
 make test
 ```
 
-Note that we do _not_ accept low-effort contributions or AI generated code. For typos and documentation errors please
-rather open an issue.
+In particular, please note that we do _not_ accept [low-effort contributions](https://github.com/0xMiden/.github?tab=contributing-ov-file#contribution-quality) or AI generated code. For typos and documentation errors please open an issue instead. 
+
+> [!IMPORTANT]
+> PRs will be closed unless you have been assigned an issue by a maintainer.
 
 ## License
 

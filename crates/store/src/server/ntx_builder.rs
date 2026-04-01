@@ -3,11 +3,12 @@ use std::num::{NonZero, TryFromIntError};
 
 use miden_crypto::merkle::smt::SmtProof;
 use miden_node_proto::domain::account::AccountInfo;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::ntx_builder_server;
 use miden_node_utils::ErrorReport;
-use miden_protocol::account::StorageSlotName;
+use miden_protocol::account::{StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetVaultKey;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Note;
@@ -16,7 +17,12 @@ use tracing::debug;
 
 use crate::COMPONENT;
 use crate::db::models::Page;
-use crate::errors::{GetNetworkAccountIdsError, GetNoteScriptByRootError, GetWitnessesError};
+use crate::errors::{
+    GetAccountError,
+    GetNetworkAccountIdsError,
+    GetNoteScriptByRootError,
+    GetWitnessesError,
+};
 use crate::server::api::{
     StoreApi,
     internal_error,
@@ -75,7 +81,8 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         &self,
         request: Request<proto::account::AccountId>,
     ) -> Result<Response<proto::store::MaybeAccountDetails>, Status> {
-        let account_id = read_account_id::<Status>(Some(request.into_inner()))?;
+        let account_id =
+            read_account_id::<proto::account::AccountId, Status>(Some(request.into_inner()))?;
 
         let account_info: Option<AccountInfo> =
             self.state.get_network_account_details_by_id(account_id).await?;
@@ -91,7 +98,9 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::store::UnconsumedNetworkNotes>, Status> {
         let request = request.into_inner();
         let block_num = BlockNumber::from(request.block_num);
-        let account_id = read_account_id::<Status>(request.account_id)?;
+        let account_id = read_account_id::<proto::store::UnconsumedNetworkNotesRequest, Status>(
+            request.account_id,
+        )?;
 
         let state = self.state.clone();
 
@@ -167,7 +176,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
         debug!(target: COMPONENT, ?request);
         let request = request.into_inner();
-        let account_request = request.try_into()?;
+        let account_request = request.try_into().map_err(GetAccountError::DeserializationFailed)?;
 
         let proof = self.state.get_account(account_request).await?;
 
@@ -176,11 +185,12 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 
     async fn get_note_script_by_root(
         &self,
-        request: Request<proto::note::NoteRoot>,
+        request: Request<proto::note::NoteScriptRoot>,
     ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let root = read_root::<GetNoteScriptByRootError>(request.into_inner().root, "NoteRoot")?;
+        let root =
+            read_root::<GetNoteScriptByRootError>(request.into_inner().root, "NoteScriptRoot")?;
 
         let note_script = self
             .state
@@ -197,11 +207,30 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         &self,
         request: Request<proto::store::VaultAssetWitnessesRequest>,
     ) -> Result<Response<proto::store::VaultAssetWitnessesResponse>, Status> {
+        const MAX_VAULT_KEYS: usize = 100;
+
         let request = request.into_inner();
 
+        // Sanity check the number of vault keys in the request
+        if request.vault_keys.len() > MAX_VAULT_KEYS {
+            tracing::warn!(
+                limit=%MAX_VAULT_KEYS,
+                request=%request.vault_keys.len(),
+                account.id=%request.account_id.unwrap_or_default(),
+                "maximum vault key limit exceeded",
+            );
+
+            return Err(Status::invalid_argument(format!(
+                "number of vault keys in request cannot exceed {MAX_VAULT_KEYS}"
+            )));
+        }
+
         // Read account ID.
-        let account_id =
-            read_account_id::<GetWitnessesError>(request.account_id).map_err(invalid_argument)?;
+        let account_id = read_account_id::<
+            proto::store::VaultAssetWitnessesRequest,
+            GetWitnessesError,
+        >(request.account_id)
+        .map_err(invalid_argument)?;
 
         // Read vault keys.
         let vault_keys = request
@@ -210,7 +239,11 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             .map(|key_digest| {
                 let word = read_root::<GetWitnessesError>(Some(key_digest), "VaultKey")
                     .map_err(invalid_argument)?;
-                Ok(AssetVaultKey::new_unchecked(word))
+                AssetVaultKey::try_from(word).map_err(|e| {
+                    invalid_argument(GetWitnessesError::DeserializationFailed(
+                        ConversionError::from(e),
+                    ))
+                })
             })
             .collect::<Result<BTreeSet<_>, Status>>()?;
 
@@ -253,11 +286,15 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 
         // Read the account ID.
         let account_id =
-            read_account_id::<GetWitnessesError>(request.account_id).map_err(invalid_argument)?;
+            read_account_id::<proto::store::StorageMapWitnessRequest, GetWitnessesError>(
+                request.account_id,
+            )
+            .map_err(invalid_argument)?;
 
         // Read the map key.
-        let map_key =
-            read_root::<GetWitnessesError>(request.map_key, "MapKey").map_err(invalid_argument)?;
+        let map_key = read_root::<GetWitnessesError>(request.map_key, "MapKey")
+            .map(StorageMapKey::new)
+            .map_err(invalid_argument)?;
 
         // Read the slot name.
         let slot_name = StorageSlotName::new(request.slot_name).map_err(|err| {

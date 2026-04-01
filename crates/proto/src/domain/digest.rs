@@ -1,8 +1,9 @@
 use std::fmt::{Debug, Display, Formatter};
 
 use hex::{FromHex, ToHex};
+use miden_protocol::account::StorageMapKey;
 use miden_protocol::note::NoteId;
-use miden_protocol::{Felt, StarkField, Word};
+use miden_protocol::{Felt, Word};
 
 use crate::errors::ConversionError;
 use crate::generated as proto;
@@ -64,12 +65,12 @@ impl FromHex for proto::primitives::Digest {
         let data = hex::decode(hex)?;
 
         match data.len() {
-            size if size < DIGEST_DATA_SIZE => {
-                Err(ConversionError::InsufficientData { expected: DIGEST_DATA_SIZE, got: size })
-            },
-            size if size > DIGEST_DATA_SIZE => {
-                Err(ConversionError::TooMuchData { expected: DIGEST_DATA_SIZE, got: size })
-            },
+            size if size < DIGEST_DATA_SIZE => Err(ConversionError::message(format!(
+                "not enough data, expected {DIGEST_DATA_SIZE}, got {size}"
+            ))),
+            size if size > DIGEST_DATA_SIZE => Err(ConversionError::message(format!(
+                "too much data, expected {DIGEST_DATA_SIZE}, got {size}"
+            ))),
             _ => {
                 let d0 = u64::from_be_bytes(data[..8].try_into().unwrap());
                 let d1 = u64::from_be_bytes(data[8..16].try_into().unwrap());
@@ -105,10 +106,10 @@ impl From<&[u64; 4]> for proto::primitives::Digest {
 impl From<[Felt; 4]> for proto::primitives::Digest {
     fn from(value: [Felt; 4]) -> Self {
         Self {
-            d0: value[0].as_int(),
-            d1: value[1].as_int(),
-            d2: value[2].as_int(),
-            d3: value[3].as_int(),
+            d0: value[0].as_canonical_u64(),
+            d1: value[1].as_canonical_u64(),
+            d2: value[2].as_canonical_u64(),
+            d3: value[3].as_canonical_u64(),
         }
     }
 }
@@ -122,16 +123,28 @@ impl From<&[Felt; 4]> for proto::primitives::Digest {
 impl From<Word> for proto::primitives::Digest {
     fn from(value: Word) -> Self {
         Self {
-            d0: value[0].as_int(),
-            d1: value[1].as_int(),
-            d2: value[2].as_int(),
-            d3: value[3].as_int(),
+            d0: value[0].as_canonical_u64(),
+            d1: value[1].as_canonical_u64(),
+            d2: value[2].as_canonical_u64(),
+            d3: value[3].as_canonical_u64(),
         }
     }
 }
 
 impl From<&Word> for proto::primitives::Digest {
     fn from(value: &Word) -> Self {
+        (*value).into()
+    }
+}
+
+impl From<StorageMapKey> for proto::primitives::Digest {
+    fn from(value: StorageMapKey) -> Self {
+        Into::<Word>::into(value).into()
+    }
+}
+
+impl From<&StorageMapKey> for proto::primitives::Digest {
+    fn from(value: &StorageMapKey) -> Self {
         (*value).into()
     }
 }
@@ -161,11 +174,8 @@ impl TryFrom<proto::primitives::Digest> for [Felt; 4] {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
-        if [value.d0, value.d1, value.d2, value.d3]
-            .iter()
-            .any(|v| *v >= <Felt as StarkField>::MODULUS)
-        {
-            return Err(ConversionError::NotAValidFelt);
+        if [value.d0, value.d1, value.d2, value.d3].iter().any(|v| *v >= Felt::ORDER) {
+            return Err(ConversionError::message("value is not in the range 0..MODULUS"));
         }
 
         Ok([
@@ -182,6 +192,14 @@ impl TryFrom<proto::primitives::Digest> for Word {
 
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         Ok(Self::new(value.try_into()?))
+    }
+}
+
+impl TryFrom<proto::primitives::Digest> for StorageMapKey {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
+        Ok(StorageMapKey::new(value.try_into()?))
     }
 }
 

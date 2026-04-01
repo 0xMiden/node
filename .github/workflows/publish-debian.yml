@@ -3,8 +3,8 @@ name: Publish Debian Package
 on:
   workflow_dispatch:
     inputs:
-      service:
-        description: "Name of service to publish"
+      package:
+        description: "Name of package to publish"
         required: true
         type: choice
         options:
@@ -20,7 +20,7 @@ on:
           - network-monitor
           - node
           - remote-prover
-      package:
+      packaging_dir:
         required: true
         description: "Name of packaging directory"
         type: choice
@@ -48,7 +48,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish ${{ inputs.service }} ${{ matrix.arch }} Debian
+    name: Publish ${{ inputs.package }} ${{ matrix.arch }} Debian
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -60,8 +60,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
 
       - name: Build and Publish Packages
         uses: ./.github/actions/debian
@@ -69,7 +69,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ inputs.version }}
           crate_dir: ${{ inputs.crate_dir }}
-          service: ${{ inputs.service }}
           package: ${{ inputs.package }}
+          packaging_dir: ${{ inputs.packaging_dir }}
           crate: ${{ inputs.crate }}
           arch: ${{ matrix.arch }}

@@ -34,5 +34,4 @@ tokio                     = { features = ["macros", "net", "rt-multi-thread"], w
 url                       = { workspace = true }
 
 [dev-dependencies]
-figment          = { features = ["env", "test", "toml"], version = "0.10" }
 miden-node-utils = { features = ["tracing-forest"], workspace = true }

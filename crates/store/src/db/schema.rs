@@ -47,6 +47,10 @@ diesel::table! {
     block_headers (block_num) {
         block_num -> BigInt,
         block_header -> Binary,
+        signature -> Binary,
+        commitment -> Binary,
+        proving_inputs -> Nullable<Binary>,
+        proven_in_sequence -> Bool,
     }
 }
 
@@ -74,7 +78,7 @@ diesel::table! {
         consumed_at -> Nullable<BigInt>,
         nullifier -> Nullable<Binary>,
         assets -> Nullable<Binary>,
-        inputs -> Nullable<Binary>,
+        storage -> Nullable<Binary>,
         script_root -> Nullable<Binary>,
         serial_num -> Nullable<Binary>,
     }
@@ -95,9 +99,10 @@ diesel::table! {
         block_num -> BigInt,
         initial_state_commitment -> Binary,
         final_state_commitment -> Binary,
-        nullifiers -> Binary,
+        input_notes -> Binary,
         output_notes -> Binary,
         size_in_bytes -> BigInt,
+        fee -> Binary,
     }
 }
 

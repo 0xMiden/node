@@ -9,28 +9,29 @@
 //!   data exists, otherwise rebuilt from the database and persisted.
 
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
-use miden_protocol::Word;
-use miden_protocol::block::account_tree::{AccountTree, account_id_to_smt_key};
+use miden_crypto::merkle::mmr::Mmr;
+#[cfg(feature = "rocksdb")]
+use miden_large_smt_backend_rocksdb::RocksDbStorage;
+use miden_node_utils::clap::RocksDbOptions;
+use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
-use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
+use miden_protocol::block::{BlockNumber, Blockchain};
 #[cfg(not(feature = "rocksdb"))]
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
+use miden_protocol::{Felt, Word};
 #[cfg(feature = "rocksdb")]
 use tracing::info;
 use tracing::instrument;
-#[cfg(feature = "rocksdb")]
-use {
-    miden_crypto::merkle::smt::RocksDbStorage,
-    miden_protocol::crypto::merkle::smt::RocksDbConfig,
-};
 
 use crate::COMPONENT;
+use crate::account_state_forest::AccountStateForest;
 use crate::db::Db;
+use crate::db::models::queries::BlockHeaderCommitment;
 use crate::errors::{DatabaseError, StateInitializationError};
-use crate::inner_forest::InnerForest;
 
 // CONSTANTS
 // ================================================================================================
@@ -40,6 +41,18 @@ pub const ACCOUNT_TREE_STORAGE_DIR: &str = "accounttree";
 
 /// Directory name for the nullifier tree storage within the data directory.
 pub const NULLIFIER_TREE_STORAGE_DIR: &str = "nullifiertree";
+
+/// Page size for loading account commitments from the database during tree rebuilding.
+/// This limits memory usage when rebuilding trees with millions of accounts.
+const ACCOUNT_COMMITMENTS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
+
+/// Page size for loading nullifiers from the database during tree rebuilding.
+/// This limits memory usage when rebuilding trees with millions of nullifiers.
+const NULLIFIERS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
+
+/// Page size for loading public account IDs from the database during forest rebuilding.
+/// This limits memory usage when rebuilding with millions of public accounts.
+const PUBLIC_ACCOUNT_IDS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
 
 // STORAGE TYPE ALIAS
 // ================================================================================================
@@ -63,7 +76,18 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
         LargeSmtError::Storage(err) => {
             StateInitializationError::AccountTreeIoError(err.as_report())
         },
+        err @ (LargeSmtError::RootMismatch { .. } | LargeSmtError::StorageNotEmpty) => {
+            StateInitializationError::AccountTreeIoError(err.as_report())
+        },
     }
+}
+
+/// Converts a block number to the leaf value format used in the nullifier tree.
+///
+/// This matches the format used by `NullifierBlock::from(BlockNumber)::into()`,
+/// which is `[Felt::from(block_num), 0, 0, 0]`.
+fn block_num_to_nullifier_leaf(block_num: BlockNumber) -> Word {
+    Word::from([Felt::from(block_num), Felt::ZERO, Felt::ZERO, Felt::ZERO])
 }
 
 // STORAGE LOADER TRAIT
@@ -78,8 +102,14 @@ pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInit
 /// which detects divergence between persistent storage and the database. If divergence is detected,
 /// the user should manually delete the tree storage directories and restart the node.
 pub trait StorageLoader: SmtStorage + Sized {
+    /// A configuration type for the implementation.
+    type Config: std::fmt::Debug + std::default::Default;
     /// Creates a storage backend for the given domain.
-    fn create(data_dir: &Path, domain: &'static str) -> Result<Self, StateInitializationError>;
+    fn create(
+        data_dir: &Path,
+        storage_options: &Self::Config,
+        domain: &'static str,
+    ) -> Result<Self, StateInitializationError>;
 
     /// Loads an account tree, either from persistent storage or by rebuilding from DB.
     fn load_account_tree(
@@ -99,31 +129,91 @@ pub trait StorageLoader: SmtStorage + Sized {
 
 #[cfg(not(feature = "rocksdb"))]
 impl StorageLoader for MemoryStorage {
-    fn create(_data_dir: &Path, _domain: &'static str) -> Result<Self, StateInitializationError> {
+    type Config = ();
+    fn create(
+        _data_dir: &Path,
+        _storage_options: &Self::Config,
+        _domain: &'static str,
+    ) -> Result<Self, StateInitializationError> {
         Ok(MemoryStorage::default())
     }
 
+    #[instrument(target = COMPONENT, skip_all)]
     async fn load_account_tree(
         self,
         db: &mut Db,
     ) -> Result<AccountTree<LargeSmt<Self>>, StateInitializationError> {
-        let account_data = db.select_all_account_commitments().await?;
-        let smt_entries = account_data
-            .into_iter()
-            .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
-        let smt = LargeSmt::with_entries(self, smt_entries)
+        let mut smt = LargeSmt::with_entries(self, std::iter::empty())
             .map_err(account_tree_large_smt_error_to_init_error)?;
+
+        // Load account commitments in pages to avoid loading millions of entries at once
+        let mut cursor = None;
+        loop {
+            let page = db
+                .select_account_commitments_paged(ACCOUNT_COMMITMENTS_PAGE_SIZE, cursor)
+                .await?;
+
+            cursor = page.next_cursor;
+            if page.commitments.is_empty() {
+                break;
+            }
+
+            let entries = page
+                .commitments
+                .into_iter()
+                .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
+
+            let mutations = smt
+                .compute_mutations(entries)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+            smt.apply_mutations(mutations)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+
+            if cursor.is_none() {
+                break;
+            }
+        }
+
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
     }
 
+    // TODO: Make the loading methodology for account and nullifier trees consistent.
+    // Currently we use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()`
+    // for accounts. Consider using `NullifierTree::with_storage_from_entries()` for consistency.
+    #[instrument(target = COMPONENT, skip_all)]
     async fn load_nullifier_tree(
         self,
         db: &mut Db,
     ) -> Result<NullifierTree<LargeSmt<Self>>, StateInitializationError> {
-        let nullifiers = db.select_all_nullifiers().await?;
-        let entries = nullifiers.into_iter().map(|info| (info.nullifier, info.block_num));
-        NullifierTree::with_storage_from_entries(self, entries)
-            .map_err(StateInitializationError::FailedToCreateNullifierTree)
+        let mut smt = LargeSmt::with_entries(self, std::iter::empty())
+            .map_err(account_tree_large_smt_error_to_init_error)?;
+
+        // Load nullifiers in pages to avoid loading millions of entries at once
+        let mut cursor = None;
+        loop {
+            let page = db.select_nullifiers_paged(NULLIFIERS_PAGE_SIZE, cursor).await?;
+
+            cursor = page.next_cursor;
+            if page.nullifiers.is_empty() {
+                break;
+            }
+
+            let entries = page.nullifiers.into_iter().map(|info| {
+                (info.nullifier.as_word(), block_num_to_nullifier_leaf(info.block_num))
+            });
+
+            let mutations = smt
+                .compute_mutations(entries)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+            smt.apply_mutations(mutations)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(NullifierTree::new_unchecked(smt))
     }
 }
 
@@ -132,15 +222,21 @@ impl StorageLoader for MemoryStorage {
 
 #[cfg(feature = "rocksdb")]
 impl StorageLoader for RocksDbStorage {
-    fn create(data_dir: &Path, domain: &'static str) -> Result<Self, StateInitializationError> {
+    type Config = RocksDbOptions;
+    fn create(
+        data_dir: &Path,
+        storage_options: &Self::Config,
+        domain: &'static str,
+    ) -> Result<Self, StateInitializationError> {
         let storage_path = data_dir.join(domain);
-
+        let config = storage_options.with_path(&storage_path);
         fs_err::create_dir_all(&storage_path)
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))?;
-        RocksDbStorage::open(RocksDbConfig::new(storage_path))
+        RocksDbStorage::open(config)
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))
     }
 
+    #[instrument(target = COMPONENT, skip_all)]
     async fn load_account_tree(
         self,
         db: &mut Db,
@@ -156,15 +252,42 @@ impl StorageLoader for RocksDbStorage {
         }
 
         info!(target: COMPONENT, "RocksDB account tree storage is empty, populating from SQLite");
-        let account_data = db.select_all_account_commitments().await?;
-        let smt_entries = account_data
-            .into_iter()
-            .map(|(id, commitment)| (account_id_to_smt_key(id), commitment));
-        let smt = LargeSmt::with_entries(self, smt_entries)
+
+        let mut smt = LargeSmt::with_entries(self, std::iter::empty())
             .map_err(account_tree_large_smt_error_to_init_error)?;
+
+        // Load account commitments in pages to avoid loading millions of entries at once
+        let mut cursor = None;
+        loop {
+            let page = db
+                .select_account_commitments_paged(ACCOUNT_COMMITMENTS_PAGE_SIZE, cursor)
+                .await?;
+
+            cursor = page.next_cursor;
+            if page.commitments.is_empty() {
+                break;
+            }
+
+            let entries = page
+                .commitments
+                .into_iter()
+                .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
+
+            let mutations = smt
+                .compute_mutations(entries)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+            smt.apply_mutations(mutations)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+
+            if cursor.is_none() {
+                break;
+            }
+        }
+
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
     }
 
+    #[instrument(target = COMPONENT, skip_all)]
     async fn load_nullifier_tree(
         self,
         db: &mut Db,
@@ -179,10 +302,36 @@ impl StorageLoader for RocksDbStorage {
         }
 
         info!(target: COMPONENT, "RocksDB nullifier tree storage is empty, populating from SQLite");
-        let nullifiers = db.select_all_nullifiers().await?;
-        let entries = nullifiers.into_iter().map(|info| (info.nullifier, info.block_num));
-        NullifierTree::with_storage_from_entries(self, entries)
-            .map_err(StateInitializationError::FailedToCreateNullifierTree)
+
+        let mut smt = LargeSmt::with_entries(self, std::iter::empty())
+            .map_err(account_tree_large_smt_error_to_init_error)?;
+
+        // Load nullifiers in pages to avoid loading millions of entries at once
+        let mut cursor = None;
+        loop {
+            let page = db.select_nullifiers_paged(NULLIFIERS_PAGE_SIZE, cursor).await?;
+
+            cursor = page.next_cursor;
+            if page.nullifiers.is_empty() {
+                break;
+            }
+
+            let entries = page.nullifiers.into_iter().map(|info| {
+                (info.nullifier.as_word(), block_num_to_nullifier_leaf(info.block_num))
+            });
+
+            let mutations = smt
+                .compute_mutations(entries)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+            smt.apply_mutations(mutations)
+                .map_err(account_tree_large_smt_error_to_init_error)?;
+
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(NullifierTree::new_unchecked(smt))
     }
 }
 
@@ -192,7 +341,7 @@ impl StorageLoader for RocksDbStorage {
 /// Loads an SMT from persistent storage.
 #[cfg(feature = "rocksdb")]
 pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializationError> {
-    LargeSmt::new(storage).map_err(account_tree_large_smt_error_to_init_error)
+    LargeSmt::load(storage).map_err(account_tree_large_smt_error_to_init_error)
 }
 
 // TREE LOADING FUNCTIONS
@@ -201,45 +350,56 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// Loads the blockchain MMR from all block headers in the database.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
-    let block_commitments: Vec<miden_protocol::Word> = db
-        .select_all_block_headers()
-        .await?
-        .iter()
-        .map(BlockHeader::commitment)
-        .collect();
+    let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX
     // entries.
-    let chain_mmr = Blockchain::from_mmr_unchecked(block_commitments.into());
+    let chain_mmr = Blockchain::from_mmr_unchecked(Mmr::from(
+        block_commitments.iter().copied().map(BlockHeaderCommitment::word),
+    ));
 
     Ok(chain_mmr)
 }
 
 /// Loads SMT forest with storage map and vault Merkle paths for all public accounts.
-#[instrument(target = COMPONENT, skip_all, fields(block_num = %block_num))]
+#[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
-) -> Result<InnerForest, StateInitializationError> {
+) -> Result<AccountStateForest, StateInitializationError> {
     use miden_protocol::account::delta::AccountDelta;
 
-    let public_account_ids = db.select_all_public_account_ids().await?;
+    let mut forest = AccountStateForest::new();
+    let mut cursor = None;
 
-    // Acquire write lock once for the entire initialization
-    let mut forest = InnerForest::new();
+    loop {
+        let page = db.select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor).await?;
 
-    // Process each account
-    for account_id in public_account_ids {
-        // Get the full account from the database
-        let account_info = db.select_account(account_id).await?;
-        let account = account_info.details.expect("public accounts always have details in DB");
+        if page.account_ids.is_empty() {
+            break;
+        }
 
-        // Convert the full account to a full-state delta
-        let delta =
-            AccountDelta::try_from(account).expect("accounts from DB should not have seeds");
+        // Process each account in this page
+        for account_id in page.account_ids {
+            // TODO: Loading the full account from the database is inefficient and will need to
+            // go away. <https://github.com/0xMiden/node/issues/1556>
+            let account_info = db.select_account(account_id).await?;
+            let account = account_info
+                .details
+                .ok_or(StateInitializationError::PublicAccountMissingDetails(account_id))?;
 
-        // Use the unified update method (will recognize it's a full-state delta)
-        forest.update_account(block_num, &delta)?;
+            // Convert the full account to a full-state delta
+            let delta = AccountDelta::try_from(account).map_err(|e| {
+                StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
+            })?;
+
+            forest.update_account(block_num, &delta)?;
+        }
+
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
     }
 
     Ok(forest)

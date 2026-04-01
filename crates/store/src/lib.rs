@@ -1,16 +1,21 @@
+mod account_state_forest;
 mod accounts;
 mod blocks;
 mod db;
 mod errors;
 pub mod genesis;
-mod inner_forest;
 mod server;
 pub mod state;
 
 #[cfg(feature = "rocksdb")]
 pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
+pub use db::Db;
+pub use db::models::conv::SqlTypeConvert;
+pub use errors::DatabaseError;
 pub use genesis::GenesisState;
+pub use server::block_prover_client::BlockProver;
+pub use server::proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use server::{DataDirectory, Store};
 
 // CONSTANTS

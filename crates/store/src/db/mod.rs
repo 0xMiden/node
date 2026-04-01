@@ -1,47 +1,53 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::ops::RangeInclusive;
+use std::mem::size_of;
+use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
-use diesel::{
-    BoolExpressionMethods,
-    Connection,
-    ExpressionMethods,
-    QueryableByName,
-    RunQueryDsl,
-    SqliteConnection,
-};
-use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
-use miden_node_proto::generated as proto;
+use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
+use miden_node_proto::domain::account::AccountInfo;
+use miden_node_proto::{BlockProofRequest, generated as proto};
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
-use miden_protocol::asset::{Asset, AssetVaultKey};
-use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, ProvenBlock};
+use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
+use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
+use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
+    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
     NoteScript,
     Nullifier,
 };
-use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, instrument};
+use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::manager::{ConnectionManager, configure_connection_on_creation};
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::queries::{NetworkNoteType, StorageMapValuesPage};
-use crate::db::models::{Page, deserialize_raw_vec, queries};
-use crate::errors::{DatabaseError, DatabaseSetupError, NoteSyncError, StateSyncError};
+pub use crate::db::models::queries::{
+    AccountCommitmentsPage,
+    NullifiersPage,
+    PublicAccountIdsPage,
+};
+use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
+use crate::db::models::{Page, queries};
+use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
-pub(crate) mod manager;
+const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
+    2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
+
+fn default_storage_map_entries_limit() -> usize {
+    MAX_RESPONSE_PAYLOAD_BYTES / STORAGE_MAP_VALUE_PER_ROW_BYTES
+}
 
 mod migrations;
 mod schema_hash;
@@ -52,12 +58,47 @@ mod tests;
 pub(crate) mod models;
 
 /// [diesel](https://diesel.rs) generated schema
+///
+/// ```sh
+/// cargo binstall diesel_cli
+/// sqlite3 -init ./src/db/migrations/001-init.sql ephemeral_setup.db ""
+/// diesel setup --database-url=./ephemeral_setup.db
+/// diesel print-schema > src/db/schema.rs
+/// ```
+///
+/// which assumes an _existing_ database.
+///
+/// Unfortunately, there is no systematic way of modifying the schema other
+/// than patching (in the diff sense) which is brittle at best.
+/// So the above must be followed by a manual editing step, for now it's
+/// limited to:
+///
+/// * `i64`/`u64` being represented as `BigInt`
+///
+/// The list might be extended.
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
+/// The Store's database.
+///
+/// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.
 pub struct Db {
-    pool: deadpool_diesel::Pool<ConnectionManager, deadpool::managed::Object<ConnectionManager>>,
+    db: miden_node_db::Db,
+}
+
+impl Deref for Db {
+    type Target = miden_node_db::Db;
+
+    fn deref(&self) -> &Self::Target {
+        &self.db
+    }
+}
+
+impl DerefMut for Db {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.db
+    }
 }
 
 /// Describes the value of an asset for an account ID at `block_num` specifically.
@@ -77,7 +118,7 @@ impl AccountVaultValue {
         let vault_key = Word::read_from_bytes(&vault_key)?;
         Ok(Self {
             block_num: BlockNumber::from_raw_sql(block_num)?,
-            vault_key: AssetVaultKey::new_unchecked(vault_key),
+            vault_key: AssetVaultKey::try_from(vault_key)?,
             asset: asset.map(|b| Asset::read_from_bytes(&b)).transpose()?,
         })
     }
@@ -96,40 +137,32 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct TransactionSummary {
-    pub account_id: AccountId,
-    pub block_num: BlockNumber,
-    pub transaction_id: TransactionId,
-}
-
-#[derive(Debug, PartialEq)]
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
     pub transaction_id: TransactionId,
     pub account_id: AccountId,
     pub initial_state_commitment: Word,
     pub final_state_commitment: Word,
-    pub nullifiers: Vec<Nullifier>, // Store nullifiers for input notes
-    pub output_notes: Vec<NoteId>,  // Store note IDs for output notes
+    pub input_notes: Vec<InputNoteCommitment>,
+    pub output_notes: Vec<NoteHeader>,
+    pub fee: FungibleAsset,
 }
 
 impl TransactionRecord {
-    /// Convert to proto `TransactionRecord`, but requires note sync records for output notes.
-    /// For `sync_transactions` RPC, we need to fetch note sync records separately since we only
-    /// store note IDs in the database.
-    pub fn into_proto_with_note_records(
-        self,
-        note_records: Vec<NoteRecord>,
-    ) -> proto::rpc::TransactionRecord {
-        let output_notes = Vec::from_iter(note_records.into_iter().map(Into::into));
-
+    /// Convert to proto `TransactionRecord`.
+    ///
+    /// The proto `TransactionHeader` is a 1:1 mapping of
+    /// `miden_protocol::transaction::TransactionHeader`.
+    pub fn into_proto(self) -> proto::rpc::TransactionRecord {
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {
+                transaction_id: Some(self.transaction_id.into()),
                 account_id: Some(self.account_id.into()),
                 initial_state_commitment: Some(self.initial_state_commitment.into()),
                 final_state_commitment: Some(self.final_state_commitment.into()),
-                nullifiers: self.nullifiers.into_iter().map(From::from).collect(),
-                output_notes,
+                input_notes: self.input_notes.into_iter().map(Into::into).collect(),
+                output_notes: self.output_notes.into_iter().map(Into::into).collect(),
+                fee: Some(Asset::from(self.fee).into()),
             }),
             block_num: self.block_num.as_u32(),
         }
@@ -163,30 +196,6 @@ impl From<NoteRecord> for proto::note::CommittedNote {
     }
 }
 
-impl From<NoteRecord> for proto::note::NoteSyncRecord {
-    fn from(value: NoteRecord) -> Self {
-        let note_id = value.note_id.into();
-        let note_index_in_block = value.note_index.leaf_index_value().into();
-        let metadata = value.metadata.into();
-        let inclusion_path = value.inclusion_path.into();
-
-        proto::note::NoteSyncRecord {
-            note_id: Some(note_id),
-            note_index_in_block,
-            metadata: Some(metadata),
-            inclusion_path: Some(inclusion_path),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct StateSyncUpdate {
-    pub notes: Vec<NoteSyncRecord>,
-    pub block_header: BlockHeader,
-    pub account_updates: Vec<AccountSummary>,
-    pub transactions: Vec<TransactionSummary>,
-}
-
 #[derive(Debug, PartialEq)]
 pub struct NoteSyncUpdate {
     pub notes: Vec<NoteSyncRecord>,
@@ -204,12 +213,14 @@ pub struct NoteSyncRecord {
 
 impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
     fn from(note: NoteSyncRecord) -> Self {
-        Self {
-            note_index_in_block: note.note_index.leaf_index_value().into(),
+        let metadata_header = Some(note.metadata.to_header().into());
+        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
             note_id: Some(note.note_id.into()),
-            metadata: Some(note.metadata.into()),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
-        }
+            block_num: note.block_num.as_u32(),
+            note_index_in_block: note.note_index.leaf_index_value().into(),
+            inclusion_path: Some(note.inclusion_path.into()),
+        });
+        Self { metadata_header, inclusion_proof }
     }
 }
 
@@ -234,7 +245,7 @@ impl Db {
         fields(path=%database_filepath.display())
         err,
     )]
-    pub fn bootstrap(database_filepath: PathBuf, genesis: &GenesisBlock) -> anyhow::Result<()> {
+    pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
         // Create database.
         //
         // This will create the file if it does not exist, but will also happily open it if already
@@ -245,134 +256,55 @@ impl Db {
         )
         .context("failed to open a database connection")?;
 
-        configure_connection_on_creation(&mut conn)?;
+        miden_node_db::configure_connection_on_creation(&mut conn)?;
 
         // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
-        // Insert genesis block data.
-        let genesis = genesis.inner();
-        conn.transaction(move |conn| {
-            models::queries::apply_block(
-                conn,
-                genesis.header(),
-                &[],
-                &[],
-                genesis.body().updated_accounts(),
-                genesis.body().transactions(),
-            )
-        })
-        .context("failed to insert genesis block")?;
+        // Insert genesis block data. Deconstruct into signed block.
+        let (header, body, signature, _proof) = genesis.into_inner().into_parts();
+        let genesis_block = SignedBlock::new_unchecked(header, body, signature);
+        conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[], None))
+            .context("failed to insert genesis block")?;
         Ok(())
-    }
-
-    /// Create and commit a transaction with the queries added in the provided closure
-    pub(crate) async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
-    where
-        Q: Send
-            + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
-            + 'static,
-        R: Send + 'static,
-        M: Send + ToString,
-        E: From<diesel::result::Error>,
-        E: From<DatabaseError>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let conn = self
-            .pool
-            .get()
-            .in_current_span()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        conn.interact(|conn| <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query))
-            .in_current_span()
-            .await
-            .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
-    }
-
-    /// Run the query _without_ a transaction
-    pub(crate) async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
-    where
-        Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,
-        R: Send + 'static,
-        M: Send + ToString,
-        E: From<DatabaseError>,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        conn.interact(move |conn| {
-            let r = query(conn)?;
-            Ok(r)
-        })
-        .await
-        .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 
     /// Open a connection to the DB and apply any pending migrations.
     #[instrument(target = COMPONENT, skip_all)]
-    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseSetupError> {
-        let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
-
+    pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
+        let db = miden_node_db::Db::new(&database_filepath)?;
         info!(
             target: COMPONENT,
             sqlite= %database_filepath.display(),
             "Connected to the database"
         );
 
-        let me = Db { pool };
-        me.query("migrations", apply_migrations).await?;
-        me.fixup_network_note_classification().await?;
-        Ok(me)
+        db.query("migrations", apply_migrations).await?;
+        Ok(Self { db })
     }
 
-    /// Temporary fixup of private notes which were misclassified as network notes.
-    #[instrument(target = COMPONENT, skip_all, err)]
-    async fn fixup_network_note_classification(&self) -> Result<()> {
-        let notes = self
-            .transact("fixup network notes", move |conn| {
-                let updated = diesel::update(schema::notes::table)
-                    .filter(
-                        schema::notes::network_note_type
-                            .eq(NetworkNoteType::SingleTarget as i32)
-                            .and(schema::notes::nullifier.is_null()),
-                    )
-                    .set(schema::notes::network_note_type.eq(NetworkNoteType::None as i32))
-                    .returning(schema::notes::note_id)
-                    .get_results::<Vec<u8>>(conn)?;
-
-                deserialize_raw_vec::<_, NoteId>(updated).map_err(DatabaseError::from)
-            })
-            .await?;
-
-        for note in notes {
-            tracing::info!(
-                note.id = %note,
-                "Fixed private note misclassified as network note"
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Loads all the nullifiers from the DB.
+    /// Returns a page of nullifiers for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub(crate) async fn select_all_nullifiers(&self) -> Result<Vec<NullifierInfo>> {
-        self.transact("all nullifiers", move |conn| {
-            let nullifiers = queries::select_all_nullifiers(conn)?;
-            Ok(nullifiers)
+    pub async fn select_nullifiers_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_nullifier: Option<Nullifier>,
+    ) -> Result<NullifiersPage> {
+        self.transact("read nullifiers paged", move |conn| {
+            queries::select_nullifiers_paged(conn, page_size, after_nullifier)
         })
         .await
     }
 
     /// Loads the nullifiers that match the prefixes from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(
+        level = "debug",
+        target = COMPONENT,
+        skip_all,
+        fields(prefix_len, prefixes = nullifier_prefixes.len()),
+        ret(level = "debug"),
+        err
+    )]
     pub async fn select_nullifiers_by_prefix(
         &self,
         prefix_len: u32,
@@ -432,20 +364,38 @@ impl Db {
         .await
     }
 
-    /// TODO marked for removal, replace with paged version
+    /// Loads all the block headers from the DB.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_account_commitments(&self) -> Result<Vec<(AccountId, Word)>> {
-        self.transact("read all account commitments", move |conn| {
-            queries::select_all_account_commitments(conn)
+    pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
+        self.transact("all block headers", |conn| {
+            let raw = queries::select_all_block_header_commitments(conn)?;
+            Ok(raw)
         })
         .await
     }
 
-    /// Returns all account IDs that have public state.
+    /// Returns a page of account commitments for tree rebuilding.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_public_account_ids(&self) -> Result<Vec<AccountId>> {
-        self.transact("read all public account IDs", move |conn| {
-            queries::select_all_public_account_ids(conn)
+    pub async fn select_account_commitments_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<AccountCommitmentsPage> {
+        self.transact("read account commitments paged", move |conn| {
+            queries::select_account_commitments_paged(conn, page_size, after_account_id)
+        })
+        .await
+    }
+
+    /// Returns a page of public account IDs for forest rebuilding.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_public_account_ids_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<PublicAccountIdsPage> {
+        self.transact("read public account IDs paged", move |conn| {
+            queries::select_public_account_ids_paged(conn, page_size, after_account_id)
         })
         .await
     }
@@ -535,26 +485,13 @@ impl Db {
     }
 
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn get_state_sync(
-        &self,
-        block_number: BlockNumber,
-        account_ids: Vec<AccountId>,
-        note_tags: Vec<u32>,
-    ) -> Result<StateSyncUpdate, StateSyncError> {
-        self.transact::<StateSyncUpdate, StateSyncError, _, _>("state sync", move |conn| {
-            queries::get_state_sync(conn, block_number, account_ids, note_tags)
-        })
-        .await
-    }
-
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn get_note_sync(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-        note_tags: Vec<u32>,
-    ) -> Result<(NoteSyncUpdate, BlockNumber), NoteSyncError> {
+        note_tags: Arc<[u32]>,
+    ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
         self.transact("notes sync task", move |conn| {
-            queries::get_note_sync(conn, note_tags.as_slice(), block_range)
+            queries::get_note_sync(conn, &note_tags, block_range)
         })
         .await
     }
@@ -603,18 +540,12 @@ impl Db {
         &self,
         allow_acquire: oneshot::Sender<()>,
         acquire_done: oneshot::Receiver<()>,
-        block: ProvenBlock,
+        signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
+        proving_inputs: Option<BlockProofRequest>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
-            models::queries::apply_block(
-                conn,
-                block.header(),
-                &notes,
-                block.body().created_nullifiers(),
-                block.body().updated_accounts(),
-                block.body().transactions(),
-            )?;
+            models::queries::apply_block(conn, &signed_block, &notes, proving_inputs)?;
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
             // it doesn't bind it properly to the data locked!
@@ -622,9 +553,63 @@ impl Db {
                 tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
             }
 
+            models::queries::prune_history(conn, signed_block.header().block_num())?;
+
             acquire_done.blocking_recv()?;
 
             Ok(())
+        })
+        .await
+    }
+
+    /// Marks a previously committed block as proven and advances the proven-in-sequence tip.
+    ///
+    /// Atomically clears `proving_inputs` for the given block, then walks forward from the
+    /// current proven-in-sequence tip through consecutive proven blocks, marking each as
+    /// proven-in-sequence. Returns the block numbers that were newly marked in-sequence.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn mark_proven_and_advance_sequence(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Vec<BlockNumber>> {
+        self.transact("mark block proven", move |conn| {
+            mark_proven_and_advance_sequence(conn, block_num)
+        })
+        .await
+    }
+
+    /// Returns the proving inputs for a given block number, if stored.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_block_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<BlockProofRequest>> {
+        self.transact("select block proving inputs", move |conn| {
+            models::queries::select_block_proving_inputs(conn, block_num)
+        })
+        .await
+    }
+
+    /// Returns unproven block numbers greater than `after`, in ascending order, up to `limit`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    pub async fn select_unproven_blocks(
+        &self,
+        after: BlockNumber,
+        limit: usize,
+    ) -> Result<Vec<BlockNumber>> {
+        self.transact("select unproven blocks", move |conn| {
+            models::queries::select_unproven_blocks(conn, after, limit)
+        })
+        .await
+    }
+
+    /// Returns the highest block number that has been proven in sequence.
+    ///
+    /// This includes the genesis block, which is not technically proven, but treated as such.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
+        self.transact("select latest proven block num", |conn| {
+            models::queries::select_latest_proven_in_sequence_block_num(conn)
         })
         .await
     }
@@ -637,11 +622,110 @@ impl Db {
         &self,
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
+        entries_limit: Option<usize>,
     ) -> Result<StorageMapValuesPage> {
+        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
+
         self.transact("select storage map sync values", move |conn| {
-            models::queries::select_account_storage_map_values(conn, account_id, block_range)
+            models::queries::select_account_storage_map_values_paged(
+                conn,
+                account_id,
+                block_range,
+                entries_limit,
+            )
         })
         .await
+    }
+
+    /// Reconstructs storage map details from the database for a specific slot at a block.
+    ///
+    /// Used as fallback when `AccountStateForest` cache misses (historical or evicted queries).
+    /// Rebuilds all entries by querying the DB and filtering to the specific slot.
+    ///
+    /// Returns:
+    ///     - `::LimitExceeded` when too many entries are present
+    ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
+    pub(crate) async fn reconstruct_storage_map_from_db(
+        &self,
+        account_id: AccountId,
+        slot_name: miden_protocol::account::StorageSlotName,
+        block_num: BlockNumber,
+        entries_limit: Option<usize>,
+    ) -> Result<miden_node_proto::domain::account::AccountStorageMapDetails> {
+        use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
+        use miden_protocol::EMPTY_WORD;
+
+        // TODO this remains expensive with a large history until we implement pruning for DB
+        // columns
+        let mut values = Vec::new();
+        let mut block_range_start = BlockNumber::GENESIS;
+        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
+
+        let mut page = self
+            .select_storage_map_sync_values(
+                account_id,
+                block_range_start..=block_num,
+                Some(entries_limit),
+            )
+            .await?;
+
+        values.extend(page.values);
+        let mut last_block_included = page.last_block_included;
+
+        // If the first page returned no values, the block at block_range_start has more
+        // entries than the limit allows (e.g. genesis accounts with large storage maps).
+        if values.is_empty() && last_block_included == block_range_start {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+
+        loop {
+            if page.last_block_included == block_num || page.last_block_included < block_range_start
+            {
+                break;
+            }
+
+            block_range_start = page.last_block_included.child();
+            page = self
+                .select_storage_map_sync_values(
+                    account_id,
+                    block_range_start..=block_num,
+                    Some(entries_limit),
+                )
+                .await?;
+
+            if page.last_block_included <= last_block_included {
+                return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+            }
+
+            last_block_included = page.last_block_included;
+            values.extend(page.values);
+        }
+
+        if page.last_block_included != block_num {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+
+        // Filter to the specific slot and collect latest values per key
+        let mut latest_values = BTreeMap::<StorageMapKey, Word>::new();
+        for value in values {
+            if value.slot_name == slot_name {
+                let raw_key = value.key;
+                latest_values.insert(raw_key, value.value);
+            }
+        }
+
+        // Remove EMPTY_WORD entries (deletions)
+        latest_values.retain(|_, v| *v != EMPTY_WORD);
+
+        if latest_values.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+
+        let entries = Vec::from_iter(latest_values.into_iter());
+        Ok(AccountStorageMapDetails {
+            slot_name,
+            entries: StorageMapEntries::AllEntries(entries),
+        })
     }
 
     /// Emits size metrics for each table in the database, and the entire database.
@@ -736,4 +820,51 @@ impl Db {
         })
         .await
     }
+}
+
+/// Mark a committed block as proven and advance the proven-in-sequence tip.
+///
+/// This is intended to atomically (when run in a transaction):
+/// 1. Clears `proving_inputs` for the given block (marking it proven).
+/// 2. Queries all blocks where `proving_inputs IS NULL AND proven_in_sequence = FALSE`.
+/// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
+///    sets `proven_in_sequence = TRUE` for each.
+///
+/// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
+/// or below the current tip, as that indicates a consistency bug.
+pub(crate) fn mark_proven_and_advance_sequence(
+    conn: &mut SqliteConnection,
+    block_num: BlockNumber,
+) -> Result<Vec<BlockNumber>, DatabaseError> {
+    // Clear proving_inputs for the specified block.
+    models::queries::clear_block_proving_inputs(conn, block_num)?;
+
+    // Get the current proven-in-sequence tip (highest in-sequence).
+    let mut tip = models::queries::select_latest_proven_in_sequence_block_num(conn)?;
+
+    // Get all blocks that are proven but not yet marked in-sequence.
+    let unsequenced = models::queries::select_proven_not_in_sequence_blocks(conn)?;
+
+    // Walk forward from the tip through consecutive proven blocks.
+    let mut newly_in_sequence = Vec::new();
+    for candidate in unsequenced {
+        if candidate <= tip {
+            return Err(DatabaseError::DataCorrupted(format!(
+                "block {candidate} is proven but not marked in-sequence while the tip is at {tip}"
+            )));
+        }
+        if candidate == tip + 1 {
+            tip = candidate;
+            newly_in_sequence.push(candidate);
+        } else {
+            break;
+        }
+    }
+
+    // Mark the newly contiguous blocks as proven-in-sequence.
+    if let (Some(&from), Some(&to)) = (newly_in_sequence.first(), newly_in_sequence.last()) {
+        models::queries::mark_blocks_as_proven_in_sequence(conn, from, to)?;
+    }
+
+    Ok(newly_in_sequence)
 }

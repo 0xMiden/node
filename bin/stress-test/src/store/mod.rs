@@ -5,10 +5,11 @@ use futures::{StreamExt, stream};
 use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
+use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteDetails, NoteTag};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use rand::Rng;
 use rand::seq::SliceRandom;
 use tokio::fs;
@@ -24,9 +25,6 @@ mod metrics;
 // CONSTANTS
 // ================================================================================================
 
-/// Number of accounts used in each `sync_state` call.
-const ACCOUNTS_PER_SYNC_STATE: usize = 5;
-
 /// Number of accounts used in each `sync_notes` call.
 const ACCOUNTS_PER_SYNC_NOTES: usize = 15;
 
@@ -35,77 +33,6 @@ const NOTE_IDS_PER_NULLIFIERS_CHECK: usize = 20;
 
 /// Number of attempts the benchmark will make to reach the store before proceeding.
 const STORE_STATUS_RETRIES: usize = 10;
-
-// SYNC STATE
-// ================================================================================================
-
-/// Sends multiple `sync_state` requests to the store and prints the performance.
-///
-/// Arguments:
-/// - `data_directory`: directory that contains the database dump file and the accounts ids dump
-///   file.
-/// - `iterations`: number of requests to send.
-/// - `concurrency`: number of requests to send in parallel.
-pub async fn bench_sync_state(data_directory: PathBuf, iterations: usize, concurrency: usize) {
-    // load accounts from the dump file
-    let accounts_file = data_directory.join(ACCOUNTS_FILENAME);
-    let accounts = fs::read_to_string(&accounts_file)
-        .await
-        .unwrap_or_else(|e| panic!("missing file {}: {e:?}", accounts_file.display()));
-    let mut account_ids = accounts.lines().map(|a| AccountId::from_hex(a).unwrap()).cycle();
-
-    let (store_client, _) = start_store(data_directory).await;
-
-    wait_for_store(&store_client).await.unwrap();
-
-    // each request will have 5 account ids, 5 note tags and will be sent with block number 0
-    let request = |_| {
-        let mut client = store_client.clone();
-        let account_batch: Vec<AccountId> =
-            account_ids.by_ref().take(ACCOUNTS_PER_SYNC_STATE).collect();
-        tokio::spawn(async move { sync_state(&mut client, account_batch, 0).await })
-    };
-
-    // create a stream of tasks to send sync_notes requests
-    let (timers_accumulator, responses) = stream::iter(0..iterations)
-        .map(request)
-        .buffer_unordered(concurrency)
-        .map(|res| res.unwrap())
-        .collect::<(Vec<_>, Vec<_>)>()
-        .await;
-
-    print_summary(&timers_accumulator);
-
-    #[allow(clippy::cast_precision_loss)]
-    let average_notes_per_response =
-        responses.iter().map(|r| r.notes.len()).sum::<usize>() as f64 / responses.len() as f64;
-    println!("Average notes per response: {average_notes_per_response}");
-}
-
-/// Sends a single `sync_state` request to the store and returns a tuple with:
-/// - the elapsed time.
-/// - the response.
-pub async fn sync_state(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    account_ids: Vec<AccountId>,
-    block_num: u32,
-) -> (Duration, proto::rpc::SyncStateResponse) {
-    let note_tags = account_ids
-        .iter()
-        .map(|id| u32::from(NoteTag::with_account_target(*id)))
-        .collect::<Vec<_>>();
-
-    let account_ids = account_ids
-        .iter()
-        .map(|id| proto::account::AccountId { id: id.to_bytes() })
-        .collect::<Vec<_>>();
-
-    let sync_request = proto::rpc::SyncStateRequest { block_num, note_tags, account_ids };
-
-    let start = Instant::now();
-    let response = api_client.sync_state(sync_request).await.unwrap();
-    (start.elapsed(), response.into_inner())
-}
 
 // SYNC NOTES
 // ================================================================================================
@@ -197,61 +124,68 @@ pub async fn bench_sync_nullifiers(
         .unwrap_or_else(|e| panic!("missing file {}: {e:?}", accounts_file.display()));
     let account_ids: Vec<AccountId> = accounts
         .lines()
-        .take(ACCOUNTS_PER_SYNC_STATE)
+        .take(ACCOUNTS_PER_SYNC_NOTES)
         .map(|a| AccountId::from_hex(a).unwrap())
         .collect();
 
-    // get all nullifier prefixes from the store
+    // Get all nullifier prefixes from the store using sync_notes
     let mut nullifier_prefixes: Vec<u32> = vec![];
     let mut current_block_num = 0;
     loop {
-        // get the accounts notes
-        let (_, response) =
-            sync_state(&mut store_client, account_ids.clone(), current_block_num).await;
-        let note_ids = response
-            .notes
+        // Get the accounts notes using sync_notes
+        let note_tags: Vec<u32> = account_ids
             .iter()
-            .map(|n| n.note_id.unwrap())
-            .collect::<Vec<proto::note::NoteId>>();
+            .map(|id| u32::from(NoteTag::with_account_target(*id)))
+            .collect();
+        let sync_request = proto::rpc::SyncNotesRequest {
+            block_range: Some(proto::rpc::BlockRange {
+                block_from: current_block_num,
+                block_to: None,
+            }),
+            note_tags,
+        };
+        let response = store_client.sync_notes(sync_request).await.unwrap().into_inner();
 
-        // get the notes nullifiers, limiting to 20 notes maximum
-        let note_ids_to_fetch =
-            note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect::<Vec<_>>();
-        let notes = store_client
-            .get_notes_by_id(proto::note::NoteIdList { ids: note_ids_to_fetch })
-            .await
-            .unwrap()
-            .into_inner()
-            .notes;
+        let pagination = response.pagination_info.expect("pagination_info should exist");
+        let last_block_checked = pagination.block_num;
 
-        nullifier_prefixes.extend(
-            notes
-                .iter()
-                .filter_map(|n| {
-                    // private notes are filtered out because `n.details` is None
-                    let details_bytes = n.note.as_ref()?.details.as_ref()?;
-                    let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
-                    Some(u32::from(details.nullifier().prefix()))
-                })
-                .collect::<Vec<u32>>(),
-        );
-
-        // Use the response from the first chunk to update block number
-        // (all chunks should return the same block header for the same block_num)
-        let (_, first_response) = sync_state(
-            &mut store_client,
-            account_ids[..1000.min(account_ids.len())].to_vec(),
-            current_block_num,
-        )
-        .await;
-        current_block_num = first_response.block_header.unwrap().block_num;
-        if first_response.chain_tip == current_block_num {
+        if response.blocks.is_empty() || last_block_checked >= pagination.chain_tip {
             break;
         }
+
+        // Collect note IDs from all blocks in the response.
+        let note_ids: Vec<_> = response
+            .blocks
+            .iter()
+            .flat_map(|b| {
+                b.notes.iter().map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
+            })
+            .collect();
+
+        // Get the notes nullifiers, limiting to 20 notes maximum.
+        let note_ids_to_fetch: Vec<_> =
+            note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
+        if !note_ids_to_fetch.is_empty() {
+            let notes = store_client
+                .get_notes_by_id(proto::note::NoteIdList { ids: note_ids_to_fetch })
+                .await
+                .unwrap()
+                .into_inner()
+                .notes;
+
+            nullifier_prefixes.extend(notes.iter().filter_map(|n| {
+                let details_bytes = n.note.as_ref()?.details.as_ref()?;
+                let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
+                Some(u32::from(details.nullifier().prefix()))
+            }));
+        }
+
+        // Resume from the next block after the last one checked.
+        current_block_num = last_block_checked + 1;
     }
     let mut nullifiers = nullifier_prefixes.into_iter().cycle();
 
-    // each request will have `prefixes_per_request` prefixes and block number 0
+    // Each request will have `prefixes_per_request` prefixes and block number 0
     let request = |_| {
         let mut client = store_client.clone();
 
@@ -260,7 +194,7 @@ pub async fn bench_sync_nullifiers(
         tokio::spawn(async move { sync_nullifiers(&mut client, nullifiers_batch).await })
     };
 
-    // create a stream of tasks to send the requests
+    // Create a stream of tasks to send the requests
     let (timers_accumulator, responses) = stream::iter(0..iterations)
         .map(request)
         .buffer_unordered(concurrency)
@@ -270,7 +204,7 @@ pub async fn bench_sync_nullifiers(
 
     print_summary(&timers_accumulator);
 
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let average_nullifiers_per_response =
         responses.iter().map(|r| r.nullifiers.len()).sum::<usize>() as f64 / responses.len() as f64;
     println!("Average nullifiers per response: {average_nullifiers_per_response}");
@@ -364,7 +298,7 @@ pub async fn bench_sync_transactions(
 
     print_summary(&timers_accumulator);
 
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let average_transactions_per_response = if responses.is_empty() {
         0.0
     } else {
@@ -376,13 +310,13 @@ pub async fn bench_sync_transactions(
     // Calculate pagination statistics
     let total_runs = results.len();
     let paginated_runs = results.iter().filter(|r| r.pages > 1).count();
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let pagination_rate = if total_runs > 0 {
         (paginated_runs as f64 / total_runs as f64) * 100.0
     } else {
         0.0
     };
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let avg_pages = if total_runs > 0 {
         results.iter().map(|r| r.pages as f64).sum::<f64>() / total_runs as f64
     } else {
@@ -466,8 +400,8 @@ async fn sync_transactions_paginated(
             break;
         }
 
-        // Request the remaining range up to the reported chain tip
-        next_block_from = reached_block;
+        // Resume from the next block after the last one fully included.
+        next_block_from = reached_block + 1;
         target_block_to = chain_tip;
     }
 
@@ -481,13 +415,86 @@ async fn sync_transactions_paginated(
     }
 }
 
+// SYNC CHAIN MMR
+// ================================================================================================
+
+/// Sends multiple `sync_chain_mmr` requests to the store and prints the performance.
+///
+/// Arguments:
+/// - `data_directory`: directory that contains the database dump file.
+/// - `iterations`: number of requests to send.
+/// - `concurrency`: number of requests to send in parallel.
+/// - `block_range_size`: number of blocks to include per request.
+pub async fn bench_sync_chain_mmr(
+    data_directory: PathBuf,
+    iterations: usize,
+    concurrency: usize,
+    block_range_size: u32,
+) {
+    let (store_client, _) = start_store(data_directory).await;
+
+    wait_for_store(&store_client).await.unwrap();
+
+    let chain_tip = store_client.clone().status(()).await.unwrap().into_inner().chain_tip;
+    let block_range_size = block_range_size.max(1);
+
+    let request = |_| {
+        let mut client = store_client.clone();
+        tokio::spawn(async move { sync_chain_mmr(&mut client, chain_tip, block_range_size).await })
+    };
+
+    let results = stream::iter(0..iterations)
+        .map(request)
+        .buffer_unordered(concurrency)
+        .map(|res| res.unwrap())
+        .collect::<Vec<_>>()
+        .await;
+
+    let timers_accumulator: Vec<Duration> = results.iter().map(|r| r.duration).collect();
+
+    print_summary(&timers_accumulator);
+
+    let total_runs = results.len();
+
+    println!("Pagination statistics:");
+    println!("  Total runs: {total_runs}");
+}
+
+/// Sends a single `sync_chain_mmr` request to the store and returns a tuple with:
+/// - the elapsed time.
+/// - the response.
+async fn sync_chain_mmr(
+    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    block_from: u32,
+    block_to: u32,
+) -> SyncChainMmrRun {
+    let sync_request = proto::rpc::SyncChainMmrRequest {
+        block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
+        finality: proto::rpc::Finality::Committed.into(),
+    };
+
+    let start = Instant::now();
+    let response = api_client.sync_chain_mmr(sync_request).await.unwrap();
+    let elapsed = start.elapsed();
+    let response = response.into_inner();
+    let _mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
+    SyncChainMmrRun { duration: elapsed }
+}
+
+#[derive(Clone)]
+struct SyncChainMmrRun {
+    duration: Duration,
+}
+
 // LOAD STATE
 // ================================================================================================
 
 pub async fn load_state(data_directory: &Path) {
     let start = Instant::now();
     let (termination_ask, _) = tokio::sync::mpsc::channel(1);
-    let _state = State::load(data_directory, termination_ask).await.unwrap();
+    let _state = State::load(data_directory, StorageOptions::default(), termination_ask)
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
 
     // Get database path and run SQL commands to count records

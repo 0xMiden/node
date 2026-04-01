@@ -1,15 +1,20 @@
 use std::convert::Infallible;
 
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_node_proto::decode::GrpcDecodeExt;
+use miden_node_proto::domain::proof_request::BlockProofRequest;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::block_producer_server;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::try_convert;
+use miden_node_proto::{decode, try_convert};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
-use miden_protocol::block::{BlockNumber, ProvenBlock};
-use miden_protocol::utils::Deserializable;
+use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
+use miden_protocol::utils::serde::Deserializable;
 use tonic::{Request, Response, Status};
-use tracing::Instrument;
+use tracing::{Instrument, error};
 
 use crate::errors::ApplyBlockError;
 use crate::server::api::{
@@ -40,44 +45,77 @@ impl block_producer_server::BlockProducer for StoreApi {
     /// Updates the local DB by inserting a new block header and the related data.
     async fn apply_block(
         &self,
-        request: Request<proto::blockchain::Block>,
+        request: Request<proto::store::ApplyBlockRequest>,
     ) -> Result<Response<()>, Status> {
         let request = request.into_inner();
+        // Read ordered batches.
+        let ordered_batches =
+            OrderedBatches::read_from_bytes(&request.ordered_batches).map_err(|err| {
+                Status::invalid_argument(
+                    err.as_report_context("failed to deserialize ordered batches"),
+                )
+            })?;
+        // Read block.
+        let block = request
+            .block
+            .ok_or(ConversionError::missing_field::<proto::store::ApplyBlockRequest>("block"))?;
+        // Decode block fields.
+        let decoder = block.decoder();
+        let header: BlockHeader = decode!(decoder, block.header)?;
+        let body: BlockBody = decode!(decoder, block.body)?;
+        let signature: Signature = decode!(decoder, block.signature)?;
 
-        let block = ProvenBlock::read_from_bytes(&request.block).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("block deserialization error"))
-        })?;
+        // Get block inputs from ordered batches.
+        let block_inputs =
+            self.block_inputs_from_ordered_batches(&ordered_batches).await.map_err(|err| {
+                Status::invalid_argument(
+                    err.as_report_context("failed to get block inputs from ordered batches"),
+                )
+            })?;
 
         let span = tracing::Span::current();
-        span.set_attribute("block.number", block.header().block_num());
-        span.set_attribute("block.commitment", block.header().commitment());
-        span.set_attribute("block.accounts.count", block.body().updated_accounts().len());
-        span.set_attribute("block.output_notes.count", block.body().output_notes().count());
-        span.set_attribute("block.nullifiers.count", block.body().created_nullifiers().len());
+        span.set_attribute("block.number", header.block_num());
+        span.set_attribute("block.commitment", header.commitment());
+        span.set_attribute("block.accounts.count", body.updated_accounts().len());
+        span.set_attribute("block.output_notes.count", body.output_notes().count());
+        span.set_attribute("block.nullifiers.count", body.created_nullifiers().len());
 
-        // We perform the apply_block work in a separate task. This prevents the caller cancelling
-        // the request and thereby cancelling the task at an arbitrary point of execution.
+        // Construct block proof request to be stored alongside the block for deferred block
+        // proving.
+        let proving_inputs = BlockProofRequest {
+            tx_batches: ordered_batches,
+            block_header: header.clone(),
+            block_inputs,
+        };
+
+        // We perform the apply block work in a separate task. This prevents the caller
+        // cancelling the request and thereby cancelling the task at an arbitrary point of
+        // execution.
         //
         // Normally this shouldn't be a problem, however our apply_block isn't quite ACID compliant
         // so things get a bit messy. This is more a temporary hack-around to minimize this risk.
         let this = self.clone();
         tokio::spawn(
             async move {
+                let block_num = header.block_num();
+                let signed_block = SignedBlock::new(header, body, signature)
+                    .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
+                // Note: This is an internal endpoint, so its safe to expose the full error
+                // report.
                 this.state
-                    .apply_block(block)
+                    .apply_block(signed_block, Some(proving_inputs))
                     .await
-                    .map(Response::new)
-                    .inspect_err(|err| {
-                        span.set_error(err);
+                    .inspect(|_| {
+                        if let Err(err) = this.chain_tip_sender.send(block_num) {
+                            error!("Failed to send chain tip: {:?}", err);
+                        }
                     })
                     .map_err(|err| {
+                        span.set_error(&err);
                         let code = match err {
                             ApplyBlockError::InvalidBlockError(_) => tonic::Code::InvalidArgument,
                             _ => tonic::Code::Internal,
                         };
-
-                        // This is an internal endpoint, so its safe to expose the full error
-                        // report.
                         Status::new(code, err.as_report())
                     })
             }
@@ -87,7 +125,8 @@ impl block_producer_server::BlockProducer for StoreApi {
         .map_err(|err| {
             tonic::Status::internal(err.as_report_context("joining apply_block task failed"))
         })
-        .flatten()
+        .flatten()?;
+        Ok(Response::new(()))
     }
 
     /// Returns data needed by the block producer to construct and prove the next block.
@@ -154,7 +193,8 @@ impl block_producer_server::BlockProducer for StoreApi {
     ) -> Result<Response<proto::store::TransactionInputs>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<Status>(request.account_id)?;
+        let account_id =
+            read_account_id::<proto::store::TransactionInputsRequest, Status>(request.account_id)?;
         let nullifiers = validate_nullifiers(&request.nullifiers)
             .map_err(|err| conversion_error_to_status(&err))?;
         let unauthenticated_note_commitments =

@@ -31,16 +31,16 @@ jobs:
         uses: actions/checkout@main
         with:
           fetch-depth: 0
-      - name: Install RocksDB
-        uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
       - name: Build and Publish Node
         uses: ./.github/actions/debian
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ env.version }}
           crate_dir: node
-          service: miden-node
-          package: node
+          package: miden-node
+          packaging_dir: node
           crate: miden-node
           arch: ${{ matrix.arch }}
 
@@ -62,8 +62,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ env.version }}
           crate_dir: remote-prover
-          service: miden-prover
-          package: prover
+          package: miden-prover
+          packaging_dir: prover
           crate: miden-remote-prover
           arch: ${{ matrix.arch }}
 
@@ -85,8 +85,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ env.version }}
           crate_dir: remote-prover
-          service: miden-prover-proxy
-          package: prover-proxy
+          package: miden-prover-proxy
+          packaging_dir: prover-proxy
           crate: miden-remote-prover
           arch: ${{ matrix.arch }}
 
@@ -108,7 +108,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ env.version }}
           crate_dir: network-monitor
-          service: miden-network-monitor
-          package: network-monitor
+          package: miden-network-monitor
+          packaging_dir: network-monitor
           crate: miden-network-monitor
           arch: ${{ matrix.arch }}

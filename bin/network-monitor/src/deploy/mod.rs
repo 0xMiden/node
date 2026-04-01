@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
-use miden_protocol::account::{Account, AccountId, PartialAccount, PartialStorage};
+use miden_protocol::account::{Account, AccountId, PartialAccount, StorageMapKey};
 use miden_protocol::assembly::{
     DefaultSourceManager,
     Library,
@@ -19,7 +19,7 @@ use miden_protocol::assembly::{
     ModuleKind,
     Path as MidenPath,
 };
-use miden_protocol::asset::{AssetVaultKey, AssetWitness, PartialVault};
+use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
 use miden_protocol::note::NoteScript;
@@ -30,9 +30,9 @@ use miden_protocol::transaction::{
     TransactionArgs,
     TransactionKernel,
 };
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, Word};
 use miden_tx::auth::BasicAuthenticator;
-use miden_tx::utils::Serializable;
 use miden_tx::{
     DataStore,
     DataStoreError,
@@ -203,7 +203,7 @@ pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) ->
 
     let prover = LocalTransactionProver::default();
 
-    let proven_tx = prover.prove(executed_tx).context("Failed to prove transaction")?;
+    let proven_tx = prover.prove(executed_tx).await.context("Failed to prove transaction")?;
 
     let request = ProvenTransaction {
         transaction: proven_tx.to_bytes(),
@@ -288,18 +288,8 @@ impl DataStore for MonitorDataStore {
         account_id: AccountId,
         mut _block_refs: BTreeSet<BlockNumber>,
     ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
-        let account = self.get_account(account_id)?.clone();
-        let partial_storage = PartialStorage::new_full(account.storage().clone());
-        let assert_vault = PartialVault::new_full(account.vault().clone());
-        let partial_account = PartialAccount::new(
-            account_id,
-            account.nonce(),
-            account.code().clone(),
-            partial_storage,
-            assert_vault,
-            account.seed(),
-        )
-        .expect("Partial account be valid");
+        let account = self.get_account(account_id)?;
+        let partial_account = PartialAccount::from(account);
 
         Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
     }
@@ -308,7 +298,7 @@ impl DataStore for MonitorDataStore {
         &self,
         _account_id: AccountId,
         _map_root: Word,
-        _map_key: Word,
+        _map_key: StorageMapKey,
     ) -> Result<miden_protocol::account::StorageMapWitness, DataStoreError> {
         unimplemented!("Not needed")
     }

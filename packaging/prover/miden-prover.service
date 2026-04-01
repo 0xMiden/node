@@ -9,8 +9,7 @@ WantedBy=multi-user.target
 Type=exec
 Environment="OTEL_SERVICE_NAME=miden-prover"
 EnvironmentFile=/lib/systemd/system/miden-prover.env
-ExecStart=/usr/bin/miden-remote-prover start-worker
-WorkingDirectory=/opt/miden-prover
+ExecStart=/usr/bin/miden-remote-prover
 User=miden-prover
 RestartSec=5
 Restart=always

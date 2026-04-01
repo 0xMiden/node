@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -9,6 +10,7 @@ use miden_protocol::account::{
     AccountId,
     AccountStorageHeader,
     PartialAccount,
+    StorageMapKey,
     StorageMapWitness,
     StorageSlotName,
     StorageSlotType,
@@ -29,11 +31,12 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
-use miden_remote_prover_client::remote_prover::tx_prover::RemoteTransactionProver;
+use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
     DataStore,
     DataStoreError,
+    ExecutionOptions,
     FailedNote,
     LocalTransactionProver,
     MastForestStore,
@@ -46,14 +49,12 @@ use miden_tx::{
     TransactionProverError,
 };
 use tokio::sync::Mutex;
-use tokio::task::JoinError;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
-use crate::actor::account_state::TransactionCandidate;
-use crate::block_producer::BlockProducerClient;
-use crate::store::StoreClient;
-use crate::validator::ValidatorClient;
+use crate::actor::candidate::TransactionCandidate;
+use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
+use crate::db::Db;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NtxError {
@@ -69,11 +70,15 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
-    #[error("the ntx task panicked")]
-    Panic(#[source] JoinError),
 }
 
 type NtxResult<T> = Result<T, NtxError>;
+
+/// The result of a successful transaction execution.
+///
+/// Contains the transaction ID, any notes that failed during filtering, and note scripts fetched
+/// from the remote store that should be persisted to the local DB cache.
+pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteScript)>);
 
 // NETWORK TRANSACTION CONTEXT
 // ================================================================================================
@@ -81,7 +86,7 @@ type NtxResult<T> = Result<T, NtxError>;
 /// Provides the context for execution [network transaction candidates](TransactionCandidate).
 #[derive(Clone)]
 pub struct NtxContext {
-    /// TODO(sergerad): Remove block producer client when block proving moved to store.
+    /// Client for submitting proven transactions to the Block Producer.
     block_producer: BlockProducerClient,
 
     /// Client for validating transactions via the Validator.
@@ -98,6 +103,12 @@ pub struct NtxContext {
 
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+
+    /// Local database for persistent note script caching.
+    db: Db,
+
+    /// Maximum number of VM execution cycles for network transactions.
+    max_cycles: u32,
 }
 
 impl NtxContext {
@@ -108,6 +119,8 @@ impl NtxContext {
         prover: Option<RemoteTransactionProver>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
+        db: Db,
+        max_cycles: u32,
     ) -> Self {
         Self {
             block_producer,
@@ -115,7 +128,28 @@ impl NtxContext {
             prover,
             store,
             script_cache,
+            db,
+            max_cycles,
         }
+    }
+
+    /// Creates a [`TransactionExecutor`] configured with the network transaction cycle limit.
+    fn create_executor<'a, 'b>(
+        &self,
+        data_store: &'a NtxDataStore,
+    ) -> TransactionExecutor<'a, 'b, NtxDataStore, UnreachableAuth> {
+        let exec_options = ExecutionOptions::new(
+            Some(self.max_cycles),
+            self.max_cycles,
+            ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
+            false,
+            false,
+        )
+        .expect("max_cycles should be within valid range");
+
+        TransactionExecutor::new(data_store)
+            .with_options(exec_options)
+            .expect("execution options should be valid for transaction executor")
     }
 
     /// Executes a transaction end-to-end: filtering, executing, proving, and submitted to the block
@@ -130,8 +164,9 @@ impl NtxContext {
     ///
     /// # Returns
     ///
-    /// On success, returns the [`TransactionId`] of the executed transaction and a list of
-    /// [`FailedNote`]s representing notes that were filtered out before execution.
+    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes
+    /// that failed during filtering, and note scripts fetched from the remote store that should
+    /// be persisted to the local DB cache.
     ///
     /// # Errors
     ///
@@ -144,7 +179,7 @@ impl NtxContext {
     pub fn execute_transaction(
         self,
         tx: TransactionCandidate,
-    ) -> impl FutureMaybeSend<NtxResult<(TransactionId, Vec<FailedNote>)>> {
+    ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
         let TransactionCandidate {
             account,
             notes,
@@ -166,6 +201,7 @@ impl NtxContext {
                     chain_mmr,
                     self.store.clone(),
                     self.script_cache.clone(),
+                    self.db.clone(),
                 );
 
                 // Filter notes.
@@ -175,6 +211,9 @@ impl NtxContext {
 
                 // Execute transaction.
                 let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
+
+                // Collect scripts fetched from the remote store during execution.
+                let scripts_to_cache = data_store.take_fetched_scripts().await;
 
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
@@ -186,7 +225,7 @@ impl NtxContext {
                 // Submit transaction to block producer.
                 self.submit(&proven_tx).await?;
 
-                Ok((proven_tx.id(), failed_notes))
+                Ok((proven_tx.id(), failed_notes, scripts_to_cache))
             })
             .in_current_span()
             .await
@@ -218,8 +257,7 @@ impl NtxContext {
         data_store: &NtxDataStore,
         notes: Vec<Note>,
     ) -> NtxResult<(InputNotes<InputNote>, Vec<FailedNote>)> {
-        let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
-            TransactionExecutor::new(data_store);
+        let executor = self.create_executor(data_store);
         let checker = NoteConsumptionChecker::new(&executor);
 
         match Box::pin(checker.check_notes_consumability(
@@ -233,9 +271,9 @@ impl NtxContext {
             Ok(NoteConsumptionInfo { successful, failed, .. }) => {
                 for failed_note in &failed {
                     tracing::info!(
-                        note_id = %failed_note.note.id(),
+                        note.id = %failed_note.note.id(),
                         nullifier = %failed_note.note.nullifier(),
-                        err = %failed_note.error,
+                        err = %failed_note.error.as_report(),
                         "note failed consumability check",
                     );
                 }
@@ -262,8 +300,7 @@ impl NtxContext {
         data_store: &NtxDataStore,
         notes: InputNotes<InputNote>,
     ) -> NtxResult<ExecutedTransaction> {
-        let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
-            TransactionExecutor::new(data_store);
+        let executor = self.create_executor(data_store);
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),
@@ -282,11 +319,9 @@ impl NtxContext {
         if let Some(remote) = &self.prover {
             remote.prove(tx_inputs).await
         } else {
-            // Only perform tx inptus clone for local proving.
+            // Only perform tx inputs clone for local proving.
             let tx_inputs = tx_inputs.clone();
-            tokio::task::spawn_blocking(move || LocalTransactionProver::default().prove(tx_inputs))
-                .await
-                .map_err(NtxError::Panic)?
+            LocalTransactionProver::default().prove(tx_inputs).await
         }
         .map_err(NtxError::Proving)
     }
@@ -328,12 +363,18 @@ impl NtxContext {
 struct NtxDataStore {
     account: Account,
     reference_block: BlockHeader,
-    chain_mmr: PartialBlockchain,
+    /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
+    chain_mmr: Arc<PartialBlockchain>,
     mast_store: TransactionMastStore,
     /// Store client for retrieving note scripts.
     store: StoreClient,
     /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
     script_cache: LruCache<Word, NoteScript>,
+    /// Local database for persistent note script.
+    db: Db,
+    /// Scripts fetched from the remote store during execution, to be persisted by the
+    /// coordinator.
+    fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///
     /// The registered slot names are subsequently used to retrieve storage map witnesses from the
@@ -363,9 +404,10 @@ impl NtxDataStore {
     fn new(
         account: Account,
         reference_block: BlockHeader,
-        chain_mmr: PartialBlockchain,
+        chain_mmr: Arc<PartialBlockchain>,
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
+        db: Db,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
@@ -377,8 +419,15 @@ impl NtxDataStore {
             mast_store,
             store,
             script_cache,
+            db,
+            fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
         }
+    }
+
+    /// Returns the list of note scripts fetched from the remote store during execution.
+    async fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
+        self.fetched_scripts.lock().await.drain(..).collect()
     }
 
     /// Registers storage map slot names for the given account ID and storage header.
@@ -422,7 +471,7 @@ impl DataStore for NtxDataStore {
                 .await;
 
             let partial_account = PartialAccount::from(&self.account);
-            Ok((partial_account, self.reference_block.clone(), self.chain_mmr.clone()))
+            Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
         }
     }
 
@@ -478,7 +527,7 @@ impl DataStore for NtxDataStore {
         &self,
         account_id: AccountId,
         map_root: Word,
-        map_key: Word,
+        map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
             // The slot name that corresponds to the given account ID and map root must have been
@@ -507,28 +556,40 @@ impl DataStore for NtxDataStore {
 
     /// Retrieves a note script by its root hash.
     ///
-    /// This implementation uses the configured RPC client to call the `GetNoteScriptByRoot`
-    /// endpoint on the RPC server.
+    /// Uses a 3-tier lookup strategy:
+    /// 1. In-memory LRU cache.
+    /// 2. Local SQLite database.
+    /// 3. Remote store via gRPC.
     fn get_note_script(
         &self,
         script_root: Word,
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
-            // Attempt to retrieve the script from the cache.
+            // 1. In-memory LRU cache.
             if let Some(cached_script) = self.script_cache.get(&script_root).await {
                 return Ok(Some(cached_script));
             }
 
-            // Retrieve the script from the store.
+            // 2. Local DB.
+            if let Some(script) = self.db.lookup_note_script(script_root).await.map_err(|err| {
+                DataStoreError::other_with_source("failed to look up note script in local DB", err)
+            })? {
+                self.script_cache.put(script_root, script.clone()).await;
+                return Ok(Some(script));
+            }
+
+            // 3. Remote store.
             let maybe_script =
                 self.store.get_note_script_by_root(script_root).await.map_err(|err| {
-                    DataStoreError::Other {
-                        error_msg: "failed to retrieve note script from store".to_string().into(),
-                        source: Some(err.into()),
-                    }
+                    DataStoreError::other_with_source(
+                        "failed to retrieve note script from store",
+                        err,
+                    )
                 })?;
-            // Handle response.
+
             if let Some(script) = maybe_script {
+                // Collect for later persistence by the coordinator.
+                self.fetched_scripts.lock().await.push((script_root, script.clone()));
                 self.script_cache.put(script_root, script.clone()).await;
                 Ok(Some(script))
             } else {

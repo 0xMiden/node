@@ -1,4 +1,4 @@
-FROM rust:1.90-slim-bullseye AS chef
+FROM rust:1.93-slim-bookworm AS chef
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
     apt-get -y upgrade && \
@@ -38,8 +38,8 @@ FROM runtime-base AS runtime
 COPY --from=builder /app/target/release/miden-node /usr/local/bin/miden-node
 LABEL org.opencontainers.image.authors=devops@miden.team \
     org.opencontainers.image.url=https://0xMiden.github.io/ \
-    org.opencontainers.image.documentation=https://github.com/0xMiden/miden-node \
-    org.opencontainers.image.source=https://github.com/0xMiden/miden-node \
+    org.opencontainers.image.documentation=https://github.com/0xMiden/node \
+    org.opencontainers.image.source=https://github.com/0xMiden/node \
     org.opencontainers.image.vendor=Miden \
     org.opencontainers.image.licenses=MIT
 ARG CREATED

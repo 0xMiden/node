@@ -2,12 +2,12 @@
 syntax = "proto3";
 package rpc;
 
+import "google/protobuf/empty.proto";
 import "types/account.proto";
 import "types/blockchain.proto";
 import "types/note.proto";
 import "types/primitives.proto";
 import "types/transaction.proto";
-import "google/protobuf/empty.proto";
 
 // RPC API
 // ================================================================================================
@@ -16,6 +16,13 @@ import "google/protobuf/empty.proto";
 service Api {
     // Returns the status info of the node.
     rpc Status(google.protobuf.Empty) returns (RpcStatus) {}
+
+    // Returns the query parameter limits configured for RPC methods.
+    //
+    // These define the maximum number of each parameter a method will accept.
+    // Exceeding the limit will result in the request being rejected and you should instead send
+    // multiple smaller requests.
+    rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
 
     // Returns a Sparse Merkle Tree opening proof for each requested nullifier
     //
@@ -44,24 +51,37 @@ service Api {
     rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteRoot) returns (MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (MaybeNoteScript) {}
+
+    // TRANSACTION SUBMISSION ENDPOINTS
+    // --------------------------------------------------------------------------------------------
 
     // Submits proven transaction to the Miden network. Returns the node's current block height.
     rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
-    // Submits a proven batch of transactions to the Miden network.
+    // Submits a batch of transactions to the Miden network.
     //
-    // The batch may include transactions which were are:
-    //
-    //   - already in the mempool i.e. previously successfully submitted
-    //   - will be submitted to the mempool in the future
-    //   - won't be submitted to the mempool at all
-    //
-    // All transactions in the batch but not in the mempool must build on the current mempool
-    // state following normal transaction submission rules.
+    // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
+
+    // STATE SYNCHRONIZATION ENDPOINTS
+    // --------------------------------------------------------------------------------------------
+
+    // Returns transactions records for specific accounts within a block range.
+    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
+
+    // Returns info which can be used by the client to sync up to the tip of chain for the notes
+    // they are interested in.
+    //
+    // Client specifies the `note_tags` they are interested in, and the block range to search.
+    // The response contains all blocks with matching notes that fit within the response payload
+    // limit, along with each note's metadata and inclusion proof.
+    //
+    // If `response.pagination_info.block_num` is less than the requested range end, make
+    // another request starting from `response.pagination_info.block_num + 1` to continue syncing.
+    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
 
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
     //
@@ -71,46 +91,20 @@ service Api {
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
-    // Returns info which can be used by the client to sync up to the tip of chain for the notes they are interested in.
-    //
-    // Client specifies the `note_tags` they are interested in, and the block height from which to search for new for
-    // matching notes for. The request will then return the next block containing any note matching the provided tags.
-    //
-    // The response includes each note's metadata and inclusion proof.
-    //
-    // A basic note sync can be implemented by repeatedly requesting the previous response's block until reaching the
-    // tip of the chain.
-    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
-
-    // Returns info which can be used by the client to sync up to the latest state of the chain
-    // for the objects (accounts and notes) the client is interested in.
-    //
-    // This request returns the next block containing requested data. It also returns `chain_tip`
-    // which is the latest block number in the chain. Client is expected to repeat these requests
-    // in a loop until `response.block_header.block_num == response.chain_tip`, at which point
-    // the client is fully synchronized with the chain.
-    //
-    // Each update response also contains info about new notes, accounts etc. created. It also returns
-    // Chain MMR delta that can be used to update the state of Chain MMR. This includes both chain
-    // MMR peaks and chain MMR nodes.
-    //
-    // For preserving some degree of privacy, note tags contain only high
-    // part of hashes. Thus, returned data contains excessive notes, client can make
-    // additional filtering of that data on its side.
-    rpc SyncState(SyncStateRequest) returns (SyncStateResponse) {}
-
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
-    // Returns transactions records for specific accounts within a block range.
-    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
+    // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
+    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
-    // Returns the query parameter limits configured for RPC methods.
+    // NOTE DEBUGGING ENDPOINTS
+    // --------------------------------------------------------------------------------------------
+
+    // Returns the latest execution error for a network note, if any.
     //
-    // These define the maximum number of each parameter a method will accept.
-    // Exceeding the limit will result in the request being rejected and you should instead send
-    // multiple smaller requests.
-    rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
+    // This is useful for debugging notes that are failing to be consumed by
+    // the network transaction builder.
+    rpc GetNoteError(note.NoteId) returns (GetNoteErrorResponse) {}
 }
 
 // RPC STATUS
@@ -131,10 +125,8 @@ message RpcStatus {
     BlockProducerStatus block_producer = 4;
 }
 
-
 // BLOCK PRODUCER STATUS
 // ================================================================================================
-
 
 // Represents the status of the block producer.
 message BlockProducerStatus {
@@ -274,7 +266,6 @@ message AccountRequest {
 
 // Represents the result of getting account proof.
 message AccountResponse {
-
     message AccountDetails {
         // Account header.
         account.AccountHeader header = 1;
@@ -458,8 +449,9 @@ message AccountVaultUpdate {
 
 // Note synchronization request.
 //
-// Specifies note tags that requester is interested in. The server will return the first block which
-// contains a note matching `note_tags` or the chain tip.
+// Specifies note tags that the requester is interested in. The server will return blocks
+// containing notes matching `note_tags` within the specified block range, batching as many
+// blocks as fit within the response payload limit.
 message SyncNotesRequest {
     // Block range from which to start synchronizing.
     BlockRange block_range = 1;
@@ -470,67 +462,71 @@ message SyncNotesRequest {
 
 // Represents the result of syncing notes request.
 message SyncNotesResponse {
+    // A single block's worth of note sync data.
+    message NoteSyncBlock {
+        // Block header of the block containing the matching notes.
+        blockchain.BlockHeader block_header = 1;
+
+        // Merkle path to verify the block's inclusion in the MMR.
+        //
+        // The proof is valid for an MMR of forest `N + 1`, where `N` is the requested
+        // `block_range.block_to` (or the chain tip if `block_to` was not specified).
+        primitives.MerklePath mmr_path = 2;
+
+        // List of notes matching the specified criteria in this block, together with the
+        // Merkle paths from `block_header.note_root`.
+        repeated note.NoteSyncRecord notes = 3;
+    }
+
     // Pagination information.
+    //
+    // `chain_tip` is the current chain tip.
+    // `block_num` is the last block checked. If it equals the requested `block_to` (or the chain
+    // tip when unset), the sync is complete. Otherwise the response was paginated and the client
+    // should resume from `block_num + 1`.
     PaginationInfo pagination_info = 1;
 
-    // Block header of the block with the first note matching the specified criteria.
-    blockchain.BlockHeader block_header = 2;
-
-    // Merkle path to verify the block's inclusion in the MMR at the returned `chain_tip`.
-    //
-    // An MMR proof can be constructed for the leaf of index `block_header.block_num` of
-    // an MMR of forest `chain_tip` with this path.
-    primitives.MerklePath mmr_path = 3;
-
-    // List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    repeated note.NoteSyncRecord notes = 4;
+    // Blocks containing matching notes, ordered by block number ascending.
+    // May be empty if no notes matched in the range.
+    repeated NoteSyncBlock blocks = 2;
 }
 
-// SYNC STATE
+// SYNC CHAIN MMR
 // ================================================================================================
 
-// State synchronization request.
-//
-// Specifies state updates the requester is interested in. The server will return the first block which
-// contains a note matching `note_tags` or the chain tip. And the corresponding updates to
-// `account_ids` for that block range.
-message SyncStateRequest {
-    // Last block known by the requester. The response will contain data starting from the next block,
-    // until the first block which contains a note of matching the requested tag, or the chain tip
-    // if there are no notes.
-    fixed32 block_num = 1;
-
-    // Accounts' commitment to include in the response.
-    //
-    // An account commitment will be included if-and-only-if it is the latest update. Meaning it is
-    // possible there was an update to the account for the given range, but if it is not the latest,
-    // it won't be included in the response.
-    repeated account.AccountId account_ids = 2;
-
-    // Specifies the tags which the requester is interested in.
-    repeated fixed32 note_tags = 3;
+// The finality level for chain data queries.
+enum Finality {
+    // Return data up to the latest committed block.
+    FINALITY_UNSPECIFIED = 0;
+    // Return data up to the latest committed block.
+    FINALITY_COMMITTED = 1;
+    // Return data only up to the latest proven block.
+    FINALITY_PROVEN = 2;
 }
 
-// Represents the result of syncing state request.
-message SyncStateResponse {
-    // Number of the latest block in the chain.
-    fixed32 chain_tip = 1;
+// Chain MMR synchronization request.
+message SyncChainMmrRequest {
+    // Block range from which to synchronize the chain MMR.
+    //
+    // The response will contain MMR delta starting after `block_range.block_from` up to
+    // `block_range.block_to` or the effective tip (whichever is lower). Set `block_from` to the
+    // last block already present in the caller's MMR so the delta begins at the next block.
+    BlockRange block_range = 1;
 
-    // Block header of the block with the first note matching the specified criteria.
-    blockchain.BlockHeader block_header = 2;
+    // The finality level to use when clamping the upper bound of the block range.
+    //
+    // When set to `FINALITY_UNSPECIFIED` or `FINALITY_COMMITTED`, the upper bound is clamped to the chain tip.
+    // When set to `FINALITY_PROVEN`, the upper bound is clamped to the latest proven block.
+    Finality finality = 2;
+}
 
-    // Data needed to update the partial MMR from `request.block_num + 1` to `response.block_header.block_num`.
-    primitives.MmrDelta mmr_delta = 3;
-
-    // List of account commitments updated after `request.block_num + 1` but not after `response.block_header.block_num`.
-    repeated account.AccountSummary accounts = 5;
-
-    // List of transactions executed against requested accounts between `request.block_num + 1` and
-    // `response.block_header.block_num`.
-    repeated transaction.TransactionSummary transactions = 6;
-
-    // List of all notes together with the Merkle paths from `response.block_header.note_root`.
-    repeated note.NoteSyncRecord notes = 7;
+// Represents the result of syncing chain MMR.
+message SyncChainMmrResponse {
+    // For which block range the MMR delta is returned.
+    BlockRange block_range = 1;
+    // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
+    // `response.block_range.block_to` or the chain tip.
+    primitives.MmrDelta mmr_delta = 2;
 }
 
 // SYNC ACCOUNT STORAGE MAP
@@ -644,13 +640,26 @@ message TransactionRecord {
     transaction.TransactionHeader header = 2;
 }
 
+// GET NOTE ERROR
+// ================================================================================================
+
+// Response containing the latest execution error for a network note.
+message GetNoteErrorResponse {
+    // The latest error message, if any.
+    optional string error = 1;
+    // Number of failed execution attempts.
+    uint32 attempt_count = 2;
+    // Block number of the last failed attempt, if any.
+    optional fixed32 last_attempt_block_num = 3;
+}
+
 // RPC LIMITS
 // ================================================================================================
 
 // Represents the query parameter limits for RPC endpoints.
 message RpcLimits {
     // Maps RPC endpoint names to their parameter limits.
-    // Key: endpoint name (e.g., "CheckNullifiers", "SyncState")
+    // Key: endpoint name (e.g., "CheckNullifiers")
     // Value: map of parameter names to their limit values
     map<string, EndpointLimits> endpoints = 1;
 }

@@ -19,75 +19,15 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{NoteId, Nullifier};
-use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionId};
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::note::NoteHeader;
+use miden_protocol::transaction::{InputNoteCommitment, OrderedTransactionHeaders, TransactionId};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
 use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
-use crate::db::{TransactionSummary, schema};
-
-/// Select transactions for given accounts in a specified block range
-///
-/// # Parameters
-/// * `account_ids`: List of account IDs to filter by
-///     - Limit: 0 <= size <= 1000
-/// * `block_range`: Range of blocks to include inclusive
-///
-/// # Returns
-///
-/// A vector of [`TransactionSummary`] types or an error.
-///
-/// # Raw SQL
-/// ```sql
-/// SELECT
-///     account_id,
-///     block_num,
-///     transaction_id
-/// FROM
-///     transactions
-/// WHERE
-///     block_num > ?1 AND
-///     block_num <= ?2 AND
-///     account_id IN (?3)
-/// ORDER BY
-///     transaction_id ASC
-/// ```
-pub fn select_transactions_by_accounts_and_block_range(
-    conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<Vec<TransactionSummary>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
-
-    let desired_account_ids = serialize_vec(account_ids);
-    let raw = SelectDsl::select(
-        schema::transactions::table,
-        (
-            schema::transactions::account_id,
-            schema::transactions::block_num,
-            schema::transactions::transaction_id,
-        ),
-    )
-    .filter(schema::transactions::block_num.gt(block_range.start().to_raw_sql()))
-    .filter(schema::transactions::block_num.le(block_range.end().to_raw_sql()))
-    .filter(schema::transactions::account_id.eq_any(desired_account_ids))
-    .order(schema::transactions::transaction_id.asc())
-    .load::<TransactionSummaryRaw>(conn)
-    .map_err(DatabaseError::from)?;
-    vec_raw_try_into(raw)
-}
-
-#[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
-#[diesel(table_name = schema::transactions)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct TransactionSummaryRaw {
-    account_id: Vec<u8>,
-    block_num: i64,
-    transaction_id: Vec<u8>,
-}
+use crate::db::schema;
 
 #[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
 #[diesel(table_name = schema::transactions)]
@@ -98,44 +38,32 @@ pub struct TransactionRecordRaw {
     transaction_id: Vec<u8>,
     initial_state_commitment: Vec<u8>,
     final_state_commitment: Vec<u8>,
-    nullifiers: Vec<u8>,
+    input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
-}
-
-impl TryInto<crate::db::TransactionSummary> for TransactionSummaryRaw {
-    type Error = DatabaseError;
-    fn try_into(self) -> Result<crate::db::TransactionSummary, Self::Error> {
-        Ok(crate::db::TransactionSummary {
-            account_id: AccountId::read_from_bytes(&self.account_id[..])?,
-            block_num: BlockNumber::from_raw_sql(self.block_num)?,
-            transaction_id: TransactionId::read_from_bytes(&self.transaction_id[..])?,
-        })
-    }
+    fee: Vec<u8>,
 }
 
 impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
     type Error = DatabaseError;
     fn try_into(self) -> Result<crate::db::TransactionRecord, Self::Error> {
         use miden_protocol::Word;
+        use miden_protocol::asset::FungibleAsset;
 
-        let initial_state_commitment = self.initial_state_commitment;
-        let final_state_commitment = self.final_state_commitment;
-        let nullifiers_binary = self.nullifiers;
-        let output_notes_binary = self.output_notes;
-
-        // Deserialize input notes as nullifiers and output notes as note IDs
-        let nullifiers: Vec<Nullifier> = Deserializable::read_from_bytes(&nullifiers_binary)?;
-        let output_notes: Vec<NoteId> = Deserializable::read_from_bytes(&output_notes_binary)?;
+        let input_notes: Vec<InputNoteCommitment> =
+            Deserializable::read_from_bytes(&self.input_notes)?;
+        let output_notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&self.output_notes)?;
+        let fee = FungibleAsset::read_from_bytes(&self.fee)?;
 
         Ok(crate::db::TransactionRecord {
             account_id: AccountId::read_from_bytes(&self.account_id[..])?,
             block_num: BlockNumber::from_raw_sql(self.block_num)?,
             transaction_id: TransactionId::read_from_bytes(&self.transaction_id[..])?,
-            initial_state_commitment: Word::read_from_bytes(&initial_state_commitment)?,
-            final_state_commitment: Word::read_from_bytes(&final_state_commitment)?,
-            nullifiers,
+            initial_state_commitment: Word::read_from_bytes(&self.initial_state_commitment)?,
+            final_state_commitment: Word::read_from_bytes(&self.final_state_commitment)?,
+            input_notes,
             output_notes,
+            fee,
         })
     }
 }
@@ -150,7 +78,6 @@ impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -161,10 +88,9 @@ pub(crate) fn insert_transactions(
     block_num: BlockNumber,
     transactions: &OrderedTransactionHeaders,
 ) -> Result<usize, DatabaseError> {
-    #[allow(clippy::into_iter_on_ref)] // false positive
     let rows: Vec<_> = transactions
         .as_slice()
-        .into_iter()
+        .iter()
         .map(|tx| TransactionSummaryRowInsert::new(tx, block_num))
         .collect();
 
@@ -181,13 +107,14 @@ pub struct TransactionSummaryRowInsert {
     block_num: i64,
     initial_state_commitment: Vec<u8>,
     final_state_commitment: Vec<u8>,
-    nullifiers: Vec<u8>,
+    input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
+    fee: Vec<u8>,
 }
 
 impl TransactionSummaryRowInsert {
-    #[allow(
+    #[expect(
         clippy::cast_possible_wrap,
         reason = "We will not approach the item count where i64 and usize cause issues"
     )]
@@ -197,11 +124,14 @@ impl TransactionSummaryRowInsert {
     ) -> Self {
         const HEADER_BASE_SIZE: usize = 4 + 32 + 16 + 64; // block_num + tx_id + account_id + commitments
 
-        // Serialize input notes using binary format (store nullifiers)
-        let nullifiers_binary = transaction_header.input_notes().to_bytes();
+        // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
+        let input_notes: Vec<InputNoteCommitment> =
+            transaction_header.input_notes().iter().cloned().collect();
+        let input_notes_binary = input_notes.to_bytes();
 
-        // Serialize output notes using binary format (store note IDs)
-        let output_notes_binary = transaction_header.output_notes().to_bytes();
+        // Serialize output notes as full NoteHeaders (NoteId + NoteMetadata).
+        let output_notes: Vec<NoteHeader> = transaction_header.output_notes().to_vec();
+        let output_notes_binary = output_notes.to_bytes();
 
         // Manually calculate the estimated size of the transaction header to avoid
         // the cost of serialization. The size estimation includes:
@@ -209,14 +139,11 @@ impl TransactionSummaryRowInsert {
         // - 32 bytes for transaction ID
         // - 16 bytes for account ID
         // - 64 bytes for initial + final state commitments (32 bytes each)
-        // - 32 bytes per input note (nullifier size)
-        // - 500 bytes per output note (estimated size when converted to NoteSyncRecord)
-        //
-        // Note: 500 bytes per output note is an over-estimate but ensures we don't
-        // exceed memory limits when these transactions are later converted to proto records.
-        let nullifiers_size = (transaction_header.input_notes().num_notes() * 32) as usize;
-        let output_notes_size = transaction_header.output_notes().len() * 500;
-        let size_in_bytes = (HEADER_BASE_SIZE + nullifiers_size + output_notes_size) as i64;
+        // - ~64 bytes per input note (nullifier + optional NoteHeader)
+        // - ~64 bytes per output note (NoteHeader = NoteId + NoteMetadata)
+        let input_notes_size = (transaction_header.input_notes().num_notes() as usize) * 64;
+        let output_notes_size = transaction_header.output_notes().len() * 64;
+        let size_in_bytes = (HEADER_BASE_SIZE + input_notes_size + output_notes_size) as i64;
 
         Self {
             transaction_id: transaction_header.id().to_bytes(),
@@ -224,9 +151,10 @@ impl TransactionSummaryRowInsert {
             block_num: block_num.to_raw_sql(),
             initial_state_commitment: transaction_header.initial_state_commitment().to_bytes(),
             final_state_commitment: transaction_header.final_state_commitment().to_bytes(),
-            nullifiers: nullifiers_binary,
+            input_notes: input_notes_binary,
             output_notes: output_notes_binary,
             size_in_bytes,
+            fee: transaction_header.fee().to_bytes(),
         }
     }
 }
@@ -341,24 +269,18 @@ pub fn select_transactions_records(
 
         // Add transactions from this chunk one by one until we hit the limit
         let mut added_from_chunk = 0;
-        let mut last_added_tx: Option<TransactionRecordRaw> = None;
 
         for tx in chunk {
             if total_size + tx.size_in_bytes <= max_payload_bytes {
                 total_size += tx.size_in_bytes;
-                last_added_tx = Some(tx);
+                last_block_num = Some(tx.block_num);
+                last_transaction_id = Some(tx.transaction_id.clone());
+                all_transactions.push(tx);
                 added_from_chunk += 1;
             } else {
                 // Can't fit this transaction, stop here
                 break;
             }
-        }
-
-        // Update cursor position only for the last transaction that was actually added
-        if let Some(tx) = last_added_tx {
-            last_block_num = Some(tx.block_num);
-            last_transaction_id = Some(tx.transaction_id.clone());
-            all_transactions.push(tx);
         }
 
         // Break if chunk incomplete (size limit hit or data exhausted)
@@ -379,6 +301,8 @@ pub fn select_transactions_records(
         )?;
 
         // SAFETY: block_num came from the database and was previously validated
+        // Subtraction is safe under the assumption that genesis block (where it could fail) does
+        // not have any transactions.
         let last_included_block = BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?;
         Ok((last_included_block, filtered_transactions))
     } else {

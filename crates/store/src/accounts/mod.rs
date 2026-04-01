@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+#[cfg(feature = "rocksdb")]
+use miden_large_smt_backend_rocksdb::RocksDbStorage;
 use miden_protocol::account::{AccountId, AccountIdPrefix};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::{AccountMutationSet, AccountTree, AccountWitness};
@@ -32,12 +34,12 @@ pub type InMemoryAccountTree = AccountTree<LargeSmt<MemoryStorage>>;
 
 #[cfg(feature = "rocksdb")]
 /// Convenience for a persistent account tree.
-pub type PersistentAccountTree = AccountTree<LargeSmt<miden_crypto::merkle::smt::RocksDbStorage>>;
+pub type PersistentAccountTree = AccountTree<LargeSmt<RocksDbStorage>>;
 
 // HISTORICAL ERROR TYPES
 // ================================================================================================
 
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 #[derive(thiserror::Error, Debug)]
 pub enum HistoricalError {
     #[error(transparent)]

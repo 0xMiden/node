@@ -9,6 +9,7 @@ use crate::tracing::OpenTelemetrySpanExt;
 /// The span name is dynamically set using the HTTP path via the `otel.name` field.
 /// Additionally also pulls in remote tracing context which allows the server trace to be connected
 /// to the client's origin trace.
+#[track_caller]
 pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
     // A gRPC request's path ends with `../<service>/<method>`.
     let mut path_segments = request.uri().path().rsplit('/');

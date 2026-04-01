@@ -47,7 +47,7 @@ pub struct FaucetTestDetails {
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
-    #[allow(dead_code)] // Timestamp is part of API response but not used
+    #[expect(dead_code)] // Timestamp is part of API response but not used
     timestamp: u64,
 }
 
@@ -55,7 +55,7 @@ struct PowChallengeResponse {
 #[derive(Debug, Deserialize)]
 struct GetTokensResponse {
     tx_id: String,
-    #[allow(dead_code)] // Note ID is part of API response but not used in monitoring
+    #[expect(dead_code)] // Note ID is part of API response but not used in monitoring
     note_id: String,
 }
 
@@ -102,6 +102,7 @@ pub async fn run_faucet_test_task(
     let mut success_count = 0u64;
     let mut failure_count = 0u64;
     let mut last_tx_id = None;
+    let mut last_error: Option<String>;
     let mut faucet_metadata = None;
 
     let mut interval = tokio::time::interval(test_interval);
@@ -118,11 +119,13 @@ pub async fn run_faucet_test_task(
             Ok((minted_tokens, metadata)) => {
                 success_count += 1;
                 last_tx_id = Some(minted_tokens.tx_id.clone());
+                last_error = None;
                 faucet_metadata = Some(metadata);
                 info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
             },
             Err(e) => {
                 failure_count += 1;
+                last_error = Some(format!("{e:#}"));
                 warn!("Faucet test failed: {}", e);
             },
         }
@@ -140,13 +143,13 @@ pub async fn run_faucet_test_task(
 
         let status = ServiceStatus {
             name: "Faucet".to_string(),
-            status: if success_count > 0 || failure_count == 0 {
-                Status::Healthy
-            } else {
+            status: if last_error.is_some() {
                 Status::Unhealthy
+            } else {
+                Status::Healthy
             },
             last_checked: current_time,
-            error: None,
+            error: last_error.clone(),
             details: ServiceDetails::FaucetTest(test_details),
         };
 
@@ -189,14 +192,15 @@ async fn perform_faucet_test(
     debug!("Generated account ID: {} (length: {})", account_id, account_id.len());
 
     // Step 1: Request PoW challenge
-    let pow_url = faucet_url.join("/pow")?;
-    let response = client
-        .get(pow_url)
-        .query(&[("account_id", &account_id), ("amount", &MINT_AMOUNT.to_string())])
-        .send()
-        .await?;
+    let mut pow_url = faucet_url.join("/pow")?;
+    pow_url
+        .query_pairs_mut()
+        .append_pair("account_id", &account_id)
+        .append_pair("amount", &MINT_AMOUNT.to_string());
 
-    let response_text = response.text().await?;
+    let response = client.get(pow_url).send().await?;
+
+    let response_text: String = response.text().await?;
     debug!("Faucet PoW response: {}", response_text);
 
     let challenge_response: PowChallengeResponse = serde_json::from_str(&response_text)
@@ -215,21 +219,18 @@ async fn perform_faucet_test(
     debug!("Solved PoW challenge with nonce: {}", nonce);
 
     // Step 3: Request tokens with the solution
-    let tokens_url = faucet_url.join("/get_tokens")?;
+    let mut tokens_url = faucet_url.join("/get_tokens")?;
+    tokens_url
+        .query_pairs_mut()
+        .append_pair("account_id", account_id.as_str())
+        .append_pair("is_private_note", "false")
+        .append_pair("asset_amount", &MINT_AMOUNT.to_string())
+        .append_pair("challenge", &challenge_response.challenge)
+        .append_pair("nonce", &nonce.to_string());
 
-    let response = client
-        .get(tokens_url)
-        .query(&[
-            ("account_id", account_id.as_str()),
-            ("is_private_note", "false"),
-            ("asset_amount", &MINT_AMOUNT.to_string()),
-            ("challenge", &challenge_response.challenge),
-            ("nonce", &nonce.to_string()),
-        ])
-        .send()
-        .await?;
+    let response = client.get(tokens_url).send().await?;
 
-    let response_text = response.text().await?;
+    let response_text: String = response.text().await?;
 
     let tokens_response: GetTokensResponse = serde_json::from_str(&response_text)
         .with_context(|| format!("Failed to parse tokens response: {response_text}"))?;

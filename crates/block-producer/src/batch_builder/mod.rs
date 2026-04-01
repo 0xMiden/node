@@ -9,7 +9,7 @@ use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
-use miden_remote_prover_client::remote_prover::batch_prover::RemoteBatchProver;
+use miden_remote_prover_client::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
 use tokio::task::JoinSet;
@@ -200,12 +200,12 @@ impl BatchJob {
         batch: SelectedBatch,
     ) -> Result<(SelectedBatch, BatchInputs), BuildBatchError> {
         let block_references = batch
-            .txs()
+            .transactions()
             .iter()
             .map(Deref::deref)
             .map(AuthenticatedTransaction::reference_block);
         let unauthenticated_notes = batch
-            .txs()
+            .transactions()
             .iter()
             .map(Deref::deref)
             .flat_map(AuthenticatedTransaction::unauthenticated_note_commitments);
@@ -325,10 +325,10 @@ impl BatchProver {
 impl TelemetryInjectorExt for SelectedBatch {
     fn inject_telemetry(&self) {
         Span::current().set_attribute("batch.id", self.id());
-        Span::current().set_attribute("transactions.count", self.txs().len());
+        Span::current().set_attribute("transactions.count", self.transactions().len());
         // Accumulate all telemetry based on transactions.
         let (tx_ids, input_notes_count, output_notes_count, unauth_notes_count) =
-            self.txs().iter().fold(
+            self.transactions().iter().fold(
                 (vec![], 0, 0, 0),
                 |(
                     mut tx_ids,

@@ -3,15 +3,23 @@ use std::ops::RangeInclusive;
 
 use miden_protocol::account::AccountId;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, FeeParameters};
+use miden_protocol::block::{
+    BlockBody,
+    BlockHeader,
+    BlockInputs,
+    BlockNumber,
+    FeeParameters,
+    SignedBlock,
+};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 
-use crate::errors::{ConversionError, MissingFieldHelper};
-use crate::{AccountWitnessRecord, NullifierWitnessRecord, generated as proto};
+use crate::decode::{ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
+use crate::errors::ConversionError;
+use crate::{AccountWitnessRecord, NullifierWitnessRecord, decode, generated as proto};
 
 // BLOCK NUMBER
 // ================================================================================================
@@ -68,50 +76,100 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
     type Error = ConversionError;
 
     fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
+        let prev_block_commitment = decode!(decoder, value.prev_block_commitment)?;
+        let chain_commitment = decode!(decoder, value.chain_commitment)?;
+        let account_root = decode!(decoder, value.account_root)?;
+        let nullifier_root = decode!(decoder, value.nullifier_root)?;
+        let note_root = decode!(decoder, value.note_root)?;
+        let tx_commitment = decode!(decoder, value.tx_commitment)?;
+        let tx_kernel_commitment = decode!(decoder, value.tx_kernel_commitment)?;
+        let validator_key = decode!(decoder, value.validator_key)?;
+        let fee_parameters = decode!(decoder, value.fee_parameters)?;
+
         Ok(BlockHeader::new(
             value.version,
-            value
-                .prev_block_commitment
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(
-                    prev_block_commitment
-                )))?
-                .try_into()?,
+            prev_block_commitment,
             value.block_num.into(),
-            value
-                .chain_commitment
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(chain_commitment)))?
-                .try_into()?,
-            value
-                .account_root
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(account_root)))?
-                .try_into()?,
-            value
-                .nullifier_root
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(nullifier_root)))?
-                .try_into()?,
-            value
-                .note_root
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(note_root)))?
-                .try_into()?,
-            value
-                .tx_commitment
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(tx_commitment)))?
-                .try_into()?,
-            value
-                .tx_kernel_commitment
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(
-                    tx_kernel_commitment
-                )))?
-                .try_into()?,
-            value
-                .validator_key
-                .ok_or(proto::blockchain::BlockHeader::missing_field(stringify!(validator_key)))?
-                .try_into()?,
-            FeeParameters::try_from(value.fee_parameters.ok_or(
-                proto::blockchain::FeeParameters::missing_field(stringify!(fee_parameters)),
-            )?)?,
+            chain_commitment,
+            account_root,
+            nullifier_root,
+            note_root,
+            tx_commitment,
+            tx_kernel_commitment,
+            validator_key,
+            fee_parameters,
             value.timestamp,
         ))
+    }
+}
+
+// BLOCK BODY
+// ================================================================================================
+
+impl From<&BlockBody> for proto::blockchain::BlockBody {
+    fn from(body: &BlockBody) -> Self {
+        Self { block_body: body.to_bytes() }
+    }
+}
+
+impl From<BlockBody> for proto::blockchain::BlockBody {
+    fn from(body: BlockBody) -> Self {
+        (&body).into()
+    }
+}
+
+impl TryFrom<&proto::blockchain::BlockBody> for BlockBody {
+    type Error = ConversionError;
+
+    fn try_from(value: &proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
+        value.try_into()
+    }
+}
+
+impl TryFrom<proto::blockchain::BlockBody> for BlockBody {
+    type Error = ConversionError;
+    fn try_from(value: proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
+        BlockBody::decode_bytes(&value.block_body, "BlockBody")
+    }
+}
+
+// SIGNED BLOCK
+// ================================================================================================
+
+impl From<&SignedBlock> for proto::blockchain::SignedBlock {
+    fn from(block: &SignedBlock) -> Self {
+        Self {
+            header: Some(block.header().into()),
+            body: Some(block.body().into()),
+            signature: Some(block.signature().into()),
+        }
+    }
+}
+
+impl From<SignedBlock> for proto::blockchain::SignedBlock {
+    fn from(block: SignedBlock) -> Self {
+        (&block).into()
+    }
+}
+
+impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
+    type Error = ConversionError;
+
+    fn try_from(value: &proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
+        value.try_into()
+    }
+}
+
+impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
+    type Error = ConversionError;
+    fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
+        let header = decode!(decoder, value.header)?;
+        let body = decode!(decoder, value.body)?;
+        let signature = decode!(decoder, value.signature)?;
+
+        Ok(SignedBlock::new_unchecked(header, body, signature))
     }
 }
 
@@ -154,10 +212,8 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
     type Error = ConversionError;
 
     fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
-        let latest_block_header: BlockHeader = response
-            .latest_block_header
-            .ok_or(proto::blockchain::BlockHeader::missing_field("block_header"))?
-            .try_into()?;
+        let decoder = response.decoder();
+        let latest_block_header: BlockHeader = decode!(decoder, response.latest_block_header)?;
 
         let account_witnesses = response
             .account_witnesses
@@ -166,7 +222,8 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
                 let witness_record: AccountWitnessRecord = entry.try_into()?;
                 Ok((witness_record.account_id, witness_record.witness))
             })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+            .collect::<Result<BTreeMap<_, _>, ConversionError>>()
+            .context("account_witnesses")?;
 
         let nullifier_witnesses = response
             .nullifier_witnesses
@@ -175,18 +232,18 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
                 let witness: NullifierWitnessRecord = entry.try_into()?;
                 Ok((witness.nullifier, NullifierWitness::new(witness.proof)))
             })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+            .collect::<Result<BTreeMap<_, _>, ConversionError>>()
+            .context("nullifier_witnesses")?;
 
         let unauthenticated_note_proofs = response
             .unauthenticated_note_proofs
             .iter()
             .map(<(NoteId, NoteInclusionProof)>::try_from)
-            .collect::<Result<_, ConversionError>>()?;
+            .collect::<Result<_, ConversionError>>()
+            .context("unauthenticated_note_proofs")?;
 
-        let partial_block_chain = PartialBlockchain::read_from_bytes(&response.partial_block_chain)
-            .map_err(|source| {
-                ConversionError::deserialization_error("PartialBlockchain", source)
-            })?;
+        let partial_block_chain =
+            PartialBlockchain::decode_bytes(&response.partial_block_chain, "PartialBlockchain")?;
 
         Ok(BlockInputs::new(
             latest_block_header,
@@ -204,8 +261,7 @@ impl TryFrom<proto::store::BlockInputs> for BlockInputs {
 impl TryFrom<proto::blockchain::ValidatorPublicKey> for PublicKey {
     type Error = ConversionError;
     fn try_from(public_key: proto::blockchain::ValidatorPublicKey) -> Result<Self, Self::Error> {
-        PublicKey::read_from_bytes(&public_key.validator_key)
-            .map_err(|source| ConversionError::deserialization_error("PublicKey", source))
+        PublicKey::decode_bytes(&public_key.validator_key, "PublicKey")
     }
 }
 
@@ -227,8 +283,7 @@ impl From<&PublicKey> for proto::blockchain::ValidatorPublicKey {
 impl TryFrom<proto::blockchain::BlockSignature> for Signature {
     type Error = ConversionError;
     fn try_from(signature: proto::blockchain::BlockSignature) -> Result<Self, Self::Error> {
-        Signature::read_from_bytes(&signature.signature)
-            .map_err(|source| ConversionError::deserialization_error("Signature", source))
+        Signature::decode_bytes(&signature.signature, "Signature")
     }
 }
 
@@ -250,9 +305,13 @@ impl From<&Signature> for proto::blockchain::BlockSignature {
 impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
     type Error = ConversionError;
     fn try_from(fee_params: proto::blockchain::FeeParameters) -> Result<Self, Self::Error> {
-        let native_asset_id = fee_params.native_asset_id.map(AccountId::try_from).ok_or(
-            proto::blockchain::FeeParameters::missing_field(stringify!(native_asset_id)),
-        )??;
+        let native_asset_id = fee_params
+            .native_asset_id
+            .map(AccountId::try_from)
+            .ok_or(ConversionError::missing_field::<proto::blockchain::FeeParameters>(
+                "native_asset_id",
+            ))?
+            .context("native_asset_id")?;
         let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee)?;
         Ok(fee_params)
     }

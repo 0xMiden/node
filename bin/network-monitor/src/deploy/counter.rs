@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
@@ -15,7 +16,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::utils::sync::LazyLock;
-use miden_protocol::{Felt, FieldElement, Word};
+use miden_protocol::{Felt, Word};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::testing::account_component::IncrNonceAuthComponent;
 use tracing::instrument;
@@ -45,7 +46,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
 
     let owner_id_slot = StorageSlot::with_value(
         OWNER_SLOT_NAME.clone(),
-        Word::from([Felt::ZERO, Felt::ZERO, owner_account_id_suffix, owner_account_id_prefix]),
+        Word::from([owner_account_id_suffix, owner_account_id_prefix, Felt::ZERO, Felt::ZERO]),
     );
 
     let counter_slot = StorageSlot::with_value(COUNTER_SLOT_NAME.clone(), Word::empty());
@@ -53,8 +54,9 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     let component_code =
         CodeBuilder::default().compile_component_code("counter::program", script)?;
 
-    let account_code = AccountComponent::new(component_code, vec![counter_slot, owner_id_slot])?
-        .with_supports_all_types();
+    let metadata = AccountComponentMetadata::new("counter::program", AccountType::all());
+    let account_code =
+        AccountComponent::new(component_code, vec![counter_slot, owner_id_slot], metadata)?;
 
     let incr_nonce_auth: AccountComponent = IncrNonceAuthComponent.into();
 

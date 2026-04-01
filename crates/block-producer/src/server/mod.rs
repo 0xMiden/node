@@ -14,7 +14,7 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::batch::ProvenBatch;
+use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
@@ -29,17 +29,14 @@ use url::Url;
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{
-    AddTransactionError,
-    BlockProducerError,
-    StoreError,
-    SubmitProvenBatchError,
-    VerifyTxError,
-};
+use crate::errors::{BlockProducerError, MempoolSubmissionError, StoreError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
+
+#[cfg(test)]
+mod tests;
 
 /// The block producer server.
 ///
@@ -56,8 +53,6 @@ pub struct BlockProducer {
     pub validator_url: Url,
     /// The address of the batch prover component.
     pub batch_prover_url: Option<Url>,
-    /// The address of the block prover component.
-    pub block_prover_url: Option<Url>,
     /// The interval at which to produce batches.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
@@ -81,7 +76,6 @@ impl BlockProducer {
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
-    #[allow(clippy::too_many_lines)]
     pub async fn serve(self) -> anyhow::Result<()> {
         info!(target: COMPONENT, endpoint=?self.block_producer_address, store=%self.store_url, "Initializing server");
         let store = StoreClient::new(self.store_url.clone());
@@ -122,8 +116,7 @@ impl BlockProducer {
 
         info!(target: COMPONENT, "Server initialized");
 
-        let block_builder =
-            BlockBuilder::new(store.clone(), validator, self.block_prover_url, self.block_interval);
+        let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
             store.clone(),
             SERVER_NUM_BATCH_BUILDERS,
@@ -251,15 +244,6 @@ impl BlockProducerRpcServer {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        // This is currently required for postman to work properly because
-        // it doesn't support the new version yet.
-        //
-        // See: <https://github.com/postmanlabs/postman-app-support/issues/13120>.
-        let reflection_service_alpha = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(block_producer_api_descriptor())
-            .build_v1alpha()
-            .context("failed to build reflection service")?;
-
         // Build the gRPC server with the API service and trace layer.
 
         tonic::transport::Server::builder()
@@ -269,7 +253,6 @@ impl BlockProducerRpcServer {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .add_service(api_server::ApiServer::new(self))
             .add_service(reflection_service)
-            .add_service(reflection_service_alpha)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .context("failed to serve block producer API")
@@ -321,11 +304,11 @@ impl BlockProducerRpcServer {
     async fn submit_proven_transaction(
         &self,
         request: proto::transaction::ProvenTransaction,
-    ) -> Result<proto::blockchain::BlockNumber, AddTransactionError> {
+    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
         debug!(target: COMPONENT, ?request);
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction)
-            .map_err(AddTransactionError::TransactionDeserializationFailed)?;
+            .map_err(MempoolSubmissionError::DeserializationFailed)?;
 
         let tx_id = tx.id();
 
@@ -342,18 +325,18 @@ impl BlockProducerRpcServer {
         );
         debug!(target: COMPONENT, proof = ?tx.proof());
 
-        let inputs = self.store.get_tx_inputs(&tx).await.map_err(VerifyTxError::from)?;
+        let inputs = self
+            .store
+            .get_tx_inputs(&tx)
+            .await
+            .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
 
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
-        let tx = AuthenticatedTransaction::new_unchecked(tx, inputs).map(Arc::new)?;
+        let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
+            .map(Arc::new)
+            .map_err(MempoolSubmissionError::StateConflict)?;
 
-        self.mempool
-            .lock()
-            .await
-            .lock()
-            .await
-            .add_transaction(tx)
-            .map(|block_height| proto::blockchain::BlockNumber { block_num: block_height.as_u32() })
+        self.mempool.lock().await.lock().await.add_transaction(tx).map(Into::into)
     }
 
     #[instrument(
@@ -364,12 +347,34 @@ impl BlockProducerRpcServer {
      )]
     async fn submit_proven_batch(
         &self,
-        request: proto::transaction::ProvenTransactionBatch,
-    ) -> Result<proto::blockchain::BlockNumber, SubmitProvenBatchError> {
-        let _batch = ProvenBatch::read_from_bytes(&request.encoded)
-            .map_err(SubmitProvenBatchError::Deserialization)?;
+        request: proto::transaction::TransactionBatch,
+    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
+        let proposed = request
+            .proposed_batch
+            .expect("proposed batch existence is enforced by RPC component");
+        let batch = ProposedBatch::read_from_bytes(&proposed)
+            .map_err(MempoolSubmissionError::DeserializationFailed)?;
 
-        todo!();
+        // We assume that the rpc component has verified everything, including the transaction
+        // proofs.
+
+        let mut txs = Vec::with_capacity(batch.transactions().len());
+        for tx in batch.transactions() {
+            let inputs = self
+                .store
+                .get_tx_inputs(tx)
+                .await
+                .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
+
+            // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
+            // as the batch integrity itself.
+            let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
+                .map(Arc::new)
+                .map_err(MempoolSubmissionError::StateConflict)?;
+            txs.push(tx);
+        }
+
+        self.mempool.lock().await.lock().await.add_user_batch(&txs).map(Into::into)
     }
 }
 
@@ -390,7 +395,7 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn submit_proven_batch(
         &self,
-        request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
+        request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         self.submit_proven_batch(request.into_inner())
              .await
@@ -415,22 +420,9 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn mempool_subscription(
         &self,
-        request: tonic::Request<proto::block_producer::MempoolSubscriptionRequest>,
+        _request: tonic::Request<()>,
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
-        let chain_tip = BlockNumber::from(request.into_inner().chain_tip);
-
-        let subscription =
-            self.mempool
-                .lock()
-                .await
-                .lock()
-                .await
-                .subscribe(chain_tip)
-                .map_err(|mempool_tip| {
-                    tonic::Status::invalid_argument(format!(
-                        "Mempool's chain tip {mempool_tip} does not match request's {chain_tip}"
-                    ))
-                })?;
+        let subscription = self.mempool.lock().await.lock().await.subscribe();
         let subscription = ReceiverStream::new(subscription);
 
         Ok(tonic::Response::new(MempoolEventSubscription { inner: subscription }))

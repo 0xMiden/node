@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::cast_possible_wrap,
     reason = "We will not approach the item count where i64 and usize cause issues"
 )]
@@ -41,15 +41,15 @@ use miden_protocol::note::{
     NoteDetails,
     NoteId,
     NoteInclusionProof,
-    NoteInputs,
     NoteMetadata,
     NoteRecipient,
     NoteScript,
+    NoteStorage,
     NoteTag,
     NoteType,
     Nullifier,
 };
-use miden_protocol::utils::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
 use crate::COMPONENT;
@@ -127,7 +127,7 @@ impl From<NetworkNoteType> for i32 {
 ///             notes
 ///         WHERE
 ///             (tag IN (?1) OR sender IN (?2)) AND
-///             block_num > ?3 AND
+///             block_num >= ?3 AND
 ///             block_num <= ?4
 ///         ORDER BY
 ///             block_num ASC
@@ -141,7 +141,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
     account_ids: &[AccountId],
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(Vec<NoteSyncRecord>, BlockNumber), DatabaseError> {
+) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
     QueryParamAccountIdLimit::check(account_ids.len())?;
     QueryParamNoteTagLimit::check(note_tags.len())?;
     let desired_note_tags = Vec::from_iter(note_tags.iter().map(|tag| *tag as i32));
@@ -158,14 +158,14 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
                     .eq_any(&desired_note_tags[..])
                     .or(schema::notes::sender.eq_any(&desired_senders[..])),
             )
-            .filter(schema::notes::committed_at.gt(start_block_num))
+            .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
             .limit(1)
             .get_result(conn)
             .optional()?
     else {
-        return Ok((Vec::new(), *block_range.end()));
+        return Ok(Vec::new());
     };
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
@@ -185,7 +185,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
             .get_results::<NoteSyncRecordRawRow>(conn)
             .map_err(DatabaseError::from)?;
 
-    Ok((vec_raw_try_into(notes)?, BlockNumber::from_raw_sql(desired_block_num)?))
+    vec_raw_try_into(notes)
 }
 
 /// Select all notes matching the given set of identifiers
@@ -203,7 +203,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
 ///     notes.tag,
 ///     notes.attachment,
 ///     notes.assets,
-///     notes.inputs,
+///     notes.storage,
 ///     notes.serial_num,
 ///     notes.inclusion_path,
 ///     note_scripts.script
@@ -283,7 +283,7 @@ pub(crate) fn select_existing_note_commitments(
 ///     notes.tag,
 ///     notes.attachment,
 ///     notes.assets,
-///     notes.inputs,
+///     notes.storage,
 ///     notes.serial_num,
 ///     notes.inclusion_path,
 ///     note_scripts.script
@@ -427,7 +427,7 @@ pub(crate) fn select_note_script_by_root(
 ///     notes.tag,
 ///     notes.attachment,
 ///     notes.assets,
-///     notes.inputs,
+///     notes.storage,
 ///     notes.serial_num,
 ///     notes.inclusion_path,
 ///     note_scripts.script,
@@ -441,14 +441,7 @@ pub(crate) fn select_note_script_by_root(
 /// ORDER BY notes.rowid ASC
 /// LIMIT ?4
 /// ```
-#[allow(
-    clippy::cast_sign_loss,
-    reason = "We need custom SQL statements which has given types that we need to convert"
-)]
-#[allow(
-    clippy::too_many_lines,
-    reason = "Lines will be reduced when schema is updated to simplify logic"
-)]
+#[expect(clippy::cast_sign_loss, reason = "row_id is a positive integer")]
 pub(crate) fn select_unconsumed_network_notes_by_account_id(
     conn: &mut SqliteConnection,
     account_id: AccountId,
@@ -460,7 +453,7 @@ pub(crate) fn select_unconsumed_network_notes_by_account_id(
         diesel::dsl::sql::<diesel::sql_types::Bool>("notes.rowid >= ")
             .bind::<diesel::sql_types::BigInt, i64>(page.token.unwrap_or_default() as i64);
 
-    #[allow(
+    #[expect(
         clippy::items_after_statements,
         reason = "It's only relevant for a single call function"
     )]
@@ -470,7 +463,7 @@ pub(crate) fn select_unconsumed_network_notes_by_account_id(
         i64,             // rowid (from sql::<BigInt>("notes.rowid"))
     );
 
-    #[allow(
+    #[expect(
         clippy::items_after_statements,
         reason = "It's only relevant for a single call function"
     )]
@@ -525,16 +518,19 @@ pub(crate) fn get_note_sync(
     conn: &mut SqliteConnection,
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(NoteSyncUpdate, BlockNumber), NoteSyncError> {
+) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
     QueryParamNoteTagLimit::check(note_tags.len()).map_err(DatabaseError::from)?;
 
-    let (notes, last_included_block) =
-        select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+    let notes = select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+
+    if notes.is_empty() {
+        return Ok(None);
+    }
 
     let block_header =
         select_block_header_by_block_num(conn, notes.first().map(|note| note.block_num))?
             .ok_or(NoteSyncError::EmptyBlockHeadersTable)?;
-    Ok((NoteSyncUpdate { notes, block_header }, last_included_block))
+    Ok(Some(NoteSyncUpdate { notes, block_header }))
 }
 
 #[derive(Debug, Clone, PartialEq, Selectable, Queryable, QueryableByName)]
@@ -550,7 +546,6 @@ pub struct NoteSyncRecordRawRow {
     pub inclusion_path: Vec<u8>, // SparseMerklePath
 }
 
-#[allow(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
 impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<NoteSyncRecord, Self::Error> {
@@ -575,7 +570,7 @@ impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
 #[diesel(check_for_backend(Sqlite))]
 pub struct NoteDetailsRawRow {
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 }
 
@@ -601,7 +596,7 @@ pub struct NoteRecordWithScriptRawJoined {
     // #[diesel(embed)]
     // pub metadata: NoteMetadataRaw,
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 
     // #[diesel(embed)]
@@ -623,7 +618,7 @@ impl From<(NoteRecordRawRow, Option<Vec<u8>>)> for NoteRecordWithScriptRawJoined
             tag,
             attachment,
             assets,
-            inputs,
+            storage,
             serial_num,
             inclusion_path,
         } = note;
@@ -638,7 +633,7 @@ impl From<(NoteRecordRawRow, Option<Vec<u8>>)> for NoteRecordWithScriptRawJoined
             tag,
             attachment,
             assets,
-            inputs,
+            storage,
             serial_num,
             inclusion_path,
             script,
@@ -666,7 +661,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
             attachment,
             // metadata ^^^,
             assets,
-            inputs,
+            storage,
             serial_num,
             //details ^^^,
             inclusion_path,
@@ -675,7 +670,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         } = raw;
         let index = BlockNoteIndexRawRow { batch_index, note_index };
         let metadata = NoteMetadataRawRow { note_type, sender, tag, attachment };
-        let details = NoteDetailsRawRow { assets, inputs, serial_num };
+        let details = NoteDetailsRawRow { assets, storage, serial_num };
 
         let metadata = metadata.try_into()?;
         let committed_at = BlockNumber::from_raw_sql(committed_at)?;
@@ -684,16 +679,21 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         let script = script.map(|script| NoteScript::read_from_bytes(&script[..])).transpose()?;
         let details = if let NoteDetailsRawRow {
             assets: Some(assets),
-            inputs: Some(inputs),
+            storage: Some(storage),
             serial_num: Some(serial_num),
         } = details
         {
-            let inputs = NoteInputs::read_from_bytes(&inputs[..])?;
+            let storage = NoteStorage::read_from_bytes(&storage[..])?;
             let serial_num = Word::read_from_bytes(&serial_num[..])?;
-            let script = script.ok_or_else(|| {
-                DatabaseError::conversiont_from_sql::<NoteRecipient, DatabaseError, _>(None)
-            })?;
-            let recipient = NoteRecipient::new(serial_num, script, inputs);
+            let script =
+                script.ok_or_else(|| {
+                    miden_node_db::DatabaseError::conversiont_from_sql::<
+                        NoteRecipient,
+                        DatabaseError,
+                        _,
+                    >(None)
+                })?;
+            let recipient = NoteRecipient::new(serial_num, script, storage);
             let assets = NoteAssets::read_from_bytes(&assets[..])?;
             Some(NoteDetails::new(assets, recipient))
         } else {
@@ -730,7 +730,7 @@ pub struct NoteRecordRawRow {
     pub attachment: Vec<u8>,
 
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 
     pub inclusion_path: Vec<u8>,
@@ -746,16 +746,16 @@ pub struct NoteMetadataRawRow {
     attachment: Vec<u8>,
 }
 
-#[allow(clippy::cast_sign_loss)]
+#[expect(clippy::cast_sign_loss)]
 impl TryInto<NoteMetadata> for NoteMetadataRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<NoteMetadata, Self::Error> {
         let sender = AccountId::read_from_bytes(&self.sender[..])?;
         let note_type = NoteType::try_from(self.note_type as u32)
-            .map_err(DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
+            .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
         let attachment = NoteAttachment::read_from_bytes(&self.attachment)?;
-        Ok(NoteMetadata::new(sender, note_type, tag).with_attachment(attachment))
+        Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
     }
 }
 
@@ -767,14 +767,16 @@ pub struct BlockNoteIndexRawRow {
     pub note_index: i32, // index within batch
 }
 
-#[allow(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
+#[expect(clippy::cast_sign_loss, reason = "Indices are cast to usize for ease of use")]
 impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<BlockNoteIndex, Self::Error> {
         let batch_index = self.batch_index as usize;
         let note_index = self.note_index as usize;
         let index = BlockNoteIndex::new(batch_index, note_index).ok_or_else(|| {
-            DatabaseError::conversiont_from_sql::<BlockNoteIndex, DatabaseError, _>(None)
+            miden_node_db::DatabaseError::conversiont_from_sql::<BlockNoteIndex, DatabaseError, _>(
+                None,
+            )
         })?;
         Ok(index)
     }
@@ -791,7 +793,6 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -822,7 +823,6 @@ pub(crate) fn insert_notes(
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[allow(clippy::too_many_lines)]
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -868,7 +868,7 @@ pub struct NoteInsertRow {
     pub consumed_at: Option<i64>,
     pub nullifier: Option<Vec<u8>>,
     pub assets: Option<Vec<u8>>,
-    pub inputs: Option<Vec<u8>>,
+    pub storage: Option<Vec<u8>>,
     pub script_root: Option<Vec<u8>>,
     pub serial_num: Option<Vec<u8>>,
 }
@@ -902,7 +902,7 @@ impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
             consumed_at: None::<i64>, // New notes are always unconsumed.
             nullifier: nullifier.as_ref().map(Nullifier::to_bytes),
             assets: note.details.as_ref().map(|d| d.assets().to_bytes()),
-            inputs: note.details.as_ref().map(|d| d.inputs().to_bytes()),
+            storage: note.details.as_ref().map(|d| d.storage().to_bytes()),
             script_root: note.details.as_ref().map(|d| d.script().root().to_bytes()),
             serial_num: note.details.as_ref().map(|d| d.serial_num().to_bytes()),
         }

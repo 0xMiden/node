@@ -6,6 +6,8 @@ use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
 
 mod commands;
+#[cfg(test)]
+mod tests;
 
 // COMMANDS
 // ================================================================================================
@@ -39,7 +41,7 @@ pub enum Command {
     ///
     /// This is the recommended way to run the node at the moment.
     #[command(subcommand)]
-    Bundled(commands::bundled::BundledCommand),
+    Bundled(Box<commands::bundled::BundledCommand>),
 }
 
 impl Command {
