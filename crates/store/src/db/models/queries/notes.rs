@@ -127,7 +127,7 @@ impl From<NetworkNoteType> for i32 {
 ///             notes
 ///         WHERE
 ///             (tag IN (?1) OR sender IN (?2)) AND
-///             block_num > ?3 AND
+///             block_num >= ?3 AND
 ///             block_num <= ?4
 ///         ORDER BY
 ///             block_num ASC
@@ -141,7 +141,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
     account_ids: &[AccountId],
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(Vec<NoteSyncRecord>, BlockNumber), DatabaseError> {
+) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
     QueryParamAccountIdLimit::check(account_ids.len())?;
     QueryParamNoteTagLimit::check(note_tags.len())?;
     let desired_note_tags = Vec::from_iter(note_tags.iter().map(|tag| *tag as i32));
@@ -158,14 +158,14 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
                     .eq_any(&desired_note_tags[..])
                     .or(schema::notes::sender.eq_any(&desired_senders[..])),
             )
-            .filter(schema::notes::committed_at.gt(start_block_num))
+            .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
             .limit(1)
             .get_result(conn)
             .optional()?
     else {
-        return Ok((Vec::new(), *block_range.end()));
+        return Ok(Vec::new());
     };
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
@@ -185,7 +185,7 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
             .get_results::<NoteSyncRecordRawRow>(conn)
             .map_err(DatabaseError::from)?;
 
-    Ok((vec_raw_try_into(notes)?, BlockNumber::from_raw_sql(desired_block_num)?))
+    vec_raw_try_into(notes)
 }
 
 /// Select all notes matching the given set of identifiers
@@ -518,16 +518,19 @@ pub(crate) fn get_note_sync(
     conn: &mut SqliteConnection,
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(NoteSyncUpdate, BlockNumber), NoteSyncError> {
+) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
     QueryParamNoteTagLimit::check(note_tags.len()).map_err(DatabaseError::from)?;
 
-    let (notes, last_included_block) =
-        select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+    let notes = select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+
+    if notes.is_empty() {
+        return Ok(None);
+    }
 
     let block_header =
         select_block_header_by_block_num(conn, notes.first().map(|note| note.block_num))?
             .ok_or(NoteSyncError::EmptyBlockHeadersTable)?;
-    Ok((NoteSyncUpdate { notes, block_header }, last_included_block))
+    Ok(Some(NoteSyncUpdate { notes, block_header }))
 }
 
 #[derive(Debug, Clone, PartialEq, Selectable, Queryable, QueryableByName)]

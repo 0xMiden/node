@@ -9,9 +9,8 @@ use miden_protocol::block::{
     BlockHeader,
     BlockNoteTree,
     BlockNumber,
-    BlockProof,
     FeeParameters,
-    ProvenBlock,
+    SignedBlock,
 };
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
@@ -35,23 +34,23 @@ pub struct GenesisState<S> {
 }
 
 /// A type-safety wrapper ensuring that genesis block data can only be created from
-/// [`GenesisState`] or validated from a [`ProvenBlock`] via [`GenesisBlock::try_from`].
-pub struct GenesisBlock(ProvenBlock);
+/// [`GenesisState`] or validated from a [`SignedBlock`] via [`GenesisBlock::try_from`].
+pub struct GenesisBlock(SignedBlock);
 
 impl GenesisBlock {
-    pub fn inner(&self) -> &ProvenBlock {
+    pub fn inner(&self) -> &SignedBlock {
         &self.0
     }
 
-    pub fn into_inner(self) -> ProvenBlock {
+    pub fn into_inner(self) -> SignedBlock {
         self.0
     }
 }
 
-impl TryFrom<ProvenBlock> for GenesisBlock {
+impl TryFrom<SignedBlock> for GenesisBlock {
     type Error = anyhow::Error;
 
-    fn try_from(block: ProvenBlock) -> anyhow::Result<Self> {
+    fn try_from(block: SignedBlock) -> anyhow::Result<Self> {
         anyhow::ensure!(
             block.header().block_num() == BlockNumber::GENESIS,
             "expected genesis block number (0), got {}",
@@ -152,15 +151,11 @@ impl<S: BlockSigner> GenesisState<S> {
             empty_transactions,
         );
 
-        let block_proof = BlockProof::new_dummy();
-
         // Sign and assert verification for sanity (no mismatch between frontend and backend signing
         // impls).
         let signature = self.block_signer.sign(&header).await?;
         assert!(signature.verify(header.commitment(), &self.block_signer.public_key()));
-        // SAFETY: Header and accounts should be valid by construction.
-        // No notes or nullifiers are created at genesis, which is consistent with the above empty
-        // block note tree root and empty nullifier tree root.
-        Ok(GenesisBlock(ProvenBlock::new_unchecked(header, body, signature, block_proof)))
+        let signed_block = SignedBlock::new(header, body, signature)?;
+        Ok(GenesisBlock(signed_block))
     }
 }

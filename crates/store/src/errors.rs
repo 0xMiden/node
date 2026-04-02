@@ -294,6 +294,11 @@ pub enum NoteSyncError {
     MmrError(#[from] MmrError),
     #[error("invalid block range")]
     InvalidBlockRange(#[from] InvalidBlockRange),
+    #[error("block_to ({block_to}) is greater than chain tip ({chain_tip})")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_to: BlockNumber,
+    },
     #[error("malformed note tags")]
     DeserializationFailed(#[from] ConversionError),
 }

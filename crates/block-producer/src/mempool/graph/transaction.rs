@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
@@ -75,6 +76,13 @@ pub struct TransactionGraph {
     /// These are batch or block proving errors in which the transaction was a part of. This is
     /// used to identify potentially buggy transactions that should be evicted.
     failures: HashMap<TransactionId, u32>,
+
+    /// Defines the transactions that belong to a user batch.
+    user_batch_txs: HashMap<BatchId, Vec<TransactionId>>,
+    /// A mapping of transactions to their user batch (if any).
+    ///
+    /// Inverse map of `user_batch_txs`.
+    txs_user_batch: HashMap<TransactionId, BatchId>,
 }
 
 impl TransactionGraph {
@@ -85,16 +93,100 @@ impl TransactionGraph {
         self.inner.append(tx)
     }
 
-    pub fn select_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
+    pub fn append_user_batch(
+        &mut self,
+        batch: &[Arc<AuthenticatedTransaction>],
+    ) -> Result<(), StateConflict> {
+        let batch_id =
+            BatchId::from_transactions(batch.iter().map(|tx| tx.raw_proven_transaction()));
+
+        // Append each transaction, but revert atomically on error.
+        for (idx, tx) in batch.iter().enumerate() {
+            if let Err(err) = self.append(Arc::clone(tx)) {
+                // We revert in reverse order because inner.revert panics if the node doesn't exist.
+                for tx in batch.iter().take(idx).rev() {
+                    let reverted = self.inner.revert_node_and_descendants(tx.id());
+                    assert_eq!(reverted.len(), 1);
+                    assert_eq!(&reverted[0], tx);
+                }
+
+                return Err(err);
+            }
+        }
+
+        let txs = batch.iter().map(GraphNode::id).collect::<Vec<_>>();
+        for tx in &txs {
+            self.txs_user_batch.insert(*tx, batch_id);
+        }
+        self.user_batch_txs.insert(batch_id, txs);
+
+        Ok(())
+    }
+
+    pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
+        self.select_user_batch().or_else(|| self.select_conventional_batch(budget))
+    }
+
+    fn select_user_batch(&mut self) -> Option<SelectedBatch> {
+        // Comb through all user batch candidates.
+        let candidate_batches = self
+            .inner
+            .selection_candidates()
+            .values()
+            .filter_map(|tx| self.txs_user_batch.get(&tx.id()))
+            .copied()
+            .collect::<HashSet<_>>();
+
+        'outer: for candidate in candidate_batches {
+            let mut selected = SelectedBatch::builder();
+
+            let txs = self
+                .user_batch_txs
+                .get(&candidate)
+                .cloned()
+                .expect("bi-directional mapping should be coherent");
+
+            for tx in txs {
+                let Some(tx) = self.inner.selection_candidates().get(&tx).copied() else {
+                    // Rollback this batch selection since it cannot complete.
+                    for tx in selected.txs.into_iter().rev() {
+                        self.inner.deselect(tx.id());
+                    }
+
+                    continue 'outer;
+                };
+                let tx = Arc::clone(tx);
+
+                self.inner.select_candidate(tx.id());
+                selected.push(tx);
+            }
+
+            assert!(!selected.is_empty(), "User batch should not be empty");
+            return Some(selected.build());
+        }
+
+        None
+    }
+
+    fn select_conventional_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
         let mut selected = SelectedBatch::builder();
 
-        while let Some((id, tx)) = self.inner.selection_candidates().pop_first() {
-            if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+        loop {
+            // Select arbitrary candidate which is _not_ part of a user batch.
+            let candidates = self.inner.selection_candidates();
+            let Some(candidate) =
+                candidates.values().find(|tx| !self.txs_user_batch.contains_key(&tx.id()))
+            else {
+                break;
+            };
+
+            if budget.check_then_subtract(candidate) == BudgetStatus::Exceeded {
                 break;
             }
 
-            selected.push(Arc::clone(tx));
-            self.inner.select_candidate(*id);
+            let candidate = Arc::clone(candidate);
+            self.inner.select_candidate(candidate.id());
+            selected.push(candidate);
         }
 
         if selected.is_empty() {
@@ -107,44 +199,77 @@ impl TransactionGraph {
 
     /// Reverts expired transactions and their descendants.
     ///
-    /// Only unselected transactions are considered; selected transactions are assumed to be in
-    /// committed blocks and should not be reverted.
+    /// This is because we don't distinguish between committed and selected transactions. If we
+    /// didn't ignore selected transactions here, we would revert committed ones as well, which
+    /// breaks the state.
     ///
     /// Returns the identifiers of transactions that were removed from the graph.
+    ///
+    /// # Note
+    ///
+    /// Since this _ignores_ selected transactions, and the purpose is to revert expired
+    /// transactions after a block is committed, the caller **must** ensure that selected
+    /// transactions from expired batches (and therefore not committed) are deselected
+    /// _before_ calling this function. i.e. first revert expired batches and deselect their
+    /// transactions, then call this.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
-        self.inner
-            .revert_expired_unselected(chain_tip)
-            .into_iter()
-            .map(|tx| tx.id())
-            .collect()
+        // We only revert transactions which are _not_ included in batches.
+        let mut to_revert = self.inner.expired(chain_tip);
+        to_revert.retain(|tx| !self.inner.is_selected(tx));
+
+        let mut reverted = HashSet::with_capacity(to_revert.len());
+
+        for tx in to_revert {
+            reverted.extend(&self.revert_tx_and_descendants(tx));
+        }
+
+        reverted
     }
 
     /// Reverts the given transaction and _all_ its descendants _IFF_ it is present in the graph.
     ///
     /// This includes batches that have been marked as proven.
     ///
-    /// Returns the reverted batches in the _reverse_ chronological order they were appended in.
+    /// Returns the reverted transactions in the _reverse_ chronological order they were appended
+    /// in.
     pub fn revert_tx_and_descendants(&mut self, transaction: TransactionId) -> Vec<TransactionId> {
-        // We need this check because `inner.revert..` panics if the node is unknown.
-        if !self.inner.contains(&transaction) {
-            return Vec::default();
-        }
+        // This is a bit more involved because we also need to atomically revert user batches.
+        let mut to_revert = vec![transaction];
+        let mut reverted = Vec::new();
 
-        let reverted = self
-            .inner
-            .revert_node_and_descendants(transaction)
-            .into_iter()
-            .map(|tx| tx.id())
-            .collect();
+        while let Some(revert) = to_revert.pop() {
+            // We need this check because `inner.revert..` panics if the node is unknown.
+            //
+            // And this transaction might already have been reverted as part of descendents in a
+            // prior loop.
+            if !self.inner.contains(&revert) {
+                continue;
+            }
 
-        for tx in &reverted {
-            self.failures.remove(tx);
+            let reverted_now = self.inner.revert_node_and_descendants(revert);
+
+            // Clean up book keeping and also revert transactions from the same user batch, if any.
+            for tx in &reverted_now {
+                self.failures.remove(&tx.id());
+
+                // Note that this is a pretty rough shod approach. We just dump the entire batch of
+                // transactions in, which will result in at least the current
+                // transaction being duplicated in `to_revert`. This isn't a concern
+                // though since we skip already processed transactions at the top of the loop.
+                if let Some(batch) = self.txs_user_batch.remove(&tx.id()) {
+                    if let Some(batch) = self.user_batch_txs.remove(&batch) {
+                        to_revert.extend(batch);
+                    }
+                }
+            }
+
+            reverted.extend(reverted_now.into_iter().map(|tx| tx.id()));
         }
 
         reverted
     }
 
-    /// Marks the batch's transactions are ready for selection again.
+    /// Marks the batch's transactions as ready for selection again.
     ///
     /// # Panics
     ///
@@ -160,6 +285,10 @@ impl TransactionGraph {
     ///
     /// This weeds out transactions which participate in batch and block failures, and might be the
     /// root cause.
+    ///
+    /// # Returns
+    ///
+    /// Returns the set of reverted transactions.
     pub fn increment_failure_count(
         &mut self,
         txs: impl Iterator<Item = TransactionId>,
@@ -183,15 +312,19 @@ impl TransactionGraph {
         reverted
     }
 
-    /// Prunes the given transaction.
+    /// Prunes the given given batch's transactions.
     ///
     /// # Panics
     ///
-    /// Panics if the transaction does not exist, or has existing ancestors in the transaction
+    /// Panics if the transactions do not exist, or has existing ancestors in the transaction
     /// graph.
-    pub fn prune(&mut self, transaction: TransactionId) {
-        self.inner.prune(transaction);
-        self.failures.remove(&transaction);
+    pub fn prune(&mut self, batch: &SelectedBatch) {
+        for tx in batch.transactions() {
+            self.inner.prune(tx.id());
+            self.failures.remove(&tx.id());
+            self.txs_user_batch.remove(&tx.id());
+        }
+        self.user_batch_txs.remove(&batch.id());
     }
 
     /// Number of transactions which have not been selected for inclusion in a batch.

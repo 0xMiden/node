@@ -28,7 +28,6 @@ use miden_protocol::block::{
     BlockNumber,
     FeeParameters,
     ProposedBlock,
-    ProvenBlock,
     SignedBlock,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
@@ -111,12 +110,12 @@ pub async fn seed_store(
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
     let data_directory =
         miden_node_store::DataDirectory::load(data_directory).expect("data directory should exist");
-    let genesis_header = genesis_state.into_block().await.unwrap().into_inner();
+    let genesis_block = genesis_state.into_block().await.unwrap().into_inner();
     let metrics = generate_blocks(
         num_accounts,
         public_accounts_percentage,
         faucet,
-        genesis_header,
+        genesis_block,
         &store_client,
         data_directory,
         accounts_filepath,
@@ -137,7 +136,7 @@ async fn generate_blocks(
     num_accounts: usize,
     public_accounts_percentage: u8,
     mut faucet: Account,
-    genesis_block: ProvenBlock,
+    genesis_block: SignedBlock,
     store_client: &StoreClient,
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
