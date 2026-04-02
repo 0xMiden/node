@@ -105,14 +105,6 @@ impl BlockStore {
         fs_err::write(block_path, data)
     }
 
-    pub async fn load_proof(&self, block_num: BlockNumber) -> std::io::Result<Option<Vec<u8>>> {
-        match tokio::fs::read(self.proof_path(block_num)).await {
-            Ok(data) => Ok(Some(data)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
     // PROOF STORAGE
     // --------------------------------------------------------------------------------------------
 
@@ -130,6 +122,14 @@ impl BlockStore {
         }
 
         tokio::fs::write(proof_path, data).await
+    }
+
+    pub async fn load_proof(&self, block_num: BlockNumber) -> std::io::Result<Option<Vec<u8>>> {
+        match tokio::fs::read(self.proof_path(block_num)).await {
+            Ok(data) => Ok(Some(data)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     // HELPER FUNCTIONS
