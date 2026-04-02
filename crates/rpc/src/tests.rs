@@ -222,6 +222,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
 
     // Start the store.
     let (store_runtime, data_directory, _genesis, store_addr) = start_store(store_listener).await;
+    wait_until_store_ready(&mut rpc_client).await;
 
     // Test: send request against RPC api and should succeed
     let response = send_request(&mut rpc_client).await;
@@ -234,6 +235,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
 
     // Test: restart the store and request should succeed
     let store_runtime = restart_store(store_addr, data_directory.path()).await;
+    wait_until_store_ready(&mut rpc_client).await;
     let response = send_request(&mut rpc_client).await;
     assert_eq!(response.unwrap().into_inner().block_header.unwrap().block_num, 0);
 
@@ -341,8 +343,9 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 #[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
     // Start the RPC.
-    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (mut ready_client, rpc_addr, store_listener) = start_rpc().await;
     let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    wait_until_store_ready(&mut ready_client).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -352,7 +355,9 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
             .without_metadata_version()
             .without_metadata_genesis()
             .without_otel_context_injection()
-            .connect_lazy::<miden_node_proto::clients::RpcClient>();
+            .connect::<miden_node_proto::clients::RpcClient>()
+            .await
+            .unwrap();
 
     let (account, account_delta) = build_test_account([0; 32]);
     let tx = build_test_proven_tx(&account, &account_delta);
@@ -364,10 +369,13 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
 
     let response = rpc_client.submit_proven_transaction(request).await;
 
+    // Shutdown to avoid runtime drop error.
+    shutdown_store(store_runtime).await;
+
     // Assert that the server rejected our request.
     assert!(response.is_err());
 
-    // Assert that the error is due to the invalid account delta commitment.
+    // Assert that the error is due to incompatible media types.
     let err = response.as_ref().unwrap_err().message();
     assert!(
         err.contains(
@@ -375,9 +383,6 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         ),
         "expected error message to reference incompatible content media types but got: {err:?}"
     );
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 /// Sends an arbitrary / irrelevant request to the RPC.
@@ -401,6 +406,16 @@ async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
     let channel = endpoint.connect().await.expect("Failed to build channel");
     let interceptor = Interceptor::default();
     RpcClient::with_interceptor(channel, interceptor)
+}
+
+async fn wait_until_store_ready(rpc_client: &mut RpcClient) {
+    for _ in 0..50 {
+        if send_request(rpc_client).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("store did not become ready in time");
 }
 
 /// Binds a socket on an available port, runs the RPC server on it, and
