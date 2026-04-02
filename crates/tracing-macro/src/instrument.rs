@@ -240,6 +240,7 @@ impl ComponentName {
 /// ```text
 /// InstrumentArgs ::= ε
 ///                  | COMPONENT ":" [element ("," element)*]
+///                  | COMPONENT
 ///                  | element ("," element)*
 ///
 /// COMPONENT  ::= ident | string-literal
@@ -263,6 +264,10 @@ impl Parse for InstrumentArgs {
         // Detect `COMPONENT:` prefix: an ident (or string literal) followed by `:`.
         // The colon disambiguates from `field = value` entries whose names also
         // start with an ident.
+        //
+        // A bare `COMPONENT` without a colon is also accepted when it is the only
+        // token in the attribute (e.g. `#[instrument(COMPONENT)]`), since no
+        // element can start with a lone ident that has no `=` or `.` after it.
         let component = if input.peek(LitStr) && input.peek2(Token![:]) {
             let lit: LitStr = input.parse()?;
             let _colon: Token![:] = input.parse()?;
@@ -271,6 +276,19 @@ impl Parse for InstrumentArgs {
             let ident: Ident = input.parse()?;
             let _colon: Token![:] = input.parse()?;
             Some(ComponentName::Ident(ident))
+        } else if input.peek(Ident) {
+            // Bare `COMPONENT` without colon: accepted only when the ident is the
+            // sole token (nothing follows it) and it is not a reserved keyword.
+            let forked = input.fork();
+            let ident: Ident = forked.parse().expect("peek verified Ident");
+            let is_keyword =
+                matches!(ident.to_string().as_str(), "ret" | "root" | "err" | "report");
+            if !is_keyword && forked.is_empty() {
+                let ident: Ident = input.parse()?;
+                Some(ComponentName::Ident(ident))
+            } else {
+                None
+            }
         } else {
             None
         };

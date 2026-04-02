@@ -17,3 +17,4 @@
 account.id
 nullifier.id
 block.number
+transaction.id

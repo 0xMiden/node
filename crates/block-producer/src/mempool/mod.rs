@@ -203,7 +203,7 @@ impl Mempool {
     /// # Errors
     ///
     /// Returns an error if the transaction's initial conditions don't match the current state.
-    #[instrument(COMPONENT:)]
+    #[instrument(COMPONENT: transaction.id = %tx.id())]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,

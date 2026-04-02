@@ -67,7 +67,7 @@ impl BlockStore {
         }
     }
 
-    #[instrument(COMPONENT: err)]
+    #[instrument(COMPONENT: err, block.number = %block_num)]
     pub async fn save_block(
         &self,
         block_num: BlockNumber,

@@ -20,7 +20,7 @@
 //! 1. **Component target** – instead of `target = "some::module"` you write a short component name
 //!    once (`rpc:`, `store:`, …) and it becomes the span target.
 //! 2. **`report` keyword** – a richer alternative to `tracing`'s `err` that walks the full
-//!    [`ErrorReport`] chain, emits a structured `error!` event *and* sets the OpenTelemetry span
+//!    `ErrorReport` chain, emits a structured `error!` event *and* sets the OpenTelemetry span
 //!    status to `Error`.
 //! 3. **OpenTelemetry field allowlist** – only names declared in `allowlist.txt` may appear as
 //!    field keys, preventing accidental cardinality explosions in the metrics / trace backend.
@@ -50,10 +50,11 @@
 //! |---|---|---|---|
 //! | *(empty)* | any | ✓ | Thin wrapper around `#[tracing::instrument]` |
 //! | `rpc:` *(no elements)* | any | ✓ | Sets `target = "rpc"`, no field/ret tracking |
+//! | `rpc` *(bare, no colon)* | any | ✓ | Same as `rpc:` – colon is optional when no elements follow |
 //! | `rpc: ret` | any | ✓ | Records return value via `tracing::instrument`'s `ret` |
 //! | `rpc: err` | `Result<_, E>` | ✓ | Delegates to `tracing::instrument`'s `err` (single-level `Display`/`Debug`) |
 //! | `rpc: err` | non-`Result` | ✗ | Compile error: `err` requires `Result` return |
-//! | `rpc: report` | `Result<_, E>` | ✓ | Walks full error chain via [`ErrorReport`], emits `error!` event, sets OpenTelemetry span status |
+//! | `rpc: report` | `Result<_, E>` | ✓ | Walks full error chain via `ErrorReport`, emits `error!` event, sets OpenTelemetry span status |
 //! | `rpc: report` | non-`Result` | ✗ | Compile error: `report` requires `Result` return |
 //! | `rpc: err, report` | any | ✗ | Compile error: mutually exclusive |
 //! | `rpc: report, err` | any | ✗ | Compile error: mutually exclusive (order does not matter) |
@@ -77,7 +78,7 @@
 //! | | `err` | `report` |
 //! |---|---|---|
 //! | Mechanism | delegates to `tracing::instrument`'s built-in `err` | custom body wrapper |
-//! | Error formatting | top-level `Display` or `Debug` only | full chain via [`ErrorReport::as_report`] (every `source()` cause) |
+//! | Error formatting | top-level `Display` or `Debug` only | full chain via `ErrorReport::as_report` (every `source()` cause) |
 //! | OpenTelemetry span status | not set | set to `Error` with the full report string |
 //! | tracing event level | `ERROR` (tracing default) | `ERROR` |
 //!
@@ -163,13 +164,14 @@ mod log;
 #[cfg(test)]
 mod tests;
 
-/// Instruments a function with a [`tracing`] span, with node-specific extensions.
+/// Instruments a function with a `tracing` span, with node-specific extensions.
 ///
 /// # Syntax
 ///
 /// ```text
 /// #[instrument]
-/// #[instrument( [COMPONENT:] [element, …] )]
+/// #[instrument( [COMPONENT[:]] [element, …] )]
+/// #[instrument( COMPONENT )]
 ///
 /// COMPONENT   ::= ident | "string literal"
 /// element     ::= field-entry | "ret" | "err" | "report"
@@ -179,11 +181,13 @@ mod tests;
 ///
 /// # Component
 ///
-/// An optional `IDENT:` or `"literal":` prefix sets the span's `target`:
+/// An optional `IDENT:` or `"literal":` prefix sets the span's `target`.
+/// The trailing colon is optional when no elements follow the component name:
 ///
 /// ```rust,ignore
 /// #[instrument(rpc: report)]
 /// #[instrument("block-producer": err)]
+/// #[instrument(rpc)]   // colon omitted – same as rpc:
 /// ```
 ///
 /// # Keywords
@@ -192,7 +196,7 @@ mod tests;
 /// - **`err`** – on `Err`, emits a tracing event with the top-level error message. Delegates to
 ///   `tracing::instrument`'s built-in `err`.  Requires `Result` return.
 /// - **`report`** – on `Err`, emits an `error!` event containing the *full error chain* via
-///   [`miden_node_utils::ErrorReport`] and sets the OpenTelemetry span status to `Error`.  Requires
+///   `miden_node_utils::ErrorReport` and sets the OpenTelemetry span status to `Error`.  Requires
 ///   `Result` return.  Mutually exclusive with `err`.
 ///
 /// # Field entries
@@ -214,9 +218,13 @@ mod tests;
 /// #[instrument]
 /// fn simple() {}
 ///
-/// // Component only – sets target = "rpc", no fields.
+/// // Component only – sets target = "rpc", no fields. Colon is optional.
 /// #[instrument(rpc:)]
 /// fn also_simple() {}
+///
+/// // Bare component without colon – same as above.
+/// #[instrument(rpc)]
+/// fn bare_component() {}
 ///
 /// // Track return value on any function.
 /// #[instrument(rpc: ret)]
@@ -224,26 +232,26 @@ mod tests;
 ///
 /// // Standard error tracking (top-level message only).
 /// #[instrument(store: err)]
-/// async fn load() -> Result<Data, LoadError> { … }
+/// async fn load() -> Result<Data, LoadError> {}
 ///
 /// // Full error chain + OpenTelemetry span status.
 /// #[instrument(rpc: report)]
-/// async fn apply_block(&self, block: Block) -> Result<(), ApplyBlockError> { … }
+/// async fn apply_block(&self, block: Block) -> Result<(), ApplyBlockError> {}
 ///
 /// // Return value tracking combined with full error chain.
 /// #[instrument(rpc: ret, report)]
-/// async fn fetch_count() -> Result<u32, FetchError> { … }
+/// async fn fetch_count() -> Result<u32, FetchError> {}
 ///
 /// // Attach an allowlisted OpenTelemetry field (Display format).
 /// #[instrument(rpc: account.id = %account_id, report)]
-/// async fn get_account(account_id: AccountId) -> Result<Account, RpcError> { … }
+/// async fn get_account(account_id: AccountId) -> Result<Account, RpcError> {}
 ///
 /// // Multiple fields.
 /// #[instrument(store: account.id = %account_id, block.number = block_num, err)]
 /// async fn get_account_at(
 ///     account_id: AccountId,
 ///     block_num: BlockNumber,
-/// ) -> Result<Account, StoreError> { … }
+/// ) -> Result<Account, StoreError> {}
 /// ```
 #[proc_macro_attribute]
 pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {

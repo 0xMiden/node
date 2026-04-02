@@ -17,6 +17,10 @@ fn bare() {}
 #[instrument(rpc:)]
 fn component_only() {}
 
+// bare component without colon – same as rpc:
+#[instrument(rpc)]
+fn component_no_colon() {}
+
 // ret on a plain fn
 #[instrument(rpc: ret)]
 fn with_ret() -> u32 { 42 }
