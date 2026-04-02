@@ -234,7 +234,7 @@ impl api_server::Api for RpcService {
 
     async fn get_block_by_number(
         &self,
-        request: Request<proto::blockchain::BlockNumber>,
+        request: Request<proto::blockchain::BlockRequest>,
     ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
         let request = request.into_inner();
 

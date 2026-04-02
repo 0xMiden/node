@@ -40,8 +40,8 @@ service Api {
     // Returns the latest details of the specified account.
     rpc GetAccount(AccountRequest) returns (AccountResponse) {}
 
-    // Returns raw block data for the specified block number.
-    rpc GetBlockByNumber(blockchain.BlockNumber) returns (blockchain.MaybeBlock) {}
+    // Returns raw block data for the specified block number, optionally including the block proof.
+    rpc GetBlockByNumber(blockchain.BlockRequest) returns (blockchain.MaybeBlock) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.

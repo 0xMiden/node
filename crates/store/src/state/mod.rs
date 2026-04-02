@@ -855,6 +855,18 @@ impl State {
         })
     }
 
+    /// Returns the effective chain tip for the given finality level.
+    ///
+    /// - [`Finality::Committed`]: returns the latest committed block number (from in-memory MMR).
+    /// - [`Finality::Proven`]: returns the latest proven-in-sequence block number (cached via watch
+    ///   channel, updated by the proof scheduler).
+    pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
+        match finality {
+            Finality::Committed => self.inner.read().await.latest_block_num(),
+            Finality::Proven => *self.proven_tip_rx.borrow(),
+        }
+    }
+
     /// Loads a block from the block store. Return `Ok(None)` if the block is not found.
     pub async fn load_block(
         &self,
@@ -866,16 +878,15 @@ impl State {
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
-    /// Returns the effective chain tip for the given finality level.
-    ///
-    /// - [`Finality::Committed`]: returns the latest committed block number (from in-memory MMR).
-    /// - [`Finality::Proven`]: returns the latest proven-in-sequence block number (cached via watch
-    ///   channel, updated by the proof scheduler).
-    pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
-        match finality {
-            Finality::Committed => self.inner.read().await.latest_block_num(),
-            Finality::Proven => *self.proven_tip_rx.borrow(),
+    /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
+    pub async fn load_proof(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<Vec<u8>>, DatabaseError> {
+        if block_num > self.chain_tip(Finality::Proven).await {
+            return Ok(None);
         }
+        self.block_store.load_proof(block_num).await.map_err(Into::into)
     }
 
     /// Emits metrics for each database table's size.

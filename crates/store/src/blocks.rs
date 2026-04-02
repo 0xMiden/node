@@ -1,3 +1,12 @@
+//! File-based storage for raw block data and block proofs.
+//!
+//! Block data is stored under `{store_dir}/{epoch:04x}/block_{block_num:08x}.dat`, and proof data
+//! for proven blocks is stored under `{store_dir}/{epoch:04x}/proof_{block_num:08x}.dat`.
+//!
+//! The epoch is derived from the 16 most significant bits of the block number (i.e.,
+//! `block_num >> 16`), and both the epoch and block number are formatted as zero-padded
+//! hexadecimal strings.
+
 use std::io::ErrorKind;
 use std::ops::Not;
 use std::path::PathBuf;
@@ -113,6 +122,14 @@ impl BlockStore {
         }
 
         tokio::fs::write(proof_path, data).await
+    }
+
+    pub async fn load_proof(&self, block_num: BlockNumber) -> std::io::Result<Option<Vec<u8>>> {
+        match tokio::fs::read(self.proof_path(block_num)).await {
+            Ok(data) => Ok(Some(data)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     // HELPER FUNCTIONS
