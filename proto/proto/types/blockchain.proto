@@ -21,13 +21,6 @@ message ProposedBlock {
     bytes proposed_block = 1;
 }
 
-// Represents a block or nothing.
-message MaybeBlock {
-    // The requested block data encoded using [miden_serde_utils::Serializable] implementation for
-    // [miden_protocol::block::Block].
-    optional bytes block = 1;
-}
-
 // Request for retrieving a block by its number, optionally including the block proof.
 message BlockRequest {
     // The block number of the target block.
@@ -38,9 +31,9 @@ message BlockRequest {
 
 // Response containing the block data and optionally its proof.
 //
-// Returns empty values for both blocks and proofs that are not found. Some blocks may not yet be
+// Contains empty values for both blocks and proofs that are not found. Some blocks may not yet be
 // proven so it is possible to retrieve a block without a proof even if the proof has been requested.
-message Block {
+message MaybeBlock {
     // The requested block data encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::block::SignedBlock].
     optional bytes block = 1;
