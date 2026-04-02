@@ -238,8 +238,8 @@ impl rpc_server::Rpc for StoreApi {
 
     async fn get_block_by_number(
         &self,
-        request: Request<proto::blockchain::GetBlockByNumberRequest>,
-    ) -> Result<Response<proto::blockchain::GetBlockByNumberResponse>, Status> {
+        request: Request<proto::blockchain::BlockRequest>,
+    ) -> Result<Response<proto::blockchain::Block>, Status> {
         let request = request.into_inner();
 
         debug!(target: COMPONENT, ?request);
@@ -255,7 +255,7 @@ impl rpc_server::Rpc for StoreApi {
             None
         };
 
-        Ok(Response::new(proto::blockchain::GetBlockByNumberResponse { block, proof }))
+        Ok(Response::new(proto::blockchain::Block { block, proof }))
     }
 
     async fn get_account(
