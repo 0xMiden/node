@@ -93,6 +93,7 @@ impl Store {
             block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_options.request_timeout,
             "Loading database");
 
+        // Load initial state.
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
         let (state, tx_proven_tip) =
@@ -100,6 +101,7 @@ impl Store {
                 .await
                 .context("failed to load state")?;
 
+        // Spawn proof scheduler.
         let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
             &state,
             self.block_prover_url,
@@ -108,6 +110,7 @@ impl Store {
         )
         .await;
 
+        // Spawn gRPC Servers.
         let mut join_set = Self::spawn_grpc_servers(
             state,
             chain_tip_sender,
@@ -117,6 +120,7 @@ impl Store {
             self.block_producer_listener,
         )?;
 
+        // Wait on any workload to finish / error out.
         let service = async move {
             join_set.join_next().await.expect("joinset is not empty")?.map_err(Into::into)
         };
