@@ -90,7 +90,7 @@ impl NetworkTransactionBuilder {
     /// Runs the network transaction builder event loop until a fatal error occurs.
     ///
     /// If a `TcpListener` is provided, a gRPC server is also spawned to expose the
-    /// `GetNoteError` endpoint.
+    /// `GetNetworkNoteStatus` endpoint.
     ///
     /// This method:
     /// 1. Optionally starts a gRPC server for note error queries
@@ -109,7 +109,7 @@ impl NetworkTransactionBuilder {
 
         // Start the gRPC server if a listener is provided.
         if let Some(listener) = listener {
-            let server = NtxBuilderRpcServer::new(self.db.clone());
+            let server = NtxBuilderRpcServer::new(self.db.clone(), self.config.max_note_attempts);
             join_set.spawn(async move {
                 server.serve(listener).await.context("ntx-builder gRPC server failed")
             });

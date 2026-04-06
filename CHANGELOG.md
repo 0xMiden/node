@@ -3,6 +3,7 @@
 ## v0.15.0 (TBD)
 
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
 
 ## v0.14.1 (2025-04-02)
 

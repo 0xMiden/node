@@ -40,17 +40,20 @@ pub struct NoteInsert {
     pub last_error: Option<String>,
     pub created_by: Option<Vec<u8>>,
     pub consumed_by: Option<Vec<u8>>,
+    pub committed_at: Option<i64>,
 }
 
-/// Row returned by `get_note_error()`.
+/// Row returned by `get_note_status()`.
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = schema::notes)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct NoteErrorRow {
+pub struct NoteStatusRow {
     pub note_id: Option<Vec<u8>>,
     pub last_error: Option<String>,
     pub attempt_count: i32,
     pub last_attempt: Option<i64>,
+    pub consumed_by: Option<Vec<u8>>,
+    pub committed_at: Option<i64>,
 }
 
 // QUERIES
@@ -86,6 +89,7 @@ pub fn insert_committed_notes(
             last_error: None,
             created_by: None,
             consumed_by: None,
+            committed_at: None,
         };
         diesel::replace_into(schema::notes::table).values(&row).execute(conn)?;
     }
@@ -94,9 +98,9 @@ pub fn insert_committed_notes(
 
 /// Returns notes available for consumption by a given account.
 ///
-/// Queries unconsumed notes (`consumed_by IS NULL`) for the account that have not exceeded the
-/// maximum attempt count, then applies backoff filtering in Rust via
-/// `InflightNetworkNote::is_available`.
+/// Queries unconsumed, uncommitted notes (`consumed_by IS NULL AND committed_at IS NULL`) for the
+/// account that have not exceeded the maximum attempt count, then applies backoff filtering in
+/// Rust via `InflightNetworkNote::is_available`.
 ///
 /// # Raw SQL
 ///
@@ -106,6 +110,7 @@ pub fn insert_committed_notes(
 /// WHERE
 ///     account_id = ?1
 ///     AND consumed_by IS NULL
+///     AND committed_at IS NULL
 ///     AND attempt_count < ?2
 /// ```
 #[expect(clippy::cast_possible_wrap)]
@@ -117,10 +122,12 @@ pub fn available_notes(
 ) -> Result<Vec<InflightNetworkNote>, DatabaseError> {
     let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
 
-    // Get unconsumed notes for this account that haven't exceeded the max attempt count.
+    // Get unconsumed, uncommitted notes for this account that haven't exceeded the max
+    // attempt count.
     let rows: Vec<NoteRow> = schema::notes::table
         .filter(schema::notes::account_id.eq(&account_id_bytes))
         .filter(schema::notes::consumed_by.is_null())
+        .filter(schema::notes::committed_at.is_null())
         .filter(schema::notes::attempt_count.lt(max_attempts as i32))
         .select(NoteRow::as_select())
         .load(conn)?;
@@ -176,22 +183,22 @@ pub fn notes_failed(
     Ok(())
 }
 
-/// Returns the latest execution error for a note identified by its note ID.
+/// Returns the status for a note identified by its note ID.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT note_id, last_error, attempt_count, last_attempt
+/// SELECT note_id, last_error, attempt_count, last_attempt, consumed_by
 /// FROM notes
 /// WHERE note_id = ?1
 /// ```
-pub fn get_note_error(
+pub fn get_note_status(
     conn: &mut SqliteConnection,
     note_id_bytes: &[u8],
-) -> Result<Option<NoteErrorRow>, DatabaseError> {
+) -> Result<Option<NoteStatusRow>, DatabaseError> {
     schema::notes::table
         .filter(schema::notes::note_id.eq(note_id_bytes))
-        .select(NoteErrorRow::as_select())
+        .select(NoteStatusRow::as_select())
         .first(conn)
         .optional()
         .map_err(Into::into)

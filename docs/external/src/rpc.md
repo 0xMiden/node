@@ -26,7 +26,7 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [SyncChainMmr](#syncchainmmr)
 - [SyncTransactions](#synctransactions)
 - [Status](#status)
-- [GetNoteError](#getnoteerror)
+- [GetNetworkNoteStatus](#getnetworknotestatus)
 
 <!--toc:end-->
 
@@ -232,9 +232,9 @@ Returns transaction records for specific accounts within a block range.
 
 Request the status of the node components. The response contains the current version of the RPC component and the connection status of the other components, including their versions and the number of the most recent block in the chain (chain tip).
 
-### GetNoteError
+### GetNetworkNoteStatus
 
-Returns the latest execution error for a network note, if any. This is useful for debugging notes that are failing to be consumed by the network transaction builder.
+Returns the current lifecycle status of a network note. The status indicates where the note is in its lifecycle: pending execution, processed (consumed by a transaction in the mempool), or discarded after too many failed attempts. The response also includes the latest execution error, if any.
 
 This endpoint is only available when the network transaction builder is enabled and connected. If it is not configured, the endpoint returns `UNAVAILABLE`.
 
@@ -249,10 +249,19 @@ message NoteId {
 #### Response
 
 ```protobuf
-message GetNoteErrorResponse {
-    optional string error = 1;                  // The latest error message, if any
-    uint32 attempt_count = 2;                   // Number of failed execution attempts
-    optional fixed32 last_attempt_block_num = 3; // Block number of the last failed attempt, if any
+enum NetworkNoteStatus {
+    NETWORK_NOTE_STATUS_UNSPECIFIED = 0;
+    NETWORK_NOTE_STATUS_PENDING = 1;    // Awaiting execution or being retried
+    NETWORK_NOTE_STATUS_PROCESSED = 2;  // Consumed by a transaction sent to block producer
+    NETWORK_NOTE_STATUS_DISCARDED = 3;  // Exceeded max retries, will not be retried
+    NETWORK_NOTE_STATUS_COMMITTED = 4;  // Consuming transaction committed on-chain
+}
+
+message GetNetworkNoteStatusResponse {
+    NetworkNoteStatus status = 1;                // Current lifecycle status
+    optional string last_error = 2;              // The latest error message, if any
+    uint32 attempt_count = 3;                    // Number of failed execution attempts
+    optional fixed32 last_attempt_block_num = 4; // Block number of the last failed attempt, if any
 }
 ```
 

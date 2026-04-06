@@ -195,11 +195,12 @@ fn block_committed_promotes_inflight_notes_to_committed() {
 }
 
 #[test]
-fn block_committed_deletes_consumed_notes() {
+fn block_committed_marks_consumed_notes_as_committed() {
     let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 10);
+    let note_id = note.as_note().id();
 
     // Insert a committed note.
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
@@ -214,8 +215,13 @@ fn block_committed_deletes_consumed_notes() {
     let header = mock_block_header(block_num);
     commit_block(conn, &[tx_id], block_num, &header).unwrap();
 
-    // Consumed note should be deleted.
-    assert_eq!(count_notes(conn), 0);
+    // Note should still exist but be marked as committed.
+    assert_eq!(count_notes(conn), 1);
+    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.committed_at, Some(conversions::block_num_to_i64(block_num)));
+    assert!(row.consumed_by.is_some());
 }
 
 #[test]
@@ -436,11 +442,11 @@ fn notes_failed_increments_attempt_count() {
     assert_eq!(last_attempt, Some(conversions::block_num_to_i64(block_num)));
 }
 
-// GET NOTE ERROR TESTS
+// GET NOTE STATUS TESTS
 // ================================================================================================
 
 #[test]
-fn get_note_error_returns_latest_error() {
+fn get_note_status_returns_latest_error() {
     let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
@@ -450,19 +456,20 @@ fn get_note_error_returns_latest_error() {
     // Insert as committed note.
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
 
-    // Initially no error.
-    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    // Initially no error, not consumed.
+    let result = get_note_status(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
     assert!(result.is_some());
     let row = result.unwrap();
     assert!(row.last_error.is_none());
     assert_eq!(row.attempt_count, 0);
+    assert!(row.consumed_by.is_none());
 
     // Mark as failed.
     let block_num = BlockNumber::from(5u32);
     notes_failed(conn, &[(note.as_note().nullifier(), test_note_error("first error"))], block_num)
         .unwrap();
 
-    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    let result = get_note_status(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
     let row = result.unwrap();
     assert_eq!(row.last_error.as_deref(), Some("first error"));
     assert_eq!(row.attempt_count, 1);
@@ -475,19 +482,52 @@ fn get_note_error_returns_latest_error() {
     )
     .unwrap();
 
-    let result = get_note_error(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
+    let result = get_note_status(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
     let row = result.unwrap();
     assert_eq!(row.last_error.as_deref(), Some("second error"));
     assert_eq!(row.attempt_count, 2);
 }
 
 #[test]
-fn get_note_error_returns_none_for_unknown_note() {
+fn get_note_status_returns_none_for_unknown_note() {
     let (conn, _dir) = &mut test_conn();
 
     let unknown_id = vec![0u8; 32];
-    let result = get_note_error(conn, &unknown_id).unwrap();
+    let result = get_note_status(conn, &unknown_id).unwrap();
     assert!(result.is_none());
+}
+
+#[test]
+fn get_note_status_includes_consumed_by() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 10);
+    let note_id = note.as_note().id();
+
+    // Insert as committed note.
+    insert_committed_notes(conn, &[note]).unwrap();
+
+    // Initially consumed_by is NULL.
+    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
+        .unwrap()
+        .unwrap();
+    assert!(row.consumed_by.is_none());
+
+    // Simulate consumption by setting consumed_by to a dummy transaction ID.
+    let dummy_tx_id = vec![42u8; 32];
+    diesel::update(
+        schema::notes::table
+            .filter(schema::notes::note_id.eq(conversions::note_id_to_bytes(&note_id))),
+    )
+    .set(schema::notes::consumed_by.eq(Some(&dummy_tx_id)))
+    .execute(conn)
+    .unwrap();
+
+    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.consumed_by, Some(dummy_tx_id));
 }
 
 // CHAIN STATE TESTS
