@@ -5,7 +5,7 @@ use miden_protocol::Word;
 use miden_protocol::block::BlockHeader;
 
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{AddTransactionError, StateConflict};
+use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
 use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
 
@@ -105,7 +105,7 @@ mod tx_expiration {
 
             assert_matches!(
                 result,
-                Err(AddTransactionError::Expired { .. }),
+                Err(MempoolSubmissionError::Expired { .. }),
                 "Failed run with expiration {i} and limit {limit}"
             );
         }
@@ -121,7 +121,7 @@ mod tx_expiration {
         let tx = Arc::new(tx);
         let result = uut.add_transaction(tx);
 
-        assert_matches!(result, Err(AddTransactionError::Expired { .. }));
+        assert_matches!(result, Err(MempoolSubmissionError::Expired { .. }));
     }
 }
 
@@ -235,7 +235,7 @@ fn duplicate_nullifiers_are_rejected() {
     // We overlap with one nullifier.
     assert_matches!(
         result,
-        Err(AddTransactionError::StateConflict(StateConflict::NullifiersAlreadyExist(..)))
+        Err(MempoolSubmissionError::StateConflict(StateConflict::NullifiersAlreadyExist(..)))
     );
 }
 
@@ -268,7 +268,9 @@ fn duplicate_output_notes_are_rejected() {
 
     assert_matches!(
         result,
-        Err(AddTransactionError::StateConflict(StateConflict::OutputNotesAlreadyExist(..)))
+        Err(MempoolSubmissionError::StateConflict(StateConflict::OutputNotesAlreadyExist(
+            ..
+        )))
     );
 }
 
@@ -301,9 +303,9 @@ fn unknown_unauthenticated_notes_are_rejected() {
 
     assert_matches!(
         result,
-        Err(AddTransactionError::StateConflict(StateConflict::UnauthenticatedNotesMissing(
-            ..
-        )))
+        Err(MempoolSubmissionError::StateConflict(
+            StateConflict::UnauthenticatedNotesMissing(..)
+        ))
     );
 }
 
@@ -403,7 +405,7 @@ mod account_state {
 
         assert_matches!(
             result,
-            Err(AddTransactionError::StateConflict(
+            Err(MempoolSubmissionError::StateConflict(
                 StateConflict::AccountCommitmentMismatch { .. }
             ))
         );
@@ -433,7 +435,7 @@ mod account_state {
         let result = uut.add_transaction(tx);
         assert_matches!(
             result,
-            Err(AddTransactionError::StateConflict(
+            Err(MempoolSubmissionError::StateConflict(
                 StateConflict::AccountCommitmentMismatch { .. }
             ))
         );
@@ -483,7 +485,7 @@ mod new_account {
         let result = uut.add_transaction(tx);
         assert_matches!(
             result,
-            Err(AddTransactionError::StateConflict(
+            Err(MempoolSubmissionError::StateConflict(
                 StateConflict::AccountCommitmentMismatch { .. }
             ))
         );
@@ -509,7 +511,7 @@ mod new_account {
         let result = uut.add_transaction(tx);
         assert_matches!(
             result,
-            Err(AddTransactionError::StateConflict(
+            Err(MempoolSubmissionError::StateConflict(
                 StateConflict::AccountCommitmentMismatch { .. }
             ))
         );

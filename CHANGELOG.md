@@ -1,6 +1,14 @@
 # Changelog
 
-## v0.14.0 (TBD)
+## v0.15.0 (TBD)
+
+- [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+
+## v0.14.1 (2025-04-02)
+
+- Fixed batch building issue with unauthenticated notes consumed in the same batch as they were created ([#1875](https://github.com/0xMiden/node/issues/1875)).
+
+## v0.14.0 (2025-04-01)
 
 ### Enhancements
 
@@ -17,10 +25,11 @@
 - Introduce `SyncChainMmr` RPC endpoint to sync chain MMR deltas within specified block ranges ([#1591](https://github.com/0xMiden/node/issues/1591)).
 - Fixed `TransactionHeader` serialization for row insertion on database & fixed transaction cursor on retrievals ([#1701](https://github.com/0xMiden/node/issues/1701)).
 - Added KMS signing support in validator ([#1677](https://github.com/0xMiden/node/pull/1677)).
+- Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746), [#1865](https://github.com/0xMiden/node/pull/1865)).
 - Added finality field for `SyncChainMmr` requests ([#1725](https://github.com/0xMiden/miden-node/pull/1725)).
-- Added per-IP gRPC rate limiting across services as well as global concurrent connection limit ([#1746](https://github.com/0xMiden/node/issues/1746)).
 - Added limit to execution cycles for a transaction network, configurable through CLI args (`--ntx-builder.max-tx-cycles`) ([#1801](https://github.com/0xMiden/node/issues/1801)).
 - Added monitor version and network name to the network monitor dashboard, network name is configurable via `--network-name` / `MIDEN_MONITOR_NETWORK_NAME` ([#1838](https://github.com/0xMiden/node/pull/1838)).
+- Users can now submit atomic transaction batches via `SubmitBatch` gRPC endpoint ([#1846](https://github.com/0xMiden/node/pull/1846)).
 
 ### Changes
 
@@ -33,7 +42,7 @@
 - Add #[track_caller] to tracing/logging helpers ([#1651](https://github.com/0xMiden/node/pull/1651)).
 - Added support for generic account loading at genesis ([#1624](https://github.com/0xMiden/node/pull/1624)).
 - Improved tracing span fields ([#1650](https://github.com/0xMiden/node/pull/1650))
- - Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/node/pull/1662)).
+- Replaced NTX Builder's in-memory state management with SQLite-backed persistence; account states, notes, and transaction effects are now stored in the database and inflight state is purged on startup ([#1662](https://github.com/0xMiden/node/pull/1662)).
 - [BREAKING] Reworked `miden-remote-prover`, removing the `worker`/`proxy` distinction and simplifying to a `worker` with a request queue ([#1688](https://github.com/0xMiden/node/pull/1688)).
 - [BREAKING] Renamed `NoteRoot` protobuf message used in `GetNoteScriptByRoot` gRPC endpoints into `NoteScriptRoot` ([#1722](https://github.com/0xMiden/node/pull/1722)).
 - NTX Builder actors now deactivate after being idle for a configurable idle timeout (`--ntx-builder.idle-timeout`, default 5 min) and are re-activated when new notes target their account ([#1705](https://github.com/0xMiden/node/pull/1705)).
@@ -43,6 +52,7 @@
 - NTX Builder now deactivates network accounts which crash repeatedly (configurable via `--ntx-builder.max-account-crashes`, default 10) ([#1712](https://github.com/0xMiden/miden-node/pull/1712)).
 - Removed gRPC reflection v1-alpha support ([#1795](https://github.com/0xMiden/node/pull/1795)).
 - [BREAKING] Rust requirement bumped from `v1.91` to `v1.93` ([#1803](https://github.com/0xMiden/node/pull/1803)).
+- [BREAKING] Updated `SyncNotes` endpoint to returned multiple note updates (([#1843](https://github.com/0xMiden/node/pull/1843))).
 - [BREAKING] Refactored `NoteSyncRecord` to returned a fixed-size `NoteMetadataHeader` ([#1837](https://github.com/0xMiden/node/pull/1837)).
 
 ### Fixes
@@ -54,6 +64,10 @@
 - Fixed accept header version negotiation rejecting all pre-release versions; pre-release label matching is now lenient, accepting any numeric suffix within the same label (e.g. `alpha.3` accepts `alpha.1`) ([#1755](https://github.com/0xMiden/node/pull/1755)).
 - Fixed `GetAccount` returning an internal error for `AllEntries` requests on storage maps where all entries are in a single block (e.g. genesis accounts) ([#1816](https://github.com/0xMiden/node/pull/1816)).
 - Fixed `GetAccount` returning empty storage map entries instead of `too_many_entries` when a genesis account's map exceeds the pagination limit ([#1816](https://github.com/0xMiden/node/pull/1816)).
+
+## v0.13.9 (2026-03-26)
+
+- Network transaction actors now share the same gRPC clients, limiting the number of file descriptors being used ([#1808](https://github.com/0xMiden/node/issues/1808)).
 
 ## v0.13.8 (2026-03-12)
 
@@ -209,6 +223,9 @@
 - Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/node/pull/1508)).
 - Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/node/pull/1508)).
 - Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/node/pull/1508)).
+- Network transaction builder now marks notes from any error as failed ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
+- Network transaction builder now adheres to note limit set by protocol ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
+- Race condition resolved in the store's `apply_block` ([#1508](https://github.com/0xMiden/miden-node/pull/1508)).
   - This presented as a database locked error and in rare cases a desync between the mempool and store.
 
 ## v0.12.6 (2026-01-12)

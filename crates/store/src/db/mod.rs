@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
@@ -260,9 +261,8 @@ impl Db {
         // Run migrations.
         apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
-        // Insert genesis block data. Deconstruct into signed block.
-        let (header, body, signature, _proof) = genesis.into_inner().into_parts();
-        let genesis_block = SignedBlock::new_unchecked(header, body, signature);
+        // Insert genesis block data.
+        let genesis_block = genesis.into_inner();
         conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[], None))
             .context("failed to insert genesis block")?;
         Ok(())
@@ -487,10 +487,10 @@ impl Db {
     pub async fn get_note_sync(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-        note_tags: Vec<u32>,
-    ) -> Result<(NoteSyncUpdate, BlockNumber), NoteSyncError> {
+        note_tags: Arc<[u32]>,
+    ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
         self.transact("notes sync task", move |conn| {
-            queries::get_note_sync(conn, note_tags.as_slice(), block_range)
+            queries::get_note_sync(conn, &note_tags, block_range)
         })
         .await
     }
@@ -609,7 +609,7 @@ impl Db {
     ///
     /// This includes the genesis block, which is not technically proven, but treated as such.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
+    pub async fn proven_chain_tip(&self) -> Result<BlockNumber> {
         self.transact("select latest proven block num", |conn| {
             models::queries::select_latest_proven_in_sequence_block_num(conn)
         })

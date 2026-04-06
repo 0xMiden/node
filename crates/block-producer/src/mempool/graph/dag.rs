@@ -199,28 +199,13 @@ where
         reverted
     }
 
-    /// Reverts nodes (and their descendants) which have expired and which are _not_ selected.
-    ///
-    /// Returns the reverted nodes in **reverse** chronological order.
-    pub fn revert_expired_unselected(&mut self, chain_tip: BlockNumber) -> Vec<N> {
-        let mut reverted = Vec::default();
-
-        let expired = self
-            .nodes
+    /// Returns the set of nodes that expired at the given block height.
+    pub fn expired(&self, chain_tip: BlockNumber) -> HashSet<N::Id> {
+        self.nodes
             .iter()
-            .filter(|(id, _)| !self.is_selected(id))
             .filter_map(|(id, node)| (node.expires_at() <= chain_tip).then_some(id))
             .copied()
-            .collect::<HashSet<_>>();
-
-        for id in expired {
-            // Its possible the node is already reverted by a previous loop iteration.
-            if self.contains(&id) {
-                reverted.extend(self.revert_node_and_descendants(id));
-            }
-        }
-
-        reverted
+            .collect()
     }
 
     /// Returns `true` if the given node is a leaf node aka has no children.
@@ -228,19 +213,19 @@ where
         self.edges.children_of(id).is_empty()
     }
 
-    /// Removes the node _IFF_ it has no ancestor nodes.
+    /// Removes the node _IFF_ it has no ancestor nodes and returns the pruned node.
     ///
     /// # Panics
     ///
     /// Panics if this node has any ancestor nodes, or if this node was not selected.
-    pub fn prune(&mut self, id: N::Id) {
+    pub fn prune(&mut self, id: N::Id) -> N {
         assert!(
             self.edges.parents_of(&id).is_empty(),
             "Cannot prune node {id} as it still has ancestors",
         );
         assert!(self.selected.contains(&id), "Cannot prune node {id} as it was not selected");
 
-        self.remove(id);
+        self.remove(id)
     }
 
     /// Unconditionally removes the given node from the graph, deleting its edges and state.
@@ -330,31 +315,5 @@ mod tests {
         let candidates_after_parent: Vec<u32> =
             graph.selection_candidates().keys().map(|id| **id).collect();
         assert_eq!(candidates_after_parent, vec![2]);
-    }
-
-    #[test]
-    fn revert_expired_unselected_removes_descendants() {
-        let mut graph = Graph::<TestNode>::default();
-
-        graph
-            .append(
-                TestNode::new(1).with_output_notes([1]).with_expires_at(BlockNumber::from(2u32)),
-            )
-            .unwrap();
-        graph
-            .append(
-                TestNode::new(2)
-                    .with_output_notes([2])
-                    .with_unauthenticated_notes([1])
-                    .with_expires_at(BlockNumber::from(3u32)),
-            )
-            .unwrap();
-
-        let reverted = graph.revert_expired_unselected(BlockNumber::from(3u32));
-        let reverted_ids: Vec<u32> = reverted.into_iter().map(|node| node.id).collect();
-
-        assert_eq!(reverted_ids, vec![2, 1]);
-        assert_eq!(graph.node_count(), 0);
-        assert_eq!(graph.selection_candidates().len(), 0);
     }
 }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::TransactionHeader;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -12,6 +11,7 @@ use crate::test_utils::MockProvenTxBuilder;
 use crate::test_utils::batch::TransactionBatchConstructor;
 
 mod add_transaction;
+mod add_user_batch;
 
 impl Mempool {
     /// Returns an empty [`Mempool`] and a perfect clone intended for use as the Unit Under Test and
@@ -71,15 +71,15 @@ fn children_of_failed_batches_are_ignored() {
     let (mut uut, _) = Mempool::for_tests();
     uut.add_transaction(txs[0].clone()).unwrap();
     let parent_batch = uut.select_batch().unwrap();
-    assert_eq!(parent_batch.txs(), vec![txs[0].clone()]);
+    assert_eq!(parent_batch.transactions(), vec![txs[0].clone()]);
 
     uut.add_transaction(txs[1].clone()).unwrap();
     let child_batch_a = uut.select_batch().unwrap();
-    assert_eq!(child_batch_a.txs(), vec![txs[1].clone()]);
+    assert_eq!(child_batch_a.transactions(), vec![txs[1].clone()]);
 
     uut.add_transaction(txs[2].clone()).unwrap();
     let next_batch = uut.select_batch().unwrap();
-    assert_eq!(next_batch.txs(), vec![txs[2].clone()]);
+    assert_eq!(next_batch.transactions(), vec![txs[2].clone()]);
 
     // Child batch jobs are now dangling.
     uut.rollback_batch(parent_batch.id());
@@ -118,7 +118,7 @@ fn failed_batch_transactions_are_requeued() {
     reference.add_transaction(txs[2].clone()).unwrap();
     reference
         .transactions
-        .increment_failure_count(failed_batch.txs().iter().map(|tx| tx.id()));
+        .increment_failure_count(failed_batch.transactions().iter().map(|tx| tx.id()));
 
     assert_eq!(uut, reference);
 }
@@ -350,9 +350,9 @@ fn pass_through_txs_on_an_empty_account() {
 
     // Ensure the batch contains a,b and final. Final should also be the last tx since its order
     // is required.
-    assert!(batch.txs().contains(&tx_pass_through_a));
-    assert!(batch.txs().contains(&tx_pass_through_b));
-    assert_eq!(batch.txs().last().unwrap(), &tx_final);
+    assert!(batch.transactions().contains(&tx_pass_through_a));
+    assert!(batch.transactions().contains(&tx_pass_through_b));
+    assert_eq!(batch.transactions().last().unwrap(), &tx_final);
 }
 
 /// Tests that pass through transactions retain parent-child relations based on notes, even though
@@ -390,11 +390,11 @@ fn pass_through_txs_with_note_dependencies() {
     // relationship was correctly inferred by the mempool.
     uut.add_transaction(tx_pass_through_a.clone()).unwrap();
     let batch_a = uut.select_batch().unwrap();
-    assert_eq!(batch_a.txs(), std::slice::from_ref(&tx_pass_through_a));
+    assert_eq!(batch_a.transactions(), std::slice::from_ref(&tx_pass_through_a));
 
     uut.add_transaction(tx_pass_through_b.clone()).unwrap();
     let batch_b = uut.select_batch().unwrap();
-    assert_eq!(batch_b.txs(), std::slice::from_ref(&tx_pass_through_b));
+    assert_eq!(batch_b.transactions(), std::slice::from_ref(&tx_pass_through_b));
 
     // Rollback (a) and check that (b) also reverted by comparing to the reference.
     uut.rollback_batch(batch_a.id());
@@ -402,7 +402,44 @@ fn pass_through_txs_with_note_dependencies() {
     reference.add_transaction(tx_pass_through_b).unwrap();
     reference
         .transactions
-        .increment_failure_count(batch_a.txs().iter().map(|tx| tx.id()));
+        .increment_failure_count(batch_a.transactions().iter().map(|tx| tx.id()));
 
     assert_eq!(uut, reference);
+}
+
+/// Tests that a batch containing transactions with intra-batch unauthenticated note dependencies
+/// can be appended to the batch graph.
+#[test]
+fn intra_batch_unauthenticated_note() {
+    let (mut uut, _) = Mempool::for_tests();
+
+    let tx_final = MockProvenTxBuilder::with_account_index(0).build();
+    let account_update = tx_final.account_update();
+
+    let tx_pass_through = MockProvenTxBuilder::with_account(
+        account_update.account_id(),
+        account_update.initial_state_commitment(),
+        account_update.initial_state_commitment(),
+    );
+
+    // Transaction A creates note.
+    let tx_a = tx_pass_through
+        .clone()
+        .nullifiers_range(0..2)
+        .private_notes_created_range(3..4)
+        .build();
+    let tx_a = Arc::new(AuthenticatedTransaction::from_inner(tx_a));
+
+    // Transaction B consumes the note (unauthenticated).
+    let tx_b = tx_pass_through.unauthenticated_notes_range(3..4).build();
+    let tx_b = Arc::new(AuthenticatedTransaction::from_inner(tx_b));
+
+    // Add both transactions before selecting a batch so they end up in the same batch.
+    uut.add_transaction(tx_a.clone()).unwrap();
+    uut.add_transaction(tx_b.clone()).unwrap();
+
+    let batch = uut.select_batch().unwrap();
+
+    assert!(batch.transactions().contains(&tx_a));
+    assert!(batch.transactions().contains(&tx_b));
 }

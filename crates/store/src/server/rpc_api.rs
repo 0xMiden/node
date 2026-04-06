@@ -1,6 +1,5 @@
 use miden_node_proto::convert;
-use miden_node_proto::domain::block::InvalidBlockRange;
-use miden_node_proto::errors::MissingFieldHelper;
+use miden_node_proto::domain::block::SyncTarget;
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -41,6 +40,7 @@ use crate::server::api::{
     read_root,
     validate_nullifiers,
 };
+use crate::state::Finality;
 
 // CLIENT ENDPOINTS
 // ================================================================================================
@@ -94,7 +94,7 @@ impl rpc_server::Rpc for StoreApi {
             return Err(SyncNullifiersError::InvalidPrefixLength(request.prefix_len).into());
         }
 
-        let chain_tip = self.state.latest_block_num().await;
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
             read_block_range::<SyncNullifiersError>(request.block_range, "SyncNullifiersRequest")?
                 .into_inclusive_range::<SyncNullifiersError>(&chain_tip)?;
@@ -129,27 +129,35 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
         let request = request.into_inner();
 
-        let chain_tip = self.state.latest_block_num().await;
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+        if *block_range.end() > chain_tip {
+            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
+        }
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (state, mmr_proof, last_block_included) =
+        let (results, last_block_checked) =
             self.state.sync_notes(request.note_tags, block_range).await?;
 
-        let notes = state.notes.into_iter().map(Into::into).collect();
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(Into::into).collect(),
+            })
+            .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
+                block_num: last_block_checked.as_u32(),
             }),
-            block_header: Some(state.block_header.into()),
-            mmr_path: Some(mmr_proof.merkle_path().clone().into()),
-            notes,
+            blocks,
         }))
     }
 
@@ -159,37 +167,27 @@ impl rpc_server::Rpc for StoreApi {
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         let request = request.into_inner();
-        let chain_tip = self.state.latest_block_num().await;
 
-        let block_range = request
-            .block_range
-            .ok_or_else(|| proto::rpc::SyncChainMmrRequest::missing_field(stringify!(block_range)))
-            .map_err(SyncChainMmrError::DeserializationFailed)?;
+        let block_from = BlockNumber::from(request.block_from);
 
-        // Determine the effective tip based on the requested finality level.
-        let effective_tip = match request.finality() {
-            proto::rpc::Finality::Unspecified | proto::rpc::Finality::Committed => chain_tip,
-            proto::rpc::Finality::Proven => self
-                .state
-                .db()
-                .select_latest_proven_in_sequence_block_num()
-                .await
-                .map_err(SyncChainMmrError::DatabaseError)?,
+        // Determine upper bound to sync to or default to last committed block.
+        let sync_target = request
+            .upper_bound
+            .map(SyncTarget::try_from)
+            .transpose()
+            .map_err(SyncChainMmrError::DeserializationFailed)?
+            .unwrap_or(SyncTarget::CommittedChainTip);
+
+        let block_to = match sync_target {
+            SyncTarget::BlockNumber(block_num) => {
+                block_num.min(self.state.chain_tip(Finality::Committed).await)
+            },
+            SyncTarget::CommittedChainTip => self.state.chain_tip(Finality::Committed).await,
+            SyncTarget::ProvenChainTip => self.state.chain_tip(Finality::Proven).await,
         };
 
-        let block_from = BlockNumber::from(block_range.block_from);
-        if block_from > effective_tip {
-            Err(SyncChainMmrError::FutureBlock { chain_tip: effective_tip, block_from })?;
-        }
-
-        let block_to =
-            block_range.block_to.map_or(effective_tip, BlockNumber::from).min(effective_tip);
-
         if block_from > block_to {
-            Err(SyncChainMmrError::InvalidBlockRange(InvalidBlockRange::StartGreaterThanEnd {
-                start: block_from,
-                end: block_to,
-            }))?;
+            Err(SyncChainMmrError::FutureBlock { chain_tip: block_to, block_from })?;
         }
         let block_range = block_from..=block_to;
         let mmr_delta =
@@ -237,19 +235,24 @@ impl rpc_server::Rpc for StoreApi {
 
     async fn get_block_by_number(
         &self,
-        request: Request<proto::blockchain::BlockNumber>,
+        request: Request<proto::blockchain::BlockRequest>,
     ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
         let request = request.into_inner();
 
         debug!(target: COMPONENT, ?request);
 
-        let block = self
-            .state
-            .load_block(request.block_num.into())
-            .await
-            .map_err(GetBlockByNumberError::from)?;
+        // Load block from state.
+        let block_num = BlockNumber::from(request.block_num);
+        let block = self.state.load_block(block_num).await.map_err(GetBlockByNumberError::from)?;
 
-        Ok(Response::new(proto::blockchain::MaybeBlock { block }))
+        // Load proof from state.
+        let proof = if request.include_proof.unwrap_or_default() {
+            self.state.load_proof(block_num).await.map_err(GetBlockByNumberError::from)?
+        } else {
+            None
+        };
+
+        Ok(Response::new(proto::blockchain::MaybeBlock { block, proof }))
     }
 
     async fn get_account(
@@ -270,9 +273,12 @@ impl rpc_server::Rpc for StoreApi {
         request: Request<proto::rpc::SyncAccountVaultRequest>,
     ) -> Result<Response<proto::rpc::SyncAccountVaultResponse>, Status> {
         let request = request.into_inner();
-        let chain_tip = self.state.latest_block_num().await;
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
-        let account_id: AccountId = read_account_id::<SyncAccountVaultError>(request.account_id)?;
+        let account_id: AccountId = read_account_id::<
+            proto::rpc::SyncAccountVaultRequest,
+            SyncAccountVaultError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             return Err(SyncAccountVaultError::AccountNotPublic(account_id).into());
@@ -320,13 +326,16 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
         let request = request.into_inner();
 
-        let account_id = read_account_id::<SyncAccountStorageMapsError>(request.account_id)?;
+        let account_id = read_account_id::<
+            proto::rpc::SyncAccountStorageMapsRequest,
+            SyncAccountStorageMapsError,
+        >(request.account_id)?;
 
         if !account_id.has_public_state() {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
         }
 
-        let chain_tip = self.state.latest_block_num().await;
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range = read_block_range::<SyncAccountStorageMapsError>(
             request.block_range,
             "SyncAccountStorageMapsRequest",
@@ -366,7 +375,7 @@ impl rpc_server::Rpc for StoreApi {
         Ok(Response::new(proto::rpc::StoreStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "connected".to_string(),
-            chain_tip: self.state.latest_block_num().await.as_u32(),
+            chain_tip: self.state.chain_tip(Finality::Committed).await.as_u32(),
         }))
     }
 
@@ -398,7 +407,7 @@ impl rpc_server::Rpc for StoreApi {
 
         let request = request.into_inner();
 
-        let chain_tip = self.state.latest_block_num().await;
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range = read_block_range::<SyncTransactionsError>(
             request.block_range,
             "SyncTransactionsRequest",
