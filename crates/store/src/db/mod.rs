@@ -17,7 +17,6 @@ use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBloc
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
-    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
@@ -144,15 +143,15 @@ pub struct TransactionRecord {
     pub initial_state_commitment: Word,
     pub final_state_commitment: Word,
     pub input_notes: Vec<InputNoteCommitment>,
-    pub output_notes: Vec<NoteHeader>,
+    pub output_notes: Vec<NoteSyncRecord>,
     pub fee: FungibleAsset,
 }
 
 impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
-    /// The proto `TransactionHeader` is a 1:1 mapping of
-    /// `miden_protocol::transaction::TransactionHeader`.
+    /// The proto `TransactionHeader` mirrors the stored transaction data, except output notes are
+    /// enriched with inclusion proofs for sync clients.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {

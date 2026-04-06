@@ -84,8 +84,8 @@ message TransactionHeader {
   // Input notes of the transaction.
   repeated InputNoteCommitment input_notes = 5;
 
-  // Output notes of the transaction.
-  repeated note.NoteHeader output_notes = 6;
+  // Output notes of the transaction together with their inclusion proofs.
+  repeated note.NoteSyncRecord output_notes = 6;
 
   // The fee paid by the transaction.
   primitives.Asset fee = 7;
