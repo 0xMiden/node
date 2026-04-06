@@ -4,7 +4,7 @@ set -euo pipefail
 # Configuration
 BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 GENESIS_CONFIG="crates/store/src/genesis/config/samples/01-simple.toml"
-KMS_KEY_ID="${KMS_KEY_ID:?error: KMS_KEY_ID environment variable must be set}"
+KMS_KEY_ID="${KMS_KEY_ID:-}"
 
 STORE_DIR="/tmp/store"
 VALIDATOR_DIR="/tmp/validator"
@@ -42,12 +42,17 @@ echo "=== Bootstrapping ==="
 rm -rf "$VALIDATOR_DIR" "$ACCOUNTS_DIR" "$STORE_DIR" "$NTX_BUILDER_DIR"
 
 echo "Bootstrapping validator..."
+KMS_BOOTSTRAP_ARGS=()
+if [[ -n "$KMS_KEY_ID" ]]; then
+    KMS_BOOTSTRAP_ARGS+=(--validator.key.kms-id "$KMS_KEY_ID")
+fi
+
 $BINARY validator bootstrap \
     --data-directory "$VALIDATOR_DIR" \
     --genesis-block-directory "$VALIDATOR_DIR" \
     --accounts-directory "$ACCOUNTS_DIR" \
     --genesis-config-file "$GENESIS_CONFIG" \
-    --validator.key.kms-id "$KMS_KEY_ID"
+    "${KMS_BOOTSTRAP_ARGS[@]+"${KMS_BOOTSTRAP_ARGS[@]}"}"
 
 echo "Bootstrapping store..."
 $BINARY store bootstrap \
@@ -67,11 +72,16 @@ $BINARY store start \
     --enable-otel &
 PIDS+=($!)
 
+KMS_START_ARGS=()
+if [[ -n "$KMS_KEY_ID" ]]; then
+    KMS_START_ARGS+=(--key.kms-id "$KMS_KEY_ID")
+fi
+
 echo "Starting validator..."
 $BINARY validator start "$VALIDATOR_URL" \
     --enable-otel \
     --data-directory "$VALIDATOR_DIR" \
-    --key.kms-id "$KMS_KEY_ID" &
+    "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)
 
 # Give store and validator a moment to bind their ports.
