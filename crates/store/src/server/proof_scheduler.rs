@@ -59,13 +59,18 @@ impl ProofTaskJoinSet {
         db: &Arc<Db>,
         block_prover: &Arc<BlockProver>,
         block_store: &Arc<BlockStore>,
+        proven_tip_tx: &watch::Sender<BlockNumber>,
         block_num: BlockNumber,
     ) {
         let db = Arc::clone(db);
         let block_prover = Arc::clone(block_prover);
         let block_store = Arc::clone(block_store);
-        self.0
-            .spawn(async move { prove_block(&db, &block_prover, &block_store, block_num).await });
+        self.0.spawn({
+            let proven_tip_tx = proven_tip_tx.clone();
+            async move {
+                prove_block(&db, &block_prover, &block_store, &proven_tip_tx, block_num).await
+            }
+        });
     }
 
     /// Returns the result of the next completed task, or pends forever if the set is empty.
@@ -98,9 +103,17 @@ pub fn spawn(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
+    proven_tip_tx: watch::Sender<BlockNumber>,
     max_concurrent_proofs: NonZeroUsize,
 ) -> JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(run(db, block_prover, block_store, chain_tip_rx, max_concurrent_proofs))
+    tokio::spawn(run(
+        db,
+        block_prover,
+        block_store,
+        chain_tip_rx,
+        proven_tip_tx,
+        max_concurrent_proofs,
+    ))
 }
 
 /// Main loop of the proof scheduler.
@@ -117,6 +130,7 @@ async fn run(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
+    proven_tip_tx: watch::Sender<BlockNumber>,
     max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
     info!(target: COMPONENT, "Proof scheduler started");
@@ -127,7 +141,7 @@ async fn run(
     // Highest block number that is in-flight or has been proven. Used to avoid re-querying
     // blocks we've already scheduled. Initialized from the in-sequence tip so we skip
     // already-proven blocks on restart.
-    let mut highest_scheduled = db.select_latest_proven_in_sequence_block_num().await?;
+    let mut highest_scheduled = db.proven_chain_tip().await?;
 
     loop {
         // Query the DB for unproven blocks beyond what we've already scheduled.
@@ -140,7 +154,7 @@ async fn run(
             }
 
             for block_num in unproven {
-                join_set.spawn(&db, &block_prover, &block_store, block_num);
+                join_set.spawn(&db, &block_prover, &block_store, &proven_tip_tx, block_num);
             }
         }
 
@@ -171,6 +185,7 @@ async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
     block_store: &BlockStore,
+    proven_tip_tx: &watch::Sender<BlockNumber>,
     block_num: BlockNumber,
 ) -> anyhow::Result<()> {
     const MAX_RETRIES: u32 = 10;
@@ -189,6 +204,7 @@ async fn prove_block(
                 // Mark the block as proven and advance the sequence in the database.
                 let advanced_in_sequence = db.mark_proven_and_advance_sequence(block_num).await?;
                 if let Some(&last) = advanced_in_sequence.last() {
+                    proven_tip_tx.send(last)?;
                     info!(
                         target = COMPONENT,
                         block.number = %block_num,
