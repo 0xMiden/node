@@ -111,9 +111,9 @@ impl BlockStore {
     #[instrument(
         target = COMPONENT,
         name = "store.block_store.save_proof",
-        skip(self, data),
+        skip_all,
         err,
-        fields(proof_size = data.len())
+        fields(block.number = block_num.as_u32(), proof_size = data.len())
     )]
     pub async fn save_proof(&self, block_num: BlockNumber, data: &[u8]) -> std::io::Result<()> {
         let (epoch_path, proof_path) = self.epoch_proof_path(block_num)?;

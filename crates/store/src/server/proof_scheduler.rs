@@ -8,7 +8,7 @@
 //!    as proven, the database atomically advances the `proven_in_sequence` column for all blocks
 //!    that now form a contiguous proven sequence from genesis.
 //! 4. On transient errors (DB reads, prover failures, timeouts), the failed block is retried
-//!    internally within its proving task.
+//!    internally within its proving task, subject to an overall per-block time budget.
 //! 5. On fatal errors (e.g. deserialization failures, missing proving inputs), the scheduler
 //!    returns the error to the caller for node shutdown.
 
@@ -23,19 +23,26 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
-use tracing::{error, info, instrument};
+use tracing::{Instrument, info, instrument};
 
 use crate::COMPONENT;
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::{DatabaseError, ProofSchedulerError};
+use crate::proven_tip::ProvenTipWriter;
 use crate::server::block_prover_client::{BlockProver, StoreProverError};
 
 // CONSTANTS
 // ================================================================================================
 
-/// Overall timeout for proving a single block.
-const BLOCK_PROVE_TIMEOUT: Duration = Duration::from_mins(4);
+/// Timeout for a single block proof attempt (per-retry).
+const BLOCK_PROVE_ATTEMPT_TIMEOUT: Duration = Duration::from_mins(4);
+
+/// Overall timeout for proving a single block (across all retries).
+const BLOCK_PROVE_OVERALL_TIMEOUT: Duration = Duration::from_mins(12);
+
+/// Maximum number of proving attempts per block before giving up.
+const MAX_PROVE_ATTEMPTS: u32 = 3;
 
 /// Default maximum number of blocks being proven concurrently.
 pub const DEFAULT_MAX_CONCURRENT_PROOFS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
@@ -59,17 +66,15 @@ impl ProofTaskJoinSet {
         db: &Arc<Db>,
         block_prover: &Arc<BlockProver>,
         block_store: &Arc<BlockStore>,
-        proven_tip_tx: &watch::Sender<BlockNumber>,
+        proven_tip: &Arc<ProvenTipWriter>,
         block_num: BlockNumber,
     ) {
         let db = Arc::clone(db);
         let block_prover = Arc::clone(block_prover);
         let block_store = Arc::clone(block_store);
-        self.0.spawn({
-            let proven_tip_tx = proven_tip_tx.clone();
-            async move {
-                prove_block(&db, &block_prover, &block_store, &proven_tip_tx, block_num).await
-            }
+        let proven_tip = Arc::clone(proven_tip);
+        self.0.spawn(async move {
+            prove_block(&db, &block_prover, &block_store, &proven_tip, block_num).await
         });
     }
 
@@ -103,15 +108,16 @@ pub fn spawn(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
-    proven_tip_tx: watch::Sender<BlockNumber>,
+    proven_tip: ProvenTipWriter,
     max_concurrent_proofs: NonZeroUsize,
 ) -> JoinHandle<anyhow::Result<()>> {
+    let proven_tip = Arc::new(proven_tip);
     tokio::spawn(run(
         db,
         block_prover,
         block_store,
         chain_tip_rx,
-        proven_tip_tx,
+        proven_tip,
         max_concurrent_proofs,
     ))
 }
@@ -130,7 +136,7 @@ async fn run(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
-    proven_tip_tx: watch::Sender<BlockNumber>,
+    proven_tip: Arc<ProvenTipWriter>,
     max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
     info!(target: COMPONENT, "Proof scheduler started");
@@ -154,7 +160,7 @@ async fn run(
             }
 
             for block_num in unproven {
-                join_set.spawn(&db, &block_prover, &block_store, &proven_tip_tx, block_num);
+                join_set.spawn(&db, &block_prover, &block_store, &proven_tip, block_num);
             }
         }
 
@@ -180,54 +186,71 @@ async fn run(
 
 /// Proves a single block, saves the proof to the block store, marks the block as proven in the
 /// DB, and advances the proven-in-sequence tip.
-#[instrument(target = COMPONENT, name = "prove_block", skip_all, fields(block.number=block_num.as_u32()), err)]
+#[instrument(target = COMPONENT, name = "prove_block", skip_all,
+    fields(
+        block.number=block_num.as_u32(),
+        proven_chain_tip = tracing::field::Empty
+    ), err)]
 async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
     block_store: &BlockStore,
-    proven_tip_tx: &watch::Sender<BlockNumber>,
+    proven_tip: &ProvenTipWriter,
     block_num: BlockNumber,
 ) -> anyhow::Result<()> {
-    const MAX_RETRIES: u32 = 10;
+    tokio::time::timeout(BLOCK_PROVE_OVERALL_TIMEOUT, async {
+        let mut attempt: u32 = 0;
+        loop {
+            // Create a span for each attempt.
+            attempt += 1;
+            let attempt_span = tracing::info_span!(
+                target: COMPONENT,
+                "prove_attempt",
+                attempt,
+                error = tracing::field::Empty,
+                timed_out = tracing::field::Empty,
+            );
 
-    for _ in 0..MAX_RETRIES {
-        match tokio::time::timeout(
-            BLOCK_PROVE_TIMEOUT,
-            generate_block_proof(db, block_prover, block_num),
-        )
-        .await
-        {
-            Ok(Ok(proof)) => {
-                // Save the block proof to file.
-                block_store.save_proof(block_num, &proof.to_bytes()).await?;
+            // Generate block proof with timeout.
+            let result = tokio::time::timeout(
+                BLOCK_PROVE_ATTEMPT_TIMEOUT,
+                generate_block_proof(db, block_prover, block_num),
+            )
+            .instrument(attempt_span.clone())
+            .await;
 
-                // Mark the block as proven and advance the sequence in the database.
-                let advanced_in_sequence = db.mark_proven_and_advance_sequence(block_num).await?;
-                if let Some(&last) = advanced_in_sequence.last() {
-                    proven_tip_tx.send(last)?;
-                    info!(
-                        target = COMPONENT,
-                        block.number = %block_num,
-                        proven_in_sequence_tip = %last,
-                        "Block proven and in-sequence advanced",
-                    );
-                } else {
-                    info!(target = COMPONENT, block.number = %block_num, "Block proven");
-                }
+            match result {
+                Ok(Ok(proof)) => {
+                    // Save the block proof to file.
+                    block_store.save_proof(block_num, &proof.to_bytes()).await?;
 
-                return Ok(());
-            },
-            Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
-            Ok(Err(ProveBlockError::Transient(err))) => {
-                error!(target = COMPONENT, block.number = %block_num, err = ?err, "transient error proving block, retrying");
-            },
-            Err(elapsed) => {
-                error!(target = COMPONENT, block.number = %block_num, %elapsed, "block proving timed out, retrying");
-            },
+                    // Mark the block as proven and advance the sequence in the database.
+                    let tip = db.mark_proven_and_advance_sequence(block_num).await?;
+                    tracing::Span::current().record("proven_chain_tip", tip.as_u32());
+
+                    // Advance the cached proven tip if the new tip is higher.
+                    proven_tip.advance(tip);
+
+                    return Ok(());
+                },
+                Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
+                Ok(Err(ProveBlockError::Transient(err))) => {
+                    attempt_span.record("error", tracing::field::display(&err));
+                },
+                Err(elapsed) => {
+                    attempt_span.record("timed_out", elapsed.to_string());
+                },
+            }
+
+            if attempt >= MAX_PROVE_ATTEMPTS {
+                anyhow::bail!("block {} failed after {attempt} attempts", block_num.as_u32());
+            }
         }
-    }
-
-    anyhow::bail!("maximum retries ({MAX_RETRIES}) exceeded");
+    })
+    .await
+    .context(format!(
+        "block proving overall timeout ({BLOCK_PROVE_OVERALL_TIMEOUT:?}) exceeded"
+    ))?
 }
 
 /// Generates a block proof by loading inputs from the DB and invoking the block prover.

@@ -34,7 +34,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{Mutex, RwLock, watch};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
@@ -52,6 +52,7 @@ use crate::errors::{
     GetCurrentBlockchainDataError,
     StateInitializationError,
 };
+use crate::proven_tip::{ProvenTipReader, ProvenTipWriter};
 use crate::{COMPONENT, DataDirectory};
 
 mod loader;
@@ -139,7 +140,7 @@ pub struct State {
     termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
 
     /// The latest proven-in-sequence block number, updated by the proof scheduler.
-    proven_tip_rx: watch::Receiver<BlockNumber>,
+    proven_tip: ProvenTipReader,
 }
 
 impl State {
@@ -152,7 +153,7 @@ impl State {
         data_path: &Path,
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<(Self, watch::Sender<BlockNumber>), StateInitializationError> {
+    ) -> Result<(Self, ProvenTipWriter), StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -201,7 +202,7 @@ impl State {
         // Initialize the proven tip from database.
         let proven_tip =
             db.proven_chain_tip().await.map_err(StateInitializationError::DatabaseError)?;
-        let (proven_tip_tx, proven_tip_rx) = watch::channel(proven_tip);
+        let (proven_tip_writer, proven_tip) = ProvenTipWriter::new(proven_tip);
 
         Ok((
             Self {
@@ -211,9 +212,9 @@ impl State {
                 forest,
                 writer,
                 termination_ask,
-                proven_tip_rx,
+                proven_tip,
             },
-            proven_tip_tx,
+            proven_tip_writer,
         ))
     }
 
@@ -863,7 +864,7 @@ impl State {
     pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
         match finality {
             Finality::Committed => self.inner.read().await.latest_block_num(),
-            Finality::Proven => *self.proven_tip_rx.borrow(),
+            Finality::Proven => self.proven_tip.read(),
         }
     }
 
