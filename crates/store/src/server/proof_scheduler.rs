@@ -41,6 +41,9 @@ const BLOCK_PROVE_ATTEMPT_TIMEOUT: Duration = Duration::from_mins(4);
 /// Overall timeout for proving a single block (across all retries).
 const BLOCK_PROVE_OVERALL_TIMEOUT: Duration = Duration::from_mins(12);
 
+/// Delay between retry attempts on transient errors.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
+
 /// Default maximum number of blocks being proven concurrently.
 pub const DEFAULT_MAX_CONCURRENT_PROOFS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
@@ -198,6 +201,7 @@ async fn prove_block(
     tokio::time::timeout(BLOCK_PROVE_OVERALL_TIMEOUT, async {
         let mut attempt: u32 = 0;
         loop {
+            // Create a span for each attempt.
             attempt += 1;
             let attempt_span = tracing::info_span!(
                 target: COMPONENT,
@@ -206,12 +210,15 @@ async fn prove_block(
                 error = tracing::field::Empty,
                 timed_out = tracing::field::Empty,
             );
+
+            // Generate block proof with timeout.
             let result = tokio::time::timeout(
                 BLOCK_PROVE_ATTEMPT_TIMEOUT,
                 generate_block_proof(db, block_prover, block_num),
             )
             .instrument(attempt_span.clone())
             .await;
+
             match result {
                 Ok(Ok(proof)) => {
                     // Save the block proof to file.
@@ -234,6 +241,8 @@ async fn prove_block(
                     attempt_span.record("timed_out", elapsed.to_string());
                 },
             }
+
+            tokio::time::sleep(RETRY_DELAY).await;
         }
     })
     .await
