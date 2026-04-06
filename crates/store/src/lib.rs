@@ -4,6 +4,7 @@ mod blocks;
 mod db;
 mod errors;
 pub mod genesis;
+mod proven_tip;
 mod server;
 pub mod state;
 

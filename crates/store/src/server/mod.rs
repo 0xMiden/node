@@ -26,6 +26,7 @@ use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::ApplyBlockError;
 use crate::genesis::GenesisBlock;
+use crate::proven_tip::ProvenTipWriter;
 use crate::state::State;
 use crate::{BlockProver, COMPONENT};
 
@@ -147,7 +148,7 @@ impl Store {
         state: &State,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
-        proven_tip_tx: watch::Sender<miden_protocol::block::BlockNumber>,
+        proven_tip: ProvenTipWriter,
     ) -> (
         tokio::task::JoinHandle<anyhow::Result<()>>,
         watch::Sender<miden_protocol::block::BlockNumber>,
@@ -166,7 +167,7 @@ impl Store {
             block_prover,
             state.block_store(),
             chain_tip_rx,
-            proven_tip_tx,
+            proven_tip,
             max_concurrent_proofs,
         );
 

@@ -29,6 +29,7 @@ use crate::COMPONENT;
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::{DatabaseError, ProofSchedulerError};
+use crate::proven_tip::ProvenTipWriter;
 use crate::server::block_prover_client::{BlockProver, StoreProverError};
 
 // CONSTANTS
@@ -62,17 +63,15 @@ impl ProofTaskJoinSet {
         db: &Arc<Db>,
         block_prover: &Arc<BlockProver>,
         block_store: &Arc<BlockStore>,
-        proven_tip_tx: &watch::Sender<BlockNumber>,
+        proven_tip: &Arc<ProvenTipWriter>,
         block_num: BlockNumber,
     ) {
         let db = Arc::clone(db);
         let block_prover = Arc::clone(block_prover);
         let block_store = Arc::clone(block_store);
-        self.0.spawn({
-            let proven_tip_tx = proven_tip_tx.clone();
-            async move {
-                prove_block(&db, &block_prover, &block_store, &proven_tip_tx, block_num).await
-            }
+        let proven_tip = Arc::clone(proven_tip);
+        self.0.spawn(async move {
+            prove_block(&db, &block_prover, &block_store, &proven_tip, block_num).await
         });
     }
 
@@ -106,15 +105,16 @@ pub fn spawn(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
-    proven_tip_tx: watch::Sender<BlockNumber>,
+    proven_tip: ProvenTipWriter,
     max_concurrent_proofs: NonZeroUsize,
 ) -> JoinHandle<anyhow::Result<()>> {
+    let proven_tip = Arc::new(proven_tip);
     tokio::spawn(run(
         db,
         block_prover,
         block_store,
         chain_tip_rx,
-        proven_tip_tx,
+        proven_tip,
         max_concurrent_proofs,
     ))
 }
@@ -133,7 +133,7 @@ async fn run(
     block_prover: Arc<BlockProver>,
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
-    proven_tip_tx: watch::Sender<BlockNumber>,
+    proven_tip: Arc<ProvenTipWriter>,
     max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
     info!(target: COMPONENT, "Proof scheduler started");
@@ -157,7 +157,7 @@ async fn run(
             }
 
             for block_num in unproven {
-                join_set.spawn(&db, &block_prover, &block_store, &proven_tip_tx, block_num);
+                join_set.spawn(&db, &block_prover, &block_store, &proven_tip, block_num);
             }
         }
 
@@ -192,7 +192,7 @@ async fn prove_block(
     db: &Db,
     block_prover: &BlockProver,
     block_store: &BlockStore,
-    proven_tip_tx: &watch::Sender<BlockNumber>,
+    proven_tip: &ProvenTipWriter,
     block_num: BlockNumber,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(BLOCK_PROVE_OVERALL_TIMEOUT, async {
@@ -221,10 +221,8 @@ async fn prove_block(
                     let tip = db.mark_proven_and_advance_sequence(block_num).await?;
                     tracing::Span::current().record("proven_chain_tip", tip.as_u32());
 
-                    // Send new tip if it was advanced.
-                    if tip > block_num {
-                        proven_tip_tx.send(tip)?;
-                    }
+                    // Advance the cached proven tip if the new tip is higher.
+                    proven_tip.advance(tip);
 
                     return Ok(());
                 },
