@@ -375,6 +375,37 @@ pub(crate) fn select_note_inclusion_proofs(
     ))
 }
 
+/// Select note sync records matching the given note commitments.
+///
+/// # Parameters
+/// * `note_commitments`: Slice of note commitments to query
+///     - Limit: 0 <= count <= 1000
+///
+/// # Returns
+///
+/// - Empty map if no matching `note`.
+/// - Otherwise, note sync records keyed by `NoteId`.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT
+///     committed_at,
+///     batch_index,
+///     note_index,
+///     note_id,
+///     note_type,
+///     sender,
+///     tag,
+///     attachment,
+///     inclusion_path
+/// FROM
+///     notes
+/// WHERE
+///     note_commitment IN (?1)
+/// ORDER BY
+///     committed_at ASC
+/// ```
 pub(crate) fn select_note_sync_records(
     conn: &mut SqliteConnection,
     note_commitments: &[Word],
