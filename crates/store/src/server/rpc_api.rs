@@ -202,7 +202,7 @@ impl rpc_server::Rpc for StoreApi {
             }))?;
         }
         let block_range = block_from..=block_to;
-        let mmr_delta =
+        let (mmr_delta, block_header) =
             self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
@@ -211,6 +211,7 @@ impl rpc_server::Rpc for StoreApi {
                 block_to: Some(block_range.end().as_u32()),
             }),
             mmr_delta: Some(mmr_delta.into()),
+            block_header: Some(block_header.into()),
         }))
     }
 

@@ -527,6 +527,8 @@ message SyncChainMmrResponse {
     // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
     // `response.block_range.block_to` or the chain tip.
     primitives.MmrDelta mmr_delta = 2;
+    // Block header for `block_range.block_to`.
+    blockchain.BlockHeader block_header = 3;
 }
 
 // SYNC ACCOUNT STORAGE MAP
