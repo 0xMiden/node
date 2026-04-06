@@ -41,8 +41,8 @@ const BLOCK_PROVE_ATTEMPT_TIMEOUT: Duration = Duration::from_mins(4);
 /// Overall timeout for proving a single block (across all retries).
 const BLOCK_PROVE_OVERALL_TIMEOUT: Duration = Duration::from_mins(12);
 
-/// Delay between retry attempts on transient errors.
-const RETRY_DELAY: Duration = Duration::from_secs(5);
+/// Maximum number of proving attempts per block before giving up.
+const MAX_PROVE_ATTEMPTS: u32 = 3;
 
 /// Default maximum number of blocks being proven concurrently.
 pub const DEFAULT_MAX_CONCURRENT_PROOFS: NonZeroUsize = NonZeroUsize::new(8).unwrap();
@@ -242,7 +242,9 @@ async fn prove_block(
                 },
             }
 
-            tokio::time::sleep(RETRY_DELAY).await;
+            if attempt >= MAX_PROVE_ATTEMPTS {
+                anyhow::bail!("block {} failed after {attempt} attempts", block_num.as_u32());
+            }
         }
     })
     .await
