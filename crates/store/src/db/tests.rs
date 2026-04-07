@@ -3620,6 +3620,42 @@ fn db_roundtrip_transactions() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
+
+    let tx = mock_block_transaction(bob, 1);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+
+    // Notes erased within the same block are not inserted into the `notes` table, so transaction
+    // sync should omit them instead of failing the whole request.
+    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+
+    let retrieved =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
+    let record = retrieved.1.first().expect("entry should exist");
+
+    let expected = TransactionRecord {
+        block_num,
+        transaction_id: tx.id(),
+        account_id: tx.account_id(),
+        initial_state_commitment: tx.initial_state_commitment(),
+        final_state_commitment: tx.final_state_commitment(),
+        input_notes: tx.input_notes().iter().cloned().collect(),
+        output_notes: vec![],
+        fee: tx.fee(),
+    };
+
+    assert_eq!(*record, expected);
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
 fn account_state_forest_preserves_most_recent_storage_map_only() {
     use std::collections::BTreeMap;
 

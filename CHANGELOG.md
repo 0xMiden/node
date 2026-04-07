@@ -4,6 +4,11 @@
 
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 
+## v0.14.3 (2026-04-07)
+
+- Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).
+- [BREAKING] Migrated to `miden-protocol` v0.14.3 (update to `miden-vm` v0.22.1).
+
 ## v0.14.2 (2026-04-07)
 
 - Added `block_header` field to `SyncChainMmrResponse` so clients can obtain the `block_to` block header without a separate request ([#1881](https://github.com/0xMiden/node/pull/1881)).
