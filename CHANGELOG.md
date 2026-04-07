@@ -3,6 +3,7 @@
 ## v0.14.3 (2026-04-07)
 
 - Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).
+- [BREAKING] Migrated to `miden-protocol` v0.14.3 (update to `miden-vm` v0.22.1).
 
 ## v0.14.2 (2026-04-07)
 

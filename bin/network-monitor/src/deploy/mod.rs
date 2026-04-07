@@ -230,10 +230,12 @@ pub(crate) fn get_counter_library() -> Result<Library> {
         .parse_str(library_path, script, source_manager)
         .map_err(|e| anyhow::anyhow!("Failed to parse module: {e}"))?;
 
-    assembler
+    let library = assembler
         .clone()
         .assemble_library([module])
-        .map_err(|e| anyhow::anyhow!("Failed to assemble library: {e}"))
+        .map_err(|e| anyhow::anyhow!("Failed to assemble library: {e}"))?;
+
+    Ok(Arc::unwrap_or_clone(library))
 }
 
 // MONITOR DATA STORE
