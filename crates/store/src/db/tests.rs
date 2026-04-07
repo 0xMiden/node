@@ -80,7 +80,7 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 use tempfile::tempdir;
 
-use super::{AccountInfo, NoteRecord, NullifierInfo, TransactionRecord};
+use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
@@ -3546,6 +3546,26 @@ fn db_roundtrip_transactions() {
 
     let tx = mock_block_transaction(bob, 1);
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+    let output_notes: Vec<_> = tx
+        .output_notes()
+        .iter()
+        .enumerate()
+        .map(|(idx, note)| {
+            (
+                NoteRecord {
+                    block_num,
+                    note_index: BlockNoteIndex::new(0, idx).unwrap(),
+                    note_id: note.id().as_word(),
+                    note_commitment: note.to_commitment(),
+                    metadata: note.metadata().clone(),
+                    details: None,
+                    inclusion_path: SparseMerklePath::default(),
+                },
+                None,
+            )
+        })
+        .collect();
+    queries::insert_notes(&mut conn, &output_notes).unwrap();
     queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
 
     let retrieved =
@@ -3560,7 +3580,18 @@ fn db_roundtrip_transactions() {
         initial_state_commitment: tx.initial_state_commitment(),
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: tx.output_notes().to_vec(),
+        output_notes: tx
+            .output_notes()
+            .iter()
+            .enumerate()
+            .map(|(idx, note)| NoteSyncRecord {
+                block_num,
+                note_index: BlockNoteIndex::new(0, idx).unwrap(),
+                note_id: note.id().as_word(),
+                metadata: note.metadata().clone(),
+                inclusion_path: SparseMerklePath::default(),
+            })
+            .collect(),
         fee: tx.fee(),
     };
 
@@ -3578,7 +3609,7 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: expected.output_notes.into_iter().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
     };

@@ -16,6 +16,7 @@ use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamAccountIdLimit,
     QueryParamLimiter,
+    QueryParamNoteCommitmentLimit,
 };
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -23,10 +24,10 @@ use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{InputNoteCommitment, OrderedTransactionHeaders, TransactionId};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
-use super::DatabaseError;
+use super::{DatabaseError, select_note_sync_records};
 use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::{serialize_vec, vec_raw_try_into};
+use crate::db::models::serialize_vec;
 use crate::db::schema;
 
 #[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
@@ -42,30 +43,6 @@ pub struct TransactionRecordRaw {
     output_notes: Vec<u8>,
     size_in_bytes: i64,
     fee: Vec<u8>,
-}
-
-impl TryInto<crate::db::TransactionRecord> for TransactionRecordRaw {
-    type Error = DatabaseError;
-    fn try_into(self) -> Result<crate::db::TransactionRecord, Self::Error> {
-        use miden_protocol::Word;
-        use miden_protocol::asset::FungibleAsset;
-
-        let input_notes: Vec<InputNoteCommitment> =
-            Deserializable::read_from_bytes(&self.input_notes)?;
-        let output_notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&self.output_notes)?;
-        let fee = FungibleAsset::read_from_bytes(&self.fee)?;
-
-        Ok(crate::db::TransactionRecord {
-            account_id: AccountId::read_from_bytes(&self.account_id[..])?,
-            block_num: BlockNumber::from_raw_sql(self.block_num)?,
-            transaction_id: TransactionId::read_from_bytes(&self.transaction_id[..])?,
-            initial_state_commitment: Word::read_from_bytes(&self.initial_state_commitment)?,
-            final_state_commitment: Word::read_from_bytes(&self.final_state_commitment)?,
-            input_notes,
-            output_notes,
-            fee,
-        })
-    }
 }
 
 /// Insert transactions to the DB using the given [`SqliteConnection`].
@@ -122,7 +99,9 @@ impl TransactionSummaryRowInsert {
         transaction_header: &miden_protocol::transaction::TransactionHeader,
         block_num: BlockNumber,
     ) -> Self {
-        const HEADER_BASE_SIZE: usize = 4 + 32 + 16 + 64; // block_num + tx_id + account_id + commitments
+        const HEADER_BASE_SIZE_BYTES: usize = 4 + 32 + 16 + 64;
+        const INPUT_NOTE_COMMITMENT_SIZE_BYTES: usize = 64;
+        const OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES: usize = 700;
 
         // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
         let input_notes: Vec<InputNoteCommitment> =
@@ -140,10 +119,12 @@ impl TransactionSummaryRowInsert {
         // - 16 bytes for account ID
         // - 64 bytes for initial + final state commitments (32 bytes each)
         // - ~64 bytes per input note (nullifier + optional NoteHeader)
-        // - ~64 bytes per output note (NoteHeader = NoteId + NoteMetadata)
-        let input_notes_size = (transaction_header.input_notes().num_notes() as usize) * 64;
-        let output_notes_size = transaction_header.output_notes().len() * 64;
-        let size_in_bytes = (HEADER_BASE_SIZE + input_notes_size + output_notes_size) as i64;
+        // - ~700 bytes per output note sync record (metadata header + inclusion proof)
+        let input_notes_size = (transaction_header.input_notes().num_notes() as usize)
+            * INPUT_NOTE_COMMITMENT_SIZE_BYTES;
+        let output_notes_size =
+            transaction_header.output_notes().len() * OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES;
+        let size_in_bytes = (HEADER_BASE_SIZE_BYTES + input_notes_size + output_notes_size) as i64;
 
         Self {
             transaction_id: transaction_header.id().to_bytes(),
@@ -172,10 +153,10 @@ impl TransactionSummaryRowInsert {
 /// - `transaction_records`: Vector of transaction records, limited by payload size
 ///
 /// # Note
-/// This function returns complete transaction record information including state commitments
-/// and note IDs, allowing for direct conversion to proto `TransactionRecord` without loading
-/// full block data. We use a chunked loading strategy to prevent memory exhaustion attacks and
-/// ensure predictable resource usage.
+/// This function returns complete transaction record information including state commitments and
+/// output note inclusion proofs, allowing for direct conversion to proto `TransactionRecord`
+/// without loading full block data. We use a chunked loading strategy to prevent memory
+/// exhaustion attacks and ensure predictable resource usage.
 ///
 /// # Raw SQL
 /// ```sql
@@ -296,16 +277,74 @@ pub fn select_transactions_records(
         let last_block_num = last_block_num.expect(
             "guaranteed to have processed at least one transaction when size limit is reached",
         );
-        let filtered_transactions = vec_raw_try_into(
-            all_transactions.into_iter().take_while(|row| row.block_num != last_block_num),
+        let filtered_transactions = with_output_note_proofs(
+            conn,
+            all_transactions
+                .into_iter()
+                .take_while(|row| row.block_num != last_block_num)
+                .collect(),
         )?;
 
-        // SAFETY: block_num came from the database and was previously validated
+        // SAFETY: block_num came from the database and was previously validated.
         // Subtraction is safe under the assumption that genesis block (where it could fail) does
         // not have any transactions.
         let last_included_block = BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?;
         Ok((last_included_block, filtered_transactions))
     } else {
-        Ok((*block_range.end(), vec_raw_try_into(all_transactions)?))
+        Ok((*block_range.end(), with_output_note_proofs(conn, all_transactions)?))
     }
+}
+
+fn with_output_note_proofs(
+    conn: &mut SqliteConnection,
+    raw_transactions: Vec<TransactionRecordRaw>,
+) -> Result<Vec<crate::db::TransactionRecord>, DatabaseError> {
+    use miden_protocol::Word;
+    use miden_protocol::asset::FungibleAsset;
+
+    // Pre-deserialize output notes to collect commitments for the batch lookup.
+    let mut tx_output_notes = Vec::with_capacity(raw_transactions.len());
+    let mut all_note_commitments = Vec::new();
+    for raw in &raw_transactions {
+        let notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&raw.output_notes)?;
+        all_note_commitments.extend(notes.iter().map(NoteHeader::to_commitment));
+        tx_output_notes.push(notes);
+    }
+
+    let mut output_notes_by_id = std::collections::BTreeMap::new();
+    for chunk in all_note_commitments.chunks(QueryParamNoteCommitmentLimit::LIMIT) {
+        output_notes_by_id.extend(select_note_sync_records(conn, chunk)?);
+    }
+
+    // Deserialize remaining fields and assemble final records.
+    raw_transactions
+        .into_iter()
+        .zip(tx_output_notes)
+        .map(|(raw, output_notes)| {
+            let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
+            let enriched_notes = output_notes
+                .into_iter()
+                .map(|note| {
+                    let note_id = note.id();
+                    output_notes_by_id.get(&note_id).cloned().ok_or_else(|| {
+                        DatabaseError::DataCorrupted(format!(
+                            "missing output note sync record for note {note_id} created by \
+                             transaction {transaction_id}",
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(crate::db::TransactionRecord {
+                account_id: AccountId::read_from_bytes(&raw.account_id)?,
+                block_num: BlockNumber::from_raw_sql(raw.block_num)?,
+                transaction_id,
+                initial_state_commitment: Word::read_from_bytes(&raw.initial_state_commitment)?,
+                final_state_commitment: Word::read_from_bytes(&raw.final_state_commitment)?,
+                input_notes: Deserializable::read_from_bytes(&raw.input_notes)?,
+                output_notes: enriched_notes,
+                fee: FungibleAsset::read_from_bytes(&raw.fee)?,
+            })
+        })
+        .collect()
 }
