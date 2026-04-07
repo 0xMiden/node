@@ -265,6 +265,8 @@ impl State {
             .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
         if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
+            // We do our best here to notify the serve routine, if it doesn't care (dropped the
+            // receiver) we can't do much.
             let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
                 InvalidBlockError::NewBlockInvalidNullifierRoot,
             ));
