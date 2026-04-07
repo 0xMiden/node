@@ -57,46 +57,81 @@ fn instrument_bare_succeeds() {
 }
 
 #[test]
-fn instrument_empty_parens_succeeds() {
-    // #[instrument()]  –  rustc strips the outer parens before the proc-macro sees the stream,
-    // so the attr stream is empty – identical to the bare case above.
-    let result = instrument2(quote! {}, item_bare_fn());
-    assert!(result.is_ok(), "{result:?}");
-}
-
-#[test]
-fn instrument_component_prefixes_span_name() {
+fn instrument_ident_component_uses_ident_as_target() {
+    // The ident `rpc` must appear as `crate::rpc` (a path, not a string literal) so the
+    // const's runtime value drives the OTel target instead of the identifier name.
     let result = instrument2(quote! { rpc: }, item_bare_fn()).expect("expansion should succeed");
     let tokens = result.to_string();
-    assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
+    assert!(
+        tokens.contains("crate :: rpc"),
+        "expected crate path target in output, got: {tokens}"
+    );
+    assert!(
+        !tokens.contains("\"rpc\""),
+        "expected no string literal for component, got: {tokens}"
+    );
 }
 
 #[test]
-fn instrument_component_prefixes_span_name_for_report() {
+fn instrument_ident_component_uses_ident_as_target_for_report() {
     let result = instrument2(quote! { rpc: report }, item_result_unit_fn())
         .expect("expansion should succeed");
     let tokens = result.to_string();
-    assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
+    assert!(
+        tokens.contains("crate :: rpc"),
+        "expected crate path target in output, got: {tokens}"
+    );
 }
 
 #[test]
-fn instrument_component_prefixes_span_name_for_err() {
+fn instrument_ident_component_uses_ident_as_target_for_err() {
     let result =
         instrument2(quote! { rpc: err }, item_result_unit_fn()).expect("expansion should succeed");
     let tokens = result.to_string();
-    assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
+    assert!(
+        tokens.contains("crate :: rpc"),
+        "expected crate path target in output, got: {tokens}"
+    );
+}
+
+// ── level ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn instrument_default_level_is_info() {
+    let result = instrument2(quote! { rpc: }, item_bare_fn()).expect("expansion should succeed");
+    assert!(result.to_string().contains("Level :: INFO"), "{}", result);
+}
+
+#[test]
+fn instrument_explicit_debug_level() {
+    let result = instrument2(quote! { rpc: level: DEBUG }, item_bare_fn())
+        .expect("expansion should succeed");
+    assert!(result.to_string().contains("Level :: DEBUG"), "{}", result);
+}
+
+#[test]
+fn instrument_level_specified_twice_fails() {
+    let result = instrument2(quote! { rpc: level: INFO, level: DEBUG }, item_bare_fn());
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[test]
+fn instrument_invalid_level_fails() {
+    let result = instrument2(quote! { rpc: level: VERBOSE }, item_bare_fn());
+    assert!(result.is_err(), "{result:?}");
 }
 
 // ── root ──────────────────────────────────────────────────────────────────────
 
 #[test]
 fn instrument_root_emits_parent_none() {
+    // For ident components, root is expressed as `parent: None` in `info_span!` syntax.
     let result =
         instrument2(quote! { rpc: root }, item_bare_fn()).expect("expansion should succeed");
     let tokens = result.to_string();
     assert!(
-        tokens.contains("parent = None"),
-        "expected `parent = None` in output, got: {tokens}"
+        tokens.contains("parent : None"),
+        "expected `parent : None` in info_span! output, got: {tokens}"
     );
 }
 

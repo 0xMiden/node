@@ -20,7 +20,7 @@
 //! must use names from the OpenTelemetry allowlist:
 //!
 //! ```rust,ignore
-//! #[instrument(COMPONENT: account.id = %id, err)]
+//! #[instrument(COMPONENT: level: DEBUG, account.id = %id, err)]
 //! fn get_account(&self, id: AccountId) -> Result<Account, Error> { ... }
 //! ```
 //!

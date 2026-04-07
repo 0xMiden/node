@@ -7,7 +7,7 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError, TransactionVerifier};
-use tracing::{Instrument, info_span};
+use tracing::info_span;
 pub use validated_tx::ValidatedTransaction;
 
 // TRANSACTION VALIDATION ERROR

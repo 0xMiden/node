@@ -8,7 +8,7 @@ use miden_protocol::note::NoteDetails;
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
-use tracing::{Instrument, info_span};
+use tracing::info_span;
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, InvalidBlockError};
