@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "miden-genesis"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3055,7 +3055,7 @@ dependencies = [
 
 [[package]]
 name = "miden-large-smt-backend-rocksdb"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "miden-crypto",
  "miden-node-rocksdb-cxx-linkage-fix",
@@ -3115,7 +3115,7 @@ dependencies = [
 
 [[package]]
 name = "miden-network-monitor"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -3143,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3163,7 +3163,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-block-producer"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-db"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "deadpool",
  "deadpool-diesel",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-grpc-error-macro"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-ntx-builder"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "build-rs",
@@ -3252,7 +3252,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto-build"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "build-rs",
  "fs-err",
@@ -3288,11 +3288,11 @@ dependencies = [
 
 [[package]]
 name = "miden-node-rocksdb-cxx-linkage-fix"
-version = "0.14.2"
+version = "0.14.3"
 
 [[package]]
 name = "miden-node-rpc"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "futures",
@@ -3324,7 +3324,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-store"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-stress-test"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "clap",
  "fs-err",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-utils"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3431,7 +3431,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-validator"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -3536,7 +3536,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3573,7 +3573,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover-client"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "build-rs",
  "fs-err",

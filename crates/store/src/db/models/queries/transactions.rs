@@ -322,18 +322,16 @@ fn with_output_note_proofs(
         .zip(tx_output_notes)
         .map(|(raw, output_notes)| {
             let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
+            // Filter out erased notes: notes created and consumed within the same
+            // block are removed from the block's output notes and thus have no entry
+            // in the `notes` table.
             let enriched_notes = output_notes
                 .into_iter()
-                .map(|note| {
+                .filter_map(|note| {
                     let note_id = note.id();
-                    output_notes_by_id.get(&note_id).cloned().ok_or_else(|| {
-                        DatabaseError::DataCorrupted(format!(
-                            "missing output note sync record for note {note_id} created by \
-                             transaction {transaction_id}",
-                        ))
-                    })
+                    output_notes_by_id.get(&note_id).cloned()
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Vec<_>>();
 
             Ok(crate::db::TransactionRecord {
                 account_id: AccountId::read_from_bytes(&raw.account_id)?,
