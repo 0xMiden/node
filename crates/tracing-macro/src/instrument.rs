@@ -569,7 +569,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         // On Err: emit the full error chain and mark the OpenTelemetry span as failed.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #parent_tok #fields_tok #ret_tok)]
+            #[::tracing::instrument(#parent_tok #target_tokens #name_tokens #skip_all #fields_tok #ret_tok)]
             #vis #sig {
                 let __result: #result_ty = #block;
                 if let ::core::result::Result::Err(ref __err) = __result {
@@ -586,14 +586,14 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         // Delegate to tracing::instrument's built-in err support.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #parent_tok #fields_tok #ret_tok err)]
+            #[::tracing::instrument(#parent_tok #target_tokens #name_tokens #skip_all #fields_tok #ret_tok err)]
             #vis #sig #block
         })
     } else {
         // No error-reporting variant – plain span wrapper.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #parent_tok #fields_tok #ret_tok)]
+            #[::tracing::instrument(#parent_tok #target_tokens #name_tokens #skip_all #fields_tok #ret_tok)]
             #vis #sig #block
         })
     }

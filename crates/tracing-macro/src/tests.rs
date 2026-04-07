@@ -91,9 +91,13 @@ fn instrument_component_prefixes_span_name_for_err() {
 
 #[test]
 fn instrument_root_emits_parent_none() {
-    let result = instrument2(quote! { rpc: root }, item_bare_fn()).expect("expansion should succeed");
+    let result =
+        instrument2(quote! { rpc: root }, item_bare_fn()).expect("expansion should succeed");
     let tokens = result.to_string();
-    assert!(tokens.contains("parent = None"), "expected `parent = None` in output, got: {tokens}");
+    assert!(
+        tokens.contains("parent = None"),
+        "expected `parent = None` in output, got: {tokens}"
+    );
 }
 
 // ── report ────────────────────────────────────────────────────────────────────
