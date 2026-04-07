@@ -70,7 +70,9 @@ impl Db {
             .await
             .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
 
+        let span = tracing::Span::current();
         conn.interact(move |conn| {
+            let _guard = span.enter();
             let r = query(conn)?;
             Ok(r)
         })
