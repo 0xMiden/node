@@ -655,6 +655,33 @@ function updateDisplay() {
                             </div>
                         </div>
                     ` : ''}
+                    ${details.ValidatorStatus ? `
+                        <div class="nested-status">
+                            <strong>Validator:</strong>
+                            <div class="test-metrics ${service.status === 'Healthy' ? 'healthy' : 'unhealthy'}">
+                                <div class="metric-row">
+                                    <span class="metric-label">URL:</span>
+                                    <span class="metric-value">${details.ValidatorStatus.url}${renderCopyButton(details.ValidatorStatus.url, 'URL')}</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="metric-label">Version:</span>
+                                    <span class="metric-value">${details.ValidatorStatus.version}</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="metric-label">Chain Tip:</span>
+                                    <span class="metric-value">${numOrDash(details.ValidatorStatus.chain_tip)}</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="metric-label">Validated Transactions:</span>
+                                    <span class="metric-value">${numOrDash(details.ValidatorStatus.validated_transactions_count)}</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="metric-label">Signed Blocks:</span>
+                                    <span class="metric-value">${numOrDash(details.ValidatorStatus.signed_blocks_count)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
                     ${service.testDetails ? `
                         <div class="nested-status">
                             <strong>Proof Generation Testing (${service.testDetails.proof_type}):</strong>

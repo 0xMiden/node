@@ -44,7 +44,7 @@ impl TestValidator {
         .unwrap();
 
         Self {
-            server: ValidatorServer::new(signer, db),
+            server: ValidatorServer::new(signer, db, 0, 0, 0),
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
         }
