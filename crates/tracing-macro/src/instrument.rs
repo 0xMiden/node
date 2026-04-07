@@ -137,7 +137,7 @@ enum Element {
     Field(Box<Field>),
     /// `ret` – record the function's return value inside the span.
     Ret,
-    /// `root` – force the span to be a root span (`parent = None`) and tag it with `root = true`.
+    /// `root` – force the span to be a root span (`parent = None`).
     Root,
     /// `err` – on `Err`, emit a tracing event with the top-level error message.
     /// Delegates to `tracing::instrument`'s built-in `err`.  Requires `Result`.
@@ -408,12 +408,8 @@ fn type_contains_dyn(ty: &Type) -> bool {
 /// Converts the collected `Field` entries into a `fields(…),` token fragment.
 ///
 /// Each field is emitted as `dotted.name = [%] expr`.
-fn fields_tokens(fields: &[&Field], has_root: bool) -> TokenStream2 {
+fn fields_tokens(fields: &[&Field]) -> TokenStream2 {
     let mut parts = Vec::new();
-
-    if has_root {
-        parts.push(quote! { root = true });
-    }
 
     for f in fields {
         // Emit the dotted name as a raw token sequence so `tracing::instrument`
@@ -544,11 +540,17 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         .component
         .as_ref()
         .map(|component| component.to_span_name_tokens(&func.sig.ident));
-    let fields_tok = fields_tokens(&fields, has_root);
+    let fields_tok = fields_tokens(&fields);
 
     // Always skip all implicit fn arguments to avoid accidentally recording sensitive values.
     // Explicit OTel fields declared in the attribute are still emitted via `fields(…)`.
     let skip_all = quote! { skip_all, };
+
+    let parent_tok = if has_root {
+        quote! { parent = None, }
+    } else {
+        quote! {}
+    };
 
     let ret_tok = if has_ret {
         quote! { ret, }
@@ -567,7 +569,7 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         // On Err: emit the full error chain and mark the OpenTelemetry span as failed.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #fields_tok #ret_tok)]
+            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #parent_tok #fields_tok #ret_tok)]
             #vis #sig {
                 let __result: #result_ty = #block;
                 if let ::core::result::Result::Err(ref __err) = __result {
@@ -584,14 +586,14 @@ pub fn instrument2(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenS
         // Delegate to tracing::instrument's built-in err support.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #fields_tok #ret_tok err)]
+            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #parent_tok #fields_tok #ret_tok err)]
             #vis #sig #block
         })
     } else {
         // No error-reporting variant – plain span wrapper.
         Ok(quote! {
             #(#attrs)*
-            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #fields_tok #ret_tok)]
+            #[::tracing::instrument(#target_tokens #name_tokens #skip_all #parent_tok #fields_tok #ret_tok)]
             #vis #sig #block
         })
     }

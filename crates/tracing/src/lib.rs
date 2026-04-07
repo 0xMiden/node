@@ -1,24 +1,34 @@
 //! Tracing utilities for Miden node with enhanced error reporting.
 //!
-//! This crate provides an `#[instrument]` attribute macro that enhances
-//! the standard `tracing::instrument` with full error chain reporting.
+//! This crate provides an `#[instrument]` attribute macro that wraps
+//! `tracing::instrument` with a custom syntax enforcing OpenTelemetry field
+//! naming and optional full error-chain reporting.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
 //! use miden_node_tracing::instrument;
 //!
-//! #[instrument(target = "my_component", skip_all, err)]
+//! // COMPONENT is a &str const defined in the calling crate.
+//! #[instrument(COMPONENT: report)]
 //! async fn apply_block(&self, block: Block) -> Result<(), ApplyBlockError> {
 //!     // ...
 //! }
 //! ```
 //!
-//! When an error occurs, the full error chain is recorded:
+//! All function arguments are skipped automatically. Additional span fields
+//! must use names from the OpenTelemetry allowlist:
+//!
+//! ```rust,ignore
+//! #[instrument(COMPONENT: account.id = %id, err)]
+//! fn get_account(&self, id: AccountId) -> Result<Account, Error> { ... }
+//! ```
+//!
+//! When `report` is used and an error occurs, the full error chain is recorded:
 //! ```text
-//! failed to apply block to store
+//! ERROR apply_block: error = "failed to apply block
 //! caused by: database error
-//! caused by: SQLite error: table 'blocks' has 10 columns but 9 values were supplied
+//! caused by: SQLite error: table 'blocks' has 10 columns but 9 values were supplied"
 //! ```
 
 pub use miden_node_tracing_macro::{debug, error, info, instrument, trace, warn};

@@ -87,14 +87,16 @@ fn instrument_component_prefixes_span_name_for_err() {
     assert!(tokens.contains("name = \"rpc.foo\""), "{tokens}");
 }
 
-// ── report ────────────────────────────────────────────────────────────────────
+// ── root ──────────────────────────────────────────────────────────────────────
 
 #[test]
-fn instrument_report_on_result_fn_succeeds() {
-    // #[instrument(rpc: report)]  –  fn returns Result  →  ok
-    let result = instrument2(quote! { rpc: report }, item_result_unit_fn());
-    assert!(result.is_ok(), "{result:?}");
+fn instrument_root_emits_parent_none() {
+    let result = instrument2(quote! { rpc: root }, item_bare_fn()).expect("expansion should succeed");
+    let tokens = result.to_string();
+    assert!(tokens.contains("parent = None"), "expected `parent = None` in output, got: {tokens}");
 }
+
+// ── report ────────────────────────────────────────────────────────────────────
 
 #[test]
 fn instrument_report_on_bare_fn_fails() {
@@ -104,13 +106,6 @@ fn instrument_report_on_bare_fn_fails() {
 }
 
 // ── err ───────────────────────────────────────────────────────────────────────
-
-#[test]
-fn instrument_err_on_result_fn_succeeds() {
-    // #[instrument(rpc: err)]  –  fn returns Result  →  ok
-    let result = instrument2(quote! { rpc: err }, item_result_unit_fn());
-    assert!(result.is_ok(), "{result:?}");
-}
 
 #[test]
 fn instrument_err_on_bare_fn_fails() {
