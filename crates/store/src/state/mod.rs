@@ -1,13 +1,13 @@
-//! Lock-free state management for the Miden store.
+//! State management for the Miden store.
 //!
-//! The [State] provides data access and modification methods. Reads are lock-free: readers access
-//! shared in-memory structures directly via [`WriterGuard`]. A single writer task, serialized by
-//! a channel, applies block mutations and then atomically advances a block counter
-//! ([`committed_block_num`](State::committed_block_num)) to publish the new state to readers.
+//! The [State] provides data access and modification methods. A single writer task, serialized by
+//! a channel, applies block mutations. In-memory structures (`account_tree`, `blockchain`,
+//! `forest`) are protected by [`RwLock`] because their internal collections (`BTreeMap`, `Vec`,
+//! `HashMap`) are not safe for concurrent mutation during reads. The `RocksDB`-backed nullifier
+//! tree uses a lock-free [`WriterGuard`] because `RocksDB` MVCC provides snapshot isolation.
 //!
-//! The `Release`/`Acquire` ordering on the atomic counter establishes a happens-before
-//! relationship, guaranteeing that readers who observe a given block number will see all
-//! mutations up to and including that block.
+//! Readers obtain a [`ReadSnapshot`] via [`State::snapshot()`], which acquires read locks on the
+//! in-memory structures. The writer acquires write locks only during the brief mutation phase.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
@@ -42,7 +42,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::{info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
@@ -109,10 +109,9 @@ pub struct TransactionInputs {
 
 /// The rollup state.
 ///
-/// All in-memory state is accessed lock-free. A single writer task (serialized by a channel)
-/// mutates the state and then advances [`committed_block_num`](Self::committed_block_num) with
-/// `Release` ordering. Readers load the counter with `Acquire` ordering before accessing shared
-/// structures, guaranteeing they see a consistent snapshot.
+/// A single writer task (serialized by a channel) mutates the state. In-memory structures are
+/// protected by [`RwLock`]; the `RocksDB`-backed nullifier tree is lock-free via [`WriterGuard`].
+/// Readers obtain a [`ReadSnapshot`] which holds read locks on the in-memory structures.
 pub struct State {
     /// The database which stores block headers, nullifiers, notes, and the latest states of
     /// accounts.
@@ -126,16 +125,28 @@ pub struct State {
     pub(crate) committed_block_num: AtomicU32,
 
     /// Nullifier tree — append-only, backed by `RocksDB`.
+    ///
+    /// Lock-free via [`WriterGuard`]: `RocksDB` MVCC provides safe concurrent read access
+    /// during writes.
     pub(crate) nullifier_tree: WriterGuard<NullifierTree<LargeSmt<TreeStorage>>>,
 
     /// Account tree with historical overlay support (50-block history).
-    pub(crate) account_tree: WriterGuard<AccountTreeWithHistory<TreeStorage>>,
+    ///
+    /// Protected by [`RwLock`]: the in-memory `BTreeMap` overlays are not safe for concurrent
+    /// mutation during reads.
+    pub(crate) account_tree: RwLock<AccountTreeWithHistory<TreeStorage>>,
 
     /// Chain MMR (Merkle Mountain Range of block commitments).
-    pub(crate) blockchain: WriterGuard<Blockchain>,
+    ///
+    /// Protected by [`RwLock`]: the in-memory `Vec` backing the MMR is not safe for concurrent
+    /// mutation during reads.
+    pub(crate) blockchain: RwLock<Blockchain>,
 
     /// Forest state for account storage maps and vault witnesses.
-    pub(crate) forest: WriterGuard<AccountStateForest>,
+    ///
+    /// Protected by [`RwLock`]: the in-memory `HashMap` backing the forest is not safe for
+    /// concurrent mutation during reads.
+    pub(crate) forest: RwLock<AccountStateForest>,
 
     /// Channel to the single writer task.
     writer_tx: mpsc::Sender<writer::WriteRequest>,
@@ -152,25 +163,25 @@ pub struct State {
 
 /// A consistent read view of the in-memory state.
 ///
-/// Created by [`State::snapshot()`], which performs an atomic load with `Acquire` ordering on the
-/// committed block counter. This establishes a happens-before relationship with the writer's
-/// `Release` store, guaranteeing that all tree references obtained through this snapshot reflect
-/// a fully consistent state at [`block_num`](Self::block_num).
+/// Created by [`State::snapshot()`], which acquires read locks on the in-memory structures and
+/// performs an atomic load with `Acquire` ordering on the committed block counter. The read locks
+/// guarantee the writer cannot mutate the in-memory structures while any reader holds a snapshot.
 ///
-/// This is the **only** way for readers to obtain references to the in-memory trees. The
-/// [`WriterGuard::as_ref()`] method is `pub(super)`, preventing direct access from outside the
-/// `state` module without going through the snapshot barrier.
+/// The nullifier tree is accessed lock-free via [`WriterGuard`] because its `RocksDB` MVCC
+/// backend provides safe concurrent read access during writes.
+///
+/// This is the **only** way for readers to obtain references to the in-memory trees.
 pub(crate) struct ReadSnapshot<'a> {
     /// The committed block number at the time the snapshot was taken.
     pub block_num: BlockNumber,
-    /// Nullifier tree — append-only.
+    /// Nullifier tree — lock-free (`RocksDB` MVCC).
     pub nullifier_tree: &'a NullifierTree<LargeSmt<TreeStorage>>,
-    /// Account tree with historical overlay support.
-    pub account_tree: &'a AccountTreeWithHistory<TreeStorage>,
-    /// Chain MMR.
-    pub blockchain: &'a Blockchain,
-    /// Forest state for account storage maps and vault witnesses.
-    pub forest: &'a AccountStateForest,
+    /// Account tree with historical overlay support — read-locked.
+    pub account_tree: tokio::sync::RwLockReadGuard<'a, AccountTreeWithHistory<TreeStorage>>,
+    /// Chain MMR — read-locked.
+    pub blockchain: tokio::sync::RwLockReadGuard<'a, Blockchain>,
+    /// Forest state for account storage maps and vault witnesses — read-locked.
+    pub forest: tokio::sync::RwLockReadGuard<'a, AccountStateForest>,
 }
 
 impl State {
@@ -240,9 +251,9 @@ impl State {
             block_store,
             committed_block_num: AtomicU32::new(latest_block_num.as_u32()),
             nullifier_tree: WriterGuard::new(nullifier_tree),
-            account_tree: WriterGuard::new(account_tree),
-            blockchain: WriterGuard::new(blockchain),
-            forest: WriterGuard::new(forest),
+            account_tree: RwLock::new(account_tree),
+            blockchain: RwLock::new(blockchain),
+            forest: RwLock::new(forest),
             writer_tx,
             termination_ask,
             proven_tip,
@@ -286,24 +297,27 @@ impl State {
         result_rx.await?
     }
 
-    // STATE ACCESSORS (lock-free)
+    // STATE ACCESSORS
     // --------------------------------------------------------------------------------------------
 
     /// Takes a consistent snapshot of all in-memory state.
     ///
-    /// Performs an `Acquire` load on the committed block counter, then obtains references to all
-    /// trees. The `Acquire` ordering guarantees that all writer mutations completed before the
-    /// corresponding `Release` store are visible through these references.
+    /// Acquires read locks on the three in-memory structures (account tree, blockchain, forest)
+    /// and performs an `Acquire` load on the committed block counter. The read locks guarantee
+    /// the writer cannot mutate these structures while any snapshot is held.
+    ///
+    /// The nullifier tree is accessed lock-free via [`WriterGuard`] because its `RocksDB` MVCC
+    /// backend provides safe concurrent read access during writes.
     ///
     /// This is the **only** sanctioned way for readers to access the in-memory trees.
-    fn snapshot(&self) -> ReadSnapshot<'_> {
+    async fn snapshot(&self) -> ReadSnapshot<'_> {
         let block_num = BlockNumber::from(self.committed_block_num.load(Ordering::Acquire));
         ReadSnapshot {
             block_num,
             nullifier_tree: self.nullifier_tree.as_ref(),
-            account_tree: self.account_tree.as_ref(),
-            blockchain: self.blockchain.as_ref(),
-            forest: self.forest.as_ref(),
+            account_tree: self.account_tree.read().await,
+            blockchain: self.blockchain.read().await,
+            forest: self.forest.read().await,
         }
     }
 
@@ -336,7 +350,7 @@ impl State {
         block_num: Option<BlockNumber>,
         include_mmr_proof: bool,
     ) -> Result<(Option<BlockHeader>, Option<MmrProof>), GetBlockHeaderError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         let block_header = self.db.select_block_header_by_block_num(block_num).await?;
         if let Some(header) = block_header {
             let mmr_proof = if include_mmr_proof {
@@ -357,7 +371,7 @@ impl State {
     /// Note: these proofs are invalidated once the nullifier tree is modified, i.e. on a new block.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret)]
     pub async fn check_nullifiers(&self, nullifiers: &[Nullifier]) -> Vec<SmtProof> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         nullifiers
             .iter()
             .map(|n| snapshot.nullifier_tree.open(n))
@@ -382,7 +396,7 @@ impl State {
         &self,
         block_num: Option<BlockNumber>,
     ) -> Result<Option<(BlockHeader, MmrPeaks)>, GetCurrentBlockchainDataError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         if let Some(number) = block_num
             && number == snapshot.block_num
         {
@@ -450,7 +464,7 @@ impl State {
         let mut blocks: BTreeSet<BlockNumber> = tx_reference_blocks;
         blocks.extend(note_blocks);
 
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         let latest_block_num = snapshot.block_num;
 
         let highest_block_num =
@@ -541,7 +555,7 @@ impl State {
         blocks.extend(note_proof_reference_blocks);
 
         let (latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr) =
-            self.get_block_inputs_witnesses(&mut blocks, &account_ids, &nullifiers)?;
+            self.get_block_inputs_witnesses(&mut blocks, &account_ids, &nullifiers).await?;
 
         // Fetch the block headers for all blocks in the partial MMR plus the latest one which will
         // be used as the previous block header of the block being built.
@@ -579,8 +593,7 @@ impl State {
     /// Get account and nullifier witnesses for the requested account IDs and nullifiers as well as
     /// the [`PartialMmr`] for the given blocks. The MMR won't contain the latest block and its
     /// number is removed from `blocks` and returned separately.
-    #[expect(clippy::type_complexity)]
-    fn get_block_inputs_witnesses(
+    async fn get_block_inputs_witnesses(
         &self,
         blocks: &mut BTreeSet<BlockNumber>,
         account_ids: &[AccountId],
@@ -594,7 +607,7 @@ impl State {
         ),
         GetBlockInputsError,
     > {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         let latest_block_number = snapshot.block_num;
 
         // If `blocks` is empty, use the latest block number which will never trigger the error.
@@ -643,7 +656,7 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
 
         let account_commitment = snapshot.account_tree.get_latest_commitment(account_id);
 
@@ -723,7 +736,7 @@ impl State {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
-        let (block_num, witness) = self.get_account_witness(block_num, account_id)?;
+        let (block_num, witness) = self.get_account_witness(block_num, account_id).await?;
 
         let details = if let Some(request) = details {
             Some(self.fetch_public_account_details(account_id, block_num, request).await?)
@@ -738,12 +751,12 @@ impl State {
     ///
     /// If `block_num` is provided, returns the witness at that historical block;
     /// otherwise, returns the witness at the latest block.
-    fn get_account_witness(
+    async fn get_account_witness(
         &self,
         block_num: Option<BlockNumber>,
         account_id: AccountId,
     ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
 
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
@@ -795,7 +808,7 @@ impl State {
         }
 
         // Validate block exists in the blockchain before querying the database.
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         if block_num > snapshot.block_num {
             return Err(GetAccountError::UnknownBlock(block_num));
         }
@@ -959,14 +972,13 @@ impl State {
     }
 
     /// Returns vault asset witnesses for the specified account and block number.
-    #[expect(clippy::unused_async)]
     pub async fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
         vault_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         let witnesses =
             snapshot.forest.get_vault_asset_witnesses(account_id, block_num, vault_keys)?;
         Ok(witnesses)
@@ -977,7 +989,6 @@ impl State {
     ///
     /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
     /// get the actual key into the storage map.
-    #[expect(clippy::unused_async)]
     pub async fn get_storage_map_witness(
         &self,
         account_id: AccountId,
@@ -985,7 +996,7 @@ impl State {
         block_num: BlockNumber,
         raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot().await;
         let witness = snapshot
             .forest
             .get_storage_map_witness(account_id, slot_name, block_num, raw_key)?;

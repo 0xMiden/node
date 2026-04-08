@@ -37,12 +37,10 @@ pub(crate) async fn writer_loop(mut rx: mpsc::Receiver<WriteRequest>, state: Arc
 ///
 /// ## Consistency model
 ///
-/// This function is the sole writer to all in-memory state. Readers access the same structures
-/// concurrently without locks because:
-///
-/// - The data structures are append-only or overlay-based (keyed by block number).
-/// - All mutations are completed before the atomic block counter is advanced (`Release`).
-/// - Readers load the counter (`Acquire`) before querying, establishing happens-before.
+/// This function is the sole writer to all in-memory state. The nullifier tree (backed by
+/// `RocksDB` with MVCC) is accessed lock-free via [`WriterGuard`]. The in-memory structures
+/// (`account_tree`, `blockchain`, `forest`) are protected by [`RwLock`]: the writer acquires
+/// read locks during validation and write locks during the brief mutation phase.
 ///
 /// The DB transaction is committed independently. Readers gate visibility through the atomic
 /// block counter, so the brief window where the DB has block N+1 but the counter still says N
@@ -99,12 +97,12 @@ async fn apply_block_inner(
     );
 
     // Compute mutations required for updating account and nullifier trees.
-    // SAFETY: This is the single writer task, serialized by the channel. No concurrent
-    // mutations to these structures are possible.
+    // The nullifier tree uses WriterGuard (RocksDB MVCC — safe for concurrent access).
+    // The account tree and blockchain use RwLock (in-memory — need read lock for validation).
     let (nullifier_tree_update, account_tree_update) = {
         let nullifier_tree = unsafe { state.nullifier_tree.as_mut() };
-        let account_tree = unsafe { state.account_tree.as_mut() };
-        let blockchain = state.blockchain.as_ref();
+        let account_tree = state.account_tree.read().await;
+        let blockchain = state.blockchain.read().await;
 
         let _span = info_span!(target: COMPONENT, "compute_tree_mutations").entered();
 
@@ -218,22 +216,30 @@ async fn apply_block_inner(
     block_save_task.await??;
 
     // Apply in-memory mutations.
-    // SAFETY: This is the single writer task, no concurrent mutations.
+
+    // Nullifier tree: lock-free via WriterGuard (RocksDB MVCC).
+    // SAFETY: This is the single writer task, serialized by the channel.
     unsafe {
         state
             .nullifier_tree
             .as_mut()
             .apply_mutations(nullifier_tree_update)
             .expect("Unreachable: mutations were computed from the current tree state");
-        state
-            .account_tree
-            .as_mut()
+    }
+
+    // In-memory structures: acquire write locks for the brief mutation phase.
+    {
+        let mut account_tree = state.account_tree.write().await;
+        let mut blockchain = state.blockchain.write().await;
+        let mut forest = state.forest.write().await;
+
+        account_tree
             .apply_mutations(account_tree_update)
             .expect("Unreachable: mutations were computed from the current tree state");
 
-        state.blockchain.as_mut().push(block_commitment);
+        blockchain.push(block_commitment);
 
-        state.forest.as_mut().apply_block_updates(block_num, account_deltas)?;
+        forest.apply_block_updates(block_num, account_deltas)?;
     }
 
     // PUBLISH: Advance the atomic block counter with Release ordering.
