@@ -40,11 +40,12 @@ pub(crate) async fn writer_loop(mut rx: mpsc::Receiver<WriteRequest>, state: Arc
 /// This function is the sole writer to all in-memory state. The nullifier tree (backed by
 /// `RocksDB` with MVCC) is accessed lock-free via [`WriterGuard`]. The in-memory structures
 /// (`account_tree`, `blockchain`, `forest`) are protected by [`RwLock`]: the writer acquires
-/// read locks during validation and write locks during the brief mutation phase.
+/// read locks during validation and write locks during the commit phase.
 ///
-/// The DB transaction is committed independently. Readers gate visibility through the atomic
-/// block counter, so the brief window where the DB has block N+1 but the counter still says N
-/// is invisible to readers.
+/// The write locks are acquired **before** the DB commit and held through both the DB commit
+/// and in-memory mutations. This ensures readers never observe a state where the DB has
+/// block N+1 but the in-memory structures still reflect block N. The atomic block counter is
+/// advanced before the write locks are released.
 #[expect(clippy::too_many_lines)]
 #[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
 async fn apply_block_inner(
@@ -204,8 +205,15 @@ async fn apply_block_inner(
             },
         ));
 
-    // Commit to DB. No oneshot synchronization dance needed — readers gate visibility
-    // through the atomic block counter, not through DB transaction timing.
+    // Acquire write locks BEFORE committing to DB. This ensures readers cannot observe a
+    // state where the DB has block N+1 but the in-memory structures still reflect block N.
+    // The write locks block all readers (via snapshot()) for the duration of the DB commit
+    // and in-memory mutations, guaranteeing atomicity from the reader's perspective.
+    let mut account_tree = state.account_tree.write().await;
+    let mut blockchain = state.blockchain.write().await;
+    let mut forest = state.forest.write().await;
+
+    // Commit to DB while holding write locks.
     state
         .db
         .apply_block(signed_block, notes, proving_inputs)
@@ -227,24 +235,16 @@ async fn apply_block_inner(
             .expect("Unreachable: mutations were computed from the current tree state");
     }
 
-    // In-memory structures: acquire write locks for the brief mutation phase.
-    {
-        let mut account_tree = state.account_tree.write().await;
-        let mut blockchain = state.blockchain.write().await;
-        let mut forest = state.forest.write().await;
+    account_tree
+        .apply_mutations(account_tree_update)
+        .expect("Unreachable: mutations were computed from the current tree state");
 
-        account_tree
-            .apply_mutations(account_tree_update)
-            .expect("Unreachable: mutations were computed from the current tree state");
+    blockchain.push(block_commitment);
 
-        blockchain.push(block_commitment);
+    forest.apply_block_updates(block_num, account_deltas)?;
 
-        forest.apply_block_updates(block_num, account_deltas)?;
-    }
-
-    // PUBLISH: Advance the atomic block counter with Release ordering.
-    // All mutations above are guaranteed visible to any reader that subsequently loads this
-    // counter with Acquire ordering.
+    // Advance the atomic block counter before releasing write locks, so readers that
+    // acquire read locks immediately after see the updated block number.
     state.committed_block_num.store(block_num.as_u32(), Ordering::Release);
 
     info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
