@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.4 (2026-04-08)
+
+- Added missing `AuthControlled::allow_all()` mint policy component to genesis faucet accounts ([#1903](https://github.com/0xMiden/node/pull/1903)).
+
 ## v0.14.3 (2026-04-07)
 
 - Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).
