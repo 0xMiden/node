@@ -77,7 +77,7 @@ impl State {
         let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 
-        let snapshot = self.snapshot().await;
+        let snapshot = self.snapshot();
         let mmr_delta = snapshot
             .blockchain
             .as_mmr()
@@ -101,7 +101,7 @@ impl State {
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
-        let snapshot = self.snapshot().await;
+        let snapshot = self.snapshot();
         let block_end = *block_range.end();
         let note_tags: Arc<[u32]> = note_tags.into();
 

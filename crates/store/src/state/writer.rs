@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
@@ -13,7 +12,7 @@ use tracing::{Instrument, info, info_span, instrument};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, InvalidBlockError};
-use crate::state::State;
+use crate::state::{InMemoryState, State};
 use crate::{COMPONENT, HistoricalError};
 
 /// A request to apply a new block, sent through the writer channel.
@@ -39,13 +38,19 @@ pub(crate) async fn writer_loop(mut rx: mpsc::Receiver<WriteRequest>, state: Arc
 ///
 /// This function is the sole writer to all in-memory state. The nullifier tree (backed by
 /// `RocksDB` with MVCC) is accessed lock-free via [`WriterGuard`]. The in-memory structures
-/// (`account_tree`, `blockchain`, `forest`) are protected by [`RwLock`]: the writer acquires
-/// read locks during validation and write locks during the commit phase.
+/// (`account_tree`, `blockchain`, `forest`) are held in an `Arc<InMemoryState>` behind an
+/// `ArcSwap`. The writer loads the current state, validates against it, commits to DB (no locks
+/// held), then deep-clones the state, applies mutations, and atomically swaps the pointer.
 ///
-/// The write locks are acquired **before** the DB commit and held through both the DB commit
-/// and in-memory mutations. This ensures readers never observe a state where the DB has
-/// block N+1 but the in-memory structures still reflect block N. The atomic block counter is
-/// advanced before the write locks are released.
+/// Readers never block: they obtain an `Arc` via `ArcSwap::load_full()`, which performs only an
+/// atomic refcount increment with no data cloning. The atomic swap guarantees readers see either
+/// the old or new state, never a partial update. Readers holding an `Arc` to the old state are
+/// completely unaffected by the swap.
+///
+/// ## Performance
+///
+/// The only deep clone of `InMemoryState` occurs once per block in this function. Readers pay
+/// only an atomic refcount bump per `snapshot()` call.
 #[expect(clippy::too_many_lines)]
 #[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
 async fn apply_block_inner(
@@ -97,13 +102,14 @@ async fn apply_block_inner(
         async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
     );
 
+    // Load the current in-memory state snapshot for validation (wait-free, no locks).
+    let snapshot = state.in_memory.load_full();
+
     // Compute mutations required for updating account and nullifier trees.
     // The nullifier tree uses WriterGuard (RocksDB MVCC — safe for concurrent access).
-    // The account tree and blockchain use RwLock (in-memory — need read lock for validation).
+    // The account tree and blockchain are read from the snapshot (no locks needed).
     let (nullifier_tree_update, account_tree_update) = {
         let nullifier_tree = unsafe { state.nullifier_tree.as_mut() };
-        let account_tree = state.account_tree.read().await;
-        let blockchain = state.blockchain.read().await;
 
         let _span = info_span!(target: COMPONENT, "compute_tree_mutations").entered();
 
@@ -119,7 +125,7 @@ async fn apply_block_inner(
         }
 
         // new_block.chain_root must be equal to the chain MMR root prior to the update.
-        let peaks = blockchain.peaks();
+        let peaks = snapshot.blockchain.peaks();
         if peaks.hash_peaks() != header.chain_commitment() {
             return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
         }
@@ -139,7 +145,8 @@ async fn apply_block_inner(
         }
 
         // Compute update for account tree.
-        let account_tree_update = account_tree
+        let account_tree_update = snapshot
+            .account_tree
             .compute_mutations(
                 body.updated_accounts()
                     .iter()
@@ -205,15 +212,8 @@ async fn apply_block_inner(
             },
         ));
 
-    // Acquire write locks BEFORE committing to DB. This ensures readers cannot observe a
-    // state where the DB has block N+1 but the in-memory structures still reflect block N.
-    // The write locks block all readers (via snapshot()) for the duration of the DB commit
-    // and in-memory mutations, guaranteeing atomicity from the reader's perspective.
-    let mut account_tree = state.account_tree.write().await;
-    let mut blockchain = state.blockchain.write().await;
-    let mut forest = state.forest.write().await;
-
-    // Commit to DB while holding write locks.
+    // Commit to DB. No locks are held — this is the key advantage over the previous design.
+    // Readers continue to see the old in-memory state (via their Arc) while the DB commits.
     state
         .db
         .apply_block(signed_block, notes, proving_inputs)
@@ -223,7 +223,9 @@ async fn apply_block_inner(
     // Await the block store save task.
     block_save_task.await??;
 
-    // Apply in-memory mutations.
+    // Deep-clone the in-memory state to produce an owned mutable copy for applying mutations.
+    // This is the only deep clone per block — readers pay only an atomic refcount bump.
+    let mut new_state = InMemoryState::clone(&snapshot);
 
     // Nullifier tree: lock-free via WriterGuard (RocksDB MVCC).
     // SAFETY: This is the single writer task, serialized by the channel.
@@ -235,17 +237,20 @@ async fn apply_block_inner(
             .expect("Unreachable: mutations were computed from the current tree state");
     }
 
-    account_tree
+    new_state
+        .account_tree
         .apply_mutations(account_tree_update)
         .expect("Unreachable: mutations were computed from the current tree state");
 
-    blockchain.push(block_commitment);
+    new_state.blockchain.push(block_commitment);
 
-    forest.apply_block_updates(block_num, account_deltas)?;
+    new_state.forest.apply_block_updates(block_num, account_deltas)?;
 
-    // Advance the atomic block counter before releasing write locks, so readers that
-    // acquire read locks immediately after see the updated block number.
-    state.committed_block_num.store(block_num.as_u32(), Ordering::Release);
+    new_state.block_num = block_num;
+
+    // Atomically publish the new state. Readers that call snapshot() after this point
+    // will see the updated state. Readers holding the old Arc continue unaffected.
+    state.in_memory.store(Arc::new(new_state));
 
     info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 

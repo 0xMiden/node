@@ -64,6 +64,7 @@ pub enum WitnessError {
 // ================================================================================================
 
 /// Container for forest-related state that needs to be updated atomically.
+#[derive(Clone)]
 pub(crate) struct AccountStateForest {
     /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.

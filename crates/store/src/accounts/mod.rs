@@ -115,7 +115,7 @@ impl HistoricalOverlay {
 /// This structure maintains a sliding window of historical account states by storing
 /// reversion data (mutations that undo changes). Historical witnesses are reconstructed
 /// by starting from the latest state and applying reversion overlays backwards in time.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AccountTreeWithHistory<S: SmtStorage> {
     /// The current block number (latest state).
     block_number: BlockNumber,

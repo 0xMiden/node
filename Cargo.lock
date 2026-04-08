@@ -198,6 +198,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2955,8 +2964,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto"
 version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ed0a034a460e27723dcfdf25effffab84331c3b46b13e7a1bd674197cc71bfe"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#71e667f6383751586c078f8723d79e59489a2e66"
 dependencies = [
  "blake3",
  "cc",
@@ -2998,8 +3006,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto-derive"
 version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8bf6ebde028e79bcc61a3632d2f375a5cc64caa17d014459f75015238cb1e08"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#71e667f6383751586c078f8723d79e59489a2e66"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -3026,8 +3033,7 @@ dependencies = [
 [[package]]
 name = "miden-field"
 version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38011348f4fb4c9e5ce1f471203d024721c00e3b60a91aa91aaefe6738d8b5ea"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#71e667f6383751586c078f8723d79e59489a2e66"
 dependencies = [
  "miden-serde-utils",
  "num-bigint",
@@ -3344,6 +3350,7 @@ name = "miden-node-store"
 version = "0.15.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "assert_matches",
  "build-rs",
  "criterion",
@@ -3643,8 +3650,7 @@ dependencies = [
 [[package]]
 name = "miden-serde-utils"
 version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff78082e9b4ca89863e68da01b35f8a4029ee6fd912e39fa41fde4273a7debab"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#71e667f6383751586c078f8723d79e59489a2e66"
 dependencies = [
  "p3-field",
  "p3-goldilocks",
