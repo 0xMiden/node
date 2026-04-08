@@ -31,6 +31,7 @@ use crate::server::api::{
     read_block_range,
     read_root,
 };
+use crate::state::Finality;
 
 // NTX BUILDER ENDPOINTS
 // ================================================================================================
@@ -145,7 +146,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::store::NetworkAccountIdList>, Status> {
         let request = request.into_inner();
 
-        let mut chain_tip = self.state.latest_block_num().await;
+        let mut chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
             read_block_range::<GetNetworkAccountIdsError>(Some(request), "GetNetworkAccountIds")?
                 .into_inclusive_range::<GetNetworkAccountIdsError>(&chain_tip)?;
@@ -159,7 +160,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             last_block_included = chain_tip;
         }
 
-        chain_tip = self.state.latest_block_num().await;
+        chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::store::NetworkAccountIdList {
             account_ids,
@@ -251,7 +252,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let block_num = if let Some(num) = request.block_num {
             num.into()
         } else {
-            self.state.latest_block_num().await
+            self.state.chain_tip(Finality::Committed).await
         };
 
         // Retrieve the asset witnesses.
@@ -305,7 +306,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let block_num = if let Some(num) = request.block_num {
             num.into()
         } else {
-            self.state.latest_block_num().await
+            self.state.chain_tip(Finality::Committed).await
         };
 
         // Retrieve the storage map witness.
@@ -322,7 +323,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
                 key: Some(map_key.into()),
                 proof: Some(proof.into()),
             }),
-            block_num: self.state.latest_block_num().await.as_u32(),
+            block_num: self.state.chain_tip(Finality::Committed).await.as_u32(),
         }))
     }
 }

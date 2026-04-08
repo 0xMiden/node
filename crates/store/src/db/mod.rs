@@ -17,7 +17,6 @@ use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBloc
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
-    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
@@ -144,15 +143,15 @@ pub struct TransactionRecord {
     pub initial_state_commitment: Word,
     pub final_state_commitment: Word,
     pub input_notes: Vec<InputNoteCommitment>,
-    pub output_notes: Vec<NoteHeader>,
+    pub output_notes: Vec<NoteSyncRecord>,
     pub fee: FungibleAsset,
 }
 
 impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
-    /// The proto `TransactionHeader` is a 1:1 mapping of
-    /// `miden_protocol::transaction::TransactionHeader`.
+    /// The proto `TransactionHeader` mirrors the stored transaction data, except output notes are
+    /// enriched with inclusion proofs for sync clients.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {
@@ -565,12 +564,15 @@ impl Db {
     ///
     /// Atomically clears `proving_inputs` for the given block, then walks forward from the
     /// current proven-in-sequence tip through consecutive proven blocks, marking each as
-    /// proven-in-sequence. Returns the block numbers that were newly marked in-sequence.
+    /// proven-in-sequence.
+    ///
+    /// Returns the new tip of blocks that are proven in-sequence (which may have been unchanged by
+    /// this function).
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn mark_proven_and_advance_sequence(
         &self,
         block_num: BlockNumber,
-    ) -> Result<Vec<BlockNumber>> {
+    ) -> Result<BlockNumber> {
         self.transact("mark block proven", move |conn| {
             mark_proven_and_advance_sequence(conn, block_num)
         })
@@ -606,7 +608,7 @@ impl Db {
     ///
     /// This includes the genesis block, which is not technically proven, but treated as such.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
+    pub async fn proven_chain_tip(&self) -> Result<BlockNumber> {
         self.transact("select latest proven block num", |conn| {
             models::queries::select_latest_proven_in_sequence_block_num(conn)
         })
@@ -829,41 +831,46 @@ impl Db {
 /// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
 ///    sets `proven_in_sequence = TRUE` for each.
 ///
+/// Returns the new tip of blocks that are proven in-sequence (which may have been unchanged by this
+/// function).
+///
 /// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
 /// or below the current tip, as that indicates a consistency bug.
 pub(crate) fn mark_proven_and_advance_sequence(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
-) -> Result<Vec<BlockNumber>, DatabaseError> {
+) -> Result<BlockNumber, DatabaseError> {
     // Clear proving_inputs for the specified block.
     models::queries::clear_block_proving_inputs(conn, block_num)?;
 
     // Get the current proven-in-sequence tip (highest in-sequence).
-    let mut tip = models::queries::select_latest_proven_in_sequence_block_num(conn)?;
+    let current_tip = models::queries::select_latest_proven_in_sequence_block_num(conn)?;
+    let mut new_tip = current_tip;
 
     // Get all blocks that are proven but not yet marked in-sequence.
     let unsequenced = models::queries::select_proven_not_in_sequence_blocks(conn)?;
 
     // Walk forward from the tip through consecutive proven blocks.
-    let mut newly_in_sequence = Vec::new();
     for candidate in unsequenced {
-        if candidate <= tip {
+        if candidate <= current_tip {
             return Err(DatabaseError::DataCorrupted(format!(
-                "block {candidate} is proven but not marked in-sequence while the tip is at {tip}"
+                "block {candidate} is proven but not marked in-sequence while the tip is at {current_tip}"
             )));
         }
-        if candidate == tip + 1 {
-            tip = candidate;
-            newly_in_sequence.push(candidate);
+        if candidate == new_tip.child() {
+            // Walk the tip forward.
+            new_tip = candidate;
         } else {
+            // Sequence has been broken. Discontinue walking tip forward.
             break;
         }
     }
 
     // Mark the newly contiguous blocks as proven-in-sequence.
-    if let (Some(&from), Some(&to)) = (newly_in_sequence.first(), newly_in_sequence.last()) {
-        models::queries::mark_blocks_as_proven_in_sequence(conn, from, to)?;
+    if new_tip > current_tip {
+        let block_from = current_tip.child();
+        models::queries::mark_blocks_as_proven_in_sequence(conn, block_from, new_tip)?;
     }
 
-    Ok(newly_in_sequence)
+    Ok(new_tip)
 }

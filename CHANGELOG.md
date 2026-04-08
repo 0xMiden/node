@@ -5,11 +5,21 @@
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 - [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
 
-## v0.14.1 (2025-04-02)
+## v0.14.3 (2026-04-07)
+
+- Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).
+- [BREAKING] Migrated to `miden-protocol` v0.14.3 (update to `miden-vm` v0.22.1).
+
+## v0.14.2 (2026-04-07)
+
+- Added `block_header` field to `SyncChainMmrResponse` so clients can obtain the `block_to` block header without a separate request ([#1881](https://github.com/0xMiden/node/pull/1881)).
+- Added inclusion proofs to `SyncTransactions` output notes ([#1893](https://github.com/0xMiden/node/pull/1893)).
+
+## v0.14.1 (2026-04-02)
 
 - Fixed batch building issue with unauthenticated notes consumed in the same batch as they were created ([#1875](https://github.com/0xMiden/node/issues/1875)).
 
-## v0.14.0 (2025-04-01)
+## v0.14.0 (2026-04-01)
 
 ### Enhancements
 

@@ -621,3 +621,37 @@ async fn sync_chain_mmr_returns_delta() {
 
     shutdown_store(store_runtime).await;
 }
+
+#[test]
+fn sync_chain_mmr_block_header_matches_chain_commitment() {
+    use miden_protocol::block::BlockHeader;
+    use miden_protocol::crypto::merkle::mmr::{Forest, Mmr, MmrPeaks, PartialMmr};
+
+    // Build 5 blocks, each with chain_commitment = MMR peaks hash before the block was added.
+    let mut server_mmr = Mmr::new();
+    let mut headers = Vec::new();
+    for i in 0..5u32 {
+        let chain_commitment = server_mmr.peaks().hash_peaks();
+        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[], Word::default());
+        server_mmr.add(header.commitment());
+        headers.push(header);
+    }
+
+    // Client bootstraps with genesis.
+    let mut client_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
+    client_mmr.add(headers[0].commitment(), false);
+
+    // First delta: block_from=0, block_to=2, so from_forest=1, to_forest=2.
+    let delta = server_mmr.get_delta(Forest::new(1), Forest::new(2)).unwrap();
+    client_mmr.apply(delta).unwrap();
+    assert_eq!(client_mmr.peaks().hash_peaks(), headers[2].chain_commitment());
+    client_mmr.add(headers[2].commitment(), false);
+
+    // Second delta: block_from=2, block_to=4, so from_forest=3, to_forest=4.
+    let delta = server_mmr.get_delta(Forest::new(3), Forest::new(4)).unwrap();
+    client_mmr.apply(delta).unwrap();
+    assert_eq!(client_mmr.peaks().hash_peaks(), headers[4].chain_commitment());
+    client_mmr.add(headers[4].commitment(), false);
+
+    assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
+}

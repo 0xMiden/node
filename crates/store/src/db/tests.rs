@@ -80,7 +80,7 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 use tempfile::tempdir;
 
-use super::{AccountInfo, NoteRecord, NullifierInfo, TransactionRecord};
+use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
@@ -3546,6 +3546,26 @@ fn db_roundtrip_transactions() {
 
     let tx = mock_block_transaction(bob, 1);
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+    let output_notes: Vec<_> = tx
+        .output_notes()
+        .iter()
+        .enumerate()
+        .map(|(idx, note)| {
+            (
+                NoteRecord {
+                    block_num,
+                    note_index: BlockNoteIndex::new(0, idx).unwrap(),
+                    note_id: note.id().as_word(),
+                    note_commitment: note.to_commitment(),
+                    metadata: note.metadata().clone(),
+                    details: None,
+                    inclusion_path: SparseMerklePath::default(),
+                },
+                None,
+            )
+        })
+        .collect();
+    queries::insert_notes(&mut conn, &output_notes).unwrap();
     queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
 
     let retrieved =
@@ -3560,7 +3580,18 @@ fn db_roundtrip_transactions() {
         initial_state_commitment: tx.initial_state_commitment(),
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: tx.output_notes().to_vec(),
+        output_notes: tx
+            .output_notes()
+            .iter()
+            .enumerate()
+            .map(|(idx, note)| NoteSyncRecord {
+                block_num,
+                note_index: BlockNoteIndex::new(0, idx).unwrap(),
+                note_id: note.id().as_word(),
+                metadata: note.metadata().clone(),
+                inclusion_path: SparseMerklePath::default(),
+            })
+            .collect(),
         fee: tx.fee(),
     };
 
@@ -3578,13 +3609,49 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: expected.output_notes.into_iter().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
     };
 
     // Proto conversion roundtrip
     assert_eq!(proto_record, expected_proto);
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
+
+    let tx = mock_block_transaction(bob, 1);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+
+    // Notes erased within the same block are not inserted into the `notes` table, so transaction
+    // sync should omit them instead of failing the whole request.
+    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+
+    let retrieved =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
+    let record = retrieved.1.first().expect("entry should exist");
+
+    let expected = TransactionRecord {
+        block_num,
+        transaction_id: tx.id(),
+        account_id: tx.account_id(),
+        initial_state_commitment: tx.initial_state_commitment(),
+        final_state_commitment: tx.final_state_commitment(),
+        input_notes: tx.input_notes().iter().cloned().collect(),
+        output_notes: vec![],
+        fee: tx.fee(),
+    };
+
+    assert_eq!(*record, expected);
 }
 
 #[test]
@@ -3881,9 +3948,9 @@ fn mark_block_proven_advances_in_sequence_for_consecutive_blocks() {
 
     // Mark all three as proven in order. Each call atomically advances the in-sequence tip.
     for i in 1u32..=3 {
-        let advanced =
+        let new_tip =
             super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(i)).unwrap();
-        assert_eq!(advanced, vec![BlockNumber::from(i)]);
+        assert_eq!(new_tip, BlockNumber::from(i));
     }
 
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
@@ -3901,17 +3968,17 @@ fn mark_block_proven_with_hole_does_not_advance_past_gap() {
     }
 
     // Prove block 1 — advances tip to 1.
-    let advanced =
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
+    assert_eq!(new_tip, BlockNumber::from(1u32));
 
     // Prove blocks 3, 4 (skipping 2) — cannot advance past the gap.
-    let advanced =
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
-    assert!(advanced.is_empty());
-    let advanced =
+    assert_eq!(new_tip, BlockNumber::from(1u32));
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
-    assert!(advanced.is_empty());
+    assert_eq!(new_tip, BlockNumber::from(1u32));
 
     // Latest proven in sequence should be 1 (blocks 3, 4 are proven but not in sequence).
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
@@ -3929,28 +3996,25 @@ fn mark_block_proven_filling_hole_advances_through_all_consecutive() {
     }
 
     // Prove blocks out of order: 1, 3, 4 first.
-    let advanced =
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
-    let advanced =
+    assert_eq!(new_tip, BlockNumber::from(1u32));
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
-    assert!(advanced.is_empty());
-    let advanced =
+    assert_eq!(new_tip, BlockNumber::from(1u32));
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
-    assert!(advanced.is_empty());
+    assert_eq!(new_tip, BlockNumber::from(1u32));
 
     assert_eq!(
         queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap(),
         BlockNumber::from(1u32),
     );
 
-    // Now prove block 2, filling the hole. Should advance through 2, 3, 4.
-    let advanced =
+    // Now prove block 2, filling the hole. Should advance tip through to 4.
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(2u32)).unwrap();
-    assert_eq!(
-        advanced,
-        vec![BlockNumber::from(2u32), BlockNumber::from(3u32), BlockNumber::from(4u32)],
-    );
+    assert_eq!(new_tip, BlockNumber::from(4u32));
 
     // Now all blocks through 4 are proven in sequence.
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
@@ -4000,9 +4064,9 @@ fn mark_block_proven_is_idempotent_for_in_sequence() {
     create_unproven_block(&mut conn, BlockNumber::from(1u32));
 
     // First call marks block 1 proven and advances it in-sequence.
-    let advanced =
+    let new_tip =
         super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    assert_eq!(advanced, vec![BlockNumber::from(1u32)]);
+    assert_eq!(new_tip, BlockNumber::from(1u32));
 
     let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
     assert_eq!(latest, BlockNumber::from(1u32));

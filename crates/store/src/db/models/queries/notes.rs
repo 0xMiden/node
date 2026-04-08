@@ -375,6 +375,59 @@ pub(crate) fn select_note_inclusion_proofs(
     ))
 }
 
+/// Select note sync records matching the given note commitments.
+///
+/// # Parameters
+/// * `note_commitments`: Slice of note commitments to query
+///     - Limit: 0 <= count <= 1000
+///
+/// # Returns
+///
+/// - Empty map if no matching `note`.
+/// - Otherwise, note sync records keyed by `NoteId`.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT
+///     committed_at,
+///     batch_index,
+///     note_index,
+///     note_id,
+///     note_type,
+///     sender,
+///     tag,
+///     attachment,
+///     inclusion_path
+/// FROM
+///     notes
+/// WHERE
+///     note_commitment IN (?1)
+/// ORDER BY
+///     committed_at ASC
+/// ```
+pub(crate) fn select_note_sync_records(
+    conn: &mut SqliteConnection,
+    note_commitments: &[Word],
+) -> Result<BTreeMap<NoteId, NoteSyncRecord>, DatabaseError> {
+    QueryParamNoteCommitmentLimit::check(note_commitments.len())?;
+
+    let note_commitments = serialize_vec(note_commitments.iter());
+
+    let raw_notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
+        .filter(schema::notes::note_commitment.eq_any(note_commitments))
+        .order_by(schema::notes::committed_at.asc())
+        .load::<NoteSyncRecordRawRow>(conn)?;
+
+    raw_notes
+        .into_iter()
+        .map(|raw_note| {
+            let note: NoteSyncRecord = raw_note.try_into()?;
+            Ok((NoteId::from_raw(note.note_id), note))
+        })
+        .collect()
+}
+
 /// Returns the script for a note by its root.
 ///
 /// ```sql
