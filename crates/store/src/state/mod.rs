@@ -147,6 +147,32 @@ pub struct State {
     proven_tip: ProvenTipReader,
 }
 
+// READ SNAPSHOT
+// ================================================================================================
+
+/// A consistent read view of the in-memory state.
+///
+/// Created by [`State::snapshot()`], which performs an atomic load with `Acquire` ordering on the
+/// committed block counter. This establishes a happens-before relationship with the writer's
+/// `Release` store, guaranteeing that all tree references obtained through this snapshot reflect
+/// a fully consistent state at [`block_num`](Self::block_num).
+///
+/// This is the **only** way for readers to obtain references to the in-memory trees. The
+/// [`WriterGuard::as_ref()`] method is `pub(super)`, preventing direct access from outside the
+/// `state` module without going through the snapshot barrier.
+pub(crate) struct ReadSnapshot<'a> {
+    /// The committed block number at the time the snapshot was taken.
+    pub block_num: BlockNumber,
+    /// Nullifier tree — append-only.
+    pub nullifier_tree: &'a NullifierTree<LargeSmt<TreeStorage>>,
+    /// Account tree with historical overlay support.
+    pub account_tree: &'a AccountTreeWithHistory<TreeStorage>,
+    /// Chain MMR.
+    pub blockchain: &'a Blockchain,
+    /// Forest state for account storage maps and vault witnesses.
+    pub forest: &'a AccountStateForest,
+}
+
 impl State {
     // CONSTRUCTOR
     // --------------------------------------------------------------------------------------------
@@ -207,7 +233,7 @@ impl State {
         let (proven_tip_writer, proven_tip) = ProvenTipWriter::new(proven_tip);
 
         // Create the writer channel. Buffer size of 1: only one block can be in flight.
-        let (writer_tx, writer_rx) = mpsc::channel(1); // TODO(currentpr): Probably want some buffering.
+        let (writer_tx, writer_rx) = mpsc::channel(1);
 
         let state = Arc::new(Self {
             db,
@@ -263,21 +289,39 @@ impl State {
     // STATE ACCESSORS (lock-free)
     // --------------------------------------------------------------------------------------------
 
-    /// Returns the committed block number (atomic load with Acquire ordering).
-    fn committed_block_num(&self) -> BlockNumber {
-        BlockNumber::from(self.committed_block_num.load(Ordering::Acquire))
+    /// Takes a consistent snapshot of all in-memory state.
+    ///
+    /// Performs an `Acquire` load on the committed block counter, then obtains references to all
+    /// trees. The `Acquire` ordering guarantees that all writer mutations completed before the
+    /// corresponding `Release` store are visible through these references.
+    ///
+    /// This is the **only** sanctioned way for readers to access the in-memory trees.
+    fn snapshot(&self) -> ReadSnapshot<'_> {
+        let block_num = BlockNumber::from(self.committed_block_num.load(Ordering::Acquire));
+        ReadSnapshot {
+            block_num,
+            nullifier_tree: self.nullifier_tree.as_ref(),
+            account_tree: self.account_tree.as_ref(),
+            blockchain: self.blockchain.as_ref(),
+            forest: self.forest.as_ref(),
+        }
     }
 
     /// Returns the effective chain tip for the given finality level.
     ///
-    /// - [`Finality::Committed`]: returns the latest committed block number from the atomic
-    ///   counter.
+    /// - [`Finality::Committed`]: returns the latest committed block number from the atomic counter
+    ///   (Acquire ordering).
     /// - [`Finality::Proven`]: returns the latest proven-in-sequence block number (cached via watch
     ///   channel, updated by the proof scheduler).
+    ///
+    /// This method only returns a block number — it does not access any trees, so the Acquire
+    /// load here is sufficient without a full snapshot.
     #[expect(clippy::unused_async)]
     pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
         match finality {
-            Finality::Committed => self.committed_block_num(),
+            Finality::Committed => {
+                BlockNumber::from(self.committed_block_num.load(Ordering::Acquire))
+            },
             Finality::Proven => self.proven_tip.read(),
         }
     }
@@ -292,10 +336,11 @@ impl State {
         block_num: Option<BlockNumber>,
         include_mmr_proof: bool,
     ) -> Result<(Option<BlockHeader>, Option<MmrProof>), GetBlockHeaderError> {
+        let snapshot = self.snapshot();
         let block_header = self.db.select_block_header_by_block_num(block_num).await?;
         if let Some(header) = block_header {
             let mmr_proof = if include_mmr_proof {
-                let mmr_proof = self.blockchain.as_ref().open(header.block_num())?;
+                let mmr_proof = snapshot.blockchain.open(header.block_num())?;
                 Some(mmr_proof)
             } else {
                 None
@@ -312,10 +357,10 @@ impl State {
     /// Note: these proofs are invalidated once the nullifier tree is modified, i.e. on a new block.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret)]
     pub async fn check_nullifiers(&self, nullifiers: &[Nullifier]) -> Vec<SmtProof> {
-        let tree = self.nullifier_tree.as_ref();
+        let snapshot = self.snapshot();
         nullifiers
             .iter()
-            .map(|n| tree.open(n))
+            .map(|n| snapshot.nullifier_tree.open(n))
             .map(NullifierWitness::into_proof)
             .collect()
     }
@@ -337,9 +382,9 @@ impl State {
         &self,
         block_num: Option<BlockNumber>,
     ) -> Result<Option<(BlockHeader, MmrPeaks)>, GetCurrentBlockchainDataError> {
-        let blockchain = self.blockchain.as_ref();
+        let snapshot = self.snapshot();
         if let Some(number) = block_num
-            && number == self.chain_tip(Finality::Committed).await
+            && number == snapshot.block_num
         {
             return Ok(None);
         }
@@ -352,7 +397,8 @@ impl State {
             .await
             .map_err(GetCurrentBlockchainDataError::ErrorRetrievingBlockHeader)?
             .unwrap();
-        let peaks = blockchain
+        let peaks = snapshot
+            .blockchain
             .peaks_at(block_header.block_num())
             .map_err(GetCurrentBlockchainDataError::InvalidPeaks)?;
 
@@ -404,8 +450,8 @@ impl State {
         let mut blocks: BTreeSet<BlockNumber> = tx_reference_blocks;
         blocks.extend(note_blocks);
 
-        let blockchain = self.blockchain.as_ref();
-        let latest_block_num = self.committed_block_num();
+        let snapshot = self.snapshot();
+        let latest_block_num = snapshot.block_num;
 
         let highest_block_num =
             *blocks.last().expect("we should have checked for empty block references");
@@ -426,9 +472,10 @@ impl State {
         //   guaranteed to have been updated to at least that block (happens-before).
         // - We have checked that no block number in the blocks set is greater than latest block
         //   number *and* latest block num was removed from the set.
-        let partial_mmr = blockchain.partial_mmr_from_blocks(&blocks, latest_block_num).expect(
-            "latest block num should exist and all blocks in set should be < than latest block",
-        );
+        let partial_mmr =
+            snapshot.blockchain.partial_mmr_from_blocks(&blocks, latest_block_num).expect(
+                "latest block num should exist and all blocks in set should be < than latest block",
+            );
 
         let batch_reference_block = latest_block_num;
 
@@ -547,11 +594,8 @@ impl State {
         ),
         GetBlockInputsError,
     > {
-        let blockchain = self.blockchain.as_ref();
-        let account_tree = self.account_tree.as_ref();
-        let nullifier_tree = self.nullifier_tree.as_ref();
-
-        let latest_block_number = self.committed_block_num();
+        let snapshot = self.snapshot();
+        let latest_block_number = snapshot.block_num;
 
         // If `blocks` is empty, use the latest block number which will never trigger the error.
         let highest_block_number = blocks.last().copied().unwrap_or(latest_block_number);
@@ -566,15 +610,16 @@ impl State {
         // inclusion in the chain.
         blocks.remove(&latest_block_number);
 
-        let partial_mmr = blockchain.partial_mmr_from_blocks(blocks, latest_block_number).expect(
-            "latest block num should exist and all blocks in set should be < than latest block",
-        );
+        let partial_mmr =
+            snapshot.blockchain.partial_mmr_from_blocks(blocks, latest_block_number).expect(
+                "latest block num should exist and all blocks in set should be < than latest block",
+            );
 
         // Fetch witnesses for all accounts.
         let account_witnesses = account_ids
             .iter()
             .copied()
-            .map(|account_id| (account_id, account_tree.open_latest(account_id)))
+            .map(|account_id| (account_id, snapshot.account_tree.open_latest(account_id)))
             .collect::<BTreeMap<AccountId, AccountWitness>>();
 
         // Fetch witnesses for all nullifiers. We don't check whether the nullifiers are spent or
@@ -582,7 +627,7 @@ impl State {
         let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> = nullifiers
             .iter()
             .copied()
-            .map(|nullifier| (nullifier, nullifier_tree.open(&nullifier)))
+            .map(|nullifier| (nullifier, snapshot.nullifier_tree.open(&nullifier)))
             .collect();
 
         Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
@@ -598,13 +643,12 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let account_tree = self.account_tree.as_ref();
-        let nullifier_tree = self.nullifier_tree.as_ref();
+        let snapshot = self.snapshot();
 
-        let account_commitment = account_tree.get_latest_commitment(account_id);
+        let account_commitment = snapshot.account_tree.get_latest_commitment(account_id);
 
         let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
-            Some(!account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
+            Some(!snapshot.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
         } else {
             None
         };
@@ -621,7 +665,7 @@ impl State {
             .iter()
             .map(|nullifier| NullifierInfo {
                 nullifier: *nullifier,
-                block_num: nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
+                block_num: snapshot.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
             })
             .collect();
 
@@ -699,24 +743,25 @@ impl State {
         block_num: Option<BlockNumber>,
         account_id: AccountId,
     ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
-        let account_tree = self.account_tree.as_ref();
+        let snapshot = self.snapshot();
 
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
             // Historical query: use the account tree with history
-            let witness = account_tree.open_at(account_id, requested_block).ok_or_else(|| {
-                let latest_block = account_tree.block_number_latest();
-                if requested_block > latest_block {
-                    GetAccountError::UnknownBlock(requested_block)
-                } else {
-                    GetAccountError::BlockPruned(requested_block)
-                }
-            })?;
+            let witness =
+                snapshot.account_tree.open_at(account_id, requested_block).ok_or_else(|| {
+                    let latest_block = snapshot.account_tree.block_number_latest();
+                    if requested_block > latest_block {
+                        GetAccountError::UnknownBlock(requested_block)
+                    } else {
+                        GetAccountError::BlockPruned(requested_block)
+                    }
+                })?;
             (requested_block, witness)
         } else {
             // Latest query: use the latest state
-            let block_num = account_tree.block_number_latest();
-            let witness = account_tree.open_latest(account_id);
+            let block_num = snapshot.account_tree.block_number_latest();
+            let witness = snapshot.account_tree.open_latest(account_id);
             (block_num, witness)
         };
 
@@ -750,8 +795,8 @@ impl State {
         }
 
         // Validate block exists in the blockchain before querying the database.
-        let latest_block_num = self.committed_block_num();
-        if block_num > latest_block_num {
+        let snapshot = self.snapshot();
+        if block_num > snapshot.block_num {
             return Err(GetAccountError::UnknownBlock(block_num));
         }
 
@@ -807,9 +852,9 @@ impl State {
         let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
 
         if !map_keys_requests.is_empty() {
-            let forest = self.forest.as_ref();
             for (index, slot_name, keys) in map_keys_requests {
-                let details = forest
+                let details = snapshot
+                    .forest
                     .get_storage_map_details_for_keys(
                         account_id,
                         slot_name.clone(),
@@ -921,10 +966,9 @@ impl State {
         block_num: BlockNumber,
         vault_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let witnesses = self
-            .forest
-            .as_ref()
-            .get_vault_asset_witnesses(account_id, block_num, vault_keys)?;
+        let snapshot = self.snapshot();
+        let witnesses =
+            snapshot.forest.get_vault_asset_witnesses(account_id, block_num, vault_keys)?;
         Ok(witnesses)
     }
 
@@ -941,9 +985,9 @@ impl State {
         block_num: BlockNumber,
         raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
-        let witness = self
+        let snapshot = self.snapshot();
+        let witness = snapshot
             .forest
-            .as_ref()
             .get_storage_map_witness(account_id, slot_name, block_num, raw_key)?;
         Ok(witness)
     }

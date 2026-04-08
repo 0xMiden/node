@@ -77,9 +77,9 @@ impl State {
         let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 
-        let mmr_delta = self
+        let snapshot = self.snapshot();
+        let mmr_delta = snapshot
             .blockchain
-            .as_ref()
             .as_mmr()
             .get_delta(Forest::new(from_forest), Forest::new(to_forest))
             .map_err(StateSyncError::FailedToBuildMmrDelta)?;
@@ -101,6 +101,7 @@ impl State {
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
+        let snapshot = self.snapshot();
         let block_end = *block_range.end();
         let note_tags: Arc<[u32]> = note_tags.into();
 
@@ -127,7 +128,7 @@ impl State {
             // SAFETY: it is ensured that block_end <= chain_tip, and the blockchain MMR always has
             // at least chain_tip + 1 leaves.
             let mmr_checkpoint = block_end + 1;
-            let mmr_proof = self.blockchain.as_ref().open_at(block_num, mmr_checkpoint)?;
+            let mmr_proof = snapshot.blockchain.open_at(block_num, mmr_checkpoint)?;
             results.push((note_sync, mmr_proof));
 
             current_from = block_num + 1;

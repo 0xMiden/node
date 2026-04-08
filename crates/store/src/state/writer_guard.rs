@@ -44,7 +44,7 @@ impl<T> WriterGuard<T> {
     /// the caller must have loaded the atomic block counter with `Acquire` ordering before
     /// calling this method, establishing a happens-before relationship with the writer's
     /// `Release` store.
-    pub fn as_ref(&self) -> &T {
+    pub(super) fn as_ref(&self) -> &T {
         // SAFETY: The writer completes all mutations before the Release store on the block
         // counter. The reader loads the counter with Acquire before calling this. The
         // Acquire/Release pair ensures all writes are visible.
