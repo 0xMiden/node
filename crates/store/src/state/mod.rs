@@ -1033,6 +1033,7 @@ impl State {
     /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
     /// the latest state. Note that historical states are only available for recent blocks close
     /// to the chain tip.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn get_account(
         &self,
         account_request: AccountRequest,
@@ -1058,12 +1059,13 @@ impl State {
     ///
     /// If `block_num` is provided, returns the witness at that historical block;
     /// otherwise, returns the witness at the latest block.
+    #[instrument(target = COMPONENT, skip_all)]
     async fn get_account_witness(
         &self,
         block_num: Option<BlockNumber>,
         account_id: AccountId,
     ) -> Result<(BlockNumber, AccountWitness), DatabaseError> {
-        let inner_state = self.inner.read().await;
+        let inner_state = self.inner.read().instrument(tracing::Span::current()).await;
 
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
@@ -1096,6 +1098,7 @@ impl State {
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest to return all entries.
+    #[instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,
@@ -1148,7 +1151,7 @@ impl State {
             Vec::<AccountStorageMapDetails>::with_capacity(storage_requests.len());
 
         // Use forest for storage map queries
-        let forest_guard = self.forest.read().await;
+        let forest_guard = self.forest.read().instrument(tracing::Span::current()).await;
 
         for StorageMapRequest { slot_name, slot_data } in storage_requests {
             let details = match &slot_data {
@@ -1218,7 +1221,7 @@ impl State {
     ///
     /// Returns `DatabaseError::BlockNotFound` if the block doesn't exist in the blockchain.
     async fn validate_block_exists(&self, block_num: BlockNumber) -> Result<(), DatabaseError> {
-        let inner = self.inner.read().await;
+        let inner = self.inner.read().instrument(tracing::Span::current()).await;
         let latest_block_num = inner.latest_block_num();
 
         if block_num > latest_block_num {

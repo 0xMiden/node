@@ -23,6 +23,9 @@ use miden_protocol::crypto::merkle::{
 };
 use miden_protocol::errors::AccountTreeError;
 use miden_protocol::{EMPTY_WORD, Word};
+use tracing::instrument;
+
+use crate::COMPONENT;
 
 #[cfg(test)]
 mod tests;
@@ -150,6 +153,7 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     // --------------------------------------------------------------------------------------------
 
     /// Returns the latest block number.
+    #[instrument(target = COMPONENT, skip_all)]
     pub fn block_number_latest(&self) -> BlockNumber {
         self.block_number
     }
@@ -185,6 +189,7 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     }
 
     /// Opens an account at the latest block, returning its witness.
+    #[instrument(target = COMPONENT, skip_all)]
     pub fn open_latest(&self, account_id: AccountId) -> AccountWitness {
         self.latest.open(account_id)
     }

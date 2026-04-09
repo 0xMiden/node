@@ -16,6 +16,9 @@ use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
+use tracing::instrument;
+
+use crate::COMPONENT;
 
 #[cfg(test)]
 mod tests;
@@ -163,6 +166,7 @@ impl InnerForest {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
+    #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn open_storage_map(
         &self,
         account_id: AccountId,
@@ -186,6 +190,7 @@ impl InnerForest {
     /// Uses range query semantics: finds the most recent entries at or before `block_num`.
     /// Returns `None` if no entries exist for this account/slot up to the given block.
     /// Returns `LimitExceeded` if there are too many entries to return.
+    #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn storage_map_entries(
         &self,
         account_id: AccountId,

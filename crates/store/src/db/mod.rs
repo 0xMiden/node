@@ -494,7 +494,7 @@ impl Db {
     }
 
     /// Queries vault assets at a specific block
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_account_vault_at_block(
         &self,
         account_id: AccountId,
@@ -509,6 +509,7 @@ impl Db {
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn select_account_code_by_commitment(
         &self,
         code_commitment: Word,
@@ -523,6 +524,7 @@ impl Db {
     ///
     /// Returns both in a single query to avoid querying the database twice.
     /// Returns `None` if the account doesn't exist at that block.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn select_account_header_with_storage_header_at_block(
         &self,
         account_id: AccountId,
