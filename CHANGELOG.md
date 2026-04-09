@@ -5,6 +5,10 @@
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 - [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
 
+## v0.14.4 (2026-04-08)
+
+- Added missing `AuthControlled::allow_all()` mint policy component to genesis faucet accounts ([#1903](https://github.com/0xMiden/node/pull/1903)).
+
 ## v0.14.3 (2026-04-07)
 
 - Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).

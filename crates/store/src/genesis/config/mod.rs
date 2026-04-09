@@ -29,6 +29,7 @@ use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
+use miden_standards::account::mint_policies::AuthControlled;
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
 use rand::{Rng, SeedableRng};
@@ -446,6 +447,7 @@ impl FungibleFaucetConfig {
             .storage_mode(storage_mode.into())
             .with_auth_component(auth)
             .with_component(component)
+            .with_component(AuthControlled::allow_all())
             .build()?;
 
         debug_assert_eq!(faucet_account.nonce(), Felt::ZERO);
