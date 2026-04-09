@@ -153,7 +153,6 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     // --------------------------------------------------------------------------------------------
 
     /// Returns the latest block number.
-    #[instrument(target = COMPONENT, skip_all)]
     pub fn block_number_latest(&self) -> BlockNumber {
         self.block_number
     }
