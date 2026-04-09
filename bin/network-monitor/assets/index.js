@@ -299,19 +299,35 @@ async function fetchStatus() {
 }
 
 // Merge Remote Prover status and test entries into a single card per prover.
+//
+// The backend sends separate services for prover status checks and prover test results.
+// This function merges them into a single card per prover. A prover status entry is
+// identified by having RemoteProverStatus details OR by sharing a name with a known test
+// entry (handles the case where the prover is down and the status has Error details).
 function mergeProverStatusAndTests(services) {
     const testsByName = new Map();
     const merged = [];
     const usedTests = new Set();
 
+    // First pass: collect test entries by name.
     services.forEach(service => {
         if (service.details && service.details.RemoteProverTest) {
             testsByName.set(service.name, service);
         }
     });
 
+    // Second pass: merge status entries with their corresponding test entries.
     services.forEach(service => {
-        if (service.details && service.details.RemoteProverStatus) {
+        if (service.details && service.details.RemoteProverTest) {
+            // Skip test entries; they are merged into status entries below.
+            return;
+        }
+
+        const isProverStatus = service.details && service.details.RemoteProverStatus;
+        const hasMatchingTest = testsByName.has(service.name);
+
+        if (isProverStatus || hasMatchingTest) {
+            // This is a prover status entry — merge with its test if available.
             const test = testsByName.get(service.name);
             if (test) {
                 usedTests.add(service.name);
@@ -322,13 +338,13 @@ function mergeProverStatusAndTests(services) {
                 testStatus: test?.status ?? null,
                 testError: test?.error ?? null
             });
-        } else if (!(service.details && service.details.RemoteProverTest)) {
-            // Non-prover entries pass through unchanged
+        } else {
+            // Non-prover entry, pass through unchanged.
             merged.push(service);
         }
     });
 
-    // Add orphaned tests (in case a test arrives before a status)
+    // Add orphaned tests (test arrived but no status entry exists yet).
     testsByName.forEach((test, name) => {
         if (!usedTests.has(name)) {
             merged.push({

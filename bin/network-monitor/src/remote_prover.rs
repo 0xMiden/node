@@ -88,6 +88,56 @@ pub struct ProverTestDetails {
 /// # Returns
 ///
 /// `Ok(())` if the task completes successfully, or an error if the task fails.
+/// Waits for a remote prover to become available by watching its status channel, then starts
+/// testing if it supports transaction proofs.
+///
+/// This is used when a prover is unreachable at startup. The task watches the status receiver
+/// until it sees a successful status check, then either starts the test loop (for transaction
+/// provers) or exits (for non-transaction provers).
+pub async fn run_deferred_prover_test_task(
+    mut status_rx: watch::Receiver<ServiceStatus>,
+    prover_url: Url,
+    name: String,
+    status_sender: watch::Sender<ServiceStatus>,
+    request_timeout: Duration,
+    test_interval: Duration,
+) {
+    // Wait until the status task discovers the prover's proof type.
+    let proof_type = loop {
+        if status_rx.changed().await.is_err() {
+            // Status sender was dropped (shutdown).
+            info!("Status channel closed while waiting for prover {name}, shutting down");
+            return;
+        }
+
+        let status = status_rx.borrow_and_update();
+        if let ServiceDetails::RemoteProverStatus(details) = &status.details {
+            break details.supported_proof_type.clone();
+        }
+        // Prover still unavailable, keep waiting for the next status update.
+    };
+
+    if !matches!(proof_type, ProofType::Transaction) {
+        info!(
+            "Prover {name} supports {proof_type:?} proofs, not Transaction — skipping test task"
+        );
+        return;
+    }
+
+    info!("Prover {name} is now available with Transaction proof support, starting tests");
+    let payload = generate_prover_test_payload().await;
+    run_remote_prover_test_task(
+        prover_url,
+        &name,
+        proof_type,
+        payload,
+        status_sender,
+        request_timeout,
+        test_interval,
+    )
+    .await;
+}
+
 pub async fn run_remote_prover_test_task(
     prover_url: Url,
     name: &str,

@@ -12,16 +12,22 @@ use tracing::{info, instrument};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
-use crate::status::{NetworkStatus, ServiceStatus};
+use crate::status::{NetworkStatus, ServiceDetails, ServiceStatus};
 
 // SERVER STATE
 // ================================================================================================
+
+/// A pair of watch receivers for a remote prover: one for status checks and an optional one for
+/// test results (only present if the prover supports transaction proofs and was reachable at
+/// startup).
+pub type ProverReceivers =
+    (watch::Receiver<ServiceStatus>, Option<watch::Receiver<ServiceStatus>>);
 
 /// State for the web server containing watch receivers for all services.
 #[derive(Clone)]
 pub struct ServerState {
     pub rpc: watch::Receiver<ServiceStatus>,
-    pub provers: Vec<(watch::Receiver<ServiceStatus>, watch::Receiver<ServiceStatus>)>,
+    pub provers: Vec<ProverReceivers>,
     pub faucet: Option<watch::Receiver<ServiceStatus>>,
     pub ntx_increment: Option<watch::Receiver<ServiceStatus>>,
     pub ntx_tracking: Option<watch::Receiver<ServiceStatus>>,
@@ -85,10 +91,18 @@ async fn get_status(
         services.push(faucet_rx.borrow().clone());
     }
 
-    // Collect all remote prover statuses
+    // Collect all remote prover statuses and test results.
+    // Only include the test service once it has produced an actual test result
+    // (RemoteProverTest details). Before the first test completes, the channel holds
+    // the initial prover status which would create a duplicate card in the frontend.
     for (prover_status_rx, prover_test_rx) in &server_state.provers {
         services.push(prover_status_rx.borrow().clone());
-        services.push(prover_test_rx.borrow().clone());
+        if let Some(test_rx) = prover_test_rx {
+            let test_status = test_rx.borrow().clone();
+            if matches!(test_status.details, ServiceDetails::RemoteProverTest(_)) {
+                services.push(test_status);
+            }
+        }
     }
 
     // Collect explorer status if available
