@@ -1,6 +1,17 @@
 # Changelog
 
+## v0.13.12 (2026-04-10)
+
+- Improved `GetAccount` instrumentation ([#1916](https://github.com/0xMiden/node/issues/1916)).
+
+## v0.13.11 (2026-04-09)
+
+- Removed `select_candidate` instrumentation in NTX Builder ([#1905](https://github.com/0xMiden/node/issues/1905)).
+
 ## v0.13.10 (2026-04-07)
+
+- Removed NTX Builder mempool trace ([#1891](https://github.com/0xMiden/node/issues/1891)).
+- Split apply_block and improved instrumentation ([#1872](https://github.com/0xMiden/node/issues/1872)).
 
 ## v0.13.9 (2026-03-26)
 
