@@ -37,9 +37,7 @@ pub async fn run_validator_status_task(
 
         let current_time = current_unix_timestamp_secs();
 
-        let status =
-            check_validator_status(&mut validator, url.to_string(), name.clone(), current_time)
-                .await;
+        let status = check_validator_status(&mut validator, &url, name.clone(), current_time).await;
 
         if status_sender.send(status).is_err() {
             info!("No receivers for validator status updates, shutting down");
@@ -57,7 +55,7 @@ pub async fn run_validator_status_task(
 )]
 pub(crate) async fn check_validator_status(
     validator: &mut ValidatorClient,
-    url: String,
+    url: &Url,
     name: String,
     current_time: u64,
 ) -> ServiceStatus {
@@ -71,7 +69,7 @@ pub(crate) async fn check_validator_status(
                 last_checked: current_time,
                 error: None,
                 details: ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
-                    url,
+                    url: url.to_string(),
                     version: status.version,
                     chain_tip: status.chain_tip,
                     validated_transactions_count: status.validated_transactions_count,
