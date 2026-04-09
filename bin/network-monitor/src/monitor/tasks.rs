@@ -189,7 +189,7 @@ impl Tasks {
     pub async fn spawn_prover_tasks(
         &mut self,
         config: &MonitorConfig,
-    ) -> Result<Vec<(watch::Receiver<ServiceStatus>, watch::Receiver<ServiceStatus>)>> {
+    ) -> Result<Vec<crate::frontend::ProverReceivers>> {
         debug!(target: COMPONENT, prover_count = config.remote_prover_urls.len(), "Spawning prover tasks");
         let mut prover_rxs = Vec::new();
 
@@ -284,15 +284,13 @@ impl Tasks {
                 let component_name = format!("prover-test-{}", i + 1);
                 self.names.insert(id, component_name);
 
-                prover_test_rx
+                Some(prover_test_rx)
             } else {
                 debug!(
                     "Skipping prover tests for {} (supports {:?} proofs, only testing Transaction proofs)",
                     name, proof_type
                 );
-                // For non-transaction provers, create a dummy receiver with no test task
-                let (_tx, rx) = watch::channel(initial_prover_status.clone());
-                rx
+                None
             };
 
             prover_rxs.push((prover_status_rx, prover_test_rx));

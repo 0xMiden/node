@@ -17,11 +17,17 @@ use crate::status::{NetworkStatus, ServiceStatus};
 // SERVER STATE
 // ================================================================================================
 
+/// A pair of watch receivers for a remote prover: one for status checks and an optional one for
+/// test results (only present if the prover supports transaction proofs and was reachable at
+/// startup).
+pub type ProverReceivers =
+    (watch::Receiver<ServiceStatus>, Option<watch::Receiver<ServiceStatus>>);
+
 /// State for the web server containing watch receivers for all services.
 #[derive(Clone)]
 pub struct ServerState {
     pub rpc: watch::Receiver<ServiceStatus>,
-    pub provers: Vec<(watch::Receiver<ServiceStatus>, watch::Receiver<ServiceStatus>)>,
+    pub provers: Vec<ProverReceivers>,
     pub faucet: Option<watch::Receiver<ServiceStatus>>,
     pub ntx_increment: Option<watch::Receiver<ServiceStatus>>,
     pub ntx_tracking: Option<watch::Receiver<ServiceStatus>>,
@@ -86,7 +92,9 @@ async fn get_status(
     // Collect all remote prover statuses
     for (prover_status_rx, prover_test_rx) in &server_state.provers {
         services.push(prover_status_rx.borrow().clone());
-        services.push(prover_test_rx.borrow().clone());
+        if let Some(test_rx) = prover_test_rx {
+            services.push(test_rx.borrow().clone());
+        }
     }
 
     // Collect explorer status if available
