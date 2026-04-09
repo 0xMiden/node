@@ -330,10 +330,10 @@ impl State {
         block_num: Option<BlockNumber>,
         include_mmr_proof: bool,
     ) -> Result<(Option<BlockHeader>, Option<MmrProof>), GetBlockHeaderError> {
-        let snapshot = self.snapshot();
         let block_header = self.db.select_block_header_by_block_num(block_num).await?;
         if let Some(header) = block_header {
             let mmr_proof = if include_mmr_proof {
+                let snapshot = self.snapshot();
                 let mmr_proof = snapshot.blockchain.open(header.block_num())?;
                 Some(mmr_proof)
             } else {
@@ -638,14 +638,23 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let snapshot = self.snapshot();
+        let (new_account_id_prefix_is_unique, account_commitment) = {
+            let snapshot = self.snapshot();
 
-        let account_commitment = snapshot.account_tree.get_latest_commitment(account_id);
+            let account_commitment = snapshot.account_tree.get_latest_commitment(account_id);
 
-        let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
-            Some(!snapshot.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
-        } else {
-            None
+            if account_commitment.is_empty() {
+                (
+                    Some(
+                        !snapshot
+                            .account_tree
+                            .contains_account_id_prefix_in_latest(account_id.prefix()),
+                    ),
+                    account_commitment,
+                )
+            } else {
+                (None, account_commitment)
+            }
         };
 
         // Non-unique account Id prefixes for new accounts are not allowed.
