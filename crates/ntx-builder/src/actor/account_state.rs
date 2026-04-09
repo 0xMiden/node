@@ -110,7 +110,6 @@ impl NetworkAccountState {
     }
 
     /// Selects the next candidate network transaction.
-    #[instrument(target = COMPONENT, name = "ntx.state.select_candidate", skip_all)]
     pub fn select_candidate(
         &mut self,
         limit: NonZeroUsize,
