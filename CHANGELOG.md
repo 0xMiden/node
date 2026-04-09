@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.5 (2026-04-10)
+
+- Removed `issuance` field from the network monitor's faucet `GetMetadataResponse` ([#1918](https://github.com/0xMiden/node/pull/1918)).
+
 ## v0.14.4 (2026-04-08)
 
 - Added missing `AuthControlled::allow_all()` mint policy component to genesis faucet accounts ([#1903](https://github.com/0xMiden/node/pull/1903)).
