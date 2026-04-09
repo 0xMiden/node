@@ -24,11 +24,13 @@ use miden_protocol::errors::{
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot::error::RecvError;
 use tonic::Status;
 
 use crate::account_state_forest::{AccountStateForestError, WitnessError};
 use crate::db::models::conv::DatabaseTypeConversionError;
+use crate::state::writer::WriteRequest;
 
 // PROOF SCHEDULER ERRORS
 // =================================================================================================
@@ -198,6 +200,10 @@ pub enum ApplyBlockError {
     InvalidBlockError(#[from] InvalidBlockError),
     #[error("account state forest error")]
     AccountStateForestError(#[from] AccountStateForestError),
+    #[error("failed to send block to writer task (channel closed)")]
+    WriterTaskSendFailed(#[from] Box<SendError<WriteRequest>>),
+    #[error("writer task dropped the result channel")]
+    WriterTaskRecvFailed(#[from] RecvError),
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------
@@ -205,12 +211,6 @@ pub enum ApplyBlockError {
     DbBlockHeaderEmpty,
     #[error("database update failed: {0}")]
     DbUpdateTaskFailed(String),
-    #[error("failed to send block to writer task (channel closed)")]
-    WriterTaskSendFailed(
-        #[source] Box<tokio::sync::mpsc::error::SendError<crate::state::writer::WriteRequest>>,
-    ),
-    #[error("writer task dropped the result channel")]
-    WriterTaskRecvFailed(#[from] tokio::sync::oneshot::error::RecvError),
 }
 
 impl From<ApplyBlockError> for Status {
