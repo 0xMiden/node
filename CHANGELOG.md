@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.6 (2026-04-10)
+
+- Fixed network monitor explorer health check failing to parse string-encoded numeric fields from the Explorer GraphQL API ([#1922](https://github.com/0xMiden/node/pull/1922)).
+
 ## v0.14.5 (2026-04-10)
 
 - Removed `issuance` field from the network monitor's faucet `GetMetadataResponse` ([#1918](https://github.com/0xMiden/node/pull/1918)).
