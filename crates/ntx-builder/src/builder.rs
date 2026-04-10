@@ -297,6 +297,14 @@ impl NetworkTransactionBuilder {
     async fn update_chain_tip(&mut self, tip: BlockHeader) {
         let mut chain_state = self.chain_state.write().await;
 
+        // Skip if this block is already accounted for. This can happen during initialization:
+        // the mempool subscription is created before the chain state is fetched from the store,
+        // so BlockCommitted events for blocks that occurred in between are already reflected in
+        // the initial chain state.
+        if tip.block_num() <= chain_state.chain_tip_header.block_num() {
+            return;
+        }
+
         // Update MMR which lags by one block.
         let mmr_tip = chain_state.chain_tip_header.clone();
         Arc::make_mut(&mut chain_state.chain_mmr).add_block(&mmr_tip, true);
