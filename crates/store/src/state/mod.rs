@@ -151,12 +151,12 @@ pub struct State {
     /// The block store which stores full block contents for all blocks.
     pub(super) block_store: Arc<BlockStore>,
 
-    /// Handle to the RocksDB database used for account tree storage.
+    /// Handle to the `RocksDB` database used for account tree storage.
     /// Used by the writer to create snapshot storage instances for `InMemoryState`.
     #[cfg(feature = "rocksdb")]
     pub(super) account_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
 
-    /// Handle to the RocksDB database used for nullifier tree storage.
+    /// Handle to the `RocksDB` database used for nullifier tree storage.
     /// Used by the writer to create snapshot storage instances for `InMemoryState`.
     #[cfg(feature = "rocksdb")]
     pub(super) nullifier_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,

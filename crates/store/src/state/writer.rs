@@ -62,8 +62,8 @@ pub(crate) async fn writer_loop(
 ///
 /// ## Performance
 ///
-/// No deep clone of tree data occurs in RocksDB mode. The snapshot-backed trees read directly
-/// from RocksDB snapshots. Readers pay only an atomic refcount bump per `snapshot()` call.
+/// No deep clone of tree data occurs in `RocksDB` mode. The snapshot-backed trees read directly
+/// from `RocksDB` snapshots. Readers pay only an atomic refcount bump per `snapshot()` call.
 #[expect(clippy::too_many_lines)]
 #[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
 async fn apply_block_inner(
