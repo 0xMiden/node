@@ -161,16 +161,29 @@ enum ActorMode {
 /// channels and shared state. The actor uses a cancellation token for graceful shutdown
 /// coordination.
 pub struct AccountActor {
+    /// The network account this actor is responsible for.
     account_id: NetworkAccountId,
+    /// Client for fetching chain data (MMR, headers) from the node's store.
     store: StoreClient,
+    /// Local database for account state, notes, and transaction tracking.
     db: Db,
+    /// Current operational mode of the actor (idle, notes available, tx inflight, etc.).
     mode: ActorMode,
+    /// Notification signal from the coordinator indicating that DB state relevant to this
+    /// actor may have changed (e.g., block committed, notes added). The actor re-evaluates
+    /// its state from the DB upon each notification.
     notify: Arc<Notify>,
+    /// Token for coordinating graceful shutdown of this actor's task.
     cancel_token: CancellationToken,
+    /// Client for submitting proven transactions to the block producer.
     block_producer: BlockProducerClient,
+    /// Client for validating transactions before submission.
     validator: ValidatorClient,
+    /// Optional remote prover for delegating transaction proving.
     prover: Option<RemoteTransactionProver>,
+    /// Shared chain state (tip header, MMR) updated by the coordinator on block commits.
     chain_state: Arc<RwLock<ChainState>>,
+    /// LRU cache of note scripts to avoid redundant fetches from the store.
     script_cache: LruCache<Word, NoteScript>,
     /// Maximum number of notes per transaction.
     max_notes_per_tx: NonZeroUsize,
