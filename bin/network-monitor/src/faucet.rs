@@ -64,7 +64,6 @@ struct GetTokensResponse {
 pub struct GetMetadataResponse {
     version: String,
     id: String,
-    issuance: u64,
     max_supply: u64,
     decimals: u8,
     explorer_url: Option<String>,

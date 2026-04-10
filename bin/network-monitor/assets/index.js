@@ -555,10 +555,6 @@ function updateDisplay() {
                                         <span class="metric-value">${details.FaucetTest.faucet_metadata.version || '-'}</span>
                                     </div>
                                     <div class="metric-row">
-                                        <span class="metric-label">Current Issuance:</span>
-                                        <span class="metric-value">${details.FaucetTest.faucet_metadata.issuance.toLocaleString()}</span>
-                                    </div>
-                                    <div class="metric-row">
                                         <span class="metric-label">Max Supply:</span>
                                         <span class="metric-value">${details.FaucetTest.faucet_metadata.max_supply.toLocaleString()}</span>
                                     </div>
