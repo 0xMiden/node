@@ -4,6 +4,14 @@
 
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 
+## v0.14.5 (2026-04-10)
+
+- Removed `issuance` field from the network monitor's faucet `GetMetadataResponse` ([#1918](https://github.com/0xMiden/node/pull/1918)).
+
+## v0.14.4 (2026-04-08)
+
+- Added missing `AuthControlled::allow_all()` mint policy component to genesis faucet accounts ([#1903](https://github.com/0xMiden/node/pull/1903)).
+
 ## v0.14.3 (2026-04-07)
 
 - Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).
