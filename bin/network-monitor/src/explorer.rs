@@ -131,15 +131,23 @@ pub(crate) async fn check_explorer_status(
         .send()
         .await;
 
-    let value = match resp {
-        Ok(resp) => resp.json::<serde_json::Value>().await,
+    let body = match resp {
+        Ok(resp) => match resp.text().await {
+            Ok(body) => body,
+            Err(e) => return unhealthy(&name, current_time, &e),
+        },
         Err(e) => return unhealthy(&name, current_time, &e),
     };
 
-    let details = match value {
-        Ok(value) => ExplorerStatusDetails::try_from(value),
-        Err(e) => return unhealthy(&name, current_time, &e),
+    let value: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(value) => value,
+        Err(e) => {
+            let msg = format!("{e}: {body}");
+            return unhealthy(&name, current_time, &msg);
+        },
     };
+
+    let details = ExplorerStatusDetails::try_from(value);
 
     match details {
         Ok(details) => ServiceStatus {
@@ -177,6 +185,12 @@ impl Display for ExplorerStatusError {
     }
 }
 
+/// Extracts a u64 from a JSON value that may be either a number or a
+/// string-encoded number (as returned by the Explorer's GraphQL API).
+fn value_as_u64(value: &serde_json::Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+}
+
 impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
     type Error = ExplorerStatusError;
 
@@ -187,31 +201,27 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
 
         let block_number = node
             .get("block_number")
-            .and_then(serde_json::Value::as_u64)
+            .and_then(value_as_u64)
             .ok_or_else(|| ExplorerStatusError::MissingField("block_number".to_string()))?;
         let timestamp = node
             .get("timestamp")
-            .and_then(serde_json::Value::as_u64)
+            .and_then(value_as_u64)
             .ok_or_else(|| ExplorerStatusError::MissingField("timestamp".to_string()))?;
 
-        let number_of_transactions = node
-            .get("number_of_transactions")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| {
+        let number_of_transactions =
+            node.get("number_of_transactions").and_then(value_as_u64).ok_or_else(|| {
                 ExplorerStatusError::MissingField("number_of_transactions".to_string())
             })?;
         let number_of_nullifiers = node
             .get("number_of_nullifiers")
-            .and_then(serde_json::Value::as_u64)
+            .and_then(value_as_u64)
             .ok_or_else(|| ExplorerStatusError::MissingField("number_of_nullifiers".to_string()))?;
         let number_of_notes = node
             .get("number_of_notes")
-            .and_then(serde_json::Value::as_u64)
+            .and_then(value_as_u64)
             .ok_or_else(|| ExplorerStatusError::MissingField("number_of_notes".to_string()))?;
-        let number_of_account_updates = node
-            .get("number_of_account_updates")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| {
+        let number_of_account_updates =
+            node.get("number_of_account_updates").and_then(value_as_u64).ok_or_else(|| {
                 ExplorerStatusError::MissingField("number_of_account_updates".to_string())
             })?;
 
