@@ -110,3 +110,15 @@ pub(crate) fn read_leaf(leaf_bytes: Vec<u8>) -> Result<Option<SmtLeaf>, StorageE
     let leaf = SmtLeaf::read_from_bytes(&leaf_bytes)?;
     Ok(Some(leaf))
 }
+
+pub(crate) fn read_leaves(
+    leaves: Vec<Option<Vec<u8>>>,
+) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
+    leaves
+        .into_iter()
+        .map(|leaf| match leaf {
+            Some(bytes) => Ok(Some(SmtLeaf::read_from_bytes(&bytes)?)),
+            None => Ok(None),
+        })
+        .collect()
+}

@@ -36,6 +36,7 @@ use crate::helpers::{
     read_entry_count,
     read_leaf,
     read_leaf_count,
+    read_leaves,
     remove_from_leaf,
 };
 use crate::{EMPTY_WORD, Word};
@@ -337,14 +338,11 @@ impl SmtStorageReader for RocksDbStorage {
         let db_keys: Vec<[u8; 8]> = indices.iter().map(|&idx| Self::index_db_key(idx)).collect();
         let results = self.db.multi_get_cf(db_keys.iter().map(|k| (cf, k.as_ref())));
 
-        results
+        let leaves = results
             .into_iter()
-            .map(|result| match result {
-                Ok(Some(bytes)) => Ok(Some(SmtLeaf::read_from_bytes(&bytes)?)),
-                Ok(None) => Ok(None),
-                Err(e) => Err(map_rocksdb_err(e)),
-            })
-            .collect()
+            .collect::<Result<Vec<Option<Vec<u8>>>, rocksdb::Error>>()
+            .map_err(map_rocksdb_err)?;
+        read_leaves(leaves)
     }
 
     /// Returns true if the storage has any leaves.
@@ -1082,14 +1080,11 @@ impl SmtStorageReader for RocksDbSnapshotStorage {
             indices.iter().map(|&idx| RocksDbStorage::index_db_key(idx)).collect();
         let results = self.inner.snapshot.multi_get_cf(db_keys.iter().map(|k| (cf, k.as_ref())));
 
-        results
+        let leaves = results
             .into_iter()
-            .map(|result| match result {
-                Ok(Some(bytes)) => Ok(Some(SmtLeaf::read_from_bytes(&bytes)?)),
-                Ok(None) => Ok(None),
-                Err(e) => Err(map_rocksdb_err(e)),
-            })
-            .collect()
+            .collect::<Result<Vec<Option<Vec<u8>>>, rocksdb::Error>>()
+            .map_err(map_rocksdb_err)?;
+        read_leaves(leaves)
     }
 
     fn has_leaves(&self) -> Result<bool, StorageError> {
