@@ -35,7 +35,7 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{info, instrument};
+use tracing::{Instrument, info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
@@ -653,6 +653,7 @@ impl State {
     /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
     /// the latest state. Note that historical states are only available for recent blocks close
     /// to the chain tip.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn get_account(
         &self,
         account_request: AccountRequest,
@@ -678,12 +679,13 @@ impl State {
     ///
     /// If `block_num` is provided, returns the witness at that historical block;
     /// otherwise, returns the witness at the latest block.
+    #[instrument(target = COMPONENT, skip_all)]
     async fn get_account_witness(
         &self,
         block_num: Option<BlockNumber>,
         account_id: AccountId,
     ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
-        let inner_state = self.inner.read().await;
+        let inner_state = self.inner.read().instrument(tracing::Span::current()).await;
 
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
@@ -718,6 +720,7 @@ impl State {
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
     #[expect(clippy::too_many_lines)]
+    #[instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,
@@ -736,7 +739,7 @@ impl State {
 
         // Validate block exists in the blockchain before querying the database
         {
-            let inner = self.inner.read().await;
+            let inner = self.inner.read().instrument(tracing::Span::current()).await;
             let latest_block_num = inner.latest_block_num();
 
             if block_num > latest_block_num {
@@ -796,7 +799,7 @@ impl State {
         let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
 
         if !map_keys_requests.is_empty() {
-            let forest_guard = self.forest.read().await;
+            let forest_guard = self.forest.read().instrument(tracing::Span::current()).await;
             for (index, slot_name, keys) in map_keys_requests {
                 let details = forest_guard
                     .get_storage_map_details_for_keys(
@@ -863,7 +866,9 @@ impl State {
     ///   channel, updated by the proof scheduler).
     pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
         match finality {
-            Finality::Committed => self.inner.read().await.latest_block_num(),
+            Finality::Committed => {
+                self.inner.read().instrument(tracing::Span::current()).await.latest_block_num()
+            },
             Finality::Proven => self.proven_tip.read(),
         }
     }

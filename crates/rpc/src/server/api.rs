@@ -36,7 +36,7 @@ use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
 use tonic::{IntoRequest, Request, Response, Status};
-use tracing::{debug, info};
+use tracing::{debug, info, info_span};
 use url::Url;
 
 use crate::COMPONENT;
@@ -331,6 +331,7 @@ impl api_server::Api for RpcService {
 
         // Validate total storage map key limit before forwarding to store
         if let Some(details) = &request.details {
+            let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
             let total_keys: usize = details
                 .storage_maps
                 .iter()

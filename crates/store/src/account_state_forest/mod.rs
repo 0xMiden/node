@@ -272,6 +272,7 @@ impl AccountStateForest {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
+    #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
