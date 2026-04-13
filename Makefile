@@ -127,6 +127,24 @@ install-network-monitor: ## Installs network monitor binary
 
 # --- docker --------------------------------------------------------------------------------------
 
+.PHONY: compose-genesis
+compose-genesis: ## Wipes node volumes and creates a fresh genesis block
+	$(CONTAINER_RUNTIME) compose down --volumes --remove-orphans
+	$(CONTAINER_RUNTIME) volume rm -f miden-node_genesis-data miden-node_store-data miden-node_validator-data miden-node_ntx-builder-data miden-node_accounts
+	$(CONTAINER_RUNTIME) compose --profile genesis run --rm genesis
+
+.PHONY: compose-up
+compose-up: ## Starts all node components via docker compose
+	$(CONTAINER_RUNTIME) compose up -d
+
+.PHONY: compose-down
+compose-down: ## Stops and removes all node containers via docker compose
+	$(CONTAINER_RUNTIME) compose down
+
+.PHONY: compose-logs
+compose-logs: ## Follows logs for all node components via docker compose
+	$(CONTAINER_RUNTIME) compose logs -f
+
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker (override with CONTAINER_RUNTIME=podman)
 	@CREATED=$$(date) && \
