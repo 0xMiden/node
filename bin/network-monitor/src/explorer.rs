@@ -174,21 +174,64 @@ fn unhealthy(name: &str, current_time: u64, err: &impl ToString) -> ServiceStatu
 
 #[derive(Debug)]
 pub enum ExplorerStatusError {
-    MissingField(String),
+    /// A required field was not present in the response.
+    NotPresent(String),
+    /// A field was present but had an unexpected type.
+    TypeMismatch {
+        field: String,
+        expected: &'static str,
+        got: String,
+    },
 }
 
 impl Display for ExplorerStatusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExplorerStatusError::MissingField(field) => write!(f, "missing field: {field}"),
+            ExplorerStatusError::NotPresent(field) => {
+                write!(f, "field '{field}': not present in response")
+            },
+            ExplorerStatusError::TypeMismatch { field, expected, got } => {
+                write!(f, "field '{field}': expected {expected}, got {got}")
+            },
         }
     }
 }
 
-/// Extracts a u64 from a JSON value that may be either a number or a
-/// string-encoded number (as returned by the Explorer's GraphQL API).
-fn value_as_u64(value: &serde_json::Value) -> Option<u64> {
-    value.as_u64().or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+/// Extracts a u64 from a named field.
+///
+/// Accepts both numeric values and string-encoded numbers (as returned by the Explorer's
+/// GraphQL API).
+fn require_u64(node: &serde_json::Value, field: &str) -> Result<u64, ExplorerStatusError> {
+    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent(field.into()))?;
+
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .ok_or_else(|| ExplorerStatusError::TypeMismatch {
+            field: field.into(),
+            expected: "u64-compatible value",
+            got: truncate_json(value),
+        })
+}
+
+/// Extracts a string from a named field.
+fn require_str(node: &serde_json::Value, field: &str) -> Result<String, ExplorerStatusError> {
+    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent(field.into()))?;
+
+    value
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| ExplorerStatusError::TypeMismatch {
+            field: field.into(),
+            expected: "string",
+            got: truncate_json(value),
+        })
+}
+
+/// Returns a short string representation of a JSON value for error messages.
+fn truncate_json(value: &serde_json::Value) -> String {
+    let s = value.to_string();
+    if s.len() > 60 { format!("{}...", &s[..60]) } else { s }
 }
 
 impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
@@ -196,61 +239,19 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
 
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         let node = value.pointer("/data/blocks/edges/0/node").ok_or_else(|| {
-            ExplorerStatusError::MissingField("data.blocks.edges[0].node".to_string())
+            ExplorerStatusError::NotPresent("data.blocks.edges[0].node".to_string())
         })?;
 
-        let block_number = node
-            .get("block_number")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("block_number".to_string()))?;
-        let timestamp = node
-            .get("timestamp")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("timestamp".to_string()))?;
-
-        let number_of_transactions =
-            node.get("number_of_transactions").and_then(value_as_u64).ok_or_else(|| {
-                ExplorerStatusError::MissingField("number_of_transactions".to_string())
-            })?;
-        let number_of_nullifiers = node
-            .get("number_of_nullifiers")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("number_of_nullifiers".to_string()))?;
-        let number_of_notes = node
-            .get("number_of_notes")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("number_of_notes".to_string()))?;
-        let number_of_account_updates =
-            node.get("number_of_account_updates").and_then(value_as_u64).ok_or_else(|| {
-                ExplorerStatusError::MissingField("number_of_account_updates".to_string())
-            })?;
-
-        let block_commitment = node
-            .get("block_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("block_commitment".to_string()))?
-            .to_string();
-        let chain_commitment = node
-            .get("chain_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("chain_commitment".to_string()))?
-            .to_string();
-        let proof_commitment = node
-            .get("proof_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("proof_commitment".to_string()))?
-            .to_string();
-
         Ok(Self {
-            block_number,
-            timestamp,
-            number_of_transactions,
-            number_of_nullifiers,
-            number_of_notes,
-            number_of_account_updates,
-            block_commitment,
-            chain_commitment,
-            proof_commitment,
+            block_number: require_u64(node, "block_number")?,
+            timestamp: require_u64(node, "timestamp")?,
+            number_of_transactions: require_u64(node, "number_of_transactions")?,
+            number_of_nullifiers: require_u64(node, "number_of_nullifiers")?,
+            number_of_notes: require_u64(node, "number_of_notes")?,
+            number_of_account_updates: require_u64(node, "number_of_account_updates")?,
+            block_commitment: require_str(node, "block_commitment")?,
+            chain_commitment: require_str(node, "chain_commitment")?,
+            proof_commitment: require_str(node, "proof_commitment")?,
         })
     }
 }
