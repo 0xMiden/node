@@ -370,7 +370,7 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         .collect();
     let input_notes = txs.iter().flat_map(|tx| tx.input_notes().iter().cloned()).collect();
     let output_notes = txs.iter().flat_map(|tx| tx.output_notes().iter().cloned()).collect();
-    ProvenBatch::new(
+    ProvenBatch::new_unchecked(
         BatchId::from_transactions(txs.iter()),
         block_ref.commitment(),
         block_ref.block_num(),

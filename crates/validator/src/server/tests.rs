@@ -324,7 +324,7 @@ async fn unknown_transactions_rejected() {
     let tx_id = tx_header.id();
 
     // Build a ProvenBatch containing this transaction.
-    let batch = ProvenBatch::new(
+    let batch = ProvenBatch::new_unchecked(
         BatchId::from_ids(std::iter::once((tx_id, account_id))),
         genesis_header.commitment(),
         BlockNumber::GENESIS,

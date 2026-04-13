@@ -23,8 +23,8 @@ use rocksdb::{
 };
 
 use super::{
+    SmtStorage,
     SmtStorageReader,
-    SmtStorageWriter,
     StorageError,
     StorageUpdateParts,
     StorageUpdates,
@@ -564,7 +564,7 @@ impl SmtStorageReader for RocksDbStorage {
     }
 }
 
-impl SmtStorageWriter for RocksDbStorage {
+impl SmtStorage for RocksDbStorage {
     /// Inserts a key-value pair into the SMT leaf at the specified logical `index`.
     ///
     /// This operation involves:
@@ -1017,7 +1017,7 @@ struct SnapshotInner {
 /// All clones share the same snapshot via `Arc`, providing a consistent view of
 /// the database at the time the snapshot was created.
 ///
-/// Implements [`SmtStorageReader`] but not [`SmtStorageWriter`].
+/// Implements [`SmtStorageReader`] only (read-only snapshot).
 #[derive(Clone)]
 pub struct RocksDbSnapshotStorage {
     inner: Arc<SnapshotInner>,

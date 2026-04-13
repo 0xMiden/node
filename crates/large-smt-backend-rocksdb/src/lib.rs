@@ -42,7 +42,6 @@ pub use miden_protocol::crypto::merkle::smt::{
     SmtProof,
     SmtStorage,
     SmtStorageReader,
-    SmtStorageWriter,
     StorageError,
     StorageUpdateParts,
     StorageUpdates,
