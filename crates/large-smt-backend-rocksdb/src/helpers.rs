@@ -87,6 +87,8 @@ pub(crate) fn remove_from_leaf(leaf: &mut SmtLeaf, key: Word) -> (Option<Word>, 
     }
 }
 
+/// Deserializes a big-endian `usize` count from exactly 8 bytes. `what` is used in the error
+/// message if the length is wrong.
 pub(crate) fn read_count(what: &'static str, bytes: &[u8]) -> Result<usize, StorageError> {
     let arr: [u8; 8] = bytes.try_into().map_err(|_| StorageError::BadValueLen {
         what,
@@ -96,12 +98,14 @@ pub(crate) fn read_count(what: &'static str, bytes: &[u8]) -> Result<usize, Stor
     Ok(usize::from_be_bytes(arr))
 }
 
+/// Deserializes a single SMT leaf from raw bytes.
 #[expect(clippy::needless_pass_by_value, reason = "simplifies chaining")]
 pub(crate) fn read_leaf(leaf_bytes: Vec<u8>) -> Result<Option<SmtLeaf>, StorageError> {
     let leaf = SmtLeaf::read_from_bytes(&leaf_bytes)?;
     Ok(Some(leaf))
 }
 
+/// Deserializes a batch of optional raw byte vectors into optional SMT leaves.
 pub(crate) fn read_leaves(
     leaves: Vec<Option<Vec<u8>>>,
 ) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
@@ -114,6 +118,7 @@ pub(crate) fn read_leaves(
         .collect()
 }
 
+/// Deserializes a single subtree from an optional raw byte vector.
 pub(crate) fn read_subtree(
     index: NodeIndex,
     db_result: Option<Vec<u8>>,
@@ -176,6 +181,7 @@ pub(crate) fn bucket_by_depth(
     Ok(depth_buckets)
 }
 
+/// Deserializes depth-24 hash entries from a database iterator into `(index, Word)` pairs.
 pub(crate) fn read_depth24_entries(
     iter: impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), RocksDbError>>,
 ) -> Result<Vec<(u64, Word)>, StorageError> {
@@ -189,6 +195,7 @@ pub(crate) fn read_depth24_entries(
     Ok(hashes)
 }
 
+/// Deserializes a `u64` index from an 8-byte big-endian key.
 pub(crate) fn index_from_key_bytes(key_bytes: &[u8]) -> Result<u64, StorageError> {
     if key_bytes.len() != 8 {
         return Err(StorageError::BadKeyLen { expected: 8, found: key_bytes.len() });
