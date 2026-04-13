@@ -32,12 +32,16 @@ use super::{
     SubtreeUpdate,
 };
 use crate::helpers::{
+    bucket_by_depth,
+    index_from_key_bytes,
     insert_into_leaf,
     map_rocksdb_err,
-    read_entry_count,
+    read_count,
+    read_depth24_entries,
     read_leaf,
-    read_leaf_count,
     read_leaves,
+    read_subtree,
+    read_subtree_batch,
     remove_from_leaf,
 };
 use crate::{EMPTY_WORD, Word};
@@ -300,7 +304,7 @@ impl SmtStorageReader for RocksDbStorage {
         self.db
             .get_cf(cf, LEAF_COUNT_KEY)
             .map_err(map_rocksdb_err)?
-            .map_or(Ok(0), read_leaf_count)
+            .map_or(Ok(0), |b| read_count("leaf count", &b))
     }
 
     /// Retrieves the total count of key-value entries from the `METADATA_CF` column family.
@@ -315,7 +319,7 @@ impl SmtStorageReader for RocksDbStorage {
         self.db
             .get_cf(cf, ENTRY_COUNT_KEY)
             .map_err(map_rocksdb_err)?
-            .map_or(Ok(0), read_entry_count)
+            .map_or(Ok(0), |b| read_count("entry count", &b))
     }
 
     /// Retrieves a single SMT leaf node by its logical `index` from the `LEAVES_CF` column family.
@@ -375,53 +379,15 @@ impl SmtStorageReader for RocksDbStorage {
     fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
         let cf = self.subtree_cf(index);
         let key = Self::subtree_db_key(index);
-        match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
-            Some(bytes) => {
-                let subtree = Subtree::from_vec(index, &bytes)?;
-                Ok(Some(subtree))
-            },
-            None => Ok(None),
-        }
+        read_subtree(index, self.db.get_cf(cf, key).map_err(map_rocksdb_err)?)
     }
 
-    /// Batch-retrieves multiple subtrees from RocksDB by their node indices.
-    ///
-    /// This method groups requests by subtree depth into column family buckets,
-    /// then performs parallel `multi_get` operations to efficiently retrieve
-    /// all subtrees. Results are deserialized and placed in the same order as
-    /// the input indices.
-    ///
-    /// # Parameters
-    /// - `indices`: A slice of subtree root indices to retrieve.
-    ///
-    /// # Returns
-    /// - A `Vec<Option<Subtree>>` where each index corresponds to the original input.
-    /// - `Ok(...)` if all fetches succeed.
-    /// - `Err(StorageError)` if any RocksDB access or deserialization fails.
     fn get_subtrees(&self, indices: &[NodeIndex]) -> Result<Vec<Option<Subtree>>, StorageError> {
         use rayon::prelude::*;
 
-        let mut depth_buckets: [Vec<(usize, NodeIndex)>; 5] = Default::default();
-
-        for (original_index, &node_index) in indices.iter().enumerate() {
-            let depth = node_index.depth();
-            let bucket_index = match depth {
-                56 => 0,
-                48 => 1,
-                40 => 2,
-                32 => 3,
-                24 => 4,
-                _ => {
-                    return Err(StorageError::Unsupported(format!(
-                        "unsupported subtree depth {depth}"
-                    )));
-                },
-            };
-            depth_buckets[bucket_index].push((original_index, node_index));
-        }
+        let depth_buckets = bucket_by_depth(indices)?;
         let mut results = vec![None; indices.len()];
 
-        // Process depth buckets in parallel
         let bucket_results: Result<Vec<_>, StorageError> = depth_buckets
             .into_par_iter()
             .enumerate()
@@ -433,26 +399,17 @@ impl SmtStorageReader for RocksDbStorage {
                     let keys: Vec<_> =
                         bucket.iter().map(|(_, idx)| Self::subtree_db_key(*idx)).collect();
 
-                    let db_results = self.db.multi_get_cf(keys.iter().map(|k| (cf, k.as_ref())));
-
-                    // Process results for this bucket
-                    bucket
+                    let db_results: Vec<_> = self
+                        .db
+                        .multi_get_cf(keys.iter().map(|k| (cf, k.as_ref())))
                         .into_iter()
-                        .zip(db_results)
-                        .map(|((original_index, node_index), db_result)| {
-                            let subtree = match db_result {
-                                Ok(Some(bytes)) => Some(Subtree::from_vec(node_index, &bytes)?),
-                                Ok(None) => None,
-                                Err(e) => return Err(map_rocksdb_err(e)),
-                            };
-                            Ok((original_index, subtree))
-                        })
-                        .collect()
+                        .collect();
+
+                    read_subtree_batch(bucket, db_results)
                 },
             )
             .collect();
 
-        // Flatten results and place them in correct positions
         for bucket_result in bucket_results? {
             for (original_index, subtree) in bucket_result {
                 results[original_index] = subtree;
@@ -532,19 +489,7 @@ impl SmtStorageReader for RocksDbStorage {
     /// - `StorageError::Value`: If any hash bytes are corrupt.
     fn get_depth24(&self) -> Result<Vec<(u64, Word)>, StorageError> {
         let cf = self.cf_handle(DEPTH_24_CF)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
-        let mut hashes = Vec::new();
-
-        for item in iter {
-            let (key_bytes, value_bytes) = item.map_err(map_rocksdb_err)?;
-
-            let index = index_from_key_bytes(&key_bytes)?;
-            let hash = Word::read_from_bytes(&value_bytes)?;
-
-            hashes.push((index, hash));
-        }
-
-        Ok(hashes)
+        read_depth24_entries(self.db.iterator_cf(cf, IteratorMode::Start))
     }
 }
 
@@ -1059,7 +1004,7 @@ impl SmtStorageReader for RocksDbSnapshotStorage {
             .snapshot
             .get_cf(cf, LEAF_COUNT_KEY)
             .map_err(map_rocksdb_err)?
-            .map_or(Ok(0), read_leaf_count)
+            .map_or(Ok(0), |b| read_count("leaf count", &b))
     }
 
     fn entry_count(&self) -> Result<usize, StorageError> {
@@ -1068,7 +1013,7 @@ impl SmtStorageReader for RocksDbSnapshotStorage {
             .snapshot
             .get_cf(cf, ENTRY_COUNT_KEY)
             .map_err(map_rocksdb_err)?
-            .map_or(Ok(0), read_entry_count)
+            .map_or(Ok(0), |b| read_count("entry count", &b))
     }
 
     fn get_leaf(&self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
@@ -1101,36 +1046,13 @@ impl SmtStorageReader for RocksDbSnapshotStorage {
     fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
         let cf = self.subtree_cf(index);
         let key = RocksDbStorage::subtree_db_key(index);
-        match self.inner.snapshot.get_cf(cf, key).map_err(map_rocksdb_err)? {
-            Some(bytes) => {
-                let subtree = Subtree::from_vec(index, &bytes)?;
-                Ok(Some(subtree))
-            },
-            None => Ok(None),
-        }
+        read_subtree(index, self.inner.snapshot.get_cf(cf, key).map_err(map_rocksdb_err)?)
     }
 
     fn get_subtrees(&self, indices: &[NodeIndex]) -> Result<Vec<Option<Subtree>>, StorageError> {
         use rayon::prelude::*;
 
-        let mut depth_buckets: [Vec<(usize, NodeIndex)>; 5] = Default::default();
-
-        for (original_index, &node_index) in indices.iter().enumerate() {
-            let depth = node_index.depth();
-            let bucket_index = match depth {
-                56 => 0,
-                48 => 1,
-                40 => 2,
-                32 => 3,
-                24 => 4,
-                _ => {
-                    return Err(StorageError::Unsupported(format!(
-                        "unsupported subtree depth {depth}"
-                    )));
-                },
-            };
-            depth_buckets[bucket_index].push((original_index, node_index));
-        }
+        let depth_buckets = bucket_by_depth(indices)?;
         let mut results = vec![None; indices.len()];
 
         let bucket_results: Result<Vec<_>, StorageError> = depth_buckets
@@ -1146,21 +1068,14 @@ impl SmtStorageReader for RocksDbSnapshotStorage {
                         .map(|(_, idx)| RocksDbStorage::subtree_db_key(*idx))
                         .collect();
 
-                    let db_results =
-                        self.inner.snapshot.multi_get_cf(keys.iter().map(|k| (cf, k.as_ref())));
-
-                    bucket
+                    let db_results: Vec<_> = self
+                        .inner
+                        .snapshot
+                        .multi_get_cf(keys.iter().map(|k| (cf, k.as_ref())))
                         .into_iter()
-                        .zip(db_results)
-                        .map(|((original_index, node_index), db_result)| {
-                            let subtree = match db_result {
-                                Ok(Some(bytes)) => Some(Subtree::from_vec(node_index, &bytes)?),
-                                Ok(None) => None,
-                                Err(e) => return Err(map_rocksdb_err(e)),
-                            };
-                            Ok((original_index, subtree))
-                        })
-                        .collect()
+                        .collect();
+
+                    read_subtree_batch(bucket, db_results)
                 },
             )
             .collect();
@@ -1209,19 +1124,7 @@ impl SmtStorageReader for RocksDbSnapshotStorage {
 
     fn get_depth24(&self) -> Result<Vec<(u64, Word)>, StorageError> {
         let cf = self.cf_handle(DEPTH_24_CF)?;
-        let db_iter = self.inner.snapshot.iterator_cf(cf, IteratorMode::Start);
-        let mut hashes = Vec::new();
-
-        for item in db_iter {
-            let (key_bytes, value_bytes) = item.map_err(map_rocksdb_err)?;
-
-            let index = index_from_key_bytes(&key_bytes)?;
-            let hash = Word::read_from_bytes(&value_bytes)?;
-
-            hashes.push((index, hash));
-        }
-
-        Ok(hashes)
+        read_depth24_entries(self.inner.snapshot.iterator_cf(cf, IteratorMode::Start))
     }
 }
 
@@ -1474,20 +1377,6 @@ impl AsRef<[u8]> for KeyBytes {
 
 // HELPERS
 // --------------------------------------------------------------------------------------------
-
-/// Deserializes an index (u64) from a RocksDB key byte slice.
-/// Expects `key_bytes` to be exactly 8 bytes long.
-///
-/// # Errors
-/// - `StorageError::BadKeyLen`: If `key_bytes` is not 8 bytes long or conversion fails.
-fn index_from_key_bytes(key_bytes: &[u8]) -> Result<u64, StorageError> {
-    if key_bytes.len() != 8 {
-        return Err(StorageError::BadKeyLen { expected: 8, found: key_bytes.len() });
-    }
-    let mut arr = [0u8; 8];
-    arr.copy_from_slice(key_bytes);
-    Ok(u64::from_be_bytes(arr))
-}
 
 /// Reconstructs a `NodeIndex` from the variable-length subtree key stored in `RocksDB`.
 ///
