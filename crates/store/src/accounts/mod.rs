@@ -149,6 +149,17 @@ impl<S: SmtStorageReader> AccountTreeWithHistory<S> {
         }
     }
 
+    /// Creates an `AccountTreeWithHistory` from its constituent parts.
+    ///
+    /// This is used by the writer to construct a snapshot-backed read-only copy.
+    pub(crate) fn from_parts(
+        latest: AccountTree<LargeSmt<S>>,
+        block_number: BlockNumber,
+        overlays: BTreeMap<BlockNumber, HistoricalOverlay>,
+    ) -> Self {
+        Self { block_number, latest, overlays }
+    }
+
     // PUBLIC ACCESSORS
     // --------------------------------------------------------------------------------------------
 
@@ -224,6 +235,11 @@ impl<S: SmtStorageReader> AccountTreeWithHistory<S> {
     /// Checks if the tree contains an account with the given prefix.
     pub fn contains_account_id_prefix_in_latest(&self, prefix: AccountIdPrefix) -> bool {
         self.latest.contains_account_id_prefix(prefix)
+    }
+
+    /// Returns a reference to the historical overlays.
+    pub(crate) fn overlays(&self) -> &BTreeMap<BlockNumber, HistoricalOverlay> {
+        &self.overlays
     }
 
     // PRIVATE HELPERS - HISTORICAL RECONSTRUCTION
@@ -338,25 +354,6 @@ impl<S: SmtStorageReader> AccountTreeWithHistory<S> {
         let path = MerklePath::new(dense);
         let path = SparseMerklePath::try_from(path).ok()?;
         Some((path, leaf))
-    }
-
-    // PUBLIC ACCESSORS (continued)
-    // --------------------------------------------------------------------------------------------
-
-    /// Returns a reference to the historical overlays.
-    pub(crate) fn overlays(&self) -> &BTreeMap<BlockNumber, HistoricalOverlay> {
-        &self.overlays
-    }
-
-    /// Creates an `AccountTreeWithHistory` from its constituent parts.
-    ///
-    /// This is used by the writer to construct a snapshot-backed read-only copy.
-    pub(crate) fn from_parts(
-        latest: AccountTree<LargeSmt<S>>,
-        block_number: BlockNumber,
-        overlays: BTreeMap<BlockNumber, HistoricalOverlay>,
-    ) -> Self {
-        Self { block_number, latest, overlays }
     }
 }
 
