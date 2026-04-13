@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.13.13 (2026-04-13)
+
+- Increase SQLite connection pool size to 128.
+
 ## v0.13.12 (2026-04-10)
 
 - Improved `GetAccount` instrumentation ([#1916](https://github.com/0xMiden/node/issues/1916)).
