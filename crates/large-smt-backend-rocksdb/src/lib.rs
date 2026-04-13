@@ -26,6 +26,8 @@ extern crate alloc;
 mod helpers;
 #[expect(clippy::doc_markdown, clippy::inline_always)]
 mod rocksdb;
+#[expect(clippy::doc_markdown, clippy::inline_always)]
+mod rocksdb_snapshot;
 // Re-export from miden-protocol.
 /// Re-export of `rocksdb::DB` for consumers that need the raw database handle type.
 pub use ::rocksdb::DB;
@@ -59,4 +61,5 @@ pub use miden_protocol::{
         merkle::{EmptySubtreeRoots, InnerNodeInfo, MerkleError, NodeIndex, SparseMerklePath},
     },
 };
-pub use rocksdb::{RocksDbConfig, RocksDbSnapshotStorage, RocksDbStorage};
+pub use rocksdb::{RocksDbConfig, RocksDbStorage};
+pub use rocksdb_snapshot::RocksDbSnapshotStorage;
