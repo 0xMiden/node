@@ -380,8 +380,7 @@ impl State {
     ///   state snapshot (wait-free via `ArcSwap`).
     /// - [`Finality::Proven`]: returns the latest proven-in-sequence block number (cached via watch
     ///   channel, updated by the proof scheduler).
-    #[expect(clippy::unused_async)]
-    pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
+    pub fn chain_tip(&self, finality: Finality) -> BlockNumber {
         match finality {
             Finality::Committed => self.snapshot().block_num,
             Finality::Proven => self.proven_tip.read(),
@@ -991,7 +990,7 @@ impl State {
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
-        if block_num > self.chain_tip(Finality::Committed).await {
+        if block_num > self.chain_tip(Finality::Committed) {
             return Ok(None);
         }
         self.block_store.load_block(block_num).await.map_err(Into::into)
@@ -1002,7 +1001,7 @@ impl State {
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
-        if block_num > self.chain_tip(Finality::Proven).await {
+        if block_num > self.chain_tip(Finality::Proven) {
             return Ok(None);
         }
         self.block_store.load_proof(block_num).await.map_err(Into::into)

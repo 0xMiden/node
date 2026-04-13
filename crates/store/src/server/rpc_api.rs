@@ -94,7 +94,7 @@ impl rpc_server::Rpc for StoreApi {
             return Err(SyncNullifiersError::InvalidPrefixLength(request.prefix_len).into());
         }
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range =
             read_block_range::<SyncNullifiersError>(request.block_range, "SyncNullifiersRequest")?
                 .into_inclusive_range::<SyncNullifiersError>(&chain_tip)?;
@@ -129,7 +129,7 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
         let request = request.into_inner();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
@@ -180,10 +180,10 @@ impl rpc_server::Rpc for StoreApi {
 
         let block_to = match sync_target {
             SyncTarget::BlockNumber(block_num) => {
-                block_num.min(self.state.chain_tip(Finality::Committed).await)
+                block_num.min(self.state.chain_tip(Finality::Committed))
             },
-            SyncTarget::CommittedChainTip => self.state.chain_tip(Finality::Committed).await,
-            SyncTarget::ProvenChainTip => self.state.chain_tip(Finality::Proven).await,
+            SyncTarget::CommittedChainTip => self.state.chain_tip(Finality::Committed),
+            SyncTarget::ProvenChainTip => self.state.chain_tip(Finality::Proven),
         };
 
         if block_from > block_to {
@@ -274,7 +274,7 @@ impl rpc_server::Rpc for StoreApi {
         request: Request<proto::rpc::SyncAccountVaultRequest>,
     ) -> Result<Response<proto::rpc::SyncAccountVaultResponse>, Status> {
         let request = request.into_inner();
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
 
         let account_id: AccountId = read_account_id::<
             proto::rpc::SyncAccountVaultRequest,
@@ -336,7 +336,7 @@ impl rpc_server::Rpc for StoreApi {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
         }
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range = read_block_range::<SyncAccountStorageMapsError>(
             request.block_range,
             "SyncAccountStorageMapsRequest",
@@ -376,7 +376,7 @@ impl rpc_server::Rpc for StoreApi {
         Ok(Response::new(proto::rpc::StoreStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "connected".to_string(),
-            chain_tip: self.state.chain_tip(Finality::Committed).await.as_u32(),
+            chain_tip: self.state.chain_tip(Finality::Committed).as_u32(),
         }))
     }
 
@@ -408,7 +408,7 @@ impl rpc_server::Rpc for StoreApi {
 
         let request = request.into_inner();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range = read_block_range::<SyncTransactionsError>(
             request.block_range,
             "SyncTransactionsRequest",

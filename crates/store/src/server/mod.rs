@@ -108,8 +108,7 @@ impl Store {
             self.block_prover_url,
             self.max_concurrent_proofs,
             tx_proven_tip,
-        )
-        .await;
+        );
 
         // Spawn gRPC Servers.
         let mut join_set = Self::spawn_grpc_servers(
@@ -144,7 +143,7 @@ impl Store {
     ///
     /// Returns the scheduler task handle and the chain tip sender (needed by gRPC services to
     /// notify the scheduler of new blocks).
-    async fn spawn_proof_scheduler(
+    fn spawn_proof_scheduler(
         state: &State,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
@@ -159,7 +158,7 @@ impl Store {
             Arc::new(BlockProver::local())
         };
 
-        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
+        let chain_tip = state.chain_tip(crate::state::Finality::Committed);
         let (chain_tip_tx, chain_tip_rx) = watch::channel(chain_tip);
 
         let handle = proof_scheduler::spawn(
