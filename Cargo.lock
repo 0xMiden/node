@@ -2845,7 +2845,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miden-agglayer"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "alloy-sol-types",
  "fs-err",
@@ -2920,7 +2920,7 @@ dependencies = [
 [[package]]
 name = "miden-block-prover"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "miden-protocol",
  "thiserror 2.0.18",
@@ -2968,7 +2968,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto"
 version = "0.23.0"
-source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#ded92df7616b724d1c4f36fed968ee341d602fda"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#bcb1daae09b0d821739e89c06d31f50cdc092ae7"
 dependencies = [
  "blake3",
  "cc",
@@ -3010,7 +3010,7 @@ dependencies = [
 [[package]]
 name = "miden-crypto-derive"
 version = "0.23.0"
-source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#ded92df7616b724d1c4f36fed968ee341d602fda"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#bcb1daae09b0d821739e89c06d31f50cdc092ae7"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -3037,7 +3037,7 @@ dependencies = [
 [[package]]
 name = "miden-field"
 version = "0.23.0"
-source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#ded92df7616b724d1c4f36fed968ee341d602fda"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#bcb1daae09b0d821739e89c06d31f50cdc092ae7"
 dependencies = [
  "miden-serde-utils",
  "num-bigint",
@@ -3537,7 +3537,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3566,7 +3566,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol-macros"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3652,7 +3652,7 @@ dependencies = [
 [[package]]
 name = "miden-serde-utils"
 version = "0.23.0"
-source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#ded92df7616b724d1c4f36fed968ee341d602fda"
+source = "git+https://github.com/0xmiden/crypto?branch=sergerad-clone#bcb1daae09b0d821739e89c06d31f50cdc092ae7"
 dependencies = [
  "p3-field",
  "p3-goldilocks",
@@ -3661,7 +3661,7 @@ dependencies = [
 [[package]]
 name = "miden-standards"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -3678,7 +3678,7 @@ dependencies = [
 [[package]]
 name = "miden-testing"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -3700,7 +3700,7 @@ dependencies = [
 [[package]]
 name = "miden-tx"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -3713,7 +3713,7 @@ dependencies = [
 [[package]]
 name = "miden-tx-batch-prover"
 version = "0.15.0"
-source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#b6dcab32565289d5772b45230f0df1118d16a9db"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#172df00d27c13f82274b6db16540e82060b0eb08"
 dependencies = [
  "miden-protocol",
  "miden-tx",
