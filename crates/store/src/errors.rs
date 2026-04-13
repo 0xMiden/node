@@ -267,11 +267,8 @@ pub enum StateSyncError {
 pub enum SyncChainMmrError {
     #[error("invalid block range")]
     InvalidBlockRange(#[source] InvalidBlockRange),
-    #[error("start block is not known")]
-    FutureBlock {
-        chain_tip: BlockNumber,
-        block_from: BlockNumber,
-    },
+    #[error("block {0} is unknown")]
+    UnknownBlock(BlockNumber),
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),
     #[error("database error")]
@@ -355,6 +352,8 @@ pub enum SyncNullifiersError {
     InvalidPrefixLength(u32),
     #[error("malformed nullifier prefix")]
     DeserializationFailed(#[from] ConversionError),
+    #[error("block {0} is unknown")]
+    UnknownBlock(BlockNumber),
 }
 
 // SYNC ACCOUNT VAULT ERRORS

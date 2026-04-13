@@ -1,5 +1,5 @@
 use miden_node_proto::convert;
-use miden_node_proto::domain::block::SyncTarget;
+use miden_node_proto::domain::block::{InvalidBlockRange, SyncTarget};
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -99,6 +99,10 @@ impl rpc_server::Rpc for StoreApi {
             read_block_range::<SyncNullifiersError>(request.block_range, "SyncNullifiersRequest")?
                 .into_inclusive_range::<SyncNullifiersError>(&chain_tip)?;
 
+        if block_range.end() > &chain_tip {
+            return Err(SyncNullifiersError::UnknownBlock(chain_tip).into());
+        }
+
         let (nullifiers, block_num) = self
             .state
             .sync_nullifiers(request.prefix_len, request.nullifiers, block_range)
@@ -133,7 +137,7 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
-        if *block_range.end() > chain_tip {
+        if block_range.end() > &chain_tip {
             Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
         }
 
@@ -186,9 +190,19 @@ impl rpc_server::Rpc for StoreApi {
             SyncTarget::ProvenChainTip => self.state.chain_tip(Finality::Proven),
         };
 
+        // Check range sanity.
         if block_from > block_to {
-            Err(SyncChainMmrError::FutureBlock { chain_tip: block_to, block_from })?;
+            Err(SyncChainMmrError::InvalidBlockRange(InvalidBlockRange::StartGreaterThanEnd {
+                start: block_from,
+                end: block_to,
+            }))?;
         }
+
+        // Check range does not go beyond current tip.
+        if block_to > self.state.chain_tip(Finality::Committed) {
+            Err(SyncChainMmrError::UnknownBlock(block_to))?;
+        }
+
         let block_range = block_from..=block_to;
         let (mmr_delta, block_header) =
             self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;

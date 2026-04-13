@@ -820,6 +820,9 @@ impl State {
 
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
+            if requested_block > snapshot.block_num {
+                return Err(GetAccountError::UnknownBlock(requested_block));
+            }
             // Historical query: use the account tree with history
             let witness =
                 snapshot.account_tree.open_at(account_id, requested_block).ok_or_else(|| {
