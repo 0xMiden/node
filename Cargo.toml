@@ -147,11 +147,11 @@ files.extend-exclude = ["*.svg"] # Ignore SVG files.
 miden-crypto      = { branch = "sergerad-clone", git = "https://github.com/0xmiden/crypto" }
 miden-serde-utils = { branch = "sergerad-clone", git = "https://github.com/0xmiden/crypto" }
 
-miden-agglayer         = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-block-prover     = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-protocol         = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-protocol-macros  = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-standards        = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-testing          = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-tx               = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
-miden-tx-batch-prover  = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-agglayer        = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-block-prover    = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-protocol        = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-protocol-macros = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-standards       = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-testing         = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-tx              = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
+miden-tx-batch-prover = { branch = "sergerad-clone", git = "https://github.com/0xmiden/protocol" }
