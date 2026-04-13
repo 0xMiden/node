@@ -318,7 +318,7 @@ impl Db {
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseSetupError> {
         let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
+        let pool = deadpool_diesel::Pool::builder(manager).max_size(128).build()?;
 
         info!(
             target: COMPONENT,
