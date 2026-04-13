@@ -3592,6 +3592,7 @@ fn db_roundtrip_transactions() {
                 inclusion_path: SparseMerklePath::default(),
             })
             .collect(),
+        erased_output_note_ids: vec![],
         fee: tx.fee(),
     };
 
@@ -3609,7 +3610,15 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: expected.output_notes.into_iter().map(Into::into).collect(),
+            output_notes: expected
+                .output_notes
+                .into_iter()
+                .map(|n| proto::transaction::OutputNoteRecord {
+                    record: Some(proto::transaction::output_note_record::Record::Committed(
+                        n.into(),
+                    )),
+                })
+                .collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
     };
@@ -3648,6 +3657,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
         output_notes: vec![],
+        erased_output_note_ids: tx.output_notes().iter().map(|h| h.id()).collect(),
         fee: tx.fee(),
     };
 
