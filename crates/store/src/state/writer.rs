@@ -53,19 +53,17 @@ pub(crate) async fn writer_loop(
 ///
 /// ## Consistency model
 ///
-/// This function is the sole writer to all state. The writer owns the writable trees directly
-/// (no locks or interior mutability). It applies mutations, then creates a new `InMemoryState`
-/// with snapshot-backed read-only copies and atomically swaps the pointer.
+/// This function is the sole writer to all state. The writer owns the writable trees directly.
+///
+/// Because SQLite/files are committed **before** the in-memory swap, there is a window where the
+/// DB is ahead of the in-memory state. Reader methods that combine in-memory and SQLite data
+/// must scope their DB queries by the snapshot's `block_num` to maintain consistency (see the
+/// doc comment on [`State`] for the full rules).
 ///
 /// Readers never block: they obtain an `Arc` via `ArcSwap::load_full()`, which performs only an
 /// atomic refcount increment with no data cloning. The atomic swap guarantees readers see either
 /// the old or new state, never a partial update. Readers holding an `Arc` to the old state are
 /// completely unaffected by the swap.
-///
-/// ## Performance
-///
-/// No deep clone of tree data occurs in `RocksDB` mode. The snapshot-backed trees read directly
-/// from `RocksDB` snapshots. Readers pay only an atomic refcount bump per `snapshot()` call.
 #[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
 async fn apply_block_inner(
     state: &State,
