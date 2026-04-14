@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.15.0 (TBD)
+
+- [BREAKING] Moved enriched output note data (inclusion proofs, erased note IDs) from `TransactionHeader` to `TransactionRecord` in `SyncTransactions` response. `TransactionHeader.output_notes` now uses `NoteHeader` (aligned with domain type) instead of `NoteSyncRecord` ([#1927](https://github.com/0xMiden/node/issues/1927), [#1898](https://github.com/0xMiden/node/issues/1898)).
+
 ## v0.14.6 (2026-04-10)
 
 - Fixed network monitor explorer health check failing to parse string-encoded numeric fields from the Explorer GraphQL API ([#1922](https://github.com/0xMiden/node/pull/1922)).

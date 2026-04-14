@@ -638,8 +638,12 @@ message TransactionRecord {
     // Block number in which the transaction was included.
     fixed32 block_num = 1;
 
-    // A transaction header.
+    // The transaction header.
     transaction.TransactionHeader header = 2;
+
+    // Output notes enriched with inclusion proofs for committed notes, or IDs for
+    // erased notes (notes created and consumed within the same batch).
+    repeated transaction.OutputNoteRecord output_notes = 3;
 }
 
 // GET NOTE ERROR

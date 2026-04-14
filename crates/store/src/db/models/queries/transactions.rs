@@ -322,14 +322,18 @@ fn with_output_note_proofs(
         .zip(tx_output_notes)
         .map(|(raw, output_notes)| {
             let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
-            // Filter out erased notes: notes created and consumed within the same
-            // block are removed from the block's output notes and thus have no entry
-            // in the `notes` table.
-            let enriched_notes = output_notes
+            // Classify output notes as committed or erased.
+            // Erased notes were created and consumed within the same batch, so they
+            // have no entry in the `notes` table.
+            let classified_notes = output_notes
                 .into_iter()
-                .filter_map(|note| {
+                .map(|note| {
                     let note_id = note.id();
-                    output_notes_by_id.get(&note_id).cloned()
+                    if let Some(record) = output_notes_by_id.get(&note_id) {
+                        crate::db::OutputNoteRecord::Committed(record.clone())
+                    } else {
+                        crate::db::OutputNoteRecord::Erased(note)
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -340,7 +344,7 @@ fn with_output_note_proofs(
                 initial_state_commitment: Word::read_from_bytes(&raw.initial_state_commitment)?,
                 final_state_commitment: Word::read_from_bytes(&raw.final_state_commitment)?,
                 input_notes: Deserializable::read_from_bytes(&raw.input_notes)?,
-                output_notes: enriched_notes,
+                output_notes: classified_notes,
                 fee: FungibleAsset::read_from_bytes(&raw.fee)?,
             })
         })

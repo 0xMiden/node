@@ -67,6 +67,20 @@ message InputNoteCommitment {
   optional note.NoteHeader header = 2;
 }
 
+// An output note from a committed transaction.
+//
+// Notes that exist on the node include their full sync record with inclusion proof.
+// Notes that were erased by same-batch note erasure (created and consumed within the
+// same batch) only include their ID, since the node has no further data about them.
+message OutputNoteRecord {
+  oneof record {
+    // The note exists on the node with its full metadata and inclusion proof.
+    note.NoteSyncRecord committed = 1;
+    // The note was erased by same-batch note erasure. Only the ID is available.
+    note.NoteId erased = 2;
+  }
+}
+
 // Represents a transaction header.
 message TransactionHeader {
   // The unique identifier of the transaction.
@@ -84,8 +98,8 @@ message TransactionHeader {
   // Input notes of the transaction.
   repeated InputNoteCommitment input_notes = 5;
 
-  // Output notes of the transaction together with their inclusion proofs.
-  repeated note.NoteSyncRecord output_notes = 6;
+  // Output notes of the transaction.
+  repeated note.NoteHeader output_notes = 6;
 
   // The fee paid by the transaction.
   primitives.Asset fee = 7;

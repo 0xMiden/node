@@ -80,7 +80,14 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 use tempfile::tempdir;
 
-use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
+use super::{
+    AccountInfo,
+    NoteRecord,
+    NoteSyncRecord,
+    NullifierInfo,
+    OutputNoteRecord,
+    TransactionRecord,
+};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
@@ -3573,6 +3580,19 @@ fn db_roundtrip_transactions() {
             .unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
+    let expected_sync_records: Vec<_> = tx
+        .output_notes()
+        .iter()
+        .enumerate()
+        .map(|(idx, note)| NoteSyncRecord {
+            block_num,
+            note_index: BlockNoteIndex::new(0, idx).unwrap(),
+            note_id: note.id().as_word(),
+            metadata: note.metadata().clone(),
+            inclusion_path: SparseMerklePath::default(),
+        })
+        .collect();
+
     let expected = TransactionRecord {
         block_num,
         transaction_id: tx.id(),
@@ -3580,17 +3600,10 @@ fn db_roundtrip_transactions() {
         initial_state_commitment: tx.initial_state_commitment(),
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: tx
-            .output_notes()
+        output_notes: expected_sync_records
             .iter()
-            .enumerate()
-            .map(|(idx, note)| NoteSyncRecord {
-                block_num,
-                note_index: BlockNoteIndex::new(0, idx).unwrap(),
-                note_id: note.id().as_word(),
-                metadata: note.metadata().clone(),
-                inclusion_path: SparseMerklePath::default(),
-            })
+            .cloned()
+            .map(OutputNoteRecord::Committed)
             .collect(),
         fee: tx.fee(),
     };
@@ -3609,9 +3622,15 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: expected.output_notes.into_iter().map(Into::into).collect(),
+            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
+        output_notes: expected_sync_records
+            .into_iter()
+            .map(|n| proto::transaction::OutputNoteRecord {
+                record: Some(proto::transaction::output_note_record::Record::Committed(n.into())),
+            })
+            .collect(),
     };
 
     // Proto conversion roundtrip
@@ -3632,7 +3651,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
 
     // Notes erased within the same block are not inserted into the `notes` table, so transaction
-    // sync should omit them instead of failing the whole request.
+    // sync should classify them as erased instead of failing the whole request.
     queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
 
     let retrieved =
@@ -3647,7 +3666,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
         initial_state_commitment: tx.initial_state_commitment(),
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: vec![],
+        output_notes: tx.output_notes().iter().cloned().map(OutputNoteRecord::Erased).collect(),
         fee: tx.fee(),
     };
 

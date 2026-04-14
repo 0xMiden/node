@@ -17,6 +17,7 @@ use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBloc
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
+    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
@@ -135,6 +136,17 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
     }
 }
 
+/// Represents an output note from a committed transaction.
+///
+/// Notes that exist on the node are "committed" and include their full sync record with
+/// inclusion proof. Notes that were erased by same-batch note erasure (created and consumed
+/// within the same batch) are "erased" and only include their note header.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputNoteRecord {
+    Committed(NoteSyncRecord),
+    Erased(NoteHeader),
+}
+
 #[derive(Debug, PartialEq)]
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
@@ -143,16 +155,45 @@ pub struct TransactionRecord {
     pub initial_state_commitment: Word,
     pub final_state_commitment: Word,
     pub input_notes: Vec<InputNoteCommitment>,
-    pub output_notes: Vec<NoteSyncRecord>,
+    pub output_notes: Vec<OutputNoteRecord>,
     pub fee: FungibleAsset,
 }
 
 impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
-    /// The proto `TransactionHeader` mirrors the stored transaction data, except output notes are
-    /// enriched with inclusion proofs for sync clients.
+    /// The proto `TransactionHeader` contains output notes as `NoteHeader` (aligned with the
+    /// domain type). The enriched output note data (inclusion proofs for committed notes, IDs
+    /// for erased notes) is placed in the `TransactionRecord.output_notes` field.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
+        let mut output_note_headers = Vec::with_capacity(self.output_notes.len());
+        let mut output_note_records = Vec::with_capacity(self.output_notes.len());
+
+        for note in self.output_notes {
+            match note {
+                OutputNoteRecord::Committed(sync_record) => {
+                    output_note_headers.push(proto::note::NoteHeader {
+                        note_id: Some(sync_record.note_id.into()),
+                        metadata: Some(sync_record.metadata.clone().into()),
+                    });
+                    output_note_records.push(proto::transaction::OutputNoteRecord {
+                        record: Some(proto::transaction::output_note_record::Record::Committed(
+                            sync_record.into(),
+                        )),
+                    });
+                },
+                OutputNoteRecord::Erased(header) => {
+                    let note_id: proto::note::NoteId = (&header.id()).into();
+                    output_note_headers.push(header.into());
+                    output_note_records.push(proto::transaction::OutputNoteRecord {
+                        record: Some(proto::transaction::output_note_record::Record::Erased(
+                            note_id,
+                        )),
+                    });
+                },
+            }
+        }
+
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {
                 transaction_id: Some(self.transaction_id.into()),
@@ -160,10 +201,11 @@ impl TransactionRecord {
                 initial_state_commitment: Some(self.initial_state_commitment.into()),
                 final_state_commitment: Some(self.final_state_commitment.into()),
                 input_notes: self.input_notes.into_iter().map(Into::into).collect(),
-                output_notes: self.output_notes.into_iter().map(Into::into).collect(),
+                output_notes: output_note_headers,
                 fee: Some(Asset::from(self.fee).into()),
             }),
             block_num: self.block_num.as_u32(),
+            output_notes: output_note_records,
         }
     }
 }
