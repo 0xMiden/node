@@ -14,7 +14,6 @@ use tracing::{info, instrument};
 
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
-use crate::inflight_note::InflightNetworkNote;
 use crate::{COMPONENT, NoteError};
 
 pub(crate) mod models;
@@ -90,7 +89,7 @@ impl Db {
         account_id: NetworkAccountId,
         block_num: BlockNumber,
         max_note_attempts: usize,
-    ) -> Result<(Option<Account>, Vec<InflightNetworkNote>)> {
+    ) -> Result<(Option<Account>, Vec<AccountTargetNetworkNote>)> {
         self.inner
             .query("select_candidate", move |conn| {
                 let account = queries::get_account(conn, account_id)?;

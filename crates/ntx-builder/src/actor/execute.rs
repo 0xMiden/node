@@ -32,6 +32,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::vm::FutureMaybeSend;
 use miden_remote_prover_client::RemoteTransactionProver;
+use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
     DataStore,
@@ -205,7 +206,8 @@ impl NtxContext {
                 );
 
                 // Filter notes.
-                let notes = notes.into_iter().map(Note::from).collect::<Vec<_>>();
+                let notes =
+                    notes.into_iter().map(AccountTargetNetworkNote::into_note).collect::<Vec<_>>();
                 let (successful_notes, failed_notes) =
                     self.filter_notes(&data_store, notes).await?;
 
