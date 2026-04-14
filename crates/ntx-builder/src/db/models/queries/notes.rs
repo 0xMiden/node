@@ -11,7 +11,6 @@ use miden_standards::note::AccountTargetNetworkNote;
 use crate::NoteError;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
-use crate::inflight_note::InflightNetworkNote;
 
 // MODELS
 // ================================================================================================
@@ -95,8 +94,7 @@ pub fn insert_committed_notes(
 /// Returns notes available for consumption by a given account.
 ///
 /// Queries unconsumed notes (`consumed_by IS NULL`) for the account that have not exceeded the
-/// maximum attempt count, then applies backoff filtering in Rust via
-/// `InflightNetworkNote::is_available`.
+/// maximum attempt count, then applies backoff and execution hint filtering in Rust.
 ///
 /// # Raw SQL
 ///
@@ -114,7 +112,7 @@ pub fn available_notes(
     account_id: NetworkAccountId,
     block_num: BlockNumber,
     max_attempts: usize,
-) -> Result<Vec<InflightNetworkNote>, DatabaseError> {
+) -> Result<Vec<AccountTargetNetworkNote>, DatabaseError> {
     let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
 
     // Get unconsumed notes for this account that haven't exceeded the max attempt count.
@@ -129,12 +127,11 @@ pub fn available_notes(
     for row in rows {
         #[expect(clippy::cast_sign_loss)]
         let attempt_count = row.attempt_count as usize;
-        let note = note_row_to_inflight(
-            &row.note_data,
-            attempt_count,
-            row.last_attempt.map(conversions::block_num_from_i64),
-        )?;
-        if note.is_available(block_num) {
+        let last_attempt = row.last_attempt.map(conversions::block_num_from_i64);
+        let note = deserialize_note(&row.note_data)?;
+
+        let execution_hint_ok = note.execution_hint().can_be_consumed(block_num).unwrap_or(true);
+        if execution_hint_ok && has_backoff_passed(block_num, last_attempt, attempt_count) {
             result.push(note);
         }
     }
@@ -200,17 +197,74 @@ pub fn get_note_error(
 // HELPERS
 // ================================================================================================
 
-/// Constructs an `InflightNetworkNote` from DB row fields.
-fn note_row_to_inflight(
-    note_data: &[u8],
-    attempt_count: usize,
-    last_attempt: Option<BlockNumber>,
-) -> Result<InflightNetworkNote, DatabaseError> {
+/// Deserializes an [`AccountTargetNetworkNote`] from raw note bytes.
+fn deserialize_note(note_data: &[u8]) -> Result<AccountTargetNetworkNote, DatabaseError> {
     let note = Note::read_from_bytes(note_data)
         .map_err(|source| DatabaseError::deserialization("failed to parse note", source))?;
-    let note = AccountTargetNetworkNote::new(note).map_err(|source| {
+    AccountTargetNetworkNote::new(note).map_err(|source| {
         DatabaseError::deserialization("failed to convert to network note", source)
-    })?;
+    })
+}
 
-    Ok(InflightNetworkNote::from_parts(note, attempt_count, last_attempt))
+/// Checks if the backoff block period has passed.
+///
+/// The number of blocks passed since the last attempt must be greater than or equal to
+/// e^(0.25 * `attempt_count`) rounded to the nearest integer.
+///
+/// This evaluates to the following:
+/// - After 1 attempt, the backoff period is 1 block.
+/// - After 3 attempts, the backoff period is 2 blocks.
+/// - After 10 attempts, the backoff period is 12 blocks.
+/// - After 20 attempts, the backoff period is 148 blocks.
+/// - etc...
+#[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+fn has_backoff_passed(
+    chain_tip: BlockNumber,
+    last_attempt: Option<BlockNumber>,
+    attempts: usize,
+) -> bool {
+    if attempts == 0 {
+        return true;
+    }
+    // Compute the number of blocks passed since the last attempt.
+    let blocks_passed = last_attempt
+        .and_then(|last| chain_tip.checked_sub(last.as_u32()))
+        .unwrap_or_default();
+
+    // Compute the exponential backoff threshold: Δ = e^(0.25 * n).
+    let backoff_threshold = (0.25 * attempts as f64).exp().round() as usize;
+
+    // Check if the backoff period has passed.
+    blocks_passed.as_usize() > backoff_threshold
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::block::BlockNumber;
+
+    use super::has_backoff_passed;
+
+    #[rstest::rstest]
+    #[test]
+    #[case::all_zero(Some(BlockNumber::GENESIS), BlockNumber::GENESIS, 0, true)]
+    #[case::no_attempts(None, BlockNumber::GENESIS, 0, true)]
+    #[case::one_attempt(Some(BlockNumber::GENESIS), BlockNumber::from(2), 1, true)]
+    #[case::three_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(3), 3, true)]
+    #[case::ten_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(13), 10, true)]
+    #[case::twenty_attempts(Some(BlockNumber::GENESIS), BlockNumber::from(149), 20, true)]
+    #[case::one_attempt_false(Some(BlockNumber::GENESIS), BlockNumber::from(1), 1, false)]
+    #[case::three_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(2), 3, false)]
+    #[case::ten_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(12), 10, false)]
+    #[case::twenty_attempts_false(Some(BlockNumber::GENESIS), BlockNumber::from(148), 20, false)]
+    fn backoff_has_passed(
+        #[case] last_attempt_block_num: Option<BlockNumber>,
+        #[case] current_block_num: BlockNumber,
+        #[case] attempt_count: usize,
+        #[case] backoff_should_have_passed: bool,
+    ) {
+        assert_eq!(
+            backoff_should_have_passed,
+            has_backoff_passed(current_block_num, last_attempt_block_num, attempt_count)
+        );
+    }
 }
