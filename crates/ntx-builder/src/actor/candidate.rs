@@ -3,8 +3,7 @@ use std::sync::Arc;
 use miden_protocol::account::Account;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::PartialBlockchain;
-
-use crate::inflight_note::InflightNetworkNote;
+use miden_standards::note::AccountTargetNetworkNote;
 
 // TRANSACTION CANDIDATE
 // ================================================================================================
@@ -19,7 +18,7 @@ pub struct TransactionCandidate {
     pub account: Account,
 
     /// A set of notes addressed to this network account.
-    pub notes: Vec<InflightNetworkNote>,
+    pub notes: Vec<AccountTargetNetworkNote>,
 
     /// The latest locally committed block header.
     ///
