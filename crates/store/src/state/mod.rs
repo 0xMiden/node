@@ -138,11 +138,32 @@ pub(crate) struct InMemoryState {
 
 /// The rollup state.
 ///
-/// A single writer task (serialized by a channel) mutates the state. All trees, the blockchain
-/// MMR, and the forest are held in an `Arc<InMemoryState>` behind an [`ArcSwap`], providing
-/// wait-free reads. The writer owns writable copies of the trees directly (passed as owned
-/// values to [`writer::writer_loop`]) and creates snapshot-backed read-only copies for
-/// `InMemoryState` after each block.
+/// State is comprised of three data sets:
+///
+/// 1. **In-memory** ([`InMemoryState`]): nullifier tree, account tree, blockchain MMR, and account
+///    state forest. Held behind an [`ArcSwap`] for wait-free reads.
+/// 2. **SQLite**: block headers, notes, nullifiers, accounts, transactions, and other relational
+///    data.
+/// 3. **File-based** ([`BlockStore`]): serialized blocks and proofs stored on disk.
+///
+/// A single writer task (serialized by a channel) mutates all three data sets. The writer owns
+/// writable copies of the in-memory trees directly (passed as owned values to
+/// [`writer::writer_loop`]) and creates snapshot-backed read-only copies for [`InMemoryState`]
+/// after each block. The writer commits to SQLite and the block store *before* swapping the
+/// in-memory pointer, so there is a window where the DB/files are ahead of the in-memory state.
+///
+/// ## Consistency rules for reader methods
+///
+/// Any method that combines in-memory and SQLite data **must** take a snapshot and use its
+/// `block_num` to scope all DB queries. This ensures the two data sets are consistent even
+/// during the window described above. Concretely, such a method must either:
+///
+/// - Reject requests where the caller-supplied block number exceeds the snapshot's chain tip, or
+/// - Inherently limit its DB query scope to `<= snapshot.block_num`.
+///
+/// Methods that operate purely on SQLite or file-based data (e.g. loading a block by number,
+/// querying account details by a caller-supplied block number that was already validated) are
+/// free to access those stores directly without taking a snapshot.
 pub struct State {
     /// The database which stores block headers, nullifiers, notes, and the latest states of
     /// accounts.
@@ -1001,9 +1022,6 @@ impl State {
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
-        if block_num > self.chain_tip(Finality::Committed) {
-            return Ok(None);
-        }
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
@@ -1012,9 +1030,6 @@ impl State {
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
-        if block_num > self.chain_tip(Finality::Proven) {
-            return Ok(None);
-        }
         self.block_store.load_proof(block_num).await.map_err(Into::into)
     }
 

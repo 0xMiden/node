@@ -94,11 +94,12 @@ impl rpc_server::Rpc for StoreApi {
             return Err(SyncNullifiersError::InvalidPrefixLength(request.prefix_len).into());
         }
 
+        // Ensure that the block range is scoped by the snapshot because we will return the
+        // snapshot's block number as the tip of the chain in the response below.
         let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range =
             read_block_range::<SyncNullifiersError>(request.block_range, "SyncNullifiersRequest")?
                 .into_inclusive_range::<SyncNullifiersError>(&chain_tip)?;
-
         if block_range.end() > &chain_tip {
             return Err(SyncNullifiersError::UnknownBlock(chain_tip).into());
         }
