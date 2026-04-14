@@ -154,12 +154,12 @@ impl TransactionRecord {
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
         let output_note_proofs = self
             .output_note_proofs
-            .iter()
+            .into_iter()
             .map(|n| proto::note::NoteInclusionInBlockProof {
                 note_id: Some(n.note_id.into()),
                 block_num: n.block_num.as_u32(),
                 note_index_in_block: n.note_index.leaf_index_value().into(),
-                inclusion_path: Some(n.inclusion_path.clone().into()),
+                inclusion_path: Some(n.inclusion_path.into()),
             })
             .collect();
 
