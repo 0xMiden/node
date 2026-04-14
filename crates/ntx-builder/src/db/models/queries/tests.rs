@@ -378,7 +378,7 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
     // Only note_good should be available (note_consumed is consumed, note_failed exceeded
     // attempts).
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].nullifier(), note_good.as_note().nullifier());
+    assert_eq!(result[0].as_note().nullifier(), note_good.as_note().nullifier());
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn available_notes_only_returns_notes_for_specified_account() {
     let result = available_notes(conn, account_id_1, block_num, 30).unwrap();
 
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].nullifier(), note_acct1.as_note().nullifier());
+    assert_eq!(result[0].as_note().nullifier(), note_acct1.as_note().nullifier());
 }
 
 // NOTES FAILED TESTS

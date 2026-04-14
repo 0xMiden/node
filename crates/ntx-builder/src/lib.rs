@@ -25,7 +25,6 @@ mod chain_state;
 mod clients;
 mod coordinator;
 pub(crate) mod db;
-pub(crate) mod inflight_note;
 pub mod server;
 
 #[cfg(test)]
