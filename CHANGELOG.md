@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.15.0 (TBD)
+## v0.14.7 (TBD)
 
-- [BREAKING] Moved output note inclusion proofs from `TransactionHeader` to `TransactionRecord` in `SyncTransactions` response. `TransactionHeader.output_notes` now uses `NoteHeader` (aligned with domain type) instead of `NoteSyncRecord`, and inclusion proofs are in `TransactionRecord.output_note_proofs`. Erased notes (created and consumed in the same batch) can be identified by comparing the two lists ([#1927](https://github.com/0xMiden/node/issues/1927), [#1898](https://github.com/0xMiden/node/issues/1898)).
+- [BREAKING] Aligned proto `TransactionHeader` with domain type and exposed erased notes in `SyncTransactions` ([#1941](https://github.com/0xMiden/node/pull/1941)).
 
 ## v0.14.6 (2026-04-10)
 
