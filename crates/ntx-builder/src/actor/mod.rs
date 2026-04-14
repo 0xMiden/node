@@ -401,7 +401,7 @@ impl AccountActor {
 
         let notes = tx_candidate.notes.clone();
         let account_id = tx_candidate.account.id();
-        let note_ids: Vec<_> = notes.iter().map(|n| n.to_inner().as_note().id()).collect();
+        let note_ids: Vec<_> = notes.iter().map(|n| n.as_note().id()).collect();
         tracing::info!(
             %account_id,
             ?note_ids,
@@ -446,12 +446,12 @@ impl AccountActor {
                             .iter()
                             .map(|note| {
                                 tracing::info!(
-                                    note.id = %note.to_inner().as_note().id(),
-                                    nullifier = %note.nullifier(),
+                                    note.id = %note.as_note().id(),
+                                    nullifier = %note.as_note().nullifier(),
                                     err = %error_msg,
                                     "note failed: transaction execution error",
                                 );
-                                (note.nullifier(), error.clone())
+                                (note.as_note().nullifier(), error.clone())
                             })
                             .collect()
                     },
