@@ -163,33 +163,30 @@ impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
     /// The proto `TransactionHeader` contains output notes as `NoteHeader` (aligned with the
-    /// domain type). The enriched output note data (inclusion proofs for committed notes, IDs
-    /// for erased notes) is placed in the `TransactionRecord.output_notes` field.
+    /// domain type). Inclusion proofs for committed output notes are placed separately in
+    /// `TransactionRecord.output_note_proofs`. Erased notes (created and consumed in the same
+    /// batch) can be identified by comparing note IDs in the proofs with the header's output
+    /// notes.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
-        let mut output_note_headers = Vec::with_capacity(self.output_notes.len());
-        let mut output_note_records = Vec::with_capacity(self.output_notes.len());
+        let mut all_note_headers = Vec::with_capacity(self.output_notes.len());
+        let mut output_note_proofs = Vec::new();
 
         for note in self.output_notes {
             match note {
                 OutputNoteRecord::Committed(sync_record) => {
-                    output_note_headers.push(proto::note::NoteHeader {
+                    all_note_headers.push(proto::note::NoteHeader {
                         note_id: Some(sync_record.note_id.into()),
                         metadata: Some(sync_record.metadata.clone().into()),
                     });
-                    output_note_records.push(proto::transaction::OutputNoteRecord {
-                        record: Some(proto::transaction::output_note_record::Record::Committed(
-                            sync_record.into(),
-                        )),
+                    output_note_proofs.push(proto::note::NoteInclusionInBlockProof {
+                        note_id: Some(sync_record.note_id.into()),
+                        block_num: sync_record.block_num.as_u32(),
+                        note_index_in_block: sync_record.note_index.leaf_index_value().into(),
+                        inclusion_path: Some(sync_record.inclusion_path.into()),
                     });
                 },
                 OutputNoteRecord::Erased(header) => {
-                    let note_id: proto::note::NoteId = (&header.id()).into();
-                    output_note_headers.push(header.into());
-                    output_note_records.push(proto::transaction::OutputNoteRecord {
-                        record: Some(proto::transaction::output_note_record::Record::Erased(
-                            note_id,
-                        )),
-                    });
+                    all_note_headers.push(header.into());
                 },
             }
         }
@@ -201,11 +198,11 @@ impl TransactionRecord {
                 initial_state_commitment: Some(self.initial_state_commitment.into()),
                 final_state_commitment: Some(self.final_state_commitment.into()),
                 input_notes: self.input_notes.into_iter().map(Into::into).collect(),
-                output_notes: output_note_headers,
+                output_notes: all_note_headers,
                 fee: Some(Asset::from(self.fee).into()),
             }),
             block_num: self.block_num.as_u32(),
-            output_notes: output_note_records,
+            output_note_proofs,
         }
     }
 }

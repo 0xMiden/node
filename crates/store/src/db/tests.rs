@@ -3625,10 +3625,13 @@ fn db_roundtrip_transactions() {
             output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
-        output_notes: expected_sync_records
+        output_note_proofs: expected_sync_records
             .into_iter()
-            .map(|n| proto::transaction::OutputNoteRecord {
-                record: Some(proto::transaction::output_note_record::Record::Committed(n.into())),
+            .map(|n| proto::note::NoteInclusionInBlockProof {
+                note_id: Some(n.note_id.into()),
+                block_num: n.block_num.as_u32(),
+                note_index_in_block: n.note_index.leaf_index_value().into(),
+                inclusion_path: Some(n.inclusion_path.into()),
             })
             .collect(),
     };

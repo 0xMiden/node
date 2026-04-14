@@ -2,7 +2,7 @@
 
 ## v0.15.0 (TBD)
 
-- [BREAKING] Moved enriched output note data (inclusion proofs, erased note IDs) from `TransactionHeader` to `TransactionRecord` in `SyncTransactions` response. `TransactionHeader.output_notes` now uses `NoteHeader` (aligned with domain type) instead of `NoteSyncRecord` ([#1927](https://github.com/0xMiden/node/issues/1927), [#1898](https://github.com/0xMiden/node/issues/1898)).
+- [BREAKING] Moved output note inclusion proofs from `TransactionHeader` to `TransactionRecord` in `SyncTransactions` response. `TransactionHeader.output_notes` now uses `NoteHeader` (aligned with domain type) instead of `NoteSyncRecord`, and inclusion proofs are in `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing the two lists ([#1927](https://github.com/0xMiden/node/issues/1927), [#1898](https://github.com/0xMiden/node/issues/1898)).
 
 ## v0.14.6 (2026-04-10)
 

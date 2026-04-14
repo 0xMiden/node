@@ -641,9 +641,10 @@ message TransactionRecord {
     // The transaction header.
     transaction.TransactionHeader header = 2;
 
-    // Output notes enriched with inclusion proofs for committed notes, or IDs for
-    // erased notes (notes created and consumed within the same batch).
-    repeated transaction.OutputNoteRecord output_notes = 3;
+    // Inclusion proofs for committed output notes. Erased notes (created and consumed
+    // within the same batch) can be identified by comparing note IDs here with
+    // `header.output_notes` — any note present in the header but absent here was erased.
+    repeated note.NoteInclusionInBlockProof output_note_proofs = 3;
 }
 
 // GET NOTE ERROR
