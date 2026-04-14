@@ -114,7 +114,7 @@ pub struct Scoped<T> {
     /// The chain tip at the time the query was executed.
     chain_tip: BlockNumber,
     /// The query result.
-    pub inner: T,
+    inner: T,
 }
 
 impl<T> Scoped<T> {
@@ -126,6 +126,11 @@ impl<T> Scoped<T> {
     /// Returns the chain tip at the time the query was executed.
     pub fn chain_tip(&self) -> BlockNumber {
         self.chain_tip
+    }
+
+    /// Consumes the scoped type and returns the inner value.
+    pub fn into_inner(self) -> T {
+        self.inner
     }
 }
 
@@ -827,8 +832,15 @@ impl State {
     pub async fn get_all_network_accounts(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<AccountId>, BlockNumber), DatabaseError> {
-        self.db.select_all_network_account_ids(block_range).await
+    ) -> Result<Scoped<(Vec<AccountId>, BlockNumber)>, DatabaseError> {
+        let snapshot = self.snapshot();
+        let chain_tip = snapshot.block_num;
+        let block_to = block_range.end();
+        if block_to > &chain_tip {
+            return Err(DatabaseError::UnknownBlock(*block_to));
+        }
+        let result = self.db.select_all_network_account_ids(block_range).await?;
+        Ok(Scoped::new(chain_tip, result))
     }
 
     /// Returns an account witness and optionally account details at a specific block.

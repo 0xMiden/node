@@ -41,9 +41,8 @@ impl State {
         if block_to > chain_tip {
             return Err(DatabaseError::UnknownBlock(block_to));
         }
-        let (last_block_included, transactions) =
-            self.db.select_transactions_records(account_ids, block_range).await?;
-        Ok(Scoped::new(chain_tip, (last_block_included, transactions)))
+        let result = self.db.select_transactions_records(account_ids, block_range).await?;
+        Ok(Scoped::new(chain_tip, result))
     }
 
     /// Returns the chain MMR delta and the `block_to` block header for the specified block range.
@@ -174,12 +173,12 @@ impl State {
             return Err(DatabaseError::UnknownBlock(*block_range.end()));
         }
 
-        let (nullifiers, block_num) = self
+        let result = self
             .db
             .select_nullifiers_by_prefix(prefix_len, nullifier_prefixes, block_range)
             .await?;
 
-        Ok(Scoped::new(chain_tip, (nullifiers, block_num)))
+        Ok(Scoped::new(chain_tip, result))
     }
 
     // ACCOUNT STATE SYNCHRONIZATION
@@ -197,9 +196,8 @@ impl State {
         if block_range.end() > &chain_tip {
             return Err(DatabaseError::UnknownBlock(*block_range.end()));
         }
-        let (last_included_block, vault_updates) =
-            self.db.get_account_vault_sync(account_id, block_range).await?;
-        Ok(Scoped::new(chain_tip, (last_included_block, vault_updates)))
+        let result = self.db.get_account_vault_sync(account_id, block_range).await?;
+        Ok(Scoped::new(chain_tip, result))
     }
 
     /// Returns storage map values for syncing within a block range including the chain tip.

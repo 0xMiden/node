@@ -105,7 +105,7 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncNullifiersError::from)?;
         let chain_tip = result.chain_tip();
-        let (nullifiers, block_num) = result.inner;
+        let (nullifiers, block_num) = result.into_inner();
 
         let nullifiers = nullifiers
             .into_iter()
@@ -141,7 +141,7 @@ impl rpc_server::Rpc for StoreApi {
 
         let result = self.state.sync_notes(request.note_tags, block_range).await?;
         let chain_tip = result.chain_tip();
-        let (results, last_block_checked) = result.inner;
+        let (results, last_block_checked) = result.into_inner();
 
         let blocks = results
             .into_iter()
@@ -302,7 +302,7 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncAccountVaultError::from)?;
         let chain_tip = result.chain_tip();
-        let (last_included_block, updates) = result.inner;
+        let (last_included_block, updates) = result.into_inner();
 
         let updates = updates
             .into_iter()
@@ -356,7 +356,7 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncAccountStorageMapsError::from)?;
         let chain_tip = result.chain_tip();
-        let storage_maps_page = result.inner;
+        let storage_maps_page = result.into_inner();
 
         let updates = storage_maps_page
             .values
@@ -436,7 +436,7 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncTransactionsError::from)?;
         let chain_tip = result.chain_tip();
-        let (last_block_included, transaction_records_db) = result.inner;
+        let (last_block_included, transaction_records_db) = result.into_inner();
 
         // Convert database TransactionRecords directly to proto TransactionRecords.
         // All data needed for the proto TransactionHeader is stored in the transactions table.

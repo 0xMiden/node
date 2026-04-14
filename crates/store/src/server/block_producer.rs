@@ -191,7 +191,7 @@ impl block_producer_server::BlockProducer for StoreApi {
             .inspect_err(|err| tracing::Span::current().set_error(err))
             .map_err(|err| tonic::Status::internal(err.as_report()))?;
         let block_height = result.chain_tip();
-        let tx_inputs = result.inner;
+        let tx_inputs = result.into_inner();
 
         Ok(Response::new(proto::store::TransactionInputs {
             account_state: Some(proto::store::transaction_inputs::AccountTransactionInputRecord {

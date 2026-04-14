@@ -103,8 +103,6 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             request.account_id,
         )?;
 
-        let state = self.state.clone();
-
         let size =
             NonZero::try_from(request.page_size as usize).map_err(|err: TryFromIntError| {
                 invalid_argument(err.as_report_context("invalid page_size"))
@@ -112,7 +110,8 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let page = Page { token: request.page_token, size };
         // TODO: no need to get the whole NoteRecord here, a NetworkNote wrapper should be created
         // instead
-        let (notes, next_page) = state
+        let (notes, next_page) = self
+            .state
             .get_unconsumed_network_notes_for_account(account_id, block_num, page)
             .await
             .map_err(internal_error)?;
@@ -146,21 +145,17 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::store::NetworkAccountIdList>, Status> {
         let request = request.into_inner();
 
-        let mut chain_tip = self.state.chain_tip(Finality::Committed);
+        let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range =
             read_block_range::<GetNetworkAccountIdsError>(Some(request), "GetNetworkAccountIds")?
                 .into_inclusive_range::<GetNetworkAccountIdsError>(&chain_tip)?;
 
-        let (account_ids, mut last_block_included) =
+        let result =
             self.state.get_all_network_accounts(block_range).await.map_err(internal_error)?;
+        let chain_tip = result.chain_tip();
+        let (account_ids, last_block_included) = result.into_inner();
 
         let account_ids = Vec::from_iter(account_ids.into_iter().map(Into::into));
-
-        if last_block_included > chain_tip {
-            last_block_included = chain_tip;
-        }
-
-        chain_tip = self.state.chain_tip(Finality::Committed);
 
         Ok(Response::new(proto::store::NetworkAccountIdList {
             account_ids,
@@ -321,7 +316,7 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
                 key: Some(map_key.into()),
                 proof: Some(proof.into()),
             }),
-            block_num: self.state.chain_tip(Finality::Committed).as_u32(),
+            block_num: block_num.as_u32(),
         }))
     }
 }
