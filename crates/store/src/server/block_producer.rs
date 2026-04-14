@@ -26,7 +26,6 @@ use crate::server::api::{
     validate_note_commitments,
     validate_nullifiers,
 };
-use crate::state::Finality;
 
 // BLOCK PRODUCER ENDPOINTS
 // ================================================================================================
@@ -185,14 +184,12 @@ impl block_producer_server::BlockProducer for StoreApi {
         let unauthenticated_note_commitments =
             validate_note_commitments(&request.unauthenticated_notes)?;
 
-        let tx_inputs = self
+        let (tx_inputs, block_height) = self
             .state
             .get_transaction_inputs(account_id, &nullifiers, unauthenticated_note_commitments)
             .await
             .inspect_err(|err| tracing::Span::current().set_error(err))
             .map_err(|err| tonic::Status::internal(err.as_report()))?;
-
-        let block_height = self.state.chain_tip(Finality::Committed).as_u32();
 
         Ok(Response::new(proto::store::TransactionInputs {
             account_state: Some(proto::store::transaction_inputs::AccountTransactionInputRecord {
@@ -215,7 +212,7 @@ impl block_producer_server::BlockProducer for StoreApi {
                 .map(Into::into)
                 .collect(),
             new_account_id_prefix_is_unique: tx_inputs.new_account_id_prefix_is_unique,
-            block_height,
+            block_height: block_height.as_u32(),
         }))
     }
 }

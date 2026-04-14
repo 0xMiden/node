@@ -701,19 +701,21 @@ impl State {
         Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
     }
 
-    /// Returns data needed by the block producer to verify transactions validity.
+    /// Returns data needed by the block producer to verify transactions validity and the
+    /// corresponding block height.
     #[instrument(target = COMPONENT, skip_all, ret)]
     pub async fn get_transaction_inputs(
         &self,
         account_id: AccountId,
         nullifiers: &[Nullifier],
         unauthenticated_note_commitments: Vec<Word>,
-    ) -> Result<TransactionInputs, DatabaseError> {
+    ) -> Result<(TransactionInputs, BlockNumber), DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
         // Take a snapshot and extract everything we need, then drop it so readers of newer
         // snapshots aren't held up by this Arc.
         let snapshot = self.snapshot();
+        let block_height = snapshot.block_num;
 
         let account_commitment = snapshot.account_tree.get_latest_commitment(account_id);
 
@@ -725,10 +727,13 @@ impl State {
 
         // Non-unique account Id prefixes for new accounts are not allowed.
         if let Some(false) = new_account_id_prefix_is_unique {
-            return Ok(TransactionInputs {
-                new_account_id_prefix_is_unique,
-                ..Default::default()
-            });
+            return Ok((
+                TransactionInputs {
+                    new_account_id_prefix_is_unique,
+                    ..Default::default()
+                },
+                block_height,
+            ));
         }
 
         let nullifiers = nullifiers
@@ -739,7 +744,7 @@ impl State {
             })
             .collect();
 
-        // Drop snapshot before the async DB call.
+        // Drop snapshot immediately after using it.
         drop(snapshot);
 
         let found_unauthenticated_notes = self
@@ -747,12 +752,15 @@ impl State {
             .select_existing_note_commitments(unauthenticated_note_commitments)
             .await?;
 
-        Ok(TransactionInputs {
-            account_commitment,
-            nullifiers,
-            found_unauthenticated_notes,
-            new_account_id_prefix_is_unique,
-        })
+        Ok((
+            TransactionInputs {
+                account_commitment,
+                nullifiers,
+                found_unauthenticated_notes,
+                new_account_id_prefix_is_unique,
+            },
+            block_height,
+        ))
     }
 
     /// Returns details for public (on-chain) account.
