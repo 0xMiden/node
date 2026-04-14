@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
@@ -42,6 +42,12 @@ use tracing::{error, info, instrument, warn};
 
 /// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
 const RESYNC_FAILURE_THRESHOLD: usize = 3;
+
+/// Number of consecutive increment failures before regenerating accounts from scratch.
+const REGENERATE_FAILURE_THRESHOLD: usize = 10;
+
+/// Minimum time between account regeneration attempts.
+const REGENERATE_COOLDOWN: Duration = Duration::from_secs(3600);
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
@@ -392,16 +398,17 @@ pub async fn run_increment_task(
     let (
         mut details,
         mut wallet_account,
-        counter_account,
-        block_header,
+        mut counter_account,
+        mut block_header,
         mut data_store,
-        increment_script,
-        secret_key,
+        mut increment_script,
+        mut secret_key,
     ) = setup_increment_task(config.clone(), &mut rpc_client).await?;
 
     let mut rng = ChaCha20Rng::from_os_rng();
     let mut interval = tokio::time::interval(config.counter_increment_interval);
     let mut consecutive_failures: usize = 0;
+    let mut last_regeneration: Option<Instant> = None;
 
     loop {
         interval.tick().await;
@@ -445,16 +452,41 @@ pub async fn run_increment_task(
                 consecutive_failures += 1;
                 last_error = Some(handle_increment_failure(&mut details, &e));
 
-                if consecutive_failures >= RESYNC_FAILURE_THRESHOLD {
-                    if try_resync_wallet_account(
+                if consecutive_failures >= RESYNC_FAILURE_THRESHOLD
+                    && try_resync_wallet_account(
                         &mut rpc_client,
                         &mut wallet_account,
                         &mut data_store,
                     )
                     .await
                     .is_ok()
-                    {
-                        consecutive_failures = 0;
+                {
+                    consecutive_failures = 0;
+                }
+
+                // If re-sync keeps failing, regenerate accounts from scratch (rate-limited).
+                let cooldown_elapsed =
+                    last_regeneration.is_none_or(|t| t.elapsed() >= REGENERATE_COOLDOWN);
+                if consecutive_failures >= REGENERATE_FAILURE_THRESHOLD && cooldown_elapsed {
+                    warn!(
+                        consecutive_failures,
+                        "re-sync ineffective, regenerating accounts from scratch"
+                    );
+                    last_regeneration = Some(Instant::now());
+                    match try_regenerate_accounts(&config, &mut rpc_client).await {
+                        Ok(new_state) => {
+                            (
+                                details,
+                                wallet_account,
+                                counter_account,
+                                block_header,
+                                data_store,
+                                increment_script,
+                                secret_key,
+                            ) = new_state;
+                            consecutive_failures = 0;
+                        },
+                        Err(regen_err) => error!("account regeneration failed: {regen_err:?}"),
                     }
                 }
             },
@@ -530,6 +562,46 @@ async fn try_resync_wallet_account(
     *wallet_account = fresh_account;
     data_store.update_account(wallet_account.clone());
     Ok(())
+}
+
+/// Regenerate accounts from scratch when re-sync is ineffective.
+///
+/// Creates fresh wallet and counter accounts, deploys them to the network, and re-initializes
+/// the increment task state. This is a last resort after [`REGENERATE_FAILURE_THRESHOLD`]
+/// consecutive failures.
+#[instrument(
+    parent = None,
+    target = COMPONENT,
+    name = "network_monitor.counter.try_regenerate_accounts",
+    skip_all,
+    level = "warn",
+    err,
+)]
+async fn try_regenerate_accounts(
+    config: &MonitorConfig,
+    rpc_client: &mut RpcClient,
+) -> Result<(
+    IncrementDetails,
+    Account,
+    Account,
+    BlockHeader,
+    MonitorDataStore,
+    NoteScript,
+    SecretKey,
+)> {
+    crate::deploy::force_recreate_accounts(
+        &config.wallet_filepath,
+        &config.counter_filepath,
+        &config.rpc_url,
+    )
+    .await
+    .context("failed to regenerate accounts")?;
+
+    // Re-initialize the full task state from the newly-created account files.
+    let state = setup_increment_task(config.clone(), rpc_client).await?;
+
+    info!("account regeneration completed, increment task re-initialized");
+    Ok(state)
 }
 
 /// Handle the failure path when creating/submitting the network note fails.

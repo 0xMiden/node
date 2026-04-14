@@ -3,6 +3,7 @@
 ## v0.15.0 (TBD)
 
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- Network monitor now auto-regenerates accounts after persistent increment failures instead of staying unhealthy indefinitely ([#1942](https://github.com/0xMiden/node/pull/1942)).
 
 ## v0.14.6 (2026-04-10)
 
