@@ -335,15 +335,12 @@ fn with_output_note_proofs(
                 .filter_map(|note| output_notes_by_id.get(&note.id()).cloned())
                 .collect();
 
-            let input_notes: Vec<InputNoteCommitment> =
-                Deserializable::read_from_bytes(&raw.input_notes)?;
-
             let header = TransactionHeader::new_unchecked(
                 transaction_id,
                 AccountId::read_from_bytes(&raw.account_id)?,
                 Word::read_from_bytes(&raw.initial_state_commitment)?,
                 Word::read_from_bytes(&raw.final_state_commitment)?,
-                InputNotes::new_unchecked(input_notes),
+                InputNotes::new_unchecked(Deserializable::read_from_bytes(&raw.input_notes)?),
                 output_notes,
                 FungibleAsset::read_from_bytes(&raw.fee)?,
             );

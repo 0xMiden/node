@@ -147,8 +147,8 @@ pub struct TransactionRecord {
 impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
-    /// The proto `TransactionHeader` contains all output notes as `NoteHeader` (aligned with
-    /// the domain type). Inclusion proofs for committed output notes are placed separately in
+    /// The proto `TransactionHeader` contains all output notes as `NoteHeader`. Inclusion
+    /// proofs for committed output notes are placed separately in
     /// `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing
     /// note IDs in the proofs with the header's output notes.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
