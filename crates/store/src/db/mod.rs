@@ -136,17 +136,6 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
     }
 }
 
-/// Represents an output note from a committed transaction.
-///
-/// Notes that exist on the node are "committed" and include their full sync record with
-/// inclusion proof. Notes that were erased by same-batch note erasure (created and consumed
-/// within the same batch) are "erased" and only include their note header.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputNoteRecord {
-    Committed(NoteSyncRecord),
-    Erased(NoteHeader),
-}
-
 #[derive(Debug, PartialEq)]
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
@@ -155,41 +144,41 @@ pub struct TransactionRecord {
     pub initial_state_commitment: Word,
     pub final_state_commitment: Word,
     pub input_notes: Vec<InputNoteCommitment>,
-    pub output_notes: Vec<OutputNoteRecord>,
+    /// Committed output notes with inclusion proofs.
+    pub output_notes: Vec<NoteSyncRecord>,
+    /// Output notes that were erased (created and consumed within the same batch).
+    pub erased_output_notes: Vec<NoteHeader>,
     pub fee: FungibleAsset,
 }
 
 impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
-    /// The proto `TransactionHeader` contains output notes as `NoteHeader` (aligned with the
-    /// domain type). Inclusion proofs for committed output notes are placed separately in
-    /// `TransactionRecord.output_note_proofs`. Erased notes (created and consumed in the same
-    /// batch) can be identified by comparing note IDs in the proofs with the header's output
-    /// notes.
+    /// The proto `TransactionHeader` contains all output notes as `NoteHeader` (aligned with
+    /// the domain type). Inclusion proofs for committed output notes are placed separately in
+    /// `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing
+    /// note IDs in the proofs with the header's output notes.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
-        let mut all_note_headers = Vec::with_capacity(self.output_notes.len());
-        let mut output_note_proofs = Vec::new();
+        let mut all_note_headers: Vec<proto::note::NoteHeader> = self
+            .output_notes
+            .iter()
+            .map(|n| proto::note::NoteHeader {
+                note_id: Some(n.note_id.into()),
+                metadata: Some(n.metadata.clone().into()),
+            })
+            .collect();
+        all_note_headers.extend(self.erased_output_notes.into_iter().map(Into::into));
 
-        for note in self.output_notes {
-            match note {
-                OutputNoteRecord::Committed(sync_record) => {
-                    all_note_headers.push(proto::note::NoteHeader {
-                        note_id: Some(sync_record.note_id.into()),
-                        metadata: Some(sync_record.metadata.clone().into()),
-                    });
-                    output_note_proofs.push(proto::note::NoteInclusionInBlockProof {
-                        note_id: Some(sync_record.note_id.into()),
-                        block_num: sync_record.block_num.as_u32(),
-                        note_index_in_block: sync_record.note_index.leaf_index_value().into(),
-                        inclusion_path: Some(sync_record.inclusion_path.into()),
-                    });
-                },
-                OutputNoteRecord::Erased(header) => {
-                    all_note_headers.push(header.into());
-                },
-            }
-        }
+        let output_note_proofs = self
+            .output_notes
+            .into_iter()
+            .map(|n| proto::note::NoteInclusionInBlockProof {
+                note_id: Some(n.note_id.into()),
+                block_num: n.block_num.as_u32(),
+                note_index_in_block: n.note_index.leaf_index_value().into(),
+                inclusion_path: Some(n.inclusion_path.into()),
+            })
+            .collect();
 
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {

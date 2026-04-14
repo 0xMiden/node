@@ -80,14 +80,7 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 use tempfile::tempdir;
 
-use super::{
-    AccountInfo,
-    NoteRecord,
-    NoteSyncRecord,
-    NullifierInfo,
-    OutputNoteRecord,
-    TransactionRecord,
-};
+use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
@@ -3600,11 +3593,8 @@ fn db_roundtrip_transactions() {
         initial_state_commitment: tx.initial_state_commitment(),
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: expected_sync_records
-            .iter()
-            .cloned()
-            .map(OutputNoteRecord::Committed)
-            .collect(),
+        output_notes: expected_sync_records.clone(),
+        erased_output_notes: vec![],
         fee: tx.fee(),
     };
 
@@ -3669,7 +3659,8 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
         initial_state_commitment: tx.initial_state_commitment(),
         final_state_commitment: tx.final_state_commitment(),
         input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: tx.output_notes().iter().cloned().map(OutputNoteRecord::Erased).collect(),
+        output_notes: vec![],
+        erased_output_notes: tx.output_notes().to_vec(),
         fee: tx.fee(),
     };
 
