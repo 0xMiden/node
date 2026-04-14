@@ -3588,14 +3588,8 @@ fn db_roundtrip_transactions() {
 
     let expected = TransactionRecord {
         block_num,
-        transaction_id: tx.id(),
-        account_id: tx.account_id(),
-        initial_state_commitment: tx.initial_state_commitment(),
-        final_state_commitment: tx.final_state_commitment(),
-        input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: expected_sync_records.clone(),
-        erased_output_notes: vec![],
-        fee: tx.fee(),
+        header: tx.clone(),
+        output_note_proofs: expected_sync_records.clone(),
     };
 
     // Verify database roundtrip
@@ -3654,14 +3648,8 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 
     let expected = TransactionRecord {
         block_num,
-        transaction_id: tx.id(),
-        account_id: tx.account_id(),
-        initial_state_commitment: tx.initial_state_commitment(),
-        final_state_commitment: tx.final_state_commitment(),
-        input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: vec![],
-        erased_output_notes: tx.output_notes().to_vec(),
-        fee: tx.fee(),
+        header: tx,
+        output_note_proofs: vec![],
     };
 
     assert_eq!(*record, expected);
