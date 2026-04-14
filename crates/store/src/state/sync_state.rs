@@ -44,11 +44,14 @@ impl State {
         &self,
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(MmrDelta, BlockHeader), StateSyncError> {
+        let snapshot = self.snapshot();
+        let chain_tip = snapshot.block_num;
         let block_from = *block_range.start();
         let block_to = *block_range.end();
+        if block_to > chain_tip {
+            return Err(StateSyncError::UnknownBlock(block_to));
+        }
 
-        // SAFETY: block_to has been validated to be <= the effective tip (chain tip or latest
-        // proven block) by the caller, so it must exist in the database.
         let block_header = self
             .db
             .select_block_header_by_block_num(Some(block_to))
@@ -77,7 +80,6 @@ impl State {
         let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 
-        let snapshot = self.snapshot();
         let mmr_delta = snapshot
             .blockchain
             .as_mmr()
@@ -100,9 +102,15 @@ impl State {
         &self,
         note_tags: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
+    ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber, BlockNumber), NoteSyncError> {
+        // Ensure the requested block range is within the chain's current tip.
         let snapshot = self.snapshot();
+        let chain_tip = snapshot.block_num;
         let block_end = *block_range.end();
+        if block_range.end() > &chain_tip {
+            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
+        }
+
         let note_tags: Arc<[u32]> = note_tags.into();
 
         let mut results = Vec::new();
@@ -138,38 +146,66 @@ impl State {
         let last_block_checked =
             results.last().map_or(block_end, |(update, _)| update.block_header.block_num());
 
-        Ok((results, last_block_checked))
+        Ok((results, last_block_checked, chain_tip))
     }
 
+    /// Returns nullifiers matching the given prefixes within the block range.
+    ///
+    /// The block range is validated against the snapshot's chain tip. Returns the matching
+    /// nullifiers, the last block included, and the chain tip at the time of the query.
     pub async fn sync_nullifiers(
         &self,
         prefix_len: u32,
         nullifier_prefixes: Vec<u32>,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<NullifierInfo>, BlockNumber), DatabaseError> {
-        self.db
+    ) -> Result<(Vec<NullifierInfo>, BlockNumber, BlockNumber), DatabaseError> {
+        // Ensure the db query is scoped by the snapshot's chain tip.
+        let chain_tip = self.snapshot().block_num;
+        if block_range.end() > &chain_tip {
+            return Err(DatabaseError::UnknownBlock(*block_range.end()));
+        }
+
+        let (nullifiers, block_num) = self
+            .db
             .select_nullifiers_by_prefix(prefix_len, nullifier_prefixes, block_range)
-            .await
+            .await?;
+
+        Ok((nullifiers, block_num, chain_tip))
     }
 
     // ACCOUNT STATE SYNCHRONIZATION
     // --------------------------------------------------------------------------------------------
 
-    /// Returns account vault updates for specified account within a block range.
+    /// Returns account vault updates for specified account within a block range, including the last
+    /// included block and the chain tip.
     pub async fn sync_account_vault(
         &self,
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
-        self.db.get_account_vault_sync(account_id, block_range).await
+    ) -> Result<(BlockNumber, Vec<AccountVaultValue>, BlockNumber), DatabaseError> {
+        // Ensure the db query is scoped by the snapshot's chain tip.
+        let chain_tip = self.snapshot().block_num;
+        if block_range.end() > &chain_tip {
+            return Err(DatabaseError::UnknownBlock(*block_range.end()));
+        }
+        let (last_included_block, vault_updates) =
+            self.db.get_account_vault_sync(account_id, block_range).await?;
+        Ok((last_included_block, vault_updates, chain_tip))
     }
 
-    /// Returns storage map values for syncing within a block range.
+    /// Returns storage map values for syncing within a block range including the chain tip.
     pub async fn sync_account_storage_maps(
         &self,
         account_id: AccountId,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<StorageMapValuesPage, DatabaseError> {
-        self.db.select_storage_map_sync_values(account_id, block_range, None).await
+    ) -> Result<(StorageMapValuesPage, BlockNumber), DatabaseError> {
+        // Ensure the db query is scoped by the snapshot's chain tip.
+        let chain_tip = self.snapshot().block_num;
+        if block_range.end() > &chain_tip {
+            return Err(DatabaseError::UnknownBlock(*block_range.end()));
+        }
+        let storage_map_values =
+            self.db.select_storage_map_sync_values(account_id, block_range, None).await?;
+        Ok((storage_map_values, chain_tip))
     }
 }

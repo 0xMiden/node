@@ -94,17 +94,12 @@ impl rpc_server::Rpc for StoreApi {
             return Err(SyncNullifiersError::InvalidPrefixLength(request.prefix_len).into());
         }
 
-        // Ensure that the block range is scoped by the snapshot because we will return the
-        // snapshot's block number as the tip of the chain in the response below.
         let chain_tip = self.state.chain_tip(Finality::Committed);
         let block_range =
             read_block_range::<SyncNullifiersError>(request.block_range, "SyncNullifiersRequest")?
                 .into_inclusive_range::<SyncNullifiersError>(&chain_tip)?;
-        if block_range.end() > &chain_tip {
-            return Err(SyncNullifiersError::UnknownBlock(chain_tip).into());
-        }
 
-        let (nullifiers, block_num) = self
+        let (nullifiers, block_num, chain_tip) = self
             .state
             .sync_nullifiers(request.prefix_len, request.nullifiers, block_range)
             .await
@@ -138,14 +133,11 @@ impl rpc_server::Rpc for StoreApi {
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
-        if block_range.end() > &chain_tip {
-            Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
-        }
 
         // Validate note tags count
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
-        let (results, last_block_checked) =
+        let (results, last_block_checked, chain_tip) =
             self.state.sync_notes(request.note_tags, block_range).await?;
 
         let blocks = results
@@ -197,11 +189,6 @@ impl rpc_server::Rpc for StoreApi {
                 start: block_from,
                 end: block_to,
             }))?;
-        }
-
-        // Check range does not go beyond current tip.
-        if block_to > self.state.chain_tip(Finality::Committed) {
-            Err(SyncChainMmrError::UnknownBlock(block_to))?;
         }
 
         let block_range = block_from..=block_to;
@@ -306,7 +293,7 @@ impl rpc_server::Rpc for StoreApi {
         )?
         .into_inclusive_range::<SyncAccountVaultError>(&chain_tip)?;
 
-        let (last_included_block, updates) = self
+        let (last_included_block, updates, chain_tip) = self
             .state
             .sync_account_vault(account_id, block_range)
             .await
@@ -358,7 +345,7 @@ impl rpc_server::Rpc for StoreApi {
         )?
         .into_inclusive_range::<SyncAccountStorageMapsError>(&chain_tip)?;
 
-        let storage_maps_page = self
+        let (storage_maps_page, chain_tip) = self
             .state
             .sync_account_storage_maps(account_id, block_range)
             .await

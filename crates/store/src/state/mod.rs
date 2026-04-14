@@ -825,10 +825,17 @@ impl State {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
-        let (block_num, witness) = self.get_account_witness(block_num, account_id)?;
+        let snapshot = self.snapshot();
+
+        let (block_num, witness) = Self::get_account_witness(&snapshot, block_num, account_id)?;
 
         let details = if let Some(request) = details {
-            Some(self.fetch_public_account_details(account_id, block_num, request).await?)
+            Some(
+                Self::fetch_public_account_details(
+                    &self.db, &snapshot, account_id, block_num, request,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -841,12 +848,10 @@ impl State {
     /// If `block_num` is provided, returns the witness at that historical block;
     /// otherwise, returns the witness at the latest block.
     fn get_account_witness(
-        &self,
+        snapshot: &Arc<InMemoryState>,
         block_num: Option<BlockNumber>,
         account_id: AccountId,
     ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
-        let snapshot = self.snapshot();
-
         // Determine which block to query
         let (block_num, witness) = if let Some(requested_block) = block_num {
             if requested_block > snapshot.block_num {
@@ -884,7 +889,8 @@ impl State {
     /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
     #[expect(clippy::too_many_lines)]
     async fn fetch_public_account_details(
-        &self,
+        db: &Arc<Db>,
+        snapshot: &Arc<InMemoryState>,
         account_id: AccountId,
         block_num: BlockNumber,
         detail_request: AccountDetailRequest,
@@ -899,15 +905,8 @@ impl State {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
-        // Validate block exists in the blockchain before querying the database.
-        let snapshot = self.snapshot();
-        if block_num > snapshot.block_num {
-            return Err(GetAccountError::UnknownBlock(block_num));
-        }
-
         // Query account header and storage header together in a single DB call
-        let (account_header, storage_header) = self
-            .db
+        let (account_header, storage_header) = db
             .select_account_header_with_storage_header_at_block(account_id, block_num)
             .await?
             .ok_or(GetAccountError::AccountNotFound(account_id, block_num))?;
@@ -915,9 +914,7 @@ impl State {
         let account_code = match code_commitment {
             Some(commitment) if commitment == account_header.code_commitment() => None,
             Some(_) => {
-                self.db
-                    .select_account_code_by_commitment(account_header.code_commitment())
-                    .await?
+                db.select_account_code_by_commitment(account_header.code_commitment()).await?
             },
             None => None,
         };
@@ -927,8 +924,7 @@ impl State {
                 AccountVaultDetails::empty()
             },
             Some(_) => {
-                let vault_assets =
-                    self.db.select_account_vault_at_block(account_id, block_num).await?;
+                let vault_assets = db.select_account_vault_at_block(account_id, block_num).await?;
                 AccountVaultDetails::from_assets(vault_assets)
             },
             None => AccountVaultDetails::empty(),
@@ -978,8 +974,7 @@ impl State {
 
         // TODO parallelize the read requests
         for (index, slot_name) in all_entries_requests {
-            let details = self
-                .db
+            let details = db
                 .reconstruct_storage_map_from_db(
                     account_id,
                     slot_name.clone(),

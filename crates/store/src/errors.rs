@@ -261,6 +261,8 @@ pub enum StateSyncError {
     EmptyBlockHeadersTable,
     #[error("failed to build MMR delta")]
     FailedToBuildMmrDelta(#[from] MmrError),
+    #[error("block {0} is unknown")]
+    UnknownBlock(BlockNumber),
 }
 
 #[derive(Error, Debug, GrpcError)]
