@@ -271,3 +271,109 @@ pub(crate) fn initial_explorer_status() -> ServiceStatus {
         details: ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
     }
 }
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    // truncate_json tests
+    // --------------------------------------------------------------------------------------------
+
+    #[test]
+    fn truncate_json_short_value_is_not_truncated() {
+        let value = json!({"key": "short"});
+        let result = truncate_json(&value);
+        assert_eq!(result, value.to_string());
+        assert!(!result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_json_long_value_is_truncated() {
+        let long_string = "a".repeat(100);
+        let value = json!(long_string);
+        let result = truncate_json(&value);
+        assert!(result.ends_with("..."));
+        // 60 chars + "..."
+        assert_eq!(result.chars().count(), 63);
+    }
+
+    #[test]
+    fn truncate_json_multibyte_chars_are_handled() {
+        // Each 'é' is 2 bytes in UTF-8. Build a string whose serialized JSON form
+        // exceeds 60 characters, ensuring truncation lands on a char boundary.
+        let multibyte_string = "é".repeat(80);
+        let value = json!(multibyte_string);
+        // Should not panic and should still truncate correctly.
+        let result = truncate_json(&value);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_json_exactly_60_chars_is_not_truncated() {
+        // Build a JSON string whose serialized form is exactly 60 characters.
+        // json!("x".repeat(58)) serializes as `"xxx...xxx"` (58 chars + 2 quotes = 60).
+        let value = json!("x".repeat(58));
+        let result = truncate_json(&value);
+        assert_eq!(result.chars().count(), 60);
+        assert!(!result.ends_with("..."));
+    }
+
+    // require_u64 tests
+    // --------------------------------------------------------------------------------------------
+
+    #[test]
+    fn require_u64_from_number() {
+        let node = json!({"block_number": 42});
+        assert_eq!(require_u64(&node, "block_number").unwrap(), 42);
+    }
+
+    #[test]
+    fn require_u64_from_string() {
+        let node = json!({"block_number": "42"});
+        assert_eq!(require_u64(&node, "block_number").unwrap(), 42);
+    }
+
+    #[test]
+    fn require_u64_missing_field() {
+        let node = json!({});
+        let err = require_u64(&node, "block_number").unwrap_err();
+        assert!(matches!(err, ExplorerStatusError::NotPresent(f) if f == "block_number"));
+    }
+
+    #[test]
+    fn require_u64_wrong_type() {
+        let node = json!({"block_number": [1, 2, 3]});
+        let err = require_u64(&node, "block_number").unwrap_err();
+        assert!(
+            matches!(err, ExplorerStatusError::TypeMismatch { field, .. } if field == "block_number")
+        );
+    }
+
+    // require_str tests
+    // --------------------------------------------------------------------------------------------
+
+    #[test]
+    fn require_str_valid() {
+        let node = json!({"name": "hello"});
+        assert_eq!(require_str(&node, "name").unwrap(), "hello");
+    }
+
+    #[test]
+    fn require_str_missing_field() {
+        let node = json!({});
+        let err = require_str(&node, "name").unwrap_err();
+        assert!(matches!(err, ExplorerStatusError::NotPresent(f) if f == "name"));
+    }
+
+    #[test]
+    fn require_str_wrong_type() {
+        let node = json!({"name": 123});
+        let err = require_str(&node, "name").unwrap_err();
+        assert!(matches!(err, ExplorerStatusError::TypeMismatch { field, .. } if field == "name"));
+    }
+}
