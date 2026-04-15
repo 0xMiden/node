@@ -49,7 +49,6 @@ fn main() -> miette::Result<()> {
         .into_diagnostic()
         .wrap_err("generating server mod.rs")?;
 
-    // generate_server_modules(&descriptor_sets, &server_dst_dir)?;
     generate_mod_rs(&dst_dir).into_diagnostic().wrap_err("generating mod.rs")?;
 
     rustfmt_generated(&dst_dir)?;
