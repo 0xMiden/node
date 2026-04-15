@@ -2,17 +2,19 @@
 set -euo pipefail
 
 # Configuration
+SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
 BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
-GENESIS_CONFIG="crates/store/src/genesis/config/samples/01-simple.toml"
 KMS_KEY_ID="${KMS_KEY_ID:-}"
+if [[ -n "$KMS_KEY_ID" ]]; then
+    AWS_REGION="${AWS_REGION:?error: AWS_REGION environment variable must be set when KMS_KEY_ID is set}"
+    export AWS_REGION
+fi
 
+GENESIS_CONFIG="crates/store/src/genesis/config/samples/01-simple.toml"
 STORE_DIR="/tmp/store"
 VALIDATOR_DIR="/tmp/validator"
 NTX_BUILDER_DIR="/tmp/ntx-builder"
 ACCOUNTS_DIR="/tmp/accounts"
-
-AWS_REGION="${AWS_REGION:?error: AWS_REGION environment variable must be set}"
-export AWS_REGION
 
 # Store exposes 3 separate APIs.
 STORE_RPC_URL="http://0.0.0.0:50001"
@@ -35,29 +37,49 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# --- Kill processes on required ports ---
+
+PORTS=(50001 50002 50003 50101 50201 57291)
+echo "=== Killing processes on required ports ==="
+for port in "${PORTS[@]}"; do
+    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+        for pid in $pids; do
+            echo "Killing PID $pid on port $port"
+            kill -9 "$pid" 2>/dev/null || true
+        done
+    fi
+done
+sleep 1
+
 # --- Bootstrap ---
 
-echo "=== Bootstrapping ==="
+if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
+    echo "=== Bootstrapping ==="
 
-rm -rf "$VALIDATOR_DIR" "$ACCOUNTS_DIR" "$STORE_DIR" "$NTX_BUILDER_DIR"
+    rm -rf "$VALIDATOR_DIR" "$ACCOUNTS_DIR" "$STORE_DIR" "$NTX_BUILDER_DIR"
+    mkdir -p "$NTX_BUILDER_DIR"
 
-echo "Bootstrapping validator..."
-KMS_BOOTSTRAP_ARGS=()
-if [[ -n "$KMS_KEY_ID" ]]; then
-    KMS_BOOTSTRAP_ARGS+=(--validator.key.kms-id "$KMS_KEY_ID")
+    echo "Bootstrapping validator..."
+    KMS_BOOTSTRAP_ARGS=()
+    if [[ -n "$KMS_KEY_ID" ]]; then
+        KMS_BOOTSTRAP_ARGS+=(--validator.key.kms-id "$KMS_KEY_ID")
+    fi
+
+    $BINARY validator bootstrap \
+        --data-directory "$VALIDATOR_DIR" \
+        --genesis-block-directory "$VALIDATOR_DIR" \
+        --accounts-directory "$ACCOUNTS_DIR" \
+        --genesis-config-file "$GENESIS_CONFIG" \
+        "${KMS_BOOTSTRAP_ARGS[@]+"${KMS_BOOTSTRAP_ARGS[@]}"}"
+
+    echo "Bootstrapping store..."
+    $BINARY store bootstrap \
+        --data-directory "$STORE_DIR" \
+        --genesis-block "$VALIDATOR_DIR/genesis.dat"
+else
+    echo "=== Skipping bootstrap (SKIP_BOOTSTRAP=true) ==="
 fi
-
-$BINARY validator bootstrap \
-    --data-directory "$VALIDATOR_DIR" \
-    --genesis-block-directory "$VALIDATOR_DIR" \
-    --accounts-directory "$ACCOUNTS_DIR" \
-    --genesis-config-file "$GENESIS_CONFIG" \
-    "${KMS_BOOTSTRAP_ARGS[@]+"${KMS_BOOTSTRAP_ARGS[@]}"}"
-
-echo "Bootstrapping store..."
-$BINARY store bootstrap \
-    --data-directory "$STORE_DIR" \
-    --genesis-block "$VALIDATOR_DIR/genesis.dat"
 
 # --- Start components ---
 
