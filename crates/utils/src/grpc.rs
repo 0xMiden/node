@@ -17,24 +17,6 @@ impl UrlExt for url::Url {
     }
 }
 
-/// Binds a TCP listener to the given address with `SO_REUSEADDR` enabled.
-///
-/// This allows the listener to bind to a port that is in the `TIME_WAIT` state, which is common
-/// when rapidly restarting services.
-pub fn bind_reuseaddr(addr: SocketAddr) -> anyhow::Result<tokio::net::TcpListener> {
-    let socket = if addr.is_ipv4() {
-        tokio::net::TcpSocket::new_v4()
-    } else {
-        tokio::net::TcpSocket::new_v6()
-    }
-    .context("Failed to create TCP socket")?;
-
-    socket.set_reuseaddr(true).context("Failed to set SO_REUSEADDR")?;
-    socket.bind(addr).context("Failed to bind socket")?;
-
-    socket.listen(1024).context("Failed to listen on socket")
-}
-
 mod private {
     pub trait Sealed {}
     impl Sealed for url::Url {}

@@ -9,13 +9,13 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_node_utils::grpc::bind_reuseaddr;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
+use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Status;
@@ -65,8 +65,9 @@ impl Validator {
             .await
             .context("failed to initialize validator database")?;
 
-        let listener =
-            bind_reuseaddr(self.address).context("failed to bind to validator address")?;
+        let listener = TcpListener::bind(self.address)
+            .await
+            .context("failed to bind to block producer address")?;
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(validator_api_descriptor())

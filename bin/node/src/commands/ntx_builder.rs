@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_utils::clap::duration_to_human_readable_string;
-use miden_node_utils::grpc::{UrlExt, bind_reuseaddr};
+use miden_node_utils::grpc::UrlExt;
+use tokio::net::TcpListener;
 use url::Url;
 
 use super::{
@@ -121,7 +122,11 @@ impl NtxBuilderCommand {
             let addr = url
                 .to_socket()
                 .context("Failed to extract socket address from ntx-builder URL")?;
-            Some(bind_reuseaddr(addr).context("Failed to bind to ntx-builder's gRPC URL")?)
+            Some(
+                TcpListener::bind(addr)
+                    .await
+                    .context("Failed to bind to ntx-builder's gRPC URL")?,
+            )
         } else {
             None
         };

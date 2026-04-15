@@ -6,7 +6,7 @@ use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
-use miden_node_utils::grpc::{UrlExt, bind_reuseaddr};
+use miden_node_utils::grpc::UrlExt;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
@@ -137,19 +137,22 @@ impl StoreCommand {
         let rpc_listener = rpc_url
             .to_socket()
             .context("Failed to extract socket address from store RPC URL")?;
-        let rpc_listener =
-            bind_reuseaddr(rpc_listener).context("Failed to bind to store's RPC gRPC URL")?;
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_listener)
+            .await
+            .context("Failed to bind to store's RPC gRPC URL")?;
 
         let ntx_builder_addr = ntx_builder_url
             .to_socket()
             .context("Failed to extract socket address from store ntx-builder URL")?;
-        let ntx_builder_listener = bind_reuseaddr(ntx_builder_addr)
+        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_addr)
+            .await
             .context("Failed to bind to store's ntx-builder gRPC URL")?;
 
         let block_producer_listener = block_producer_url
             .to_socket()
             .context("Failed to extract socket address from store block-producer URL")?;
-        let block_producer_listener = bind_reuseaddr(block_producer_listener)
+        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_listener)
+            .await
             .context("Failed to bind to store's block-producer gRPC URL")?;
 
         Store {
