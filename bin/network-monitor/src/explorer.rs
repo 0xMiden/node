@@ -229,9 +229,15 @@ fn require_str(node: &serde_json::Value, field: &str) -> Result<String, Explorer
 }
 
 /// Returns a short string representation of a JSON value for error messages.
+///
+/// Truncates the JSON string to at most 60 characters, appending "..." if truncated.
+/// Truncation is done at a character boundary to avoid panicking on multi-byte characters.
 fn truncate_json(value: &serde_json::Value) -> String {
     let s = value.to_string();
-    if s.len() > 60 { format!("{}...", &s[..60]) } else { s }
+    match s.char_indices().nth(60) {
+        Some((idx, _)) => format!("{}...", &s[..idx]),
+        None => s,
+    }
 }
 
 impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
