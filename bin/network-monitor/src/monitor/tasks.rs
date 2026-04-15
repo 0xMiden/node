@@ -20,11 +20,14 @@ use crate::config::MonitorConfig;
 use crate::counter::{LatencyState, run_counter_tracking_task, run_increment_task};
 use crate::deploy::ensure_accounts_exist;
 use crate::explorer::{initial_explorer_status, run_explorer_status_task};
-use crate::faucet::run_faucet_test_task;
+use crate::faucet::{FaucetTestDetails, run_faucet_test_task};
 use crate::frontend::{ServerState, serve};
 use crate::note_transport::{initial_note_transport_status, run_note_transport_status_task};
 use crate::remote_prover::{ProofType, generate_prover_test_payload, run_remote_prover_test_task};
 use crate::status::{
+    CounterTrackingDetails,
+    IncrementDetails,
+    ServiceDetails,
     ServiceStatus,
     StaleChainTracker,
     check_remote_prover_status,
@@ -238,7 +241,7 @@ impl Tasks {
 
             // Extract proof_type directly from the service status
             // If the prover is not available during startup, skip spawning test tasks
-            let proof_type = if let crate::status::ServiceDetails::RemoteProverStatus(details) =
+            let proof_type = if let ServiceDetails::RemoteProverStatus(details) =
                 &initial_prover_status.details
             {
                 Some(details.supported_proof_type.clone())
@@ -312,7 +315,7 @@ impl Tasks {
         // Create initial faucet test status
         let initial_faucet_status = ServiceStatus::unknown(
             "Faucet",
-            crate::status::ServiceDetails::FaucetTest(crate::faucet::FaucetTestDetails {
+            ServiceDetails::FaucetTest(FaucetTestDetails {
                 url: config.faucet_url.as_ref().expect("faucet URL exists").to_string(),
                 test_duration_ms: 0,
                 success_count: 0,
@@ -367,7 +370,7 @@ impl Tasks {
         // Create initial increment status
         let initial_increment_status = ServiceStatus::unknown(
             "Local Transactions",
-            crate::status::ServiceDetails::NtxIncrement(crate::status::IncrementDetails {
+            ServiceDetails::NtxIncrement(IncrementDetails {
                 success_count: 0,
                 failure_count: 0,
                 last_tx_id: None,
@@ -378,7 +381,7 @@ impl Tasks {
         // Create initial tracking status
         let initial_tracking_status = ServiceStatus::unknown(
             "Network Transactions",
-            crate::status::ServiceDetails::NtxTracking(crate::status::CounterTrackingDetails {
+            ServiceDetails::NtxTracking(CounterTrackingDetails {
                 current_value: None,
                 expected_value: None,
                 last_updated: None,

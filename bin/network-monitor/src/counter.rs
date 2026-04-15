@@ -43,7 +43,6 @@ use tracing::{error, info, instrument, warn};
 /// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
 const RESYNC_FAILURE_THRESHOLD: usize = 3;
 
-use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
 use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client, get_counter_library};
@@ -54,6 +53,7 @@ use crate::status::{
     ServiceDetails,
     ServiceStatus,
 };
+use crate::{COMPONENT, current_unix_timestamp_secs};
 
 #[derive(Debug, Default, Clone)]
 pub struct LatencyState {
@@ -644,7 +644,7 @@ async fn initialize_counter_tracking_state(
             expected_counter_value.store(initial_value, Ordering::Relaxed);
             details.current_value = Some(initial_value);
             details.expected_value = Some(initial_value);
-            details.last_updated = Some(crate::status::current_unix_timestamp_secs());
+            details.last_updated = Some(current_unix_timestamp_secs());
             info!("Initialized counter tracking with value: {}", initial_value);
         },
         Ok(None) => {
@@ -671,7 +671,7 @@ async fn poll_counter_once(
     config: &MonitorConfig,
 ) -> Option<String> {
     let mut last_error = None;
-    let current_time = crate::status::current_unix_timestamp_secs();
+    let current_time = current_unix_timestamp_secs();
 
     match fetch_counter_value(rpc_client, counter_account.id()).await {
         Ok(Some(value)) => {
