@@ -15,6 +15,7 @@
 ## v0.14.7 (2026-04-15)
 
 - [BREAKING] Aligned proto `TransactionHeader` with domain type and exposed erased notes in `SyncTransactions` ([#1941](https://github.com/0xMiden/node/pull/1941)).
+- Improved LargeSmt RocksDB defaults, added tuning and memory-budget controls, and defaulted durability mode to sync ([#1947](https://github.com/0xMiden/node/pull/1947))
 
 ## v0.14.6 (2026-04-10)
 
