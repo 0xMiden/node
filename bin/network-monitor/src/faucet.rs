@@ -241,6 +241,7 @@ async fn perform_faucet_test(
     let response = client.get(metadata_url).send().await?;
 
     let response_text = response.text().await?;
+    debug!("Faucet /get_metadata response: {}", response_text);
 
     let metadata: GetMetadataResponse =
         serde_json::from_str(&response_text).context("unexpected response from /get_metadata")?;
