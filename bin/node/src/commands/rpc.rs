@@ -1,7 +1,7 @@
 use anyhow::Context;
 use miden_node_rpc::Rpc;
 use miden_node_utils::clap::GrpcOptionsExternal;
-use miden_node_utils::grpc::UrlExt;
+use miden_node_utils::grpc::{UrlExt, bind_reuseaddr};
 use url::Url;
 
 use super::{
@@ -64,9 +64,7 @@ impl RpcCommand {
         } = self;
 
         let listener = url.to_socket().context("Failed to extract socket address from RPC URL")?;
-        let listener = tokio::net::TcpListener::bind(listener)
-            .await
-            .context("Failed to bind to RPC's gRPC URL")?;
+        let listener = bind_reuseaddr(listener).context("Failed to bind to RPC's gRPC URL")?;
 
         Rpc {
             listener,

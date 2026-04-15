@@ -12,6 +12,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::block_producer_api_descriptor;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
+use miden_node_utils::grpc::bind_reuseaddr;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::batch::ProposedBatch;
@@ -110,8 +111,7 @@ impl BlockProducer {
             }
         };
 
-        let listener = TcpListener::bind(self.block_producer_address)
-            .await
+        let listener = bind_reuseaddr(self.block_producer_address)
             .context("failed to bind to block producer address")?;
 
         info!(target: COMPONENT, "Server initialized");
