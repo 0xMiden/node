@@ -93,7 +93,7 @@ impl block_producer_server::BlockProducer for StoreApi {
             .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
 
         // Apply the block.
-        self.state
+        self.write_handle
             .apply_block(signed_block, Some(proving_inputs))
             .await
             .inspect(|_| {

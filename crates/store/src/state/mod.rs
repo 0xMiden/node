@@ -15,7 +15,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use miden_node_proto::BlockProofRequest;
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountDetails,
@@ -37,12 +36,12 @@ use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, Stora
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain, SignedBlock};
+use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
@@ -180,9 +179,10 @@ pub(crate) struct InMemoryState {
 ///
 /// A single writer task (serialized by a channel) mutates all three data sets. The writer owns
 /// writable copies of the in-memory trees directly (passed as owned values to
-/// [`writer::writer_loop`]) and creates snapshot-backed read-only copies for [`InMemoryState`]
-/// after each block. The writer commits to SQLite and the block store *before* swapping the
-/// in-memory pointer, so there is a window where the DB/files are ahead of the in-memory state.
+/// [`writer::BlockWriter::run`]) and creates snapshot-backed read-only copies for
+/// [`InMemoryState`] after each block. The writer commits to SQLite and the block store *before*
+/// swapping the in-memory pointer, so there is a window where the DB/files are ahead of the
+/// in-memory state.
 ///
 /// ## Consistency rules for reader methods
 ///
@@ -204,28 +204,14 @@ pub struct State {
     /// The block store which stores full block contents for all blocks.
     pub(super) block_store: Arc<BlockStore>,
 
-    /// Handle to the `RocksDB` database used for account tree storage.
-    /// Used by the writer to create snapshot storage instances for `InMemoryState`.
-    #[cfg(feature = "rocksdb")]
-    pub(super) account_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
-
-    /// Handle to the `RocksDB` database used for nullifier tree storage.
-    /// Used by the writer to create snapshot storage instances for `InMemoryState`.
-    #[cfg(feature = "rocksdb")]
-    pub(super) nullifier_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
-
     /// All in-memory state held atomically behind an `ArcSwap`.
     ///
     /// Readers call `snapshot()` which returns `Arc<InMemoryState>` via a wait-free atomic
     /// refcount bump — no data cloning. The writer builds a new `InMemoryState` with
     /// snapshot-backed trees after each block and atomically swaps via `ArcSwap::store()`.
-    pub(super) in_memory: ArcSwap<InMemoryState>,
-
-    /// Channel to the single writer task.
-    writer_tx: mpsc::Sender<writer::WriteRequest>,
-
-    /// Request termination of the process due to a fatal internal state error.
-    pub(super) termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
+    ///
+    /// Wrapped in `Arc` so the writer context can share the same `ArcSwap` instance.
+    pub(super) in_memory: Arc<ArcSwap<InMemoryState>>,
 
     /// The latest proven-in-sequence block number, updated by the proof scheduler.
     proven_tip: ProvenTipReader,
@@ -237,15 +223,15 @@ impl State {
 
     /// Loads the state from the data directory.
     ///
-    /// The returned `Arc<State>` is ready to use. The writer task is spawned internally and
-    /// holds a clone of the `Arc`. Dropping all external clones and closing the writer channel
-    /// will terminate the writer task.
+    /// Returns `(Arc<State>, WriteHandle, ProvenTipWriter)`. The `WriteHandle` is the only way
+    /// to submit blocks to the writer loop. The writer task is spawned internally; dropping the
+    /// `WriteHandle` closes the channel and terminates the writer task.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<(Arc<Self>, ProvenTipWriter), StateInitializationError> {
+    ) -> Result<(Arc<Self>, writer::WriteHandle, ProvenTipWriter), StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -348,37 +334,37 @@ impl State {
         // Create the writer channel. Buffer size of 1: only one block can be in flight.
         let (writer_tx, writer_rx) = mpsc::channel(1);
 
-        let in_memory = ArcSwap::from_pointee(InMemoryState {
+        let in_memory = Arc::new(ArcSwap::from_pointee(InMemoryState {
             block_num: latest_block_num,
             nullifier_tree: snapshot_nullifier_tree,
             account_tree: snapshot_account_tree,
             blockchain,
             forest,
-        });
+        }));
 
-        let state = Arc::new(Self {
-            db,
-            block_store,
-            #[cfg(feature = "rocksdb")]
-            account_db,
-            #[cfg(feature = "rocksdb")]
-            nullifier_db,
-            in_memory,
-            writer_tx,
-            termination_ask,
-            proven_tip,
-        });
-
-        // Spawn the single writer task with owned writable trees.
-        let writer_state = Arc::clone(&state);
-        tokio::spawn(writer::writer_loop(
-            writer_rx,
-            writer_state,
+        // Build the writer context.
+        let writer_ctx = writer::BlockWriter {
+            rx: writer_rx,
+            account_tree: account_tree_with_history,
             nullifier_tree,
-            account_tree_with_history,
-        ));
+            db: Arc::clone(&db),
+            block_store: Arc::clone(&block_store),
+            in_memory: Arc::clone(&in_memory),
+            termination_ask: termination_ask.clone(),
+            #[cfg(feature = "rocksdb")]
+            account_db: std::sync::Arc::clone(&account_db),
+            #[cfg(feature = "rocksdb")]
+            nullifier_db: std::sync::Arc::clone(&nullifier_db),
+        };
 
-        Ok((state, proven_tip_writer))
+        let state = Arc::new(Self { db, block_store, in_memory, proven_tip });
+
+        // Spawn the single writer task.
+        tokio::spawn(writer_ctx.run());
+
+        let write_handle = writer::WriteHandle::new(writer_tx);
+
+        Ok((state, write_handle, proven_tip_writer))
     }
 
     /// Returns the database.
@@ -389,27 +375,6 @@ impl State {
     /// Returns the block store.
     pub(crate) fn block_store(&self) -> Arc<BlockStore> {
         Arc::clone(&self.block_store)
-    }
-
-    // BLOCK APPLICATION
-    // --------------------------------------------------------------------------------------------
-
-    /// Apply changes of a new block to the DB and in-memory data structures.
-    ///
-    /// This sends the block to the single writer task via a channel and awaits the result.
-    /// The writer task handles all validation, DB writes, and in-memory mutations.
-    #[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
-    pub async fn apply_block(
-        &self,
-        signed_block: SignedBlock,
-        proving_inputs: Option<BlockProofRequest>,
-    ) -> Result<(), ApplyBlockError> {
-        let (result_tx, result_rx) = oneshot::channel();
-        self.writer_tx
-            .send(writer::WriteRequest { signed_block, proving_inputs, result_tx })
-            .await
-            .map_err(|e| ApplyBlockError::WriterTaskSendFailed(Box::new(e)))?;
-        result_rx.await?
     }
 
     // STATE ACCESSORS

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use miden_large_smt_backend_rocksdb::RocksDbStorage;
+use arc_swap::ArcSwap;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -15,11 +15,82 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{info, instrument};
 
 use crate::accounts::AccountTreeWithHistory;
-use crate::db::NoteRecord;
+use crate::blocks::BlockStore;
+use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
+use crate::state::InMemoryState;
 use crate::state::loader::{SnapshotTreeStorage, TreeStorage};
-use crate::state::{InMemoryState, State};
 use crate::{COMPONENT, HistoricalError};
+
+// WRITE HANDLE
+// ================================================================================================
+
+/// Handle for submitting blocks to the writer loop.
+///
+/// This is intentionally separated from [`super::State`] to avoid a circular reference: the writer
+/// loop must not hold a reference back to the sender's owner.
+#[derive(Clone)]
+pub struct WriteHandle {
+    tx: mpsc::Sender<WriteRequest>,
+}
+
+impl WriteHandle {
+    pub(crate) fn new(tx: mpsc::Sender<WriteRequest>) -> Self {
+        Self { tx }
+    }
+
+    /// Sends a block to the writer loop and awaits the result.
+    pub async fn apply_block(
+        &self,
+        signed_block: SignedBlock,
+        proving_inputs: Option<BlockProofRequest>,
+    ) -> Result<(), ApplyBlockError> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.tx
+            .send(WriteRequest { signed_block, proving_inputs, result_tx })
+            .await
+            .map_err(|e| ApplyBlockError::WriterTaskSendFailed(Box::new(e)))?;
+        result_rx.await?
+    }
+}
+
+// BLOCK WRITER
+// ================================================================================================
+
+/// Single writer task that serializes all block mutations.
+///
+/// Owns the channel receiver and writable trees, and holds shared references to the database,
+/// block store, and in-memory state. Deliberately does not reference `State` to avoid circular
+/// references — the channel sender lives in [`WriteHandle`], which is independent of `State`.
+pub(crate) struct BlockWriter {
+    /// Channel receiver for incoming block write requests.
+    pub rx: mpsc::Receiver<WriteRequest>,
+
+    /// Writable account tree with historical overlays, owned exclusively by the writer.
+    pub account_tree: AccountTreeWithHistory<TreeStorage>,
+    /// Writable nullifier tree, owned exclusively by the writer.
+    pub nullifier_tree: NullifierTree<LargeSmt<TreeStorage>>,
+
+    /// Shared database for persisting blocks, accounts, notes, and nullifiers.
+    pub db: Arc<Db>,
+    /// Shared block store for persisting raw block data.
+    pub block_store: Arc<BlockStore>,
+    /// Shared in-memory state. The writer publishes new snapshots via `ArcSwap::store()`.
+    pub in_memory: Arc<ArcSwap<InMemoryState>>,
+
+    /// Channel to request process termination on fatal internal state errors.
+    pub termination_ask: mpsc::Sender<ApplyBlockError>,
+
+    /// Handle to the `RocksDB` database used to create snapshot-backed account trees.
+    #[cfg(feature = "rocksdb")]
+    pub account_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
+    /// Handle to the `RocksDB` database used to create snapshot-backed nullifier trees.
+    #[cfg(feature = "rocksdb")]
+    pub nullifier_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
+}
+
+// WRITE REQUEST
+// ================================================================================================
 
 /// A request to apply a new block, sent through the writer channel.
 pub struct WriteRequest {
@@ -28,229 +99,257 @@ pub struct WriteRequest {
     pub result_tx: oneshot::Sender<Result<(), ApplyBlockError>>,
 }
 
-/// Runs the single writer loop. Receives blocks through the channel and applies them
-/// sequentially. The writer owns the writable trees — no locks or interior mutability needed.
-pub(crate) async fn writer_loop(
-    mut rx: mpsc::Receiver<WriteRequest>,
-    state: Arc<State>,
-    mut nullifier_tree: NullifierTree<LargeSmt<TreeStorage>>,
-    mut account_tree: AccountTreeWithHistory<TreeStorage>,
-) {
-    while let Some(req) = rx.recv().await {
-        let result = Box::pin(apply_block_inner(
-            &state,
-            &mut nullifier_tree,
-            &mut account_tree,
-            req.signed_block,
-            req.proving_inputs,
-        ))
-        .await;
-        let _ = req.result_tx.send(result);
-    }
-}
-
-/// Apply changes of a new block to the DB and in-memory data structures.
-///
-/// ## Consistency model
-///
-/// This function is the sole writer to all state. The writer owns the writable trees directly.
-///
-/// Because SQLite/files are committed **before** the in-memory swap, there is a window where the
-/// DB is ahead of the in-memory state. Reader methods that combine in-memory and SQLite data
-/// must scope their DB queries by the snapshot's `block_num` to maintain consistency (see the
-/// doc comment on [`State`] for the full rules).
-///
-/// Readers never block: they obtain an `Arc` via `ArcSwap::load_full()`, which performs only an
-/// atomic refcount increment with no data cloning. The atomic swap guarantees readers see either
-/// the old or new state, never a partial update. Readers holding an `Arc` to the old state are
-/// completely unaffected by the swap.
-#[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
-async fn apply_block_inner(
-    state: &State,
-    nullifier_tree: &mut NullifierTree<LargeSmt<TreeStorage>>,
-    account_tree: &mut AccountTreeWithHistory<TreeStorage>,
-    signed_block: SignedBlock,
-    proving_inputs: Option<BlockProofRequest>,
-) -> Result<(), ApplyBlockError> {
-    let header = signed_block.header();
-    let body = signed_block.body();
-    let block_num = header.block_num();
-    let block_commitment = header.commitment();
-
-    validate_block_header(state, header, body).await?;
-
-    // Load the current in-memory state snapshot for validation (wait-free).
-    let snapshot = state.in_memory.load_full();
-
-    // Compute mutations required for updating account and nullifier trees.
-    let (nullifier_tree_update, account_tree_update) =
-        compute_tree_mutations(state, &snapshot, header, body, nullifier_tree, account_tree)?;
-
-    let notes = build_note_records(header, body)?;
-
-    // Extract public account deltas before block is moved into the DB task.
-    let account_deltas =
-        Vec::from_iter(body.updated_accounts().iter().filter_map(
-            |update| match update.details() {
-                AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
-                AccountUpdateDetails::Private => None,
-            },
-        ));
-
-    // Apply mutations to the writable trees (writes to RocksDB).
-    nullifier_tree
-        .apply_mutations(nullifier_tree_update)
-        .expect("Unreachable: mutations were computed from the current tree state");
-
-    account_tree
-        .apply_mutations(account_tree_update)
-        .expect("Unreachable: mutations were computed from the current tree state");
-
-    // Build new read-only snapshot-backed trees for the new in-memory state.
-    let snapshot_nullifier_tree = build_snapshot_nullifier_tree(state, nullifier_tree);
-    let snapshot_account_tree = build_snapshot_account_tree(state, account_tree);
-
-    let mut new_blockchain = snapshot.blockchain.clone();
-    new_blockchain.push(block_commitment);
-
-    let mut new_forest = snapshot.forest.clone();
-    new_forest.apply_block_updates(block_num, account_deltas)?;
-
-    let new_state = InMemoryState {
-        block_num,
-        nullifier_tree: snapshot_nullifier_tree,
-        account_tree: snapshot_account_tree,
-        blockchain: new_blockchain,
-        forest: new_forest,
-    };
-
-    // We have completed all in-memory mutations on the new clone of in-memory state. Now commit to
-    // storage before swapping the Arc.
-
-    // Save the block to the block store.
-    let signed_block_bytes = signed_block.to_bytes();
-    state.block_store.save_block(block_num, &signed_block_bytes).await?;
-
-    // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while
-    // the DB commits. We ensure consistency by scoping all RPC queries that hit DB data by the
-    // block number that is Arc swapped at the end of this function.
-    state
-        .db
-        .apply_block(signed_block, notes, proving_inputs)
-        .await
-        .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
-
-    // Atomically publish the new state. Readers that call snapshot() after this point
-    // will see the updated state. Readers holding the old Arc continue unaffected.
-    state.in_memory.store(Arc::new(new_state));
-
-    info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
-
-    Ok(())
-}
-
-/// Validates that the block header is consistent with the body and follows the previous block.
-async fn validate_block_header(
-    state: &State,
-    header: &BlockHeader,
-    body: &BlockBody,
-) -> Result<(), ApplyBlockError> {
-    let tx_commitment = body.transactions().commitment();
-    if header.tx_commitment() != tx_commitment {
-        return Err(InvalidBlockError::InvalidBlockTxCommitment {
-            expected: tx_commitment,
-            actual: header.tx_commitment(),
+impl BlockWriter {
+    /// Runs the single writer loop. Receives blocks through the channel and applies them
+    /// sequentially.
+    pub(crate) async fn run(mut self) {
+        while let Some(req) = self.rx.recv().await {
+            let result = Box::pin(self.write_block(req.signed_block, req.proving_inputs)).await;
+            let _ = req.result_tx.send(result);
         }
-        .into());
     }
 
-    let block_num = header.block_num();
-    let prev_block = state
-        .db
-        .select_block_header_by_block_num(None)
-        .await?
-        .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
-    let expected_block_num = prev_block.block_num().child();
-    if block_num != expected_block_num {
-        return Err(InvalidBlockError::NewBlockInvalidBlockNum {
-            expected: expected_block_num,
-            submitted: block_num,
+    /// Apply changes of a new block to the DB, file, and in-memory data structures.
+    ///
+    /// ## Consistency model
+    ///
+    /// This function is the sole writer to all state. The writer owns the writable trees directly.
+    ///
+    /// Because SQLite/files are committed **before** the in-memory swap, there is a window where
+    /// the DB is ahead of the in-memory state. Reader methods that combine in-memory and SQLite
+    /// data must scope their DB queries by the snapshot's `block_num` to maintain consistency
+    /// (see the doc comment on [`super::State`] for the full rules).
+    ///
+    /// Readers never block: they obtain an `Arc` via `ArcSwap::load_full()`, which performs only
+    /// an atomic refcount increment with no data cloning. The atomic swap guarantees readers see
+    /// either the old or new state, never a partial update. Readers holding an `Arc` to the old
+    /// state are completely unaffected by the swap.
+    #[instrument(target = COMPONENT, skip_all, err, fields(block.number = signed_block.header().block_num().as_u32()))]
+    async fn write_block(
+        &mut self,
+        signed_block: SignedBlock,
+        proving_inputs: Option<BlockProofRequest>,
+    ) -> Result<(), ApplyBlockError> {
+        let header = signed_block.header();
+        let body = signed_block.body();
+        let block_num = header.block_num();
+        let block_commitment = header.commitment();
+
+        self.validate_block_header(header, body).await?;
+
+        // Load the current in-memory state snapshot for validation (wait-free).
+        let snapshot = self.in_memory.load_full();
+
+        // Compute mutations required for updating account and nullifier trees.
+        let (nullifier_tree_update, account_tree_update) =
+            self.compute_tree_mutations(&snapshot, header, body)?;
+
+        let notes = build_note_records(header, body)?;
+
+        // Extract public account deltas before block is moved into the DB task.
+        let account_deltas =
+            Vec::from_iter(body.updated_accounts().iter().filter_map(
+                |update| match update.details() {
+                    AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
+                    AccountUpdateDetails::Private => None,
+                },
+            ));
+
+        // Apply mutations to the writable trees (writes to RocksDB).
+        self.nullifier_tree
+            .apply_mutations(nullifier_tree_update)
+            .expect("Unreachable: mutations were computed from the current tree state");
+
+        self.account_tree
+            .apply_mutations(account_tree_update)
+            .expect("Unreachable: mutations were computed from the current tree state");
+
+        // Build new read-only snapshot-backed trees for the new in-memory state.
+        let snapshot_nullifier_tree = self.build_snapshot_nullifier_tree();
+        let snapshot_account_tree = self.build_snapshot_account_tree();
+
+        let mut new_blockchain = snapshot.blockchain.clone();
+        new_blockchain.push(block_commitment);
+
+        let mut new_forest = snapshot.forest.clone();
+        new_forest.apply_block_updates(block_num, account_deltas)?;
+
+        let new_state = InMemoryState {
+            block_num,
+            nullifier_tree: snapshot_nullifier_tree,
+            account_tree: snapshot_account_tree,
+            blockchain: new_blockchain,
+            forest: new_forest,
+        };
+
+        // We have completed all in-memory mutations on the new clone of in-memory state. Now
+        // commit to storage before swapping the Arc.
+
+        // Save the block to the block store.
+        let signed_block_bytes = signed_block.to_bytes();
+        self.block_store.save_block(block_num, &signed_block_bytes).await?;
+
+        // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while
+        // the DB commits. We ensure consistency by scoping all RPC queries that hit DB data by
+        // the block number that is Arc swapped at the end of this function.
+        self.db
+            .apply_block(signed_block, notes, proving_inputs)
+            .await
+            .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
+
+        // Atomically publish the new state. Readers that call snapshot() after this point
+        // will see the updated state. Readers holding the old Arc continue unaffected.
+        self.in_memory.store(Arc::new(new_state));
+
+        info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
+
+        Ok(())
+    }
+
+    /// Validates that the block header is consistent with the body and follows the previous block.
+    async fn validate_block_header(
+        &self,
+        header: &BlockHeader,
+        body: &BlockBody,
+    ) -> Result<(), ApplyBlockError> {
+        let tx_commitment = body.transactions().commitment();
+        if header.tx_commitment() != tx_commitment {
+            return Err(InvalidBlockError::InvalidBlockTxCommitment {
+                expected: tx_commitment,
+                actual: header.tx_commitment(),
+            }
+            .into());
         }
-        .into());
-    }
-    if header.prev_block_commitment() != prev_block.commitment() {
-        return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
-    }
 
-    Ok(())
-}
+        let block_num = header.block_num();
+        let prev_block = self
+            .db
+            .select_block_header_by_block_num(None)
+            .await?
+            .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
+        let expected_block_num = prev_block.block_num().child();
+        if block_num != expected_block_num {
+            return Err(InvalidBlockError::NewBlockInvalidBlockNum {
+                expected: expected_block_num,
+                submitted: block_num,
+            }
+            .into());
+        }
+        if header.prev_block_commitment() != prev_block.commitment() {
+            return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
+        }
 
-/// Compute mutations for the nullifier tree and account tree.
-fn compute_tree_mutations(
-    state: &State,
-    snapshot: &Arc<InMemoryState>,
-    header: &BlockHeader,
-    body: &BlockBody,
-    nullifier_tree: &mut NullifierTree<LargeSmt<TreeStorage>>,
-    account_tree: &mut AccountTreeWithHistory<RocksDbStorage>,
-) -> Result<(NullifierMutationSet, AccountMutationSet), ApplyBlockError> {
-    // Nullifiers can be produced only once.
-    let duplicate_nullifiers: Vec<_> = body
-        .created_nullifiers()
-        .iter()
-        .filter(|&nullifier| nullifier_tree.get_block_num(nullifier).is_some())
-        .copied()
-        .collect();
-    if !duplicate_nullifiers.is_empty() {
-        return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
+        Ok(())
     }
 
-    // new_block.chain_root must be equal to the chain MMR root prior to the update.
-    let peaks = snapshot.blockchain.peaks();
-    if peaks.hash_peaks() != header.chain_commitment() {
-        return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
+    /// Compute mutations for the nullifier tree and account tree.
+    fn compute_tree_mutations(
+        &mut self,
+        snapshot: &Arc<InMemoryState>,
+        header: &BlockHeader,
+        body: &BlockBody,
+    ) -> Result<(NullifierMutationSet, AccountMutationSet), ApplyBlockError> {
+        // Nullifiers can be produced only once.
+        let duplicate_nullifiers: Vec<_> = body
+            .created_nullifiers()
+            .iter()
+            .filter(|&nullifier| self.nullifier_tree.get_block_num(nullifier).is_some())
+            .copied()
+            .collect();
+        if !duplicate_nullifiers.is_empty() {
+            return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
+        }
+
+        // new_block.chain_root must be equal to the chain MMR root prior to the update.
+        let peaks = snapshot.blockchain.peaks();
+        if peaks.hash_peaks() != header.chain_commitment() {
+            return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
+        }
+
+        // Compute update for nullifier tree.
+        let nullifier_tree_update = self
+            .nullifier_tree
+            .compute_mutations(
+                body.created_nullifiers()
+                    .iter()
+                    .map(|nullifier| (*nullifier, header.block_num())),
+            )
+            .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
+
+        if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
+            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
+                InvalidBlockError::NewBlockInvalidNullifierRoot,
+            ));
+            return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
+        }
+
+        // Compute update for account tree from the writable tree (always in sync with DB).
+        let account_tree_update = self
+            .account_tree
+            .compute_mutations(
+                body.updated_accounts()
+                    .iter()
+                    .map(|update| (update.account_id(), update.final_state_commitment())),
+            )
+            .map_err(|e| match e {
+                HistoricalError::AccountTreeError(err) => {
+                    InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
+                },
+                HistoricalError::MerkleError(_) => {
+                    panic!("Unexpected MerkleError during account tree mutation computation")
+                },
+            })?;
+
+        if account_tree_update.as_mutation_set().root() != header.account_root() {
+            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
+                InvalidBlockError::NewBlockInvalidAccountRoot,
+            ));
+            return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
+        }
+
+        Ok((nullifier_tree_update, account_tree_update))
     }
 
-    // Compute update for nullifier tree.
-    let nullifier_tree_update = nullifier_tree
-        .compute_mutations(
-            body.created_nullifiers()
-                .iter()
-                .map(|nullifier| (*nullifier, header.block_num())),
-        )
-        .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
-
-    if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
-        let _ = state.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-            InvalidBlockError::NewBlockInvalidNullifierRoot,
-        ));
-        return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
+    /// Builds a snapshot-backed nullifier tree for the new in-memory state.
+    fn build_snapshot_nullifier_tree(&self) -> NullifierTree<LargeSmt<SnapshotTreeStorage>> {
+        #[cfg(feature = "rocksdb")]
+        {
+            let snapshot_storage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage::new(
+                std::sync::Arc::clone(&self.nullifier_db),
+            );
+            let snapshot_smt = crate::state::loader::load_smt(snapshot_storage)
+                .expect("Unreachable: snapshot reads from data just written by apply_mutations");
+            NullifierTree::new_unchecked(snapshot_smt)
+        }
+        #[cfg(not(feature = "rocksdb"))]
+        {
+            self.nullifier_tree.clone()
+        }
     }
 
-    // Compute update for account tree from the writable tree (always in sync with DB).
-    let account_tree_update = account_tree
-        .compute_mutations(
-            body.updated_accounts()
-                .iter()
-                .map(|update| (update.account_id(), update.final_state_commitment())),
-        )
-        .map_err(|e| match e {
-            HistoricalError::AccountTreeError(err) => {
-                InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-            },
-            HistoricalError::MerkleError(_) => {
-                panic!("Unexpected MerkleError during account tree mutation computation")
-            },
-        })?;
+    /// Builds a snapshot-backed account tree for the new in-memory state.
+    fn build_snapshot_account_tree(&self) -> AccountTreeWithHistory<SnapshotTreeStorage> {
+        #[cfg(feature = "rocksdb")]
+        {
+            let snapshot_storage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage::new(
+                std::sync::Arc::clone(&self.account_db),
+            );
+            let snapshot_smt = crate::state::loader::load_smt(snapshot_storage)
+                .expect("Unreachable: snapshot reads from data just written by apply_mutations");
+            let snapshot_tree =
+                miden_protocol::block::account_tree::AccountTree::new_unchecked(snapshot_smt);
 
-    if account_tree_update.as_mutation_set().root() != header.account_root() {
-        let _ = state.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-            InvalidBlockError::NewBlockInvalidAccountRoot,
-        ));
-        return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
+            AccountTreeWithHistory::from_parts(
+                snapshot_tree,
+                self.account_tree.block_number_latest(),
+                self.account_tree.overlays().clone(),
+            )
+        }
+        #[cfg(not(feature = "rocksdb"))]
+        {
+            self.account_tree.clone()
+        }
     }
-
-    Ok((nullifier_tree_update, account_tree_update))
 }
 
 /// Builds the note tree, validates its root against the header, and collects note records.
@@ -290,54 +389,4 @@ fn build_note_records(
         })
         .collect::<Result<Vec<_>, InvalidBlockError>>()
         .map_err(Into::into)
-}
-
-/// Builds a snapshot-backed nullifier tree for the new in-memory state.
-fn build_snapshot_nullifier_tree(
-    state: &State,
-    nullifier_tree: &NullifierTree<LargeSmt<TreeStorage>>,
-) -> NullifierTree<LargeSmt<SnapshotTreeStorage>> {
-    #[cfg(feature = "rocksdb")]
-    {
-        let _ = nullifier_tree;
-        let snapshot_storage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage::new(
-            std::sync::Arc::clone(&state.nullifier_db),
-        );
-        let snapshot_smt = crate::state::loader::load_smt(snapshot_storage)
-            .expect("Unreachable: snapshot reads from data just written by apply_mutations");
-        NullifierTree::new_unchecked(snapshot_smt)
-    }
-    #[cfg(not(feature = "rocksdb"))]
-    {
-        let _ = state;
-        nullifier_tree.clone()
-    }
-}
-
-/// Builds a snapshot-backed account tree for the new in-memory state.
-fn build_snapshot_account_tree(
-    state: &State,
-    account_tree: &AccountTreeWithHistory<TreeStorage>,
-) -> AccountTreeWithHistory<SnapshotTreeStorage> {
-    #[cfg(feature = "rocksdb")]
-    {
-        let snapshot_storage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage::new(
-            std::sync::Arc::clone(&state.account_db),
-        );
-        let snapshot_smt = crate::state::loader::load_smt(snapshot_storage)
-            .expect("Unreachable: snapshot reads from data just written by apply_mutations");
-        let snapshot_tree =
-            miden_protocol::block::account_tree::AccountTree::new_unchecked(snapshot_smt);
-
-        AccountTreeWithHistory::from_parts(
-            snapshot_tree,
-            account_tree.block_number_latest(),
-            account_tree.overlays().clone(),
-        )
-    }
-    #[cfg(not(feature = "rocksdb"))]
-    {
-        let _ = state;
-        account_tree.clone()
-    }
 }

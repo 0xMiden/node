@@ -17,6 +17,7 @@ use tracing::{info, instrument};
 use crate::COMPONENT;
 use crate::errors::GetBlockInputsError;
 use crate::state::State;
+use crate::state::writer::WriteHandle;
 
 // STORE API
 // ================================================================================================
@@ -24,6 +25,8 @@ use crate::state::State;
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
+    /// Handle for submitting blocks to the writer loop.
+    pub(super) write_handle: WriteHandle,
     /// Sender used to notify the proof scheduler of the latest committed block number.
     pub(super) chain_tip_sender: watch::Sender<BlockNumber>,
 }

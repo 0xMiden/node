@@ -97,7 +97,7 @@ impl Store {
         // Load initial state.
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
-        let (state, tx_proven_tip) =
+        let (state, write_handle, tx_proven_tip) =
             State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?;
@@ -113,6 +113,7 @@ impl Store {
         // Spawn gRPC Servers.
         let mut join_set = Self::spawn_grpc_servers(
             state,
+            write_handle,
             chain_tip_sender,
             self.grpc_options,
             self.rpc_listener,
@@ -176,6 +177,7 @@ impl Store {
     /// Spawns the gRPC servers and the DB maintenance background task.
     fn spawn_grpc_servers(
         state: Arc<State>,
+        write_handle: crate::state::writer::WriteHandle,
         chain_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
@@ -184,15 +186,18 @@ impl Store {
     ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
         let rpc_service = store::rpc_server::RpcServer::new(api::StoreApi {
             state: Arc::clone(&state),
+            write_handle: write_handle.clone(),
             chain_tip_sender: chain_tip_sender.clone(),
         });
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(api::StoreApi {
             state: Arc::clone(&state),
+            write_handle: write_handle.clone(),
             chain_tip_sender: chain_tip_sender.clone(),
         });
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(api::StoreApi {
                 state: Arc::clone(&state),
+                write_handle,
                 chain_tip_sender,
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
