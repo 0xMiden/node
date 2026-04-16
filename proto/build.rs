@@ -8,7 +8,7 @@ use protox::prost::Message;
 /// Compiles each gRPC service definitions into a
 /// [`FileDescriptorSet`](tonic_prost_build::FileDescriptorSet) and exposes it as a function:
 ///
-/// ```rust
+/// ```rust, ignore
 /// fn <service>_api_descriptor() -> FileDescriptorSet;
 /// ```
 fn main() -> miette::Result<()> {
