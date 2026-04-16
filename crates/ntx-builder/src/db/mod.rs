@@ -114,11 +114,11 @@ impl Db {
             .await
     }
 
-    /// Returns the latest execution error for a note identified by its note ID.
-    pub async fn get_note_error(&self, note_id: NoteId) -> Result<Option<queries::NoteErrorRow>> {
+    /// Returns the status for a note identified by its note ID.
+    pub async fn get_note_status(&self, note_id: NoteId) -> Result<Option<queries::NoteStatusRow>> {
         let note_id_bytes = models::conv::note_id_to_bytes(&note_id);
         self.inner
-            .query("get_note_error", move |conn| queries::get_note_error(conn, &note_id_bytes))
+            .query("get_note_status", move |conn| queries::get_note_status(conn, &note_id_bytes))
             .await
     }
 

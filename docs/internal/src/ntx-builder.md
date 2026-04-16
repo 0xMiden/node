@@ -67,6 +67,7 @@ requests to this server. In bundled mode the server is started automatically on 
 wired to the RPC; in distributed mode operators must pass the NTB's address to the RPC via
 `--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`).
 
-Currently the only endpoint is `GetNoteError(note_id)` which returns the latest execution error
-for a given network note, along with the attempt count and the block number of the last attempt.
-This is useful for debugging notes that fail to be consumed.
+Currently the only endpoint is `GetNetworkNoteStatus(note_id)` which returns the lifecycle status
+of a network note (pending, processed, or discarded), along with the latest execution error,
+attempt count, and block number of the last attempt. This is useful for debugging notes that fail
+to be consumed.
