@@ -257,6 +257,39 @@ fn block_committed_promotes_inflight_account_to_committed() {
     assert_eq!(count_inflight_accounts(conn), 0);
 }
 
+// GET COMMITTED ACCOUNT TESTS
+// ================================================================================================
+
+#[test]
+fn get_committed_account_ignores_inflight() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_id = mock_network_account_id();
+    let account = mock_account(account_id);
+
+    // Insert only an inflight account row (simulating account creation).
+    let tx_id = mock_tx_id(1);
+    let row = AccountInsert {
+        account_id: conversions::network_account_id_to_bytes(account_id),
+        transaction_id: Some(conversions::transaction_id_to_bytes(&tx_id)),
+        account_data: conversions::account_to_bytes(&account),
+    };
+    diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
+
+    // get_committed_account should return None (only inflight exists).
+    let result = get_committed_account(conn, account_id).unwrap();
+    assert!(result.is_none());
+
+    // Commit the block to promote inflight to committed.
+    let block_num = BlockNumber::from(1u32);
+    let header = mock_block_header(block_num);
+    commit_block(conn, &[tx_id], block_num, &header).unwrap();
+
+    // Now get_committed_account should return the account.
+    let result = get_committed_account(conn, account_id).unwrap();
+    assert!(result.is_some());
+}
+
 // HANDLE TRANSACTIONS REVERTED TESTS
 // ================================================================================================
 

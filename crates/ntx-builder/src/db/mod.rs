@@ -83,6 +83,15 @@ impl Db {
             .await
     }
 
+    /// Returns `true` if a committed account state exists for the given account.
+    pub async fn has_committed_account(&self, account_id: NetworkAccountId) -> Result<bool> {
+        self.inner
+            .query("has_committed_account", move |conn| {
+                Ok(queries::get_committed_account(conn, account_id)?.is_some())
+            })
+            .await
+    }
+
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,

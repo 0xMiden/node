@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::NtxBuilderConfig;
-use crate::actor::{AccountActorContext, AccountOrigin, ActorRequest};
+use crate::actor::{AccountActorContext, ActorRequest};
 use crate::chain_state::ChainState;
 use crate::clients::StoreClient;
 use crate::coordinator::Coordinator;
@@ -147,7 +147,7 @@ impl NetworkTransactionBuilder {
                 result = self.coordinator.next() => {
                     if let Some(account_id) = result? {
                         self.coordinator
-                            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                            .spawn_actor(account_id, &self.actor_context);
                     }
                 },
                 // Handle mempool events.
@@ -210,8 +210,7 @@ impl NetworkTransactionBuilder {
             .await
             .context("failed to sync account to DB")?;
 
-        self.coordinator
-            .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+        self.coordinator.spawn_actor(account_id, &self.actor_context);
         Ok(())
     }
 
@@ -226,21 +225,17 @@ impl NetworkTransactionBuilder {
                     .await
                     .context("failed to write TransactionAdded to DB")?;
 
-                // Handle account deltas in case an account is being created.
+                // Spawn new actors for newly created network accounts.
                 if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
-                    // Handle account deltas for network accounts only.
-                    if let Some(network_account) = AccountOrigin::transaction(delta) {
-                        // Spawn new actors if a transaction creates a new network account.
-                        let is_creating_account = delta.is_full_state();
-                        if is_creating_account {
-                            self.coordinator.spawn_actor(network_account, &self.actor_context);
+                    if delta.is_full_state() {
+                        if let Ok(network_id) = NetworkAccountId::try_from(delta.id()) {
+                            self.coordinator.spawn_actor(network_id, &self.actor_context);
                         }
                     }
                 }
                 let inactive_targets = self.coordinator.send_targeted(&event);
                 for account_id in inactive_targets {
-                    self.coordinator
-                        .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                    self.coordinator.spawn_actor(account_id, &self.actor_context);
                 }
                 Ok(())
             },
