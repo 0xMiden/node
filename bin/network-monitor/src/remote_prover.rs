@@ -22,8 +22,8 @@ use tonic::Request;
 use tracing::{info, instrument};
 use url::Url;
 
-use crate::status::{ServiceDetails, ServiceStatus, Status};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::status::{ServiceDetails, ServiceStatus};
 
 // PROOF TYPE
 // ================================================================================================
@@ -115,14 +115,11 @@ pub async fn run_remote_prover_test_task(
     loop {
         interval.tick().await;
 
-        let current_time = current_unix_timestamp_secs();
-
         let status = test_remote_prover(
             &mut client,
             name,
             &proof_type,
             &serialized_request_payload,
-            current_time,
             &mut success_count,
             &mut failure_count,
         )
@@ -147,7 +144,6 @@ pub async fn run_remote_prover_test_task(
 /// * `name` - The name of the remote prover.
 /// * `proof_type` - The type of proof to test.
 /// * `serialized_request_payload` - The serialized request payload to send to the remote prover.
-/// * `current_time` - The current time in seconds since UNIX epoch.
 /// * `success_count` - Mutable reference to the success counter.
 /// * `failure_count` - Mutable reference to the failure counter.
 ///
@@ -167,7 +163,6 @@ async fn test_remote_prover(
     name: &str,
     proof_type: &ProofType,
     serialized_request_payload: &proto::remote_prover::ProofRequest,
-    current_time: u64,
     success_count: &mut u64,
     failure_count: &mut u64,
 ) -> ServiceStatus {
@@ -184,36 +179,31 @@ async fn test_remote_prover(
 
             *success_count += 1;
 
-            ServiceStatus {
-                name: name.to_string(),
-                status: Status::Healthy,
-                last_checked: current_time,
-                error: None,
-                details: ServiceDetails::RemoteProverTest(ProverTestDetails {
+            ServiceStatus::healthy(
+                name,
+                ServiceDetails::RemoteProverTest(ProverTestDetails {
                     test_duration_ms: duration.as_millis() as u64,
                     proof_size_bytes: response_inner.payload.len(),
                     success_count: *success_count,
                     failure_count: *failure_count,
                     proof_type: proof_type.clone(),
                 }),
-            }
+            )
         },
         Err(e) => {
             *failure_count += 1;
 
-            ServiceStatus {
-                name: name.to_string(),
-                status: Status::Unhealthy,
-                last_checked: current_time,
-                error: Some(tonic_status_to_json(&e)),
-                details: ServiceDetails::RemoteProverTest(ProverTestDetails {
+            ServiceStatus::unhealthy(
+                name,
+                tonic_status_to_json(&e),
+                ServiceDetails::RemoteProverTest(ProverTestDetails {
                     test_duration_ms: 0,
                     proof_size_bytes: 0,
                     success_count: *success_count,
                     failure_count: *failure_count,
                     proof_type: proof_type.clone(),
                 }),
-            }
+            )
         },
     }
 }

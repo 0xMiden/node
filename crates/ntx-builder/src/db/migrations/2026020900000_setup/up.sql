@@ -36,7 +36,7 @@ CREATE INDEX idx_accounts_tx ON accounts(transaction_id) WHERE transaction_id IS
 -- Notes: committed, inflight, and nullified — all in one table.
 -- created_by = NULL means committed note; non-NULL means created by inflight tx.
 -- consumed_by = NULL means unconsumed; non-NULL means consumed by inflight tx.
--- Row is deleted once consumption is committed.
+-- committed_at = block number when the consuming transaction was committed on-chain.
 CREATE TABLE notes (
     -- Nullifier bytes (32 bytes). Primary key.
     nullifier       BLOB    PRIMARY KEY,
@@ -56,9 +56,13 @@ CREATE TABLE notes (
     created_by      BLOB,
     -- NULL if unconsumed; transaction ID of the consuming inflight tx.
     consumed_by     BLOB,
+    -- Block number at which the note's consuming transaction was committed.
+    -- NULL while the note is still pending or in-flight; set on block commit.
+    committed_at    INTEGER,
 
     CONSTRAINT notes_attempt_count_non_negative CHECK (attempt_count >= 0),
-    CONSTRAINT notes_last_attempt_is_u32 CHECK (last_attempt BETWEEN 0 AND 0xFFFFFFFF)
+    CONSTRAINT notes_last_attempt_is_u32 CHECK (last_attempt BETWEEN 0 AND 0xFFFFFFFF),
+    CONSTRAINT notes_committed_at_is_u32 CHECK (committed_at BETWEEN 0 AND 0xFFFFFFFF)
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_notes_account ON notes(account_id);

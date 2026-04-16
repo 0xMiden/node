@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use anyhow::Context;
 use miden_node_db::Db;
@@ -24,7 +25,14 @@ use tower_http::trace::TraceLayer;
 use tracing::{info_span, instrument};
 
 use crate::block_validation::validate_block;
-use crate::db::{insert_transaction, load, load_chain_tip, upsert_block_header};
+use crate::db::{
+    count_signed_blocks,
+    count_validated_transactions,
+    insert_transaction,
+    load,
+    load_chain_tip,
+    upsert_block_header,
+};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, ValidatorSigner};
 
@@ -65,6 +73,17 @@ impl Validator {
             .await
             .context("failed to initialize validator database")?;
 
+        // Load initial metrics from the database for the in-memory counters.
+        let (initial_chain_tip, initial_tx_count, initial_block_count) = db
+            .query("load_initial_metrics", |conn| {
+                let tip = load_chain_tip(conn)?.map_or(0, |h| h.block_num().as_u32());
+                let tx_count = u64::try_from(count_validated_transactions(conn)?).unwrap_or(0);
+                let block_count = u64::try_from(count_signed_blocks(conn)?).unwrap_or(0);
+                Ok::<_, miden_node_db::DatabaseError>((tip, tx_count, block_count))
+            })
+            .await
+            .context("failed to load initial metrics")?;
+
         let listener = TcpListener::bind(self.address)
             .await
             .context("failed to bind to block producer address")?;
@@ -79,7 +98,13 @@ impl Validator {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(api_server::ApiServer::new(ValidatorServer::new(self.signer, db)))
+            .add_service(api_server::ApiServer::new(ValidatorServer::new(
+                self.signer,
+                db,
+                initial_chain_tip,
+                initial_tx_count,
+                initial_block_count,
+            )))
             .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
@@ -99,14 +124,29 @@ struct ValidatorServer {
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
     sign_block_semaphore: Semaphore,
+    /// In-memory chain tip, updated atomically after each signed block.
+    chain_tip: AtomicU32,
+    /// In-memory count of validated transactions, incremented after each new insert.
+    validated_transactions_count: AtomicU64,
+    /// In-memory count of signed blocks, incremented after each signed block.
+    signed_blocks_count: AtomicU64,
 }
 
 impl ValidatorServer {
-    fn new(signer: ValidatorSigner, db: Db) -> Self {
+    fn new(
+        signer: ValidatorSigner,
+        db: Db,
+        initial_chain_tip: u32,
+        initial_tx_count: u64,
+        initial_block_count: u64,
+    ) -> Self {
         Self {
             signer,
             db: db.into(),
             sign_block_semaphore: Semaphore::new(1),
+            chain_tip: AtomicU32::new(initial_chain_tip),
+            validated_transactions_count: AtomicU64::new(initial_tx_count),
+            signed_blocks_count: AtomicU64::new(initial_block_count),
         }
     }
 }
@@ -121,6 +161,9 @@ impl api_server::Api for ValidatorServer {
         Ok(tonic::Response::new(proto::validator::ValidatorStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "OK".to_string(),
+            chain_tip: self.chain_tip.load(Ordering::Relaxed),
+            validated_transactions_count: self.validated_transactions_count.load(Ordering::Relaxed),
+            signed_blocks_count: self.signed_blocks_count.load(Ordering::Relaxed),
         }))
     }
 
@@ -153,12 +196,16 @@ impl api_server::Api for ValidatorServer {
         })?;
 
         // Store the validated transaction.
-        self.db
+        let count = self
+            .db
             .transact("insert_transaction", move |conn| insert_transaction(conn, &tx_info))
             .await
             .map_err(|err| {
                 Status::internal(err.as_report_context("Failed to insert transaction"))
             })?;
+
+        self.validated_transactions_count.fetch_add(count as u64, Ordering::Relaxed);
+
         Ok(tonic::Response::new(()))
     }
 
@@ -205,6 +252,7 @@ impl api_server::Api for ValidatorServer {
             })?;
 
         // Persist the validated block header.
+        let new_block_num = header.block_num().as_u32();
         self.db
             .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
             .await
@@ -214,6 +262,10 @@ impl api_server::Api for ValidatorServer {
                     err.as_report()
                 ))
             })?;
+
+        // Update the in-memory counters after successful persistence.
+        self.chain_tip.store(new_block_num, Ordering::Relaxed);
+        self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
 
         // Send the signature.
         let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };

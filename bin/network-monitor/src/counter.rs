@@ -43,7 +43,6 @@ use tracing::{error, info, instrument, warn};
 /// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
 const RESYNC_FAILURE_THRESHOLD: usize = 3;
 
-use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
 use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client, get_counter_library};
@@ -53,8 +52,8 @@ use crate::status::{
     PendingLatencyDetails,
     ServiceDetails,
     ServiceStatus,
-    Status,
 };
+use crate::{COMPONENT, current_unix_timestamp_secs};
 
 #[derive(Debug, Default, Clone)]
 pub struct LatencyState {
@@ -541,24 +540,21 @@ fn handle_increment_failure(details: &mut IncrementDetails, error: &anyhow::Erro
 
 /// Build a `ServiceStatus` snapshot from the current increment details and last error.
 fn build_increment_status(details: &IncrementDetails, last_error: Option<String>) -> ServiceStatus {
-    let status = if last_error.is_some() {
-        // If the most recent attempt failed, surface the service as unhealthy so the
-        // dashboard reflects that the increment pipeline is not currently working.
-        Status::Unhealthy
-    } else if details.failure_count == 0 {
-        Status::Healthy
-    } else if details.success_count == 0 {
-        Status::Unhealthy
-    } else {
-        Status::Healthy
-    };
+    let service_details = ServiceDetails::NtxIncrement(details.clone());
 
-    ServiceStatus {
-        name: "Local Transactions".to_string(),
-        status,
-        last_checked: crate::monitor::tasks::current_unix_timestamp_secs(),
-        error: last_error,
-        details: ServiceDetails::NtxIncrement(details.clone()),
+    // If the most recent attempt failed, surface the service as unhealthy so the
+    // dashboard reflects that the increment pipeline is not currently working.
+    // Also unhealthy if we've never succeeded but have failures.
+    if let Some(err) = last_error {
+        ServiceStatus::unhealthy("Local Transactions", err, service_details)
+    } else if details.success_count == 0 && details.failure_count > 0 {
+        ServiceStatus::unhealthy(
+            "Local Transactions",
+            format!("no successful increments ({} failures)", details.failure_count),
+            service_details,
+        )
+    } else {
+        ServiceStatus::healthy("Local Transactions", service_details)
     }
 }
 
@@ -648,7 +644,7 @@ async fn initialize_counter_tracking_state(
             expected_counter_value.store(initial_value, Ordering::Relaxed);
             details.current_value = Some(initial_value);
             details.expected_value = Some(initial_value);
-            details.last_updated = Some(crate::monitor::tasks::current_unix_timestamp_secs());
+            details.last_updated = Some(current_unix_timestamp_secs());
             info!("Initialized counter tracking with value: {}", initial_value);
         },
         Ok(None) => {
@@ -675,7 +671,7 @@ async fn poll_counter_once(
     config: &MonitorConfig,
 ) -> Option<String> {
     let mut last_error = None;
-    let current_time = crate::monitor::tasks::current_unix_timestamp_secs();
+    let current_time = current_unix_timestamp_secs();
 
     match fetch_counter_value(rpc_client, counter_account.id()).await {
         Ok(Some(value)) => {
@@ -775,22 +771,16 @@ fn build_tracking_status(
     details: &CounterTrackingDetails,
     last_error: Option<String>,
 ) -> ServiceStatus {
-    let status = if last_error.is_some() {
-        // If the latest poll failed, surface the service as unhealthy even if we have
-        // a previously cached value, so the dashboard shows that tracking is degraded.
-        Status::Unhealthy
-    } else if details.current_value.is_some() {
-        Status::Healthy
-    } else {
-        Status::Unknown
-    };
+    let service_details = ServiceDetails::NtxTracking(details.clone());
 
-    ServiceStatus {
-        name: "Network Transactions".to_string(),
-        status,
-        last_checked: crate::monitor::tasks::current_unix_timestamp_secs(),
-        error: last_error,
-        details: ServiceDetails::NtxTracking(details.clone()),
+    // If the latest poll failed, surface the service as unhealthy even if we have
+    // a previously cached value, so the dashboard shows that tracking is degraded.
+    if let Some(err) = last_error {
+        ServiceStatus::unhealthy("Network Transactions", err, service_details)
+    } else if details.current_value.is_some() {
+        ServiceStatus::healthy("Network Transactions", service_details)
+    } else {
+        ServiceStatus::unknown("Network Transactions", service_details)
     }
 }
 
