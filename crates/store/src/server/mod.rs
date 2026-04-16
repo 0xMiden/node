@@ -6,11 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::generated::store;
-use miden_node_proto_build::{
-    store_block_producer_api_descriptor,
-    store_ntx_builder_api_descriptor,
-    store_rpc_api_descriptor,
-};
+use miden_node_proto_build::store_api_descriptor;
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -198,9 +194,7 @@ impl Store {
                 chain_tip_sender,
             });
         let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(store_rpc_api_descriptor())
-            .register_file_descriptor_set(store_ntx_builder_api_descriptor())
-            .register_file_descriptor_set(store_block_producer_api_descriptor())
+            .register_file_descriptor_set(store_api_descriptor())
             .build_v1()
             .context("failed to build reflection service")?;
 
