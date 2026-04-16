@@ -5,6 +5,11 @@ let statusData = null;
 let updateInterval = null;
 const EXPLORER_LAG_TOLERANCE = 20; // max allowed block delta vs RPC, roughly 1 minute
 
+// Read theme colors from CSS custom properties
+const rootStyle = getComputedStyle(document.documentElement);
+const COLOR_HEALTHY = rootStyle.getPropertyValue('--color-healthy').trim();
+const COLOR_UNHEALTHY = rootStyle.getPropertyValue('--color-unhealthy').trim();
+
 // Store gRPC-Web probe results keyed by service URL
 const grpcWebProbeResults = new Map();
 
@@ -386,7 +391,7 @@ function updateDisplay() {
 
     // Update footer
     overallStatus.textContent = allHealthy ? 'All Systems Operational' : `${healthyServices}/${totalServices} Services Healthy`;
-    overallStatus.style.color = allHealthy ? '#22C55D' : '#ff5500';
+    overallStatus.style.color = allHealthy ? COLOR_HEALTHY : COLOR_UNHEALTHY;
     servicesCount.textContent = `${totalServices} Services`;
 
     // Update network name in logo
@@ -401,7 +406,7 @@ function updateDisplay() {
     // Generate status cards
     const serviceCardsHtml = processedServices.map(service => {
         const isHealthy = isServiceHealthy(service);
-        const statusColor = isHealthy ? '#22C55D' : '#ff5500';
+        const statusColor = isHealthy ? COLOR_HEALTHY : COLOR_UNHEALTHY;
         const statusIcon = isHealthy ? '✓' : '✗';
         const numOrDash = value => isHealthy ? (value?.toLocaleString?.() ?? value ?? '-') : '-';
         const timeOrDash = ts => {
@@ -796,7 +801,7 @@ async function copyToClipboard(text, event) {
         // Show a brief success indicator
         const originalContent = button.innerHTML;
         button.innerHTML = '<svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>';
-        button.style.color = '#22C55D';
+        button.style.color = COLOR_HEALTHY;
 
         setTimeout(() => {
             button.innerHTML = originalContent;
@@ -805,7 +810,7 @@ async function copyToClipboard(text, event) {
     } catch (err) {
         console.error('Failed to copy to clipboard:', err);
         // Show error feedback on button
-        button.style.color = '#ff5500';
+        button.style.color = COLOR_UNHEALTHY;
         setTimeout(() => {
             button.style.color = '';
         }, 2000);
