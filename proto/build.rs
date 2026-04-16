@@ -75,7 +75,7 @@ fn proto_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>, miette::Er
 ///
 /// The function looks as follows:
 ///
-/// ```rust
+/// ```rust, ignore
 /// fn <file_stem>_api_descriptor() -> FileDescriptorSet {
 ///     FileDescriptorSet::decode(vec![<encoded>].as_slice())
 ///         .expect("encoded file descriptor should decode")
