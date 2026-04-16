@@ -35,6 +35,7 @@ diesel::table! {
         last_error -> Nullable<Text>,
         created_by -> Nullable<Binary>,
         consumed_by -> Nullable<Binary>,
+        committed_at -> Nullable<BigInt>,
     }
 }
 

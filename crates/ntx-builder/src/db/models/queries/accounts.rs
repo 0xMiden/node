@@ -103,6 +103,33 @@ pub fn get_account(
         .transpose()
 }
 
+/// Returns the committed account state (`transaction_id IS NULL`), ignoring any inflight rows.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT account_data
+/// FROM accounts
+/// WHERE account_id = ?1 AND transaction_id IS NULL
+/// LIMIT 1
+/// ```
+pub fn get_committed_account(
+    conn: &mut SqliteConnection,
+    account_id: NetworkAccountId,
+) -> Result<Option<Account>, DatabaseError> {
+    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
+
+    let row: Option<AccountRow> = schema::accounts::table
+        .filter(schema::accounts::account_id.eq(&account_id_bytes))
+        .filter(schema::accounts::transaction_id.is_null())
+        .select(AccountRow::as_select())
+        .first(conn)
+        .optional()?;
+
+    row.map(|AccountRow { account_data, .. }| conversions::account_from_bytes(&account_data))
+        .transpose()
+}
+
 /// Returns `true` when an inflight account row exists with the given `transaction_id`.
 ///
 /// # Raw SQL
