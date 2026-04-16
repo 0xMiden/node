@@ -1,0 +1,11 @@
+services:
+  monitor:
+    image: miden-network-monitor-image
+    pull_policy: if_not_present
+    environment:
+      - MIDEN_MONITOR_RPC_URL=http://rpc:57291
+      - MIDEN_MONITOR_PORT=3001
+      - MIDEN_MONITOR_NETWORK_NAME=Localhost
+      - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
+    ports:
+      - "3001:3001"
