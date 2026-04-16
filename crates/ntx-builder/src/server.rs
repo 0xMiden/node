@@ -1,6 +1,7 @@
 use anyhow::Context;
 use miden_node_proto::generated::note::NoteId;
-use miden_node_proto::generated::ntx_builder::{self, api_server};
+use miden_node_proto::generated::ntx_builder::api_server;
+use miden_node_proto::generated::rpc;
 use miden_node_proto_build::ntx_builder_api_descriptor;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -19,15 +20,16 @@ use crate::db::Db;
 
 /// gRPC server for the network transaction builder.
 ///
-/// Exposes endpoints for querying note execution errors, useful for debugging
+/// Exposes endpoints for querying network note status, useful for debugging
 /// network notes that fail to be consumed.
 pub struct NtxBuilderRpcServer {
     db: Db,
+    max_note_attempts: usize,
 }
 
 impl NtxBuilderRpcServer {
-    pub fn new(db: Db) -> Self {
-        Self { db }
+    pub fn new(db: Db, max_note_attempts: usize) -> Self {
+        Self { db, max_note_attempts }
     }
 
     /// Starts the gRPC server on the given listener.
@@ -58,10 +60,10 @@ impl NtxBuilderRpcServer {
 #[tonic::async_trait]
 impl api_server::Api for NtxBuilderRpcServer {
     #[expect(clippy::cast_sign_loss)]
-    async fn get_note_error(
+    async fn get_network_note_status(
         &self,
         request: Request<NoteId>,
-    ) -> Result<Response<ntx_builder::GetNoteErrorResponse>, Status> {
+    ) -> Result<Response<rpc::GetNetworkNoteStatusResponse>, Status> {
         let note_id_proto = request.into_inner();
 
         let note_id_digest: Word = note_id_proto
@@ -73,8 +75,8 @@ impl api_server::Api for NtxBuilderRpcServer {
 
         let note_id = miden_protocol::note::NoteId::from_raw(note_id_digest);
 
-        let row = self.db.get_note_error(note_id).await.map_err(|err| {
-            tracing::error!(err = %err, "failed to query note error from DB");
+        let row = self.db.get_note_status(note_id).await.map_err(|err| {
+            tracing::error!(err = %err, "failed to query note status from DB");
             Status::internal("database error")
         })?;
 
@@ -82,12 +84,77 @@ impl api_server::Api for NtxBuilderRpcServer {
             return Err(Status::not_found("note not found in ntx-builder database"));
         };
 
-        let response = ntx_builder::GetNoteErrorResponse {
-            error: row.last_error,
+        let status = derive_status(
+            row.committed_at.is_some(),
+            row.consumed_by.is_some(),
+            row.attempt_count as usize,
+            self.max_note_attempts,
+        );
+
+        let response = rpc::GetNetworkNoteStatusResponse {
+            status: status.into(),
+            last_error: row.last_error,
             attempt_count: row.attempt_count as u32,
             last_attempt_block_num: row.last_attempt.map(|v| v as u32),
         };
 
         Ok(Response::new(response))
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Derives the lifecycle status of a network note from its DB state.
+fn derive_status(
+    is_committed: bool,
+    is_consumed: bool,
+    attempt_count: usize,
+    max_note_attempts: usize,
+) -> rpc::NetworkNoteStatus {
+    if is_committed {
+        rpc::NetworkNoteStatus::NullifierCommitted
+    } else if is_consumed {
+        rpc::NetworkNoteStatus::NullifierInflight
+    } else if attempt_count >= max_note_attempts {
+        rpc::NetworkNoteStatus::Discarded
+    } else {
+        rpc::NetworkNoteStatus::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_proto::generated::rpc::NetworkNoteStatus;
+
+    use super::*;
+
+    #[test]
+    fn derive_status_pending() {
+        assert_eq!(derive_status(false, false, 0, 30), NetworkNoteStatus::Pending);
+        assert_eq!(derive_status(false, false, 15, 30), NetworkNoteStatus::Pending);
+        assert_eq!(derive_status(false, false, 29, 30), NetworkNoteStatus::Pending);
+    }
+
+    #[test]
+    fn derive_status_processed() {
+        assert_eq!(derive_status(false, true, 0, 30), NetworkNoteStatus::NullifierInflight);
+        assert_eq!(derive_status(false, true, 5, 30), NetworkNoteStatus::NullifierInflight);
+        // consumed_by takes precedence over attempt count
+        assert_eq!(derive_status(false, true, 30, 30), NetworkNoteStatus::NullifierInflight);
+    }
+
+    #[test]
+    fn derive_status_discarded() {
+        assert_eq!(derive_status(false, false, 30, 30), NetworkNoteStatus::Discarded);
+        assert_eq!(derive_status(false, false, 100, 30), NetworkNoteStatus::Discarded);
+    }
+
+    #[test]
+    fn derive_status_committed() {
+        assert_eq!(derive_status(true, true, 0, 30), NetworkNoteStatus::NullifierCommitted);
+        assert_eq!(derive_status(true, true, 5, 30), NetworkNoteStatus::NullifierCommitted);
+        // committed takes precedence over everything
+        assert_eq!(derive_status(true, false, 30, 30), NetworkNoteStatus::NullifierCommitted);
     }
 }

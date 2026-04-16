@@ -17,8 +17,8 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, instrument, warn};
 use url::Url;
 
-use crate::status::{ServiceDetails, ServiceStatus, Status};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::status::{ServiceDetails, ServiceStatus};
 
 // CONSTANTS
 // ================================================================================================
@@ -110,8 +110,6 @@ pub async fn run_faucet_test_task(
     loop {
         interval.tick().await;
 
-        let current_time = current_unix_timestamp_secs();
-
         let start_time = std::time::Instant::now();
 
         match perform_faucet_test(&client, &faucet_url).await {
@@ -131,25 +129,18 @@ pub async fn run_faucet_test_task(
 
         let test_duration_ms = start_time.elapsed().as_millis() as u64;
 
-        let test_details = FaucetTestDetails {
+        let details = ServiceDetails::FaucetTest(FaucetTestDetails {
             url: faucet_url.to_string(),
             test_duration_ms,
             success_count,
             failure_count,
             last_tx_id: last_tx_id.clone(),
             faucet_metadata: faucet_metadata.clone(),
-        };
+        });
 
-        let status = ServiceStatus {
-            name: "Faucet".to_string(),
-            status: if last_error.is_some() {
-                Status::Unhealthy
-            } else {
-                Status::Healthy
-            },
-            last_checked: current_time,
-            error: last_error.clone(),
-            details: ServiceDetails::FaucetTest(test_details),
+        let status = match &last_error {
+            Some(err) => ServiceStatus::unhealthy("Faucet", err, details),
+            None => ServiceStatus::healthy("Faucet", details),
         };
 
         // Send the status update; exit if no receivers (shutdown signal)

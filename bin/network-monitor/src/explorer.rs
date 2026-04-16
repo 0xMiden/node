@@ -11,8 +11,8 @@ use tokio::time::MissedTickBehavior;
 use tracing::{info, instrument};
 use url::Url;
 
-use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus, Status};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus};
 
 const LATEST_BLOCK_QUERY: &str = "
 query LatestBlock {
@@ -79,13 +79,10 @@ pub async fn run_explorer_status_task(
     loop {
         interval.tick().await;
 
-        let current_time = current_unix_timestamp_secs();
-
         let status = check_explorer_status(
             &mut explorer_client,
             explorer_url.clone(),
             name.clone(),
-            current_time,
             request_timeout,
         )
         .await;
@@ -121,7 +118,6 @@ pub(crate) async fn check_explorer_status(
     explorer_client: &mut Client,
     explorer_url: Url,
     name: String,
-    current_time: u64,
     request_timeout: Duration,
 ) -> ServiceStatus {
     let resp = explorer_client
@@ -134,41 +130,21 @@ pub(crate) async fn check_explorer_status(
     let body = match resp {
         Ok(resp) => match resp.text().await {
             Ok(body) => body,
-            Err(e) => return unhealthy(&name, current_time, &e),
+            Err(e) => return ServiceStatus::error(&name, e),
         },
-        Err(e) => return unhealthy(&name, current_time, &e),
+        Err(e) => return ServiceStatus::error(&name, e),
     };
 
     let value: serde_json::Value = match serde_json::from_str(&body) {
         Ok(value) => value,
         Err(e) => {
-            let msg = format!("{e}: {body}");
-            return unhealthy(&name, current_time, &msg);
+            return ServiceStatus::error(&name, format!("{e}: {body}"));
         },
     };
 
-    let details = ExplorerStatusDetails::try_from(value);
-
-    match details {
-        Ok(details) => ServiceStatus {
-            name: name.clone(),
-            status: Status::Healthy,
-            last_checked: current_time,
-            error: None,
-            details: ServiceDetails::ExplorerStatus(details),
-        },
-        Err(e) => unhealthy(&name, current_time, &e),
-    }
-}
-
-/// Returns an unhealthy service status.
-fn unhealthy(name: &str, current_time: u64, err: &impl ToString) -> ServiceStatus {
-    ServiceStatus {
-        name: name.to_owned(),
-        status: Status::Unhealthy,
-        last_checked: current_time,
-        error: Some(err.to_string()),
-        details: ServiceDetails::Error,
+    match ExplorerStatusDetails::try_from(value) {
+        Ok(details) => ServiceStatus::healthy(name, ServiceDetails::ExplorerStatus(details)),
+        Err(e) => ServiceStatus::error(&name, e),
     }
 }
 
@@ -256,11 +232,8 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
 }
 
 pub(crate) fn initial_explorer_status() -> ServiceStatus {
-    ServiceStatus {
-        name: "Explorer".to_string(),
-        status: Status::Unknown,
-        last_checked: current_unix_timestamp_secs(),
-        error: None,
-        details: ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
-    }
+    ServiceStatus::unknown(
+        "Explorer",
+        ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
+    )
 }

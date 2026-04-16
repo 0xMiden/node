@@ -27,6 +27,7 @@ pub struct ServerState {
     pub ntx_tracking: Option<watch::Receiver<ServiceStatus>>,
     pub explorer: Option<watch::Receiver<ServiceStatus>>,
     pub note_transport: Option<watch::Receiver<ServiceStatus>>,
+    pub validator: Option<watch::Receiver<ServiceStatus>>,
     pub monitor_version: String,
     pub network_name: String,
 }
@@ -109,6 +110,11 @@ async fn get_status(
     // Collect note transport status if available
     if let Some(note_transport_rx) = &server_state.note_transport {
         services.push(note_transport_rx.borrow().clone());
+    }
+
+    // Collect validator status if available
+    if let Some(validator_rx) = &server_state.validator {
+        services.push(validator_rx.borrow().clone());
     }
 
     let network_status = NetworkStatus {

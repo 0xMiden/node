@@ -437,7 +437,7 @@ impl SmtStorage for RocksDbStorage {
         let key = Self::index_db_key(index);
         match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
             Some(bytes) => {
-                let leaf = SmtLeaf::read_from_bytes(&bytes)?;
+                let leaf = SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?;
                 Ok(Some(leaf))
             },
             None => Ok(None),
@@ -493,8 +493,10 @@ impl SmtStorage for RocksDbStorage {
         let cf = self.cf_handle(LEAVES_CF)?;
         let old_bytes = self.db.get_cf(cf, key).map_err(map_rocksdb_err)?;
         self.db.delete_cf(cf, key).map_err(map_rocksdb_err)?;
-        Ok(old_bytes
-            .map(|bytes| SmtLeaf::read_from_bytes(&bytes).expect("failed to deserialize leaf")))
+        Ok(old_bytes.map(|bytes| {
+            SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())
+                .expect("failed to deserialize leaf")
+        }))
     }
 
     /// Retrieves multiple SMT leaf nodes by their logical `indices` using RocksDB's `multi_get_cf`.
@@ -510,7 +512,9 @@ impl SmtStorage for RocksDbStorage {
         results
             .into_iter()
             .map(|result| match result {
-                Ok(Some(bytes)) => Ok(Some(SmtLeaf::read_from_bytes(&bytes)?)),
+                Ok(Some(bytes)) => {
+                    Ok(Some(SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?))
+                },
                 Ok(None) => Ok(None),
                 Err(e) => Err(map_rocksdb_err(e)),
             })
@@ -975,7 +979,7 @@ impl SmtStorage for RocksDbStorage {
             let (key_bytes, value_bytes) = item.map_err(map_rocksdb_err)?;
 
             let index = index_from_key_bytes(&key_bytes)?;
-            let hash = Word::read_from_bytes(&value_bytes)?;
+            let hash = Word::read_from_bytes_with_budget(&value_bytes, value_bytes.len())?;
 
             hashes.push((index, hash));
         }
@@ -1017,7 +1021,8 @@ impl Iterator for RocksDbDirectLeafIterator<'_> {
         self.iter.find_map(|result| {
             let (key_bytes, value_bytes) = result.ok()?;
             let leaf_idx = index_from_key_bytes(&key_bytes).ok()?;
-            let leaf = SmtLeaf::read_from_bytes(&value_bytes).ok()?;
+            let leaf =
+                SmtLeaf::read_from_bytes_with_budget(&value_bytes, value_bytes.len()).ok()?;
             Some((leaf_idx, leaf))
         })
     }
