@@ -133,17 +133,19 @@ compose-genesis: ## Wipes node volumes and creates a fresh genesis block
 	$(CONTAINER_RUNTIME) volume rm -f miden-node_genesis-data miden-node_store-data miden-node_validator-data miden-node_ntx-builder-data miden-node_accounts
 	$(CONTAINER_RUNTIME) compose --profile genesis run --rm genesis
 
+COMPOSE_FILES := -f docker-compose.yml -f compose/telemetry.yml -f compose/monitor.yml -f compose/otel-collector.yml -f compose/prometheus.yml
+
 .PHONY: compose-up
 compose-up: ## Starts all node components, telemetry, and monitor via docker compose
-	$(CONTAINER_RUNTIME) compose up -d
+	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) up -d
 
 .PHONY: compose-down
 compose-down: ## Stops and removes all containers via docker compose
-	$(CONTAINER_RUNTIME) compose down
+	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) down
 
 .PHONY: compose-logs
 compose-logs: ## Follows logs for all components via docker compose
-	$(CONTAINER_RUNTIME) compose logs -f
+	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) logs -f
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker (override with CONTAINER_RUNTIME=podman)

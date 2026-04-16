@@ -6,7 +6,6 @@ services:
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
       - "3200:3200"
-      - "4317:4317"
 
   grafana:
     volumes:
@@ -22,41 +21,42 @@ services:
       - "3000:3000"
     depends_on:
       - tempo
+      - prometheus
 
   store:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      - tempo
+      - otel-collector
 
   validator:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      - tempo
+      - otel-collector
 
   block-producer:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      - tempo
+      - otel-collector
 
   rpc:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      - tempo
+      - otel-collector
 
   ntx-builder:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      - tempo
+      - otel-collector
 
 volumes:
   tempo-data:

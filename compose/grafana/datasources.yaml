@@ -11,6 +11,18 @@ datasources:
     uid: tempo
     jsonData:
       tracesToMetrics:
-        datasourceUid: tempo
+        datasourceUid: prometheus
       serviceMap:
-        datasourceUid: tempo
+        datasourceUid: prometheus
+
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    version: 1
+    editable: false
+    uid: prometheus
+    jsonData:
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
