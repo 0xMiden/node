@@ -43,7 +43,7 @@ use crate::helpers::{
     read_subtree_batch,
     remove_from_leaf,
 };
-use crate::{EMPTY_WORD, Word};
+use crate::{EMPTY_WORD, RocksDbSnapshotStorage, Word};
 
 pub(crate) const IN_MEMORY_DEPTH: u8 = 24;
 
@@ -494,6 +494,8 @@ impl SmtStorageReader for RocksDbStorage {
 }
 
 impl SmtStorage for RocksDbStorage {
+    type Reader = RocksDbSnapshotStorage;
+
     /// Inserts a key-value pair into the SMT leaf at the specified logical `index`.
     ///
     /// This operation involves:
@@ -921,6 +923,11 @@ impl SmtStorage for RocksDbStorage {
         self.db.write_opt(batch, &write_opts).map_err(map_rocksdb_err)?;
 
         Ok(())
+    }
+
+    /// Returns the read-only snapshot storage.
+    fn reader(&self) -> Self::Reader {
+        self.snapshot_storage()
     }
 }
 

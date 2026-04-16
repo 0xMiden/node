@@ -351,10 +351,6 @@ impl State {
             block_store: Arc::clone(&block_store),
             in_memory: Arc::clone(&in_memory),
             termination_ask: termination_ask.clone(),
-            #[cfg(feature = "rocksdb")]
-            account_db: std::sync::Arc::clone(&account_db),
-            #[cfg(feature = "rocksdb")]
-            nullifier_db: std::sync::Arc::clone(&nullifier_db),
         };
 
         let state = Arc::new(Self { db, block_store, in_memory, proven_tip });

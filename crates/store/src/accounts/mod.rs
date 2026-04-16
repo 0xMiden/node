@@ -408,3 +408,22 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
         Ok(())
     }
 }
+
+impl<S> AccountTreeWithHistory<S>
+where
+    S: SmtStorage,
+{
+    /// Returns a read-only `AccountTreeWithHistory` backed by a reader view of this tree's
+    /// storage.
+    ///
+    /// The returned tree shares the same block number and historical overlays as `self`, and its
+    /// latest `AccountTree` is produced by [`AccountTree::reader`]. The returned tree's storage
+    /// type is `S::Reader: SmtStorageReader`, so it cannot be used for mutations.
+    pub fn reader(&self) -> AccountTreeWithHistory<S::Reader> {
+        AccountTreeWithHistory {
+            block_number: self.block_number,
+            latest: self.latest.reader(),
+            overlays: self.overlays.clone(),
+        }
+    }
+}

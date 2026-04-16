@@ -80,13 +80,6 @@ pub(crate) struct BlockWriter {
 
     /// Channel to request process termination on fatal internal state errors.
     pub termination_ask: mpsc::Sender<ApplyBlockError>,
-
-    /// Handle to the `RocksDB` database used to create snapshot-backed account trees.
-    #[cfg(feature = "rocksdb")]
-    pub account_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
-    /// Handle to the `RocksDB` database used to create snapshot-backed nullifier trees.
-    #[cfg(feature = "rocksdb")]
-    pub nullifier_db: std::sync::Arc<miden_large_smt_backend_rocksdb::DB>,
 }
 
 // WRITE REQUEST
@@ -314,12 +307,7 @@ impl BlockWriter {
     fn build_snapshot_nullifier_tree(&self) -> NullifierTree<LargeSmt<SnapshotTreeStorage>> {
         #[cfg(feature = "rocksdb")]
         {
-            let snapshot_storage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage::new(
-                std::sync::Arc::clone(&self.nullifier_db),
-            );
-            let snapshot_smt = crate::state::loader::load_smt(snapshot_storage)
-                .expect("Unreachable: snapshot reads from data just written by apply_mutations");
-            NullifierTree::new_unchecked(snapshot_smt)
+            self.nullifier_tree.reader()
         }
         #[cfg(not(feature = "rocksdb"))]
         {
@@ -331,19 +319,7 @@ impl BlockWriter {
     fn build_snapshot_account_tree(&self) -> AccountTreeWithHistory<SnapshotTreeStorage> {
         #[cfg(feature = "rocksdb")]
         {
-            let snapshot_storage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage::new(
-                std::sync::Arc::clone(&self.account_db),
-            );
-            let snapshot_smt = crate::state::loader::load_smt(snapshot_storage)
-                .expect("Unreachable: snapshot reads from data just written by apply_mutations");
-            let snapshot_tree =
-                miden_protocol::block::account_tree::AccountTree::new_unchecked(snapshot_smt);
-
-            AccountTreeWithHistory::from_parts(
-                snapshot_tree,
-                self.account_tree.block_number_latest(),
-                self.account_tree.overlays().clone(),
-            )
+            self.account_tree.reader()
         }
         #[cfg(not(feature = "rocksdb"))]
         {
