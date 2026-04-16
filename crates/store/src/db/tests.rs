@@ -3573,26 +3573,23 @@ fn db_roundtrip_transactions() {
             .unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
+    let expected_sync_records: Vec<_> = tx
+        .output_notes()
+        .iter()
+        .enumerate()
+        .map(|(idx, note)| NoteSyncRecord {
+            block_num,
+            note_index: BlockNoteIndex::new(0, idx).unwrap(),
+            note_id: note.id().as_word(),
+            metadata: note.metadata().clone(),
+            inclusion_path: SparseMerklePath::default(),
+        })
+        .collect();
+
     let expected = TransactionRecord {
         block_num,
-        transaction_id: tx.id(),
-        account_id: tx.account_id(),
-        initial_state_commitment: tx.initial_state_commitment(),
-        final_state_commitment: tx.final_state_commitment(),
-        input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: tx
-            .output_notes()
-            .iter()
-            .enumerate()
-            .map(|(idx, note)| NoteSyncRecord {
-                block_num,
-                note_index: BlockNoteIndex::new(0, idx).unwrap(),
-                note_id: note.id().as_word(),
-                metadata: note.metadata().clone(),
-                inclusion_path: SparseMerklePath::default(),
-            })
-            .collect(),
-        fee: tx.fee(),
+        header: tx.clone(),
+        output_note_proofs: expected_sync_records.clone(),
     };
 
     // Verify database roundtrip
@@ -3609,9 +3606,18 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: expected.output_notes.into_iter().map(Into::into).collect(),
+            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
+        output_note_proofs: expected_sync_records
+            .into_iter()
+            .map(|n| proto::note::NoteInclusionInBlockProof {
+                note_id: Some(n.note_id.into()),
+                block_num: n.block_num.as_u32(),
+                note_index_in_block: n.note_index.leaf_index_value().into(),
+                inclusion_path: Some(n.inclusion_path.into()),
+            })
+            .collect(),
     };
 
     // Proto conversion roundtrip
@@ -3632,7 +3638,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
 
     // Notes erased within the same block are not inserted into the `notes` table, so transaction
-    // sync should omit them instead of failing the whole request.
+    // sync should classify them as erased instead of failing the whole request.
     queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
 
     let retrieved =
@@ -3642,13 +3648,8 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 
     let expected = TransactionRecord {
         block_num,
-        transaction_id: tx.id(),
-        account_id: tx.account_id(),
-        initial_state_commitment: tx.initial_state_commitment(),
-        final_state_commitment: tx.final_state_commitment(),
-        input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: vec![],
-        fee: tx.fee(),
+        header: tx,
+        output_note_proofs: vec![],
     };
 
     assert_eq!(*record, expected);
