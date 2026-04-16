@@ -387,7 +387,7 @@ impl AccountActor {
                         .await
                         .context("failed to check for committed account")?
                     {
-                        tracing::info!(%account_id, "Account committed, starting normal operation");
+                        tracing::info!(account.id=%account_id, "Account committed, starting normal operation");
                         return Ok(true);
                     }
                 }
