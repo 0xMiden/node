@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fs_err as fs;
 use miette::{IntoDiagnostic, miette};
@@ -51,7 +51,7 @@ fn main() -> miette::Result<()> {
 /// The list of `*.proto` files in the given directory.
 ///
 /// Does _not_ recurse into folders; only top level files are returned.
-fn proto_files_in_directory(directory: &PathBuf) -> Result<Vec<PathBuf>, miette::Error> {
+fn proto_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>, miette::Error> {
     let mut proto_files = Vec::new();
     for entry in fs::read_dir(directory).into_diagnostic()? {
         let entry = entry.into_diagnostic()?;
@@ -84,8 +84,8 @@ fn proto_files_in_directory(directory: &PathBuf) -> Result<Vec<PathBuf>, miette:
 ///
 /// where `<encoded>` is bytes of the compiled gRPC service.
 fn generate_file_descriptor(
-    grpc_service: &PathBuf,
-    includes: &PathBuf,
+    grpc_service: &Path,
+    includes: &Path,
 ) -> Result<codegen::Function, miette::Error> {
     let file_name = grpc_service
         .file_stem()
