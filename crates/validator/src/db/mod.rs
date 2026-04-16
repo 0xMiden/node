@@ -5,7 +5,7 @@ mod schema;
 use std::path::PathBuf;
 
 use diesel::SqliteConnection;
-use diesel::dsl::exists;
+use diesel::dsl::{count_star, exists};
 use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db, SqlTypeConvert};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -134,4 +134,18 @@ pub fn load_block_header(
             .map_err(|err| DatabaseError::deserialization("BlockHeader", err))
     })
     .transpose()
+}
+
+/// Returns the total number of validated transactions in the database.
+#[instrument(target = COMPONENT, skip(conn), err)]
+pub fn count_validated_transactions(conn: &mut SqliteConnection) -> Result<i64, DatabaseError> {
+    let count = schema::validated_transactions::table.select(count_star()).first::<i64>(conn)?;
+    Ok(count)
+}
+
+/// Returns the total number of signed blocks in the database.
+#[instrument(target = COMPONENT, skip(conn), err)]
+pub fn count_signed_blocks(conn: &mut SqliteConnection) -> Result<i64, DatabaseError> {
+    let count = schema::block_headers::table.select(count_star()).first::<i64>(conn)?;
+    Ok(count)
 }

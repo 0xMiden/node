@@ -58,7 +58,7 @@ sequenceDiagram
 
 The validator exposes a gRPC API with the following endpoints:
 
-- `Status()` - Returns validator health and version information.
+- `Status()` - Returns validator health, version, chain tip, validated transactions count, and signed blocks count.
 - `SubmitProvenTransaction()` - Validates and stores a proven transaction.
 - `SignBlock()` - Validates a proposed block and returns a signature.
 

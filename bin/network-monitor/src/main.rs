@@ -20,6 +20,7 @@ pub mod note_transport;
 pub mod remote_prover;
 pub mod service_status;
 pub mod status;
+pub mod validator;
 
 // Re-exports for cleaner imports
 use cli::Cli;
@@ -38,5 +39,5 @@ pub const COMPONENT: &str = "miden-network-monitor";
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    cli.execute().await
+    Box::pin(cli.execute()).await
 }
