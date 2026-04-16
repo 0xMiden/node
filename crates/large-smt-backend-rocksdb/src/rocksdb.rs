@@ -105,6 +105,7 @@ impl RocksDbStorage {
     /// # Errors
     /// Returns `StorageError::Backend` if the database cannot be opened or configured,
     /// for example, due to path issues, permissions, or RocksDB internal errors.
+    #[expect(clippy::too_many_lines)]
     pub fn open(config: RocksDbConfig) -> Result<Self, StorageError> {
         let tuning_options = &config.tuning_options;
 
@@ -1306,8 +1307,9 @@ impl RocksDbConfig {
     /// * `memory_budget` - Memory budget settings for RocksDB.
     #[must_use]
     pub fn with_memory_budget(mut self, memory_budget: RocksDbMemoryBudget) -> Self {
-        self.cache_size = memory_budget.block_cache_size;
-        self.write_buffer_manager = memory_budget.write_buffer_manager;
+        let RocksDbMemoryBudget { block_cache_size, write_buffer_manager } = memory_budget;
+        self.cache_size = block_cache_size;
+        self.write_buffer_manager = write_buffer_manager;
         self
     }
 
@@ -1371,7 +1373,7 @@ pub enum RocksDbDurabilityMode {
     Sync,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RocksDbMemoryBudget {
     pub block_cache_size: usize,
     pub write_buffer_manager: Option<RocksDbWriteBufferManagerBudget>,
@@ -1479,7 +1481,7 @@ mod tests {
         };
 
         let config = RocksDbConfig::new("/tmp/smt")
-            .with_memory_budget(memory_budget.clone())
+            .with_memory_budget(memory_budget)
             .with_max_open_files(1024)
             .with_tuning_options(tuning_options.clone())
             .with_durability_mode(RocksDbDurabilityMode::Sync);
