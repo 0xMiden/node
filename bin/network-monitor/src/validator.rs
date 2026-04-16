@@ -9,8 +9,8 @@ use tokio::time::MissedTickBehavior;
 use tracing::{info, instrument};
 use url::Url;
 
-use crate::status::{ServiceDetails, ServiceStatus, Status, ValidatorStatusDetails};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::status::{ServiceDetails, ServiceStatus, ValidatorStatusDetails};
 
 /// Runs a task that continuously checks validator status and updates a watch channel.
 pub async fn run_validator_status_task(
@@ -35,9 +35,7 @@ pub async fn run_validator_status_task(
     loop {
         interval.tick().await;
 
-        let current_time = current_unix_timestamp_secs();
-
-        let status = check_validator_status(&mut validator, &url, name.clone(), current_time).await;
+        let status = check_validator_status(&mut validator, &url, name.clone()).await;
 
         if status_sender.send(status).is_err() {
             info!("No receivers for validator status updates, shutting down");
@@ -57,47 +55,29 @@ pub(crate) async fn check_validator_status(
     validator: &mut ValidatorClient,
     url: &Url,
     name: String,
-    current_time: u64,
 ) -> ServiceStatus {
     match validator.status(()).await {
         Ok(response) => {
             let status = response.into_inner();
 
-            ServiceStatus {
+            ServiceStatus::healthy(
                 name,
-                status: Status::Healthy,
-                last_checked: current_time,
-                error: None,
-                details: ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
                     url: url.to_string(),
                     version: status.version,
                     chain_tip: status.chain_tip,
                     validated_transactions_count: status.validated_transactions_count,
                     signed_blocks_count: status.signed_blocks_count,
                 }),
-            }
+            )
         },
-        Err(e) => unhealthy(&name, current_time, &e),
-    }
-}
-
-/// Returns an unhealthy service status.
-fn unhealthy(name: &str, current_time: u64, err: &impl ToString) -> ServiceStatus {
-    ServiceStatus {
-        name: name.to_owned(),
-        status: Status::Unhealthy,
-        last_checked: current_time,
-        error: Some(err.to_string()),
-        details: ServiceDetails::Error,
+        Err(e) => ServiceStatus::error(name, e),
     }
 }
 
 pub(crate) fn initial_validator_status() -> ServiceStatus {
-    ServiceStatus {
-        name: "Validator".to_string(),
-        status: Status::Unknown,
-        last_checked: current_unix_timestamp_secs(),
-        error: None,
-        details: ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
-    }
+    ServiceStatus::unknown(
+        "Validator",
+        ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
+    )
 }
