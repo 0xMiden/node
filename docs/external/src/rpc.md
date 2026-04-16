@@ -177,9 +177,9 @@ message NoteId {
 enum NetworkNoteStatus {
     NETWORK_NOTE_STATUS_UNSPECIFIED = 0;
     NETWORK_NOTE_STATUS_PENDING = 1;    // Awaiting execution or being retried
-    NETWORK_NOTE_STATUS_PROCESSED = 2;  // Consumed by a transaction sent to block producer
+    NETWORK_NOTE_STATUS_NULLIFIER_INFLIGHT = 2;  // Consumed by a transaction sent to block producer
     NETWORK_NOTE_STATUS_DISCARDED = 3;  // Exceeded max retries, will not be retried
-    NETWORK_NOTE_STATUS_COMMITTED = 4;  // Consuming transaction committed on-chain
+    NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;  // Consuming transaction committed on-chain
 }
 
 message GetNetworkNoteStatusResponse {

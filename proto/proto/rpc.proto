@@ -660,11 +660,11 @@ enum NetworkNoteStatus {
     // The note is awaiting execution or being retried after transient failures.
     NETWORK_NOTE_STATUS_PENDING = 1;
     // The note has been consumed by a transaction that was sent to the block producer.
-    NETWORK_NOTE_STATUS_PROCESSED = 2;
+    NETWORK_NOTE_STATUS_NULLIFIER_INFLIGHT = 2;
     // The note exceeded the maximum retry count and will not be retried.
     NETWORK_NOTE_STATUS_DISCARDED = 3;
     // The note's consuming transaction has been committed on-chain.
-    NETWORK_NOTE_STATUS_COMMITTED = 4;
+    NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;
 }
 
 // Response containing the lifecycle status and latest execution error for a network note.
