@@ -15,6 +15,7 @@ use std::path::Path;
 use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::RocksDbStorage;
+#[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
