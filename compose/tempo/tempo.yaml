@@ -26,6 +26,13 @@ metrics_generator:
     path: /var/tempo/metrics/wal
   traces_storage:
     path: /var/tempo/metrics/traces
+  processor:
+    span_metrics:
+      dimensions:
+        - service.name
+    service_graphs:
+      dimensions:
+        - service.name
 
 overrides:
   metrics_generator_processors: [service-graphs, span-metrics, local-blocks] # enables metrics generator

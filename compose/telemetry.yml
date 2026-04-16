@@ -1,19 +1,19 @@
 services:
   tempo:
-    image: grafana/tempo:latest
     volumes:
       - ./compose/tempo/tempo.yaml:/etc/tempo.yaml
+      - tempo-data:/var/tempo
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
       - "3200:3200"
       - "4317:4317"
 
   grafana:
-    image: grafana/grafana:latest
     volumes:
       - ./compose/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
       - ./compose/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
       - ./compose/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
@@ -27,23 +27,37 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      - tempo
 
   validator:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      - tempo
 
   block-producer:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      - tempo
 
   rpc:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      - tempo
 
   ntx-builder:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      - tempo
+
+volumes:
+  tempo-data:
+  grafana-data:

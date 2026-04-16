@@ -9,3 +9,8 @@ datasources:
     version: 1
     editable: false
     uid: tempo
+    jsonData:
+      tracesToMetrics:
+        datasourceUid: tempo
+      serviceMap:
+        datasourceUid: tempo
