@@ -1,7 +1,9 @@
-//! Network monitor status checker.
+//! Network monitor status checker tasks.
 //!
 //! This module contains the logic for checking the status of network services.
 //! Individual status checker tasks send updates via watch channels to the web server.
+//!
+//! Type definitions live in [`crate::service_status`] and are re-exported here for convenience.
 
 use std::time::Duration;
 
@@ -10,17 +12,13 @@ use miden_node_proto::clients::{
     RemoteProverProxyStatusClient,
     RpcClient,
 };
-use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus, StoreStatus};
-use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, instrument};
 use url::Url;
 
-use crate::faucet::FaucetTestDetails;
-use crate::remote_prover::{ProofType, ProverTestDetails};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+pub use crate::service_status::*;
 
 // STALE CHAIN TIP TRACKER
 // ================================================================================================
@@ -71,287 +69,6 @@ impl StaleChainTracker {
             },
         }
         None
-    }
-}
-
-// STATUS
-// ================================================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Status {
-    Healthy,
-    Unhealthy,
-    Unknown,
-}
-
-impl From<String> for Status {
-    fn from(value: String) -> Self {
-        match value.as_str() {
-            "HEALTHY" | "connected" => Status::Healthy,
-            "UNHEALTHY" | "disconnected" => Status::Unhealthy,
-            _ => Status::Unknown,
-        }
-    }
-}
-
-impl From<proto::remote_prover::WorkerHealthStatus> for Status {
-    fn from(value: proto::remote_prover::WorkerHealthStatus) -> Self {
-        match value {
-            proto::remote_prover::WorkerHealthStatus::Unknown => Status::Unknown,
-            proto::remote_prover::WorkerHealthStatus::Healthy => Status::Healthy,
-            proto::remote_prover::WorkerHealthStatus::Unhealthy => Status::Unhealthy,
-        }
-    }
-}
-
-// SERVICE STATUS
-// ================================================================================================
-
-/// Status of a service.
-///
-/// This struct contains the status of a service, the last time it was checked, and any errors that
-/// occurred. It also contains the details of the service, which is a union of the details of the
-/// service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceStatus {
-    pub name: String,
-    pub status: Status,
-    pub last_checked: u64,
-    pub error: Option<String>,
-    pub details: ServiceDetails,
-}
-
-/// Details of the increment service.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct IncrementDetails {
-    /// Number of successful counter increments.
-    pub success_count: u64,
-    /// Number of failed counter increments.
-    pub failure_count: u64,
-    /// Last transaction ID (if available).
-    pub last_tx_id: Option<String>,
-    /// Last measured latency in blocks from submission to state update.
-    pub last_latency_blocks: Option<u32>,
-}
-
-/// Details about an in-flight latency measurement.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PendingLatencyDetails {
-    /// Block height returned when the transaction was submitted.
-    pub submit_height: u32,
-    /// Counter value we expect to see once the transaction is applied.
-    pub target_value: u64,
-}
-
-/// Details of the counter tracking service.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CounterTrackingDetails {
-    /// Current counter value observed on-chain (if available).
-    pub current_value: Option<u64>,
-    /// Expected counter value based on successful increments sent.
-    pub expected_value: Option<u64>,
-    /// Last time the counter value was successfully updated.
-    pub last_updated: Option<u64>,
-    /// Number of pending increments (expected - current).
-    pub pending_increments: Option<u64>,
-}
-
-/// Details of the explorer service.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ExplorerStatusDetails {
-    pub block_number: u64,
-    pub timestamp: u64,
-    pub number_of_transactions: u64,
-    pub number_of_nullifiers: u64,
-    pub number_of_notes: u64,
-    pub number_of_account_updates: u64,
-    pub block_commitment: String,
-    pub chain_commitment: String,
-    pub proof_commitment: String,
-}
-
-/// Details of the note transport service.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NoteTransportStatusDetails {
-    pub url: String,
-    pub serving_status: String,
-}
-
-/// Details of a service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ServiceDetails {
-    RpcStatus(RpcStatusDetails),
-    RemoteProverStatus(RemoteProverStatusDetails),
-    RemoteProverTest(ProverTestDetails),
-    FaucetTest(FaucetTestDetails),
-    NtxIncrement(IncrementDetails),
-    NtxTracking(CounterTrackingDetails),
-    ExplorerStatus(ExplorerStatusDetails),
-    NoteTransportStatus(NoteTransportStatusDetails),
-    Error,
-}
-
-/// Details of an RPC service.
-///
-/// This struct contains the details of an RPC service, which is a union of the details of the RPC
-/// service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcStatusDetails {
-    /// The URL of the RPC service (used by the frontend for gRPC-Web probing).
-    pub url: String,
-    pub version: String,
-    pub genesis_commitment: Option<String>,
-    pub store_status: Option<StoreStatusDetails>,
-    pub block_producer_status: Option<BlockProducerStatusDetails>,
-}
-
-/// Details of a store service.
-///
-/// This struct contains the details of a store service, which is a union of the details of the
-/// store service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoreStatusDetails {
-    pub version: String,
-    pub status: Status,
-    pub chain_tip: u32,
-}
-
-/// Details of a block producer service.
-///
-/// This struct contains the details of a block producer service, which is a union of the details
-/// of the block producer service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlockProducerStatusDetails {
-    pub version: String,
-    pub status: Status,
-    /// The block producer's current view of the chain tip height.
-    pub chain_tip: u32,
-    /// Mempool statistics for this block producer.
-    pub mempool: MempoolStatusDetails,
-}
-
-/// Details about the block producer's mempool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MempoolStatusDetails {
-    /// Number of transactions currently in the mempool waiting to be batched.
-    pub unbatched_transactions: u64,
-    /// Number of batches currently being proven.
-    pub proposed_batches: u64,
-    /// Number of proven batches waiting for block inclusion.
-    pub proven_batches: u64,
-}
-
-/// Details of a remote prover service.
-///
-/// This struct contains the details of a remote prover service, which is a union of the details
-/// of the remote prover service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteProverStatusDetails {
-    pub url: String,
-    pub version: String,
-    pub supported_proof_type: ProofType,
-    pub workers: Vec<WorkerStatusDetails>,
-}
-
-/// Details of a worker service.
-///
-/// This struct contains the details of a worker service, which is a union of the details of the
-/// worker service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerStatusDetails {
-    pub name: String,
-    pub version: String,
-    pub status: Status,
-}
-
-/// Status of a network.
-///
-/// This struct contains the status of a network, which is a union of the status of the network.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkStatus {
-    pub services: Vec<ServiceStatus>,
-    pub last_updated: u64,
-    pub monitor_version: String,
-    pub network_name: String,
-}
-
-// FROM IMPLEMENTATIONS
-// ================================================================================================
-
-/// From implementations for converting gRPC types to domain types
-///
-/// This implementation converts a `StoreStatus` to a `StoreStatusDetails`.
-impl From<StoreStatus> for StoreStatusDetails {
-    fn from(value: StoreStatus) -> Self {
-        Self {
-            version: value.version,
-            status: value.status.into(),
-            chain_tip: value.chain_tip,
-        }
-    }
-}
-
-impl From<BlockProducerStatus> for BlockProducerStatusDetails {
-    fn from(value: BlockProducerStatus) -> Self {
-        // We assume all supported nodes expose mempool statistics.
-        let mempool_stats = value
-            .mempool_stats
-            .expect("block producer status must include mempool statistics");
-
-        Self {
-            version: value.version,
-            status: value.status.into(),
-            chain_tip: value.chain_tip,
-            mempool: MempoolStatusDetails {
-                unbatched_transactions: mempool_stats.unbatched_transactions,
-                proposed_batches: mempool_stats.proposed_batches,
-                proven_batches: mempool_stats.proven_batches,
-            },
-        }
-    }
-}
-
-impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
-    fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
-        let status =
-            proto::remote_prover::WorkerHealthStatus::try_from(value.status).unwrap().into();
-
-        Self {
-            name: value.name,
-            version: value.version,
-            status,
-        }
-    }
-}
-
-impl RemoteProverStatusDetails {
-    pub fn from_proxy_status(status: proto::remote_prover::ProxyStatus, url: String) -> Self {
-        let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
-            .unwrap()
-            .into();
-
-        let workers: Vec<WorkerStatusDetails> =
-            status.workers.into_iter().map(WorkerStatusDetails::from).collect();
-
-        Self {
-            url,
-            version: status.version,
-            supported_proof_type: proof_type,
-            workers,
-        }
-    }
-}
-
-impl RpcStatusDetails {
-    /// Creates `RpcStatusDetails` from a gRPC `RpcStatus` response and the configured URL.
-    pub fn from_rpc_status(status: RpcStatus, url: String) -> Self {
-        Self {
-            url,
-            version: status.version,
-            genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
-            store_status: status.store.map(StoreStatusDetails::from),
-            block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
-        }
     }
 }
 
@@ -461,36 +178,22 @@ pub(crate) async fn check_rpc_status(
                         stale_duration_secs = stale_duration,
                         "Chain tip is stale"
                     );
-                    return ServiceStatus {
-                        name: "RPC".to_string(),
-                        status: Status::Unhealthy,
-                        last_checked: current_time,
-                        error: Some(format!(
+                    return ServiceStatus::unhealthy(
+                        "RPC",
+                        format!(
                             "Chain tip {} has not changed for {} seconds",
                             store_status.chain_tip, stale_duration
-                        )),
-                        details: ServiceDetails::RpcStatus(rpc_details),
-                    };
+                        ),
+                        ServiceDetails::RpcStatus(rpc_details),
+                    );
                 }
             }
 
-            ServiceStatus {
-                name: "RPC".to_string(),
-                status: Status::Healthy,
-                last_checked: current_time,
-                error: None,
-                details: ServiceDetails::RpcStatus(rpc_details),
-            }
+            ServiceStatus::healthy("RPC", ServiceDetails::RpcStatus(rpc_details))
         },
         Err(e) => {
             debug!(target: COMPONENT, error = %e, "RPC status check failed");
-            ServiceStatus {
-                name: "RPC".to_string(),
-                status: Status::Unhealthy,
-                last_checked: current_time,
-                error: Some(e.to_string()),
-                details: ServiceDetails::Error,
-            }
+            ServiceStatus::error("RPC", e)
         },
     }
 }
@@ -537,15 +240,8 @@ pub async fn run_remote_prover_status_task(
     loop {
         interval.tick().await;
 
-        let current_time = current_unix_timestamp_secs();
-
-        let status = check_remote_prover_status(
-            &mut remote_prover,
-            name.clone(),
-            url_str.clone(),
-            current_time,
-        )
-        .await;
+        let status =
+            check_remote_prover_status(&mut remote_prover, name.clone(), url_str.clone()).await;
 
         // Send the status update; exit if no receivers (shutdown signal)
         if status_sender.send(status).is_err() {
@@ -564,7 +260,6 @@ pub async fn run_remote_prover_status_task(
 /// * `remote_prover` - The remote prover client.
 /// * `name` - The name of the remote prover.
 /// * `url` - The URL of the remote prover.
-/// * `current_time` - The current time.
 ///
 /// # Returns
 ///
@@ -581,7 +276,6 @@ pub(crate) async fn check_remote_prover_status(
     remote_prover: &mut miden_node_proto::clients::RemoteProverProxyStatusClient,
     display_name: String,
     url: String,
-    current_time: u64,
 ) -> ServiceStatus {
     match remote_prover.status(()).await {
         Ok(response) => {
@@ -592,31 +286,32 @@ pub(crate) async fn check_remote_prover_status(
 
             // Determine overall health based on worker statuses.
             // All workers must be healthy for the prover to be considered healthy.
-            let overall_health = if remote_prover_details.workers.is_empty() {
-                Status::Unknown
-            } else if remote_prover_details.workers.iter().all(|w| w.status == Status::Healthy) {
-                Status::Healthy
-            } else {
-                Status::Unhealthy
-            };
+            let no_workers = remote_prover_details.workers.is_empty();
+            let all_healthy =
+                remote_prover_details.workers.iter().all(|w| w.status == Status::Healthy);
+            let unhealthy_worker_names: Vec<_> = remote_prover_details
+                .workers
+                .iter()
+                .filter(|w| w.status != Status::Healthy)
+                .map(|w| w.name.clone())
+                .collect();
+            let details = ServiceDetails::RemoteProverStatus(remote_prover_details);
 
-            ServiceStatus {
-                name: display_name.clone(),
-                status: overall_health,
-                last_checked: current_time,
-                error: None,
-                details: ServiceDetails::RemoteProverStatus(remote_prover_details),
+            if no_workers {
+                ServiceStatus::unknown(display_name, details)
+            } else if all_healthy {
+                ServiceStatus::healthy(display_name, details)
+            } else {
+                ServiceStatus::unhealthy(
+                    display_name,
+                    format!("unhealthy workers: {}", unhealthy_worker_names.join(", ")),
+                    details,
+                )
             }
         },
         Err(e) => {
             debug!(target: COMPONENT, prover_name = %display_name, error = %e, "Remote prover status check failed");
-            ServiceStatus {
-                name: display_name,
-                status: Status::Unhealthy,
-                last_checked: current_time,
-                error: Some(e.to_string()),
-                details: ServiceDetails::Error,
-            }
+            ServiceStatus::error(display_name, e)
         },
     }
 }
