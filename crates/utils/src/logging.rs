@@ -114,10 +114,19 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
 }
 
 fn init_tracer_provider() -> anyhow::Result<SdkTracerProvider> {
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
-        .build()?;
+    let mut builder = opentelemetry_otlp::SpanExporter::builder().with_tonic();
+
+    // Only enable TLS if the endpoint uses HTTPS.
+    let needs_tls = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .map(|ep| ep.starts_with("https://"))
+        .unwrap_or(true);
+
+    if needs_tls {
+        builder =
+            builder.with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots());
+    }
+
+    let exporter = builder.build()?;
 
     Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
