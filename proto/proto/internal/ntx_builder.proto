@@ -15,5 +15,7 @@ service Api {
     // The status indicates where the note is in its lifecycle: pending execution,
     // processed (consumed by a transaction in the mempool), or discarded after too
     // many failed attempts.
+    //
+    // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
     rpc GetNetworkNoteStatus(note.NoteId) returns (rpc.GetNetworkNoteStatusResponse) {}
 }
