@@ -8,6 +8,8 @@
 
 - Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).
 - Enabled `miden-tx/concurrent` feature across all crates ([#1956](https://github.com/0xMiden/node/pull/1956)).
+- [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
 
 ## v0.14.7 (2026-04-15)
 
