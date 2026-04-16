@@ -1,0 +1,353 @@
+//! Service status types and constructors for the network monitor.
+//!
+//! This module defines the data model for service health reporting: the [`ServiceStatus`] struct
+//! with its builder methods, the [`ServiceDetails`] enum covering all monitored service types,
+//! and the corresponding detail structs.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use miden_node_proto::generated as proto;
+use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus, StoreStatus};
+use serde::{Deserialize, Serialize};
+
+use crate::faucet::FaucetTestDetails;
+use crate::remote_prover::{ProofType, ProverTestDetails};
+
+// STATUS
+// ================================================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Status {
+    Healthy,
+    Unhealthy,
+    Unknown,
+}
+
+impl From<String> for Status {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "HEALTHY" | "connected" => Status::Healthy,
+            "UNHEALTHY" | "disconnected" => Status::Unhealthy,
+            _ => Status::Unknown,
+        }
+    }
+}
+
+impl From<proto::remote_prover::WorkerHealthStatus> for Status {
+    fn from(value: proto::remote_prover::WorkerHealthStatus) -> Self {
+        match value {
+            proto::remote_prover::WorkerHealthStatus::Unknown => Status::Unknown,
+            proto::remote_prover::WorkerHealthStatus::Healthy => Status::Healthy,
+            proto::remote_prover::WorkerHealthStatus::Unhealthy => Status::Unhealthy,
+        }
+    }
+}
+
+// SERVICE STATUS
+// ================================================================================================
+
+/// Status of a service.
+///
+/// This struct contains the status of a service, the last time it was checked, and any errors that
+/// occurred. It also contains the details of the service, which is a union of the details of the
+/// service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceStatus {
+    pub name: String,
+    pub status: Status,
+    pub last_checked: u64,
+    pub error: Option<String>,
+    pub details: ServiceDetails,
+}
+
+impl ServiceStatus {
+    /// Creates a healthy service status with the current timestamp.
+    pub fn healthy(name: impl Into<String>, details: ServiceDetails) -> Self {
+        Self {
+            name: name.into(),
+            status: Status::Healthy,
+            last_checked: current_unix_timestamp_secs(),
+            error: None,
+            details,
+        }
+    }
+
+    /// Creates an unhealthy service status with the current timestamp and an error message.
+    #[expect(clippy::needless_pass_by_value)]
+    pub fn unhealthy(
+        name: impl Into<String>,
+        error: impl ToString,
+        details: ServiceDetails,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            status: Status::Unhealthy,
+            last_checked: current_unix_timestamp_secs(),
+            error: Some(error.to_string()),
+            details,
+        }
+    }
+
+    /// Creates an unknown service status with the current timestamp.
+    pub fn unknown(name: impl Into<String>, details: ServiceDetails) -> Self {
+        Self {
+            name: name.into(),
+            status: Status::Unknown,
+            last_checked: current_unix_timestamp_secs(),
+            error: None,
+            details,
+        }
+    }
+
+    /// Creates an unhealthy service status with [`ServiceDetails::Error`] details.
+    #[expect(clippy::needless_pass_by_value)]
+    pub fn error(name: impl Into<String>, error: impl ToString) -> Self {
+        Self {
+            name: name.into(),
+            status: Status::Unhealthy,
+            last_checked: current_unix_timestamp_secs(),
+            error: Some(error.to_string()),
+            details: ServiceDetails::Error,
+        }
+    }
+}
+
+// SERVICE DETAILS
+// ================================================================================================
+
+/// Details of a service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ServiceDetails {
+    RpcStatus(RpcStatusDetails),
+    RemoteProverStatus(RemoteProverStatusDetails),
+    RemoteProverTest(ProverTestDetails),
+    FaucetTest(FaucetTestDetails),
+    NtxIncrement(IncrementDetails),
+    NtxTracking(CounterTrackingDetails),
+    ExplorerStatus(ExplorerStatusDetails),
+    NoteTransportStatus(NoteTransportStatusDetails),
+    Error,
+}
+
+/// Details of the increment service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IncrementDetails {
+    /// Number of successful counter increments.
+    pub success_count: u64,
+    /// Number of failed counter increments.
+    pub failure_count: u64,
+    /// Last transaction ID (if available).
+    pub last_tx_id: Option<String>,
+    /// Last measured latency in blocks from submission to state update.
+    pub last_latency_blocks: Option<u32>,
+}
+
+/// Details about an in-flight latency measurement.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PendingLatencyDetails {
+    /// Block height returned when the transaction was submitted.
+    pub submit_height: u32,
+    /// Counter value we expect to see once the transaction is applied.
+    pub target_value: u64,
+}
+
+/// Details of the counter tracking service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CounterTrackingDetails {
+    /// Current counter value observed on-chain (if available).
+    pub current_value: Option<u64>,
+    /// Expected counter value based on successful increments sent.
+    pub expected_value: Option<u64>,
+    /// Last time the counter value was successfully updated.
+    pub last_updated: Option<u64>,
+    /// Number of pending increments (expected - current).
+    pub pending_increments: Option<u64>,
+}
+
+/// Details of the explorer service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExplorerStatusDetails {
+    pub block_number: u64,
+    pub timestamp: u64,
+    pub number_of_transactions: u64,
+    pub number_of_nullifiers: u64,
+    pub number_of_notes: u64,
+    pub number_of_account_updates: u64,
+    pub block_commitment: String,
+    pub chain_commitment: String,
+    pub proof_commitment: String,
+}
+
+/// Details of the note transport service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NoteTransportStatusDetails {
+    pub url: String,
+    pub serving_status: String,
+}
+
+// RPC STATUS DETAILS
+// ================================================================================================
+
+/// Details of an RPC service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpcStatusDetails {
+    /// The URL of the RPC service (used by the frontend for gRPC-Web probing).
+    pub url: String,
+    pub version: String,
+    pub genesis_commitment: Option<String>,
+    pub store_status: Option<StoreStatusDetails>,
+    pub block_producer_status: Option<BlockProducerStatusDetails>,
+}
+
+/// Details of a store service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreStatusDetails {
+    pub version: String,
+    pub status: Status,
+    pub chain_tip: u32,
+}
+
+/// Details of a block producer service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockProducerStatusDetails {
+    pub version: String,
+    pub status: Status,
+    /// The block producer's current view of the chain tip height.
+    pub chain_tip: u32,
+    /// Mempool statistics for this block producer.
+    pub mempool: MempoolStatusDetails,
+}
+
+/// Details about the block producer's mempool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MempoolStatusDetails {
+    /// Number of transactions currently in the mempool waiting to be batched.
+    pub unbatched_transactions: u64,
+    /// Number of batches currently being proven.
+    pub proposed_batches: u64,
+    /// Number of proven batches waiting for block inclusion.
+    pub proven_batches: u64,
+}
+
+// REMOTE PROVER STATUS DETAILS
+// ================================================================================================
+
+/// Details of a remote prover service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteProverStatusDetails {
+    pub url: String,
+    pub version: String,
+    pub supported_proof_type: ProofType,
+    pub workers: Vec<WorkerStatusDetails>,
+}
+
+/// Details of a worker service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerStatusDetails {
+    pub name: String,
+    pub version: String,
+    pub status: Status,
+}
+
+// NETWORK STATUS
+// ================================================================================================
+
+/// Status of the entire network, aggregating all service statuses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStatus {
+    pub services: Vec<ServiceStatus>,
+    pub last_updated: u64,
+    pub monitor_version: String,
+    pub network_name: String,
+}
+
+// FROM IMPLEMENTATIONS
+// ================================================================================================
+
+impl From<StoreStatus> for StoreStatusDetails {
+    fn from(value: StoreStatus) -> Self {
+        Self {
+            version: value.version,
+            status: value.status.into(),
+            chain_tip: value.chain_tip,
+        }
+    }
+}
+
+impl From<BlockProducerStatus> for BlockProducerStatusDetails {
+    fn from(value: BlockProducerStatus) -> Self {
+        // We assume all supported nodes expose mempool statistics.
+        let mempool_stats = value
+            .mempool_stats
+            .expect("block producer status must include mempool statistics");
+
+        Self {
+            version: value.version,
+            status: value.status.into(),
+            chain_tip: value.chain_tip,
+            mempool: MempoolStatusDetails {
+                unbatched_transactions: mempool_stats.unbatched_transactions,
+                proposed_batches: mempool_stats.proposed_batches,
+                proven_batches: mempool_stats.proven_batches,
+            },
+        }
+    }
+}
+
+impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
+    fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
+        let status =
+            proto::remote_prover::WorkerHealthStatus::try_from(value.status).unwrap().into();
+
+        Self {
+            name: value.name,
+            version: value.version,
+            status,
+        }
+    }
+}
+
+impl RemoteProverStatusDetails {
+    pub fn from_proxy_status(status: proto::remote_prover::ProxyStatus, url: String) -> Self {
+        let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
+            .unwrap()
+            .into();
+
+        let workers: Vec<WorkerStatusDetails> =
+            status.workers.into_iter().map(WorkerStatusDetails::from).collect();
+
+        Self {
+            url,
+            version: status.version,
+            supported_proof_type: proof_type,
+            workers,
+        }
+    }
+}
+
+impl RpcStatusDetails {
+    /// Creates `RpcStatusDetails` from a gRPC `RpcStatus` response and the configured URL.
+    pub fn from_rpc_status(status: RpcStatus, url: String) -> Self {
+        Self {
+            url,
+            version: status.version,
+            genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
+            store_status: status.store.map(StoreStatusDetails::from),
+            block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
+        }
+    }
+}
+
+// UTILITIES
+// ================================================================================================
+
+/// Gets the current Unix timestamp in seconds.
+///
+/// This function is infallible - if the system time is somehow before Unix epoch
+/// (extremely unlikely), it returns 0.
+pub fn current_unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_secs()
+}
