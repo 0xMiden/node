@@ -126,6 +126,7 @@ pub enum ServiceDetails {
     NtxTracking(CounterTrackingDetails),
     ExplorerStatus(ExplorerStatusDetails),
     NoteTransportStatus(NoteTransportStatusDetails),
+    ValidatorStatus(ValidatorStatusDetails),
     Error,
 }
 
@@ -183,6 +184,16 @@ pub struct ExplorerStatusDetails {
 pub struct NoteTransportStatusDetails {
     pub url: String,
     pub serving_status: String,
+}
+
+/// Details of the validator service.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ValidatorStatusDetails {
+    pub url: String,
+    pub version: String,
+    pub chain_tip: u32,
+    pub validated_transactions_count: u64,
+    pub signed_blocks_count: u64,
 }
 
 // RPC STATUS DETAILS

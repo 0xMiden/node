@@ -183,6 +183,14 @@ pub struct MonitorConfig {
     )]
     pub note_transport_url: Option<Url>,
 
+    /// The URL of the validator service.
+    #[arg(
+        long = "validator-url",
+        env = "MIDEN_MONITOR_VALIDATOR_URL",
+        help = "The URL of the validator service"
+    )]
+    pub validator_url: Option<Url>,
+
     /// Maximum time without a chain tip update before marking RPC as unhealthy.
     ///
     /// If the chain tip does not increment within this duration, the RPC service will be
