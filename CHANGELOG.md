@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.8 (TBD)
+
+- Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).
+
 ## v0.14.7 (2026-04-15)
 
 - [BREAKING] Aligned proto `TransactionHeader` with domain type and exposed erased notes in `SyncTransactions` ([#1941](https://github.com/0xMiden/node/pull/1941)).
