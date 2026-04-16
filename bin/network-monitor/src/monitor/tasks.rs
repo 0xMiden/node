@@ -36,6 +36,7 @@ use crate::status::{
     run_remote_prover_status_task,
     run_rpc_status_task,
 };
+use crate::validator::{initial_validator_status, run_validator_status_task};
 
 /// Task management structure that encapsulates `JoinSet` and component names.
 #[derive(Default)]
@@ -175,6 +176,38 @@ impl Tasks {
         self.names.insert(id, "note-transport-checker".to_string());
 
         println!("Spawned note transport status checker task");
+
+        Ok(rx)
+    }
+
+    /// Spawn the validator status checker task.
+    #[instrument(target = COMPONENT, name = "tasks.spawn-validator-checker", skip_all)]
+    pub async fn spawn_validator_checker(
+        &mut self,
+        config: &MonitorConfig,
+    ) -> Result<Receiver<ServiceStatus>> {
+        let validator_url = config.validator_url.clone().expect("Validator URL exists");
+        let name = "Validator".to_string();
+        let status_check_interval = config.status_check_interval;
+        let request_timeout = config.request_timeout;
+        let (tx, rx) = watch::channel(initial_validator_status());
+
+        let id = self
+            .handles
+            .spawn(async move {
+                run_validator_status_task(
+                    validator_url,
+                    name,
+                    tx,
+                    status_check_interval,
+                    request_timeout,
+                )
+                .await;
+            })
+            .id();
+        self.names.insert(id, "validator-checker".to_string());
+
+        println!("Spawned validator status checker task");
 
         Ok(rx)
     }
