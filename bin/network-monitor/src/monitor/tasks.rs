@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use miden_node_proto::clients::{
@@ -21,15 +20,19 @@ use crate::config::MonitorConfig;
 use crate::counter::{LatencyState, run_counter_tracking_task, run_increment_task};
 use crate::deploy::ensure_accounts_exist;
 use crate::explorer::{initial_explorer_status, run_explorer_status_task};
-use crate::faucet::run_faucet_test_task;
+use crate::faucet::{FaucetTestDetails, run_faucet_test_task};
 use crate::frontend::{ServerState, serve};
 use crate::note_transport::{initial_note_transport_status, run_note_transport_status_task};
 use crate::remote_prover::{ProofType, generate_prover_test_payload, run_remote_prover_test_task};
 use crate::status::{
+    CounterTrackingDetails,
+    IncrementDetails,
+    ServiceDetails,
     ServiceStatus,
     StaleChainTracker,
     check_remote_prover_status,
     check_rpc_status,
+    current_unix_timestamp_secs,
     run_remote_prover_status_task,
     run_rpc_status_task,
 };
@@ -205,13 +208,10 @@ impl Tasks {
                 .without_otel_context_injection()
                 .connect_lazy::<RemoteProverProxyStatusClient>();
 
-            let current_time = current_unix_timestamp_secs();
-
             let initial_prover_status = check_remote_prover_status(
                 &mut remote_prover,
                 name.clone(),
                 prover_url.to_string(),
-                current_time,
             )
             .await;
 
@@ -241,7 +241,7 @@ impl Tasks {
 
             // Extract proof_type directly from the service status
             // If the prover is not available during startup, skip spawning test tasks
-            let proof_type = if let crate::status::ServiceDetails::RemoteProverStatus(details) =
+            let proof_type = if let ServiceDetails::RemoteProverStatus(details) =
                 &initial_prover_status.details
             {
                 Some(details.supported_proof_type.clone())
@@ -312,15 +312,10 @@ impl Tasks {
         ret(level = "debug")
     )]
     pub fn spawn_faucet(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
-        let current_time = current_unix_timestamp_secs();
-
         // Create initial faucet test status
-        let initial_faucet_status = ServiceStatus {
-            name: "Faucet".to_string(),
-            status: crate::status::Status::Unknown,
-            last_checked: current_time,
-            error: None,
-            details: crate::status::ServiceDetails::FaucetTest(crate::faucet::FaucetTestDetails {
+        let initial_faucet_status = ServiceStatus::unknown(
+            "Faucet",
+            ServiceDetails::FaucetTest(FaucetTestDetails {
                 url: config.faucet_url.as_ref().expect("faucet URL exists").to_string(),
                 test_duration_ms: 0,
                 success_count: 0,
@@ -328,7 +323,7 @@ impl Tasks {
                 last_tx_id: None,
                 faucet_metadata: None,
             }),
-        };
+        );
 
         // Spawn the faucet testing task
         let (faucet_tx, faucet_rx) = watch::channel(initial_faucet_status);
@@ -366,8 +361,6 @@ impl Tasks {
         ensure_accounts_exist(&config.wallet_filepath, &config.counter_filepath, &config.rpc_url)
             .await?;
 
-        let current_time = current_unix_timestamp_secs();
-
         // Create shared atomic counter for tracking expected counter value
         let expected_counter_value = Arc::new(AtomicU64::new(0));
         let latency_state = Arc::new(Mutex::new(LatencyState::default()));
@@ -375,34 +368,26 @@ impl Tasks {
         let latency_state_for_tracking = latency_state.clone();
 
         // Create initial increment status
-        let initial_increment_status = ServiceStatus {
-            name: "Local Transactions".to_string(),
-            status: crate::status::Status::Unknown,
-            last_checked: current_time,
-            error: None,
-            details: crate::status::ServiceDetails::NtxIncrement(crate::status::IncrementDetails {
+        let initial_increment_status = ServiceStatus::unknown(
+            "Local Transactions",
+            ServiceDetails::NtxIncrement(IncrementDetails {
                 success_count: 0,
                 failure_count: 0,
                 last_tx_id: None,
                 last_latency_blocks: None,
             }),
-        };
+        );
 
         // Create initial tracking status
-        let initial_tracking_status = ServiceStatus {
-            name: "Network Transactions".to_string(),
-            status: crate::status::Status::Unknown,
-            last_checked: current_time,
-            error: None,
-            details: crate::status::ServiceDetails::NtxTracking(
-                crate::status::CounterTrackingDetails {
-                    current_value: None,
-                    expected_value: None,
-                    last_updated: None,
-                    pending_increments: None,
-                },
-            ),
-        };
+        let initial_tracking_status = ServiceStatus::unknown(
+            "Network Transactions",
+            ServiceDetails::NtxTracking(CounterTrackingDetails {
+                current_value: None,
+                expected_value: None,
+                last_updated: None,
+                pending_increments: None,
+            }),
+        );
 
         // Spawn the increment task
         let (increment_tx, increment_rx) = watch::channel(initial_increment_status);
@@ -492,15 +477,4 @@ impl Tasks {
         // Exit with error context
         Err(err.context(format!("component {component_name} failed")))
     }
-}
-
-/// Gets the current Unix timestamp in seconds.
-///
-/// This function is infallible - if the system time is somehow before Unix epoch
-/// (extremely unlikely), it returns 0.
-pub fn current_unix_timestamp_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))  // Fallback to 0 if before Unix epoch
-        .as_secs()
 }
