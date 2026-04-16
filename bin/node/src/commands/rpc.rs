@@ -34,8 +34,7 @@ pub enum RpcCommand {
         #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
         validator_url: Url,
 
-        /// The network transaction builder's gRPC url. If unset, the `GetNoteError` endpoint
-        /// will be unavailable.
+        /// The network transaction builder's gRPC url.
         #[arg(long = "ntx-builder.url", env = ENV_NTX_BUILDER_URL, value_name = "URL")]
         ntx_builder_url: Option<Url>,
 

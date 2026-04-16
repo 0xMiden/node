@@ -12,7 +12,6 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
-use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
@@ -117,45 +116,6 @@ impl AccountActorContext {
     }
 }
 
-// ACCOUNT ORIGIN
-// ================================================================================================
-
-/// The origin of the account which the actor will use to initialize the account state.
-#[derive(Debug)]
-pub enum AccountOrigin {
-    /// Accounts that have just been created by a transaction but have not been committed to the
-    /// store yet.
-    Transaction(Box<Account>),
-    /// Accounts that already exist in the store.
-    Store(NetworkAccountId),
-}
-
-impl AccountOrigin {
-    /// Returns an [`AccountOrigin::Transaction`] if the account is a network account.
-    pub fn transaction(delta: &AccountDelta) -> Option<Self> {
-        let account = Account::try_from(delta).ok()?;
-        if account.is_network() {
-            Some(AccountOrigin::Transaction(account.clone().into()))
-        } else {
-            None
-        }
-    }
-
-    /// Returns an [`AccountOrigin::Store`].
-    pub fn store(account_id: NetworkAccountId) -> Self {
-        AccountOrigin::Store(account_id)
-    }
-
-    /// Returns the [`NetworkAccountId`] of the account.
-    pub fn id(&self) -> NetworkAccountId {
-        match self {
-            AccountOrigin::Transaction(account) => NetworkAccountId::try_from(account.id())
-                .expect("actor accounts are always network accounts"),
-            AccountOrigin::Store(account_id) => *account_id,
-        }
-    }
-}
-
 // ACTOR MODE
 // ================================================================================================
 
@@ -187,7 +147,7 @@ enum ActorMode {
 ///
 /// ## Lifecycle
 ///
-/// 1. **Initialization**: Checks DB for available notes to determine initial mode.
+/// 1. **Initialization**: Waits for committed account state, then checks DB for available notes.
 /// 2. **Event Loop**: Continuously processes mempool events and executes transactions.
 /// 3. **Transaction Processing**: Selects, executes, and proves transactions, and submits them to
 ///    block producer.
@@ -201,16 +161,29 @@ enum ActorMode {
 /// channels and shared state. The actor uses a cancellation token for graceful shutdown
 /// coordination.
 pub struct AccountActor {
-    origin: AccountOrigin,
+    /// The network account this actor is responsible for.
+    account_id: NetworkAccountId,
+    /// Client for fetching chain data (MMR, headers) from the node's store.
     store: StoreClient,
+    /// Local database for account state, notes, and transaction tracking.
     db: Db,
+    /// Current operational mode of the actor (idle, notes available, tx inflight, etc.).
     mode: ActorMode,
+    /// Notification signal from the coordinator indicating that DB state relevant to this
+    /// actor may have changed (e.g., block committed, notes added). The actor re-evaluates
+    /// its state from the DB upon each notification.
     notify: Arc<Notify>,
+    /// Token for coordinating graceful shutdown of this actor's task.
     cancel_token: CancellationToken,
+    /// Client for submitting proven transactions to the block producer.
     block_producer: BlockProducerClient,
+    /// Client for validating transactions before submission.
     validator: ValidatorClient,
+    /// Optional remote prover for delegating transaction proving.
     prover: Option<RemoteTransactionProver>,
+    /// Shared chain state (tip header, MMR) updated by the coordinator on block commits.
     chain_state: Arc<RwLock<ChainState>>,
+    /// LRU cache of note scripts to avoid redundant fetches from the store.
     script_cache: LruCache<Word, NoteScript>,
     /// Maximum number of notes per transaction.
     max_notes_per_tx: NonZeroUsize,
@@ -227,13 +200,13 @@ pub struct AccountActor {
 impl AccountActor {
     /// Constructs a new account actor with the given configuration.
     pub fn new(
-        origin: AccountOrigin,
+        account_id: NetworkAccountId,
         actor_context: &AccountActorContext,
         notify: Arc<Notify>,
         cancel_token: CancellationToken,
     ) -> Self {
         Self {
-            origin,
+            account_id,
             store: actor_context.store.clone(),
             db: actor_context.db.clone(),
             mode: ActorMode::NoViableNotes,
@@ -259,7 +232,13 @@ impl AccountActor {
     /// - `Ok(())`: intentional shutdown (idle timeout, cancellation, or account removal).
     /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
     pub async fn run(mut self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
-        let account_id = self.origin.id();
+        let account_id = self.account_id;
+
+        // Wait for the account to be committed to the DB. For newly created accounts,
+        // the creation transaction must be committed before we start processing notes.
+        if !self.wait_for_committed_account(account_id).await? {
+            return Ok(());
+        }
 
         // Determine initial mode by checking DB for available notes.
         let block_num = self.chain_state.read().await.chain_tip_header.block_num();
@@ -375,6 +354,45 @@ impl AccountActor {
             chain_tip_header,
             chain_mmr,
         }))
+    }
+
+    /// Waits until a committed account state exists in the DB.
+    ///
+    /// For accounts that are being created by an inflight transaction, this will idle
+    /// until the transaction is committed. Returns `true` when the account is ready,
+    /// or `false` if the actor was cancelled while waiting.
+    async fn wait_for_committed_account(
+        &self,
+        account_id: NetworkAccountId,
+    ) -> anyhow::Result<bool> {
+        // Check if the account is already committed.
+        if self
+            .db
+            .has_committed_account(account_id)
+            .await
+            .context("failed to check for committed account")?
+        {
+            return Ok(true);
+        }
+
+        loop {
+            tokio::select! {
+                _ = self.cancel_token.cancelled() => {
+                    return Ok(false);
+                }
+                _ = self.notify.notified() => {
+                    if self
+                        .db
+                        .has_committed_account(account_id)
+                        .await
+                        .context("failed to check for committed account")?
+                    {
+                        tracing::info!(account.id=%account_id, "Account committed, starting normal operation");
+                        return Ok(true);
+                    }
+                }
+            }
+        }
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.

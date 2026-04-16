@@ -83,6 +83,15 @@ impl Db {
             .await
     }
 
+    /// Returns `true` if a committed account state exists for the given account.
+    pub async fn has_committed_account(&self, account_id: NetworkAccountId) -> Result<bool> {
+        self.inner
+            .query("has_committed_account", move |conn| {
+                Ok(queries::get_committed_account(conn, account_id)?.is_some())
+            })
+            .await
+    }
+
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
@@ -114,11 +123,11 @@ impl Db {
             .await
     }
 
-    /// Returns the latest execution error for a note identified by its note ID.
-    pub async fn get_note_error(&self, note_id: NoteId) -> Result<Option<queries::NoteErrorRow>> {
+    /// Returns the status for a note identified by its note ID.
+    pub async fn get_note_status(&self, note_id: NoteId) -> Result<Option<queries::NoteStatusRow>> {
         let note_id_bytes = models::conv::note_id_to_bytes(&note_id);
         self.inner
-            .query("get_note_error", move |conn| queries::get_note_error(conn, &note_id_bytes))
+            .query("get_note_status", move |conn| queries::get_note_status(conn, &note_id_bytes))
             .await
     }
 
