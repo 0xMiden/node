@@ -170,18 +170,23 @@ impl State {
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
 
-        let account_storage = TreeStorage::create(
-            data_path,
-            &storage_options.account_tree.into(),
-            ACCOUNT_TREE_STORAGE_DIR,
-        )?;
+        #[cfg(feature = "rocksdb")]
+        let account_storage_config = storage_options.account_tree.into();
+        #[cfg(not(feature = "rocksdb"))]
+        let account_storage_config = {
+            let _ = &storage_options;
+            ()
+        };
+        let account_storage =
+            TreeStorage::create(data_path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage = TreeStorage::create(
-            data_path,
-            &storage_options.nullifier_tree.into(),
-            NULLIFIER_TREE_STORAGE_DIR,
-        )?;
+        #[cfg(feature = "rocksdb")]
+        let nullifier_storage_config = storage_options.nullifier_tree.into();
+        #[cfg(not(feature = "rocksdb"))]
+        let nullifier_storage_config = ();
+        let nullifier_storage =
+            TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         // Verify that tree roots match the expected roots from the database.
