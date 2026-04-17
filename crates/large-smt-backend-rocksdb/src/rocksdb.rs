@@ -40,6 +40,7 @@ const DEFAULT_MAX_WRITE_BUFFER_SIZE_TO_MAINTAIN: i64 = 0;
 const DEFAULT_TARGET_FILE_SIZE_BASE: u64 = 512 << 20;
 const DEFAULT_TARGET_FILE_SIZE_MULTIPLIER: i32 = 2;
 const DEFAULT_LEVEL_ZERO_FILE_NUM_COMPACTION_TRIGGER: i32 = 8;
+const DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES: i32 = 1 << 20;
 const DEFAULT_BLOOM_FILTER_BITS_PER_KEY: f64 = 10.0;
 
 /// The name of the `RocksDB` column family used for storing SMT leaves.
@@ -185,6 +186,11 @@ impl RocksDbStorage {
         let mut depth24_opts = Options::default();
         depth24_opts.set_compression_type(DBCompressionType::Lz4);
         depth24_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
+        // Enable the bottommost compression setting; selecting ZSTD alone is not enough.
+        depth24_opts.set_bottommost_zstd_max_train_bytes(
+            DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES,
+            true,
+        );
         depth24_opts.set_block_based_table_factory(&depth24_table_opts);
         if let Some(write_buffer_manager) = write_buffer_manager.as_ref() {
             depth24_opts.set_write_buffer_manager(write_buffer_manager);
@@ -1185,6 +1191,8 @@ fn configure_smt_cf_options(opts: &mut Options, tuning_options: &RocksDbTuningOp
     opts.set_target_file_size_multiplier(tuning_options.target_file_size_multiplier);
     opts.set_compression_type(DBCompressionType::Lz4);
     opts.set_bottommost_compression_type(DBCompressionType::Zstd);
+    // Enable the bottommost compression setting; selecting ZSTD alone is not enough.
+    opts.set_bottommost_zstd_max_train_bytes(DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES, true);
     opts.set_level_zero_file_num_compaction_trigger(
         tuning_options.level_zero_file_num_compaction_trigger,
     );
