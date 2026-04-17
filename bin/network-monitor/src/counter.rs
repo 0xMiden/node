@@ -665,7 +665,7 @@ pub async fn run_counter_tracking_task(
         create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
 
     // Load counter account to get the account ID
-    let counter_account = match load_counter_account(&config.counter_filepath) {
+    let mut counter_account = match load_counter_account(&config.counter_filepath) {
         Ok(account) => account,
         Err(e) => {
             error!("Failed to load counter account: {:?}", e);
@@ -687,6 +687,17 @@ pub async fn run_counter_tracking_task(
     loop {
         poll_interval.tick().await;
 
+        // The increment task may regenerate accounts when doesn't fixes the card, reload from
+        // the account file so tracking follows the new account.
+        reload_counter_account_if_changed(
+            &config,
+            &mut counter_account,
+            &mut rpc_client,
+            &expected_counter_value,
+            &mut details,
+        )
+        .await;
+
         let last_error = poll_counter_once(
             &mut rpc_client,
             &counter_account,
@@ -699,6 +710,40 @@ pub async fn run_counter_tracking_task(
         let status = build_tracking_status(&details, last_error);
         send_status(&tx, status)?;
     }
+}
+
+/// Reload the counter account from disk and re-initialize tracking state if its ID changed.
+///
+/// The increment task regenerates accounts on persistent failure and rewrites the account
+/// file. Without this the tracking task would keep polling the stale account ID forever.
+async fn reload_counter_account_if_changed(
+    config: &MonitorConfig,
+    counter_account: &mut Account,
+    rpc_client: &mut RpcClient,
+    expected_counter_value: &Arc<AtomicU64>,
+    details: &mut CounterTrackingDetails,
+) {
+    let reloaded = match load_counter_account(&config.counter_filepath) {
+        Ok(account) => account,
+        Err(e) => {
+            warn!(err = ?e, "failed to reload counter account file");
+            return;
+        },
+    };
+
+    if reloaded.id() == counter_account.id() {
+        return;
+    }
+
+    info!(
+        old.id = %counter_account.id(),
+        new.id = %reloaded.id(),
+        "counter account file changed, resetting tracking state",
+    );
+    *counter_account = reloaded;
+    *details = CounterTrackingDetails::default();
+    initialize_counter_tracking_state(rpc_client, counter_account, expected_counter_value, details)
+        .await;
 }
 
 /// Initialize tracking state by fetching the current counter value from the node.
