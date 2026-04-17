@@ -6,9 +6,7 @@ use miden_node_proto_build::{
     ntx_builder_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
-    store_block_producer_api_descriptor,
-    store_ntx_builder_api_descriptor,
-    store_rpc_api_descriptor,
+    store_api_descriptor,
     validator_api_descriptor,
 };
 use miette::{Context, IntoDiagnostic};
@@ -25,9 +23,7 @@ fn main() -> miette::Result<()> {
         .wrap_err("creating destination folder")?;
 
     generate_bindings(rpc_api_descriptor(), &dst_dir)?;
-    generate_bindings(store_rpc_api_descriptor(), &dst_dir)?;
-    generate_bindings(store_ntx_builder_api_descriptor(), &dst_dir)?;
-    generate_bindings(store_block_producer_api_descriptor(), &dst_dir)?;
+    generate_bindings(store_api_descriptor(), &dst_dir)?;
     generate_bindings(block_producer_api_descriptor(), &dst_dir)?;
     generate_bindings(remote_prover_api_descriptor(), &dst_dir)?;
     generate_bindings(validator_api_descriptor(), &dst_dir)?;
