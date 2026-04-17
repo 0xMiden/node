@@ -1258,7 +1258,7 @@ impl RocksDbConfig {
     /// * `max_open_files`: 512
     /// * `write_buffer_manager`: disabled
     /// * `tuning_options`: [`RocksDbTuningOptions::default()`]
-    /// * `durability_mode`: [`RocksDbDurabilityMode::Sync`]
+    /// * `durability_mode`: [`RocksDbDurabilityMode::Relaxed`]
     ///
     /// # Examples
     /// ```
@@ -1344,7 +1344,8 @@ impl RocksDbConfig {
 
     /// Sets the RocksDB write durability mode.
     ///
-    /// The default is [`RocksDbDurabilityMode::Sync`].
+    /// The default is [`RocksDbDurabilityMode::Relaxed`], matching RocksDB's default non-sync
+    /// writes.
     #[must_use]
     pub fn with_durability_mode(mut self, durability_mode: RocksDbDurabilityMode) -> Self {
         self.durability_mode = durability_mode;
@@ -1368,8 +1369,8 @@ impl RocksDbConfig {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum RocksDbDurabilityMode {
-    Relaxed,
     #[default]
+    Relaxed,
     Sync,
 }
 
@@ -1496,6 +1497,14 @@ mod tests {
                 tuning_options,
                 durability_mode: RocksDbDurabilityMode::Sync,
             }
+        );
+    }
+
+    #[test]
+    fn rocksdb_config_defaults_to_relaxed_durability() {
+        assert_eq!(
+            RocksDbConfig::new("/tmp/smt").durability_mode,
+            RocksDbDurabilityMode::Relaxed
         );
     }
 }
