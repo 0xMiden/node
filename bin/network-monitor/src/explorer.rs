@@ -151,7 +151,7 @@ pub(crate) async fn check_explorer_status(
 #[derive(Debug)]
 pub enum ExplorerStatusError {
     /// A required field was not present in the response.
-    NotPresent(String),
+    NotPresent { field: String, response: String },
     /// A field was present but had an unexpected type.
     TypeMismatch {
         field: String,
@@ -163,8 +163,8 @@ pub enum ExplorerStatusError {
 impl Display for ExplorerStatusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExplorerStatusError::NotPresent(field) => {
-                write!(f, "field '{field}': not present in response")
+            ExplorerStatusError::NotPresent { field, response } => {
+                write!(f, "field '{field}': not present in response (got: {response})")
             },
             ExplorerStatusError::TypeMismatch { field, expected, got } => {
                 write!(f, "field '{field}': expected {expected}, got {got}")
@@ -178,7 +178,10 @@ impl Display for ExplorerStatusError {
 /// Accepts both numeric values and string-encoded numbers (as returned by the Explorer's
 /// GraphQL API).
 fn require_u64(node: &serde_json::Value, field: &str) -> Result<u64, ExplorerStatusError> {
-    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent(field.into()))?;
+    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent {
+        field: field.into(),
+        response: truncate_json(node),
+    })?;
 
     value
         .as_u64()
@@ -192,7 +195,10 @@ fn require_u64(node: &serde_json::Value, field: &str) -> Result<u64, ExplorerSta
 
 /// Extracts a string from a named field.
 fn require_str(node: &serde_json::Value, field: &str) -> Result<String, ExplorerStatusError> {
-    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent(field.into()))?;
+    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent {
+        field: field.into(),
+        response: truncate_json(node),
+    })?;
 
     value
         .as_str()
@@ -221,7 +227,10 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
 
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         let node = value.pointer("/data/blocks/edges/0/node").ok_or_else(|| {
-            ExplorerStatusError::NotPresent("data.blocks.edges[0].node".to_string())
+            ExplorerStatusError::NotPresent {
+                field: "data.blocks.edges[0].node".to_string(),
+                response: truncate_json(&value),
+            }
         })?;
 
         Ok(Self {
@@ -315,7 +324,9 @@ mod tests {
     fn require_u64_missing_field() {
         let node = json!({});
         let err = require_u64(&node, "block_number").unwrap_err();
-        assert!(matches!(err, ExplorerStatusError::NotPresent(f) if f == "block_number"));
+        assert!(
+            matches!(err, ExplorerStatusError::NotPresent { field, .. } if field == "block_number")
+        );
     }
 
     #[test]
@@ -340,7 +351,7 @@ mod tests {
     fn require_str_missing_field() {
         let node = json!({});
         let err = require_str(&node, "name").unwrap_err();
-        assert!(matches!(err, ExplorerStatusError::NotPresent(f) if f == "name"));
+        assert!(matches!(err, ExplorerStatusError::NotPresent { field, .. } if field == "name"));
     }
 
     #[test]
