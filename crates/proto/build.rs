@@ -1,5 +1,6 @@
+use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use codegen::{Function, Impl, Module, Struct, Trait, Type};
 use fs_err as fs;
@@ -79,11 +80,14 @@ fn rustfmt_generated(dir: &Path) -> miette::Result<()> {
         return Ok(());
     }
 
-    let status = Command::new("rustfmt")
-        .args(&rs_files)
-        .status()
-        .into_diagnostic()
-        .wrap_err("running rustfmt on generated files")?;
+    let status = match Command::new("rustfmt").args(&rs_files).status() {
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            // rustfmt is not installed, skip without an error
+            ExitStatus::default()
+        },
+        Err(e) => return Err(e).into_diagnostic().wrap_err("running rustfmt on generated files"),
+        Ok(status) => status,
+    };
 
     if !status.success() {
         miette::bail!("rustfmt failed with status: {status}");
