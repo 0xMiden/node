@@ -231,6 +231,7 @@ impl AccountStateForest {
     ///
     /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
     /// get the actual key into the storage map.
+    #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_witness(
         &self,
         account_id: AccountId,
@@ -248,6 +249,7 @@ impl AccountStateForest {
 
     /// Retrieves a vault asset witnesses for the specified account and asset keys at the specified
     /// block number.
+    #[instrument(target = COMPONENT, skip_all)]
     pub fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
@@ -272,6 +274,7 @@ impl AccountStateForest {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
+    #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
