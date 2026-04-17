@@ -90,7 +90,7 @@ impl RocksDbStorage {
     /// and compaction strategies tailored for SMT workloads.
     ///
     /// The default profile uses:
-    /// - a 1 GiB shared block cache
+    /// - a 1 GiB block cache shared by this database's column families
     /// - up to 512 open files
     /// - 16 KiB block-based table blocks with cached index/filter blocks
     /// - 128 MiB write buffers with up to 3 memtables per write-heavy column family
@@ -120,7 +120,7 @@ impl RocksDbStorage {
         // Maximum WAL size
         db_opts.set_max_total_wal_size(tuning_options.max_total_wal_size);
 
-        // Shared block cache across all column families
+        // Cache and optional write-buffer manager are shared across this DB's column families.
         let cache = Cache::new_lru_cache(config.cache_size);
         let write_buffer_manager = config.write_buffer_manager(&cache);
 
@@ -1242,7 +1242,7 @@ pub struct RocksDbConfig {
     /// increase resource usage. Default: 512 files
     pub(crate) max_open_files: i32,
 
-    /// Optional shared memtable budget settings.
+    /// Optional per-DB write-buffer manager shared by this DB's column families.
     pub(crate) write_buffer_manager: Option<RocksDbWriteBufferManagerBudget>,
 
     /// Tunable RocksDB profile values.
@@ -1305,9 +1305,11 @@ impl RocksDbConfig {
         self
     }
 
-    /// Sets the RocksDB memory budget.
+    /// Sets the RocksDB memory budget for this database instance.
     ///
-    /// This controls the shared block cache size and optional shared write-buffer manager.
+    /// This controls the block cache size and optional write-buffer manager created by
+    /// [`RocksDbStorage::open`] for one DB and its column families. It is not a process-wide
+    /// budget across multiple RocksDB instances.
     ///
     /// # Arguments
     /// * `memory_budget` - Memory budget settings for RocksDB.
@@ -1382,7 +1384,9 @@ pub enum RocksDbDurabilityMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RocksDbMemoryBudget {
+    /// Block cache size for one RocksDB instance.
     pub block_cache_size: usize,
+    /// Optional write-buffer manager for one RocksDB instance.
     pub write_buffer_manager: Option<RocksDbWriteBufferManagerBudget>,
 }
 
