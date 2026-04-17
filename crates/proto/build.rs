@@ -130,6 +130,7 @@ fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
         modules.push(format!("pub mod {module};"));
     }
 
+    modules.sort();
     fs::write(dst_dir.as_ref().join("mod.rs"), modules.join("\n"))
 }
 
