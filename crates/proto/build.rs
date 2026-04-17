@@ -459,7 +459,7 @@ impl ServerStream {
     /// ```
     fn as_trait(&self) -> Trait {
         let stream_bound =
-            format!("tonic::codegen::tokio_stream::Stream<Item = tonic::Result<Self::Item>>");
+            "tonic::codegen::tokio_stream::Stream<Item = tonic::Result<Self::Item>>".to_string();
         let boxed_stream = format!(
             "std::pin::Pin<Box<dyn tonic::codegen::tokio_stream::Stream<Item = tonic::Result<{}>> + Send + 'static>>",
             self.response
@@ -508,6 +508,7 @@ impl ServerStream {
             .arg_ref_self()
             .arg("request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<Self::{}>>", self.associated_type().0))
+            .line("#[allow(clippy::unit_arg)]")
             .line(format!(
                 "<T as {}>::full(self, request.into_inner()).await.map(tonic::Response::new)",
                 self.name
