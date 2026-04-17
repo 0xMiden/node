@@ -258,9 +258,6 @@ impl Service {
             ret.parent(method.as_trait().ty());
         }
 
-        for method in &self.server_streaming_methods {
-            ret.parent(method.as_trait().ty());
-        }
         ret
     }
 
