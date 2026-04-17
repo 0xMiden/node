@@ -150,21 +150,76 @@ pub(crate) async fn check_explorer_status(
 
 #[derive(Debug)]
 pub enum ExplorerStatusError {
-    MissingField(String),
+    /// A required field was not present in the response.
+    NotPresent { field: String, response: String },
+    /// A field was present but had an unexpected type.
+    TypeMismatch {
+        field: String,
+        expected: &'static str,
+        got: String,
+    },
 }
 
 impl Display for ExplorerStatusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExplorerStatusError::MissingField(field) => write!(f, "missing field: {field}"),
+            ExplorerStatusError::NotPresent { field, response } => {
+                write!(f, "field '{field}': not present in response (got: {response})")
+            },
+            ExplorerStatusError::TypeMismatch { field, expected, got } => {
+                write!(f, "field '{field}': expected {expected}, got {got}")
+            },
         }
     }
 }
 
-/// Extracts a u64 from a JSON value that may be either a number or a
-/// string-encoded number (as returned by the Explorer's GraphQL API).
-fn value_as_u64(value: &serde_json::Value) -> Option<u64> {
-    value.as_u64().or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+/// Extracts a u64 from a named field.
+///
+/// Accepts both numeric values and string-encoded numbers (as returned by the Explorer's
+/// GraphQL API).
+fn require_u64(node: &serde_json::Value, field: &str) -> Result<u64, ExplorerStatusError> {
+    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent {
+        field: field.into(),
+        response: truncate_json(node),
+    })?;
+
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .ok_or_else(|| ExplorerStatusError::TypeMismatch {
+            field: field.into(),
+            expected: "u64-compatible value",
+            got: truncate_json(value),
+        })
+}
+
+/// Extracts a string from a named field.
+fn require_str(node: &serde_json::Value, field: &str) -> Result<String, ExplorerStatusError> {
+    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent {
+        field: field.into(),
+        response: truncate_json(node),
+    })?;
+
+    value
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| ExplorerStatusError::TypeMismatch {
+            field: field.into(),
+            expected: "string",
+            got: truncate_json(value),
+        })
+}
+
+/// Returns a short string representation of a JSON value for error messages.
+///
+/// Truncates the JSON string to at most 60 characters, appending "..." if truncated.
+/// Truncation is done at a character boundary to avoid panicking on multi-byte characters.
+fn truncate_json(value: &serde_json::Value) -> String {
+    let s = value.to_string();
+    match s.char_indices().nth(60) {
+        Some((idx, _)) => format!("{}...", &s[..idx]),
+        None => s,
+    }
 }
 
 impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
@@ -172,61 +227,22 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
 
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         let node = value.pointer("/data/blocks/edges/0/node").ok_or_else(|| {
-            ExplorerStatusError::MissingField("data.blocks.edges[0].node".to_string())
+            ExplorerStatusError::NotPresent {
+                field: "data.blocks.edges[0].node".to_string(),
+                response: truncate_json(&value),
+            }
         })?;
 
-        let block_number = node
-            .get("block_number")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("block_number".to_string()))?;
-        let timestamp = node
-            .get("timestamp")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("timestamp".to_string()))?;
-
-        let number_of_transactions =
-            node.get("number_of_transactions").and_then(value_as_u64).ok_or_else(|| {
-                ExplorerStatusError::MissingField("number_of_transactions".to_string())
-            })?;
-        let number_of_nullifiers = node
-            .get("number_of_nullifiers")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("number_of_nullifiers".to_string()))?;
-        let number_of_notes = node
-            .get("number_of_notes")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("number_of_notes".to_string()))?;
-        let number_of_account_updates =
-            node.get("number_of_account_updates").and_then(value_as_u64).ok_or_else(|| {
-                ExplorerStatusError::MissingField("number_of_account_updates".to_string())
-            })?;
-
-        let block_commitment = node
-            .get("block_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("block_commitment".to_string()))?
-            .to_string();
-        let chain_commitment = node
-            .get("chain_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("chain_commitment".to_string()))?
-            .to_string();
-        let proof_commitment = node
-            .get("proof_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("proof_commitment".to_string()))?
-            .to_string();
-
         Ok(Self {
-            block_number,
-            timestamp,
-            number_of_transactions,
-            number_of_nullifiers,
-            number_of_notes,
-            number_of_account_updates,
-            block_commitment,
-            chain_commitment,
-            proof_commitment,
+            block_number: require_u64(node, "block_number")?,
+            timestamp: require_u64(node, "timestamp")?,
+            number_of_transactions: require_u64(node, "number_of_transactions")?,
+            number_of_nullifiers: require_u64(node, "number_of_nullifiers")?,
+            number_of_notes: require_u64(node, "number_of_notes")?,
+            number_of_account_updates: require_u64(node, "number_of_account_updates")?,
+            block_commitment: require_str(node, "block_commitment")?,
+            chain_commitment: require_str(node, "chain_commitment")?,
+            proof_commitment: require_str(node, "proof_commitment")?,
         })
     }
 }
@@ -236,4 +252,112 @@ pub(crate) fn initial_explorer_status() -> ServiceStatus {
         "Explorer",
         ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
     )
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    // truncate_json tests
+    // --------------------------------------------------------------------------------------------
+
+    #[test]
+    fn truncate_json_short_value_is_not_truncated() {
+        let value = json!({"key": "short"});
+        let result = truncate_json(&value);
+        assert_eq!(result, value.to_string());
+        assert!(!result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_json_long_value_is_truncated() {
+        let long_string = "a".repeat(100);
+        let value = json!(long_string);
+        let result = truncate_json(&value);
+        assert!(result.ends_with("..."));
+        // 60 chars + "..."
+        assert_eq!(result.chars().count(), 63);
+    }
+
+    #[test]
+    fn truncate_json_multibyte_chars_are_handled() {
+        // Each 'é' is 2 bytes in UTF-8. Build a string whose serialized JSON form
+        // exceeds 60 characters, ensuring truncation lands on a char boundary.
+        let multibyte_string = "é".repeat(80);
+        let value = json!(multibyte_string);
+        // Should not panic and should still truncate correctly.
+        let result = truncate_json(&value);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_json_exactly_60_chars_is_not_truncated() {
+        // Build a JSON string whose serialized form is exactly 60 characters.
+        // json!("x".repeat(58)) serializes as `"xxx...xxx"` (58 chars + 2 quotes = 60).
+        let value = json!("x".repeat(58));
+        let result = truncate_json(&value);
+        assert_eq!(result.chars().count(), 60);
+        assert!(!result.ends_with("..."));
+    }
+
+    // require_u64 tests
+    // --------------------------------------------------------------------------------------------
+
+    #[test]
+    fn require_u64_from_number() {
+        let node = json!({"block_number": 42});
+        assert_eq!(require_u64(&node, "block_number").unwrap(), 42);
+    }
+
+    #[test]
+    fn require_u64_from_string() {
+        let node = json!({"block_number": "42"});
+        assert_eq!(require_u64(&node, "block_number").unwrap(), 42);
+    }
+
+    #[test]
+    fn require_u64_missing_field() {
+        let node = json!({});
+        let err = require_u64(&node, "block_number").unwrap_err();
+        assert!(
+            matches!(err, ExplorerStatusError::NotPresent { field, .. } if field == "block_number")
+        );
+    }
+
+    #[test]
+    fn require_u64_wrong_type() {
+        let node = json!({"block_number": [1, 2, 3]});
+        let err = require_u64(&node, "block_number").unwrap_err();
+        assert!(
+            matches!(err, ExplorerStatusError::TypeMismatch { field, .. } if field == "block_number")
+        );
+    }
+
+    // require_str tests
+    // --------------------------------------------------------------------------------------------
+
+    #[test]
+    fn require_str_valid() {
+        let node = json!({"name": "hello"});
+        assert_eq!(require_str(&node, "name").unwrap(), "hello");
+    }
+
+    #[test]
+    fn require_str_missing_field() {
+        let node = json!({});
+        let err = require_str(&node, "name").unwrap_err();
+        assert!(matches!(err, ExplorerStatusError::NotPresent { field, .. } if field == "name"));
+    }
+
+    #[test]
+    fn require_str_wrong_type() {
+        let node = json!({"name": 123});
+        let err = require_str(&node, "name").unwrap_err();
+        assert!(matches!(err, ExplorerStatusError::TypeMismatch { field, .. } if field == "name"));
+    }
 }
