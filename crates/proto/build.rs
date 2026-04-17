@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
@@ -137,6 +138,8 @@ fn generate_server_modules(
     descriptor_sets: &[FileDescriptorSet],
     dst_dir: &Path,
 ) -> miette::Result<()> {
+    let mut generated: HashSet<(String, String)> = HashSet::new();
+
     for fds in descriptor_sets {
         for file in &fds.file {
             let package = file.package.as_deref().unwrap_or_default();
@@ -144,6 +147,11 @@ fn generate_server_modules(
 
             for service in &file.service {
                 let service_name = service.name.as_deref().unwrap_or("Service");
+                let key = (package.clone(), service_name.to_string());
+                if !generated.insert(key) {
+                    continue;
+                }
+
                 let service_name = to_snake_case(service_name);
                 let module_name = format!("{}_{}", &package, service_name);
 
