@@ -33,13 +33,6 @@ const DEFAULT_CACHE_SIZE: usize = 1 << 30;
 const DEFAULT_MAX_OPEN_FILES: i32 = 512;
 const DEFAULT_BLOCK_SIZE: usize = 16 << 10;
 const DEFAULT_MAX_TOTAL_WAL_SIZE: u64 = 512 * 1024 * 1024;
-const DEFAULT_WRITE_BUFFER_SIZE: usize = 128 << 20;
-const DEFAULT_MAX_WRITE_BUFFER_NUMBER: i32 = 3;
-const DEFAULT_MIN_WRITE_BUFFER_NUMBER_TO_MERGE: i32 = 1;
-const DEFAULT_MAX_WRITE_BUFFER_SIZE_TO_MAINTAIN: i64 = 0;
-const DEFAULT_TARGET_FILE_SIZE_BASE: u64 = 512 << 20;
-const DEFAULT_TARGET_FILE_SIZE_MULTIPLIER: i32 = 2;
-const DEFAULT_LEVEL_ZERO_FILE_NUM_COMPACTION_TRIGGER: i32 = 8;
 const DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES: i32 = 1 << 20;
 const DEFAULT_BLOOM_FILTER_BITS_PER_KEY: f64 = 10.0;
 
@@ -143,7 +136,7 @@ impl RocksDbStorage {
         // Column family for leaves
         let mut leaves_opts = Options::default();
         leaves_opts.set_block_based_table_factory(&table_opts);
-        configure_smt_cf_options(&mut leaves_opts, tuning_options);
+        configure_smt_cf_options(&mut leaves_opts);
         if let Some(write_buffer_manager) = write_buffer_manager.as_ref() {
             db_opts.set_write_buffer_manager(write_buffer_manager);
             leaves_opts.set_write_buffer_manager(write_buffer_manager);
@@ -167,7 +160,7 @@ impl RocksDbStorage {
 
             let mut opts = Options::default();
             opts.set_block_based_table_factory(&table_opts);
-            configure_smt_cf_options(&mut opts, tuning_options);
+            configure_smt_cf_options(&mut opts);
             if let Some(write_buffer_manager) = write_buffer_manager {
                 opts.set_write_buffer_manager(write_buffer_manager);
             }
@@ -1181,21 +1174,26 @@ impl Iterator for RocksDbSubtreeIterator<'_> {
     }
 }
 
-fn configure_smt_cf_options(opts: &mut Options, tuning_options: &RocksDbTuningOptions) {
-    opts.set_write_buffer_size(tuning_options.write_buffer_size);
-    opts.set_max_write_buffer_number(tuning_options.max_write_buffer_number);
-    opts.set_min_write_buffer_number_to_merge(tuning_options.min_write_buffer_number_to_merge);
-    opts.set_max_write_buffer_size_to_maintain(tuning_options.max_write_buffer_size_to_maintain);
+fn configure_smt_cf_options(opts: &mut Options) {
+    // 128 MB memtable
+    opts.set_write_buffer_size(128 << 20);
+    // Allow up to 3 memtables
+    opts.set_max_write_buffer_number(3);
+    opts.set_min_write_buffer_number_to_merge(1);
+    // Do not retain flushed memtables in memory
+    opts.set_max_write_buffer_size_to_maintain(0);
+    // Use level-based compaction
     opts.set_compaction_style(DBCompactionStyle::Level);
-    opts.set_target_file_size_base(tuning_options.target_file_size_base);
-    opts.set_target_file_size_multiplier(tuning_options.target_file_size_multiplier);
+    // 512 MB target file size
+    opts.set_target_file_size_base(512 << 20);
+    opts.set_target_file_size_multiplier(2);
+    // LZ4 compression for active files, ZSTD for bottommost files
     opts.set_compression_type(DBCompressionType::Lz4);
     opts.set_bottommost_compression_type(DBCompressionType::Zstd);
     // Enable the bottommost compression setting; selecting ZSTD alone is not enough.
     opts.set_bottommost_zstd_max_train_bytes(DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES, true);
-    opts.set_level_zero_file_num_compaction_trigger(
-        tuning_options.level_zero_file_num_compaction_trigger,
-    );
+    // Set level-based compaction parameters
+    opts.set_level_zero_file_num_compaction_trigger(8);
 }
 
 fn configure_block_table_options(
@@ -1408,13 +1406,6 @@ pub struct RocksDbWriteBufferManagerBudget {
 pub struct RocksDbTuningOptions {
     pub block_size: usize,
     pub max_total_wal_size: u64,
-    pub write_buffer_size: usize,
-    pub max_write_buffer_number: i32,
-    pub min_write_buffer_number_to_merge: i32,
-    pub max_write_buffer_size_to_maintain: i64,
-    pub target_file_size_base: u64,
-    pub target_file_size_multiplier: i32,
-    pub level_zero_file_num_compaction_trigger: i32,
     pub bloom_filter_bits_per_key: RocksDbBloomFilterBitsPerKey,
 }
 
@@ -1423,13 +1414,6 @@ impl Default for RocksDbTuningOptions {
         Self {
             block_size: DEFAULT_BLOCK_SIZE,
             max_total_wal_size: DEFAULT_MAX_TOTAL_WAL_SIZE,
-            write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
-            max_write_buffer_number: DEFAULT_MAX_WRITE_BUFFER_NUMBER,
-            min_write_buffer_number_to_merge: DEFAULT_MIN_WRITE_BUFFER_NUMBER_TO_MERGE,
-            max_write_buffer_size_to_maintain: DEFAULT_MAX_WRITE_BUFFER_SIZE_TO_MAINTAIN,
-            target_file_size_base: DEFAULT_TARGET_FILE_SIZE_BASE,
-            target_file_size_multiplier: DEFAULT_TARGET_FILE_SIZE_MULTIPLIER,
-            level_zero_file_num_compaction_trigger: DEFAULT_LEVEL_ZERO_FILE_NUM_COMPACTION_TRIGGER,
             bloom_filter_bits_per_key: RocksDbBloomFilterBitsPerKey::default(),
         }
     }
