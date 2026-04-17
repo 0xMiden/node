@@ -47,7 +47,7 @@ mod tests;
 ///
 /// DELETE FROM notes WHERE created_by IS NOT NULL
 ///
-/// UPDATE notes SET consumed_by = NULL WHERE consumed_by IS NOT NULL
+/// UPDATE notes SET consumed_by = NULL WHERE consumed_by IS NOT NULL AND committed_at IS NULL
 /// ```
 pub fn purge_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
     // Delete inflight account rows.
@@ -58,10 +58,14 @@ pub fn purge_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> 
     diesel::delete(schema::notes::table.filter(schema::notes::created_by.is_not_null()))
         .execute(conn)?;
 
-    // Un-nullify notes consumed by inflight transactions.
-    diesel::update(schema::notes::table.filter(schema::notes::consumed_by.is_not_null()))
-        .set(schema::notes::consumed_by.eq(None::<Vec<u8>>))
-        .execute(conn)?;
+    // Un-nullify notes consumed by inflight transactions (skip committed notes).
+    diesel::update(
+        schema::notes::table
+            .filter(schema::notes::consumed_by.is_not_null())
+            .filter(schema::notes::committed_at.is_null()),
+    )
+    .set(schema::notes::consumed_by.eq(None::<Vec<u8>>))
+    .execute(conn)?;
 
     Ok(())
 }
@@ -154,6 +158,7 @@ pub fn add_transaction(
             last_error: None,
             created_by: Some(tx_id_bytes.clone()),
             consumed_by: None,
+            committed_at: None,
         };
         diesel::insert_or_ignore_into(schema::notes::table)
             .values(&insert)
@@ -194,8 +199,8 @@ pub fn add_transaction(
 /// UPDATE accounts SET transaction_id = NULL
 /// WHERE account_id = ?1 AND transaction_id = ?2
 ///
-/// -- Delete consumed notes
-/// DELETE FROM notes WHERE consumed_by = ?1
+/// -- Mark consumed notes as committed
+/// UPDATE notes SET committed_at = ?block_num WHERE consumed_by = ?1
 ///
 /// -- Promote inflight-created notes to committed
 /// UPDATE notes SET created_by = NULL WHERE created_by = ?1
@@ -242,7 +247,7 @@ pub fn commit_block(
             .execute(conn)?;
         }
 
-        // Collect accounts of notes consumed by this tx before deleting them.
+        // Collect accounts of notes consumed by this tx.
         let consumed_note_accounts: Vec<Vec<u8>> = schema::notes::table
             .filter(schema::notes::consumed_by.eq(&tx_id_bytes))
             .select(schema::notes::account_id)
@@ -251,8 +256,10 @@ pub fn commit_block(
             affected_accounts.insert(conversions::network_account_id_from_bytes(account_id_bytes)?);
         }
 
-        // Delete consumed notes (consumed_by = tx_id).
-        diesel::delete(schema::notes::table.filter(schema::notes::consumed_by.eq(&tx_id_bytes)))
+        // Mark consumed notes as committed (set committed_at = block_num).
+        let block_num_val = conversions::block_num_to_i64(block_num);
+        diesel::update(schema::notes::table.filter(schema::notes::consumed_by.eq(&tx_id_bytes)))
+            .set(schema::notes::committed_at.eq(Some(block_num_val)))
             .execute(conn)?;
 
         // Promote inflight-created notes to committed (set created_by = NULL).

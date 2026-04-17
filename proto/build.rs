@@ -8,7 +8,7 @@ use protox::prost::Message;
 /// Compiles each gRPC service definitions into a
 /// [`FileDescriptorSet`](tonic_prost_build::FileDescriptorSet) and exposes it as a function:
 ///
-/// ```rust
+/// ```rust, ignore
 /// fn <service>_api_descriptor() -> FileDescriptorSet;
 /// ```
 fn main() -> miette::Result<()> {
@@ -75,7 +75,7 @@ fn proto_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>, miette::Er
 ///
 /// The function looks as follows:
 ///
-/// ```rust
+/// ```rust, ignore
 /// fn <file_stem>_api_descriptor() -> FileDescriptorSet {
 ///     FileDescriptorSet::decode(vec![<encoded>].as_slice())
 ///         .expect("encoded file descriptor should decode")

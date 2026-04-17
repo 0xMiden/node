@@ -9,7 +9,7 @@ use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::actor::{AccountActor, AccountActorContext, AccountOrigin};
+use crate::actor::{AccountActor, AccountActorContext};
 use crate::db::Db;
 
 // WRITE EVENT RESULT
@@ -133,10 +133,12 @@ impl Coordinator {
     /// This method creates a new [`AccountActor`] instance for the specified account origin
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
-    #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self, origin, actor_context))]
-    pub fn spawn_actor(&mut self, origin: AccountOrigin, actor_context: &AccountActorContext) {
-        let account_id = origin.id();
-
+    #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self, actor_context))]
+    pub fn spawn_actor(
+        &mut self,
+        account_id: NetworkAccountId,
+        actor_context: &AccountActorContext,
+    ) {
         // Skip spawning if the account has been deactivated due to repeated crashes.
         if let Some(&count) = self.crash_counts.get(&account_id) {
             if count >= self.max_account_crashes {
@@ -160,7 +162,8 @@ impl Coordinator {
 
         let notify = Arc::new(Notify::new());
         let cancel_token = tokio_util::sync::CancellationToken::new();
-        let actor = AccountActor::new(origin, actor_context, notify.clone(), cancel_token.clone());
+        let actor =
+            AccountActor::new(account_id, actor_context, notify.clone(), cancel_token.clone());
         let handle = ActorHandle::new(notify, cancel_token);
 
         // Run the actor. Actor reads state from DB on startup.
@@ -346,7 +349,7 @@ mod tests {
     use miden_node_proto::domain::mempool::MempoolEvent;
 
     use super::*;
-    use crate::actor::{AccountActorContext, AccountOrigin};
+    use crate::actor::AccountActorContext;
     use crate::db::Db;
     use crate::test_utils::*;
 
@@ -403,7 +406,7 @@ mod tests {
         // Simulate the account having reached the crash threshold.
         coordinator.crash_counts.insert(account_id, max_crashes);
 
-        coordinator.spawn_actor(AccountOrigin::Store(account_id), &actor_context);
+        coordinator.spawn_actor(account_id, &actor_context);
 
         assert!(
             !coordinator.actor_registry.contains_key(&account_id),
@@ -423,7 +426,7 @@ mod tests {
         // Set crash count below the threshold.
         coordinator.crash_counts.insert(account_id, max_crashes - 1);
 
-        coordinator.spawn_actor(AccountOrigin::Store(account_id), &actor_context);
+        coordinator.spawn_actor(account_id, &actor_context);
 
         assert!(
             coordinator.actor_registry.contains_key(&account_id),
