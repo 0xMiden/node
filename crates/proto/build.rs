@@ -446,7 +446,10 @@ impl ServerStream {
             .arg_ref_self()
             .arg("_request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<Self::{}>>", self.associated_type().0))
-            .line("todo!()");
+            .line(format!(
+                "Err(tonic::Status::unimplemented({:?}))",
+                format!("server-streaming RPC `{}` is not implemented", self.name)
+            ));
 
         ret
     }
