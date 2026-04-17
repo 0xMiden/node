@@ -656,8 +656,10 @@ impl SmtStorage for RocksDbStorage {
         let cf = self.cf_handle(LEAVES_CF)?;
         let old_bytes = self.db.get_cf(cf, key).map_err(map_rocksdb_err)?;
         self.db.delete_cf(cf, key).map_err(map_rocksdb_err)?;
-        Ok(old_bytes
-            .map(|bytes| SmtLeaf::read_from_bytes(&bytes).expect("failed to deserialize leaf")))
+        Ok(old_bytes.map(|bytes| {
+            SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())
+                .expect("failed to deserialize leaf")
+        }))
     }
 
     /// Stores a single subtree in RocksDB and optionally updates the depth-24 root cache.
@@ -964,7 +966,8 @@ impl Iterator for RocksDbDirectLeafIterator<'_> {
         self.iter.find_map(|result| {
             let (key_bytes, value_bytes) = result.ok()?;
             let leaf_idx = index_from_key_bytes(&key_bytes).ok()?;
-            let leaf = SmtLeaf::read_from_bytes(&value_bytes).ok()?;
+            let leaf =
+                SmtLeaf::read_from_bytes_with_budget(&value_bytes, value_bytes.len()).ok()?;
             Some((leaf_idx, leaf))
         })
     }

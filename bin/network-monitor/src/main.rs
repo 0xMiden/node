@@ -18,12 +18,14 @@ pub mod frontend;
 mod monitor;
 pub mod note_transport;
 pub mod remote_prover;
+pub mod service_status;
 pub mod status;
+pub mod validator;
 
 // Re-exports for cleaner imports
 use cli::Cli;
 // Re-export for other modules
-pub use monitor::tasks::current_unix_timestamp_secs;
+pub use service_status::current_unix_timestamp_secs;
 
 /// Component identifier for structured logging and tracing
 pub const COMPONENT: &str = "miden-network-monitor";
@@ -37,5 +39,5 @@ pub const COMPONENT: &str = "miden-network-monitor";
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    cli.execute().await
+    Box::pin(cli.execute()).await
 }

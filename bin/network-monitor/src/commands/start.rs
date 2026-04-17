@@ -55,6 +55,13 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         None
     };
 
+    // Initialize the validator status checker task.
+    let validator_rx = if config.validator_url.is_some() {
+        Some(tasks.spawn_validator_checker(&config).await?)
+    } else {
+        None
+    };
+
     // Initialize the prover checkers & tests tasks, only if URLs were provided.
     let prover_rxs = if config.remote_prover_urls.is_empty() {
         debug!(target: COMPONENT, "No remote prover URLs configured, skipping prover tasks");
@@ -93,6 +100,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         ntx_tracking: ntx_tracking_rx,
         explorer: explorer_rx,
         note_transport: note_transport_rx,
+        validator: validator_rx,
         monitor_version: env!("CARGO_PKG_VERSION").to_string(),
         network_name: config.network_name.clone(),
     };

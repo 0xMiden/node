@@ -32,4 +32,13 @@ message ValidatorStatus {
 
     // The validator's status.
     string status = 2;
+
+    // The validator's current chain tip (highest signed block number).
+    fixed32 chain_tip = 3;
+
+    // The total number of transactions validated by this validator.
+    fixed64 validated_transactions_count = 4;
+
+    // The total number of blocks signed by this validator.
+    fixed64 signed_blocks_count = 5;
 }

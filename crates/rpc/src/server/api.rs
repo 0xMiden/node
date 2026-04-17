@@ -36,7 +36,7 @@ use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
 use tonic::{IntoRequest, Request, Response, Status};
-use tracing::{debug, info};
+use tracing::{debug, info, info_span};
 use url::Url;
 
 use crate::COMPONENT;
@@ -331,6 +331,7 @@ impl api_server::Api for RpcService {
 
         // Validate total storage map key limit before forwarding to store
         if let Some(details) = &request.details {
+            let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
             let total_keys: usize = details
                 .storage_maps
                 .iter()
@@ -585,23 +586,19 @@ impl api_server::Api for RpcService {
 
     // -- Note debugging endpoints ----------------------------------------------------------------
 
-    async fn get_note_error(
+    async fn get_network_note_status(
         &self,
         request: Request<proto::note::NoteId>,
-    ) -> Result<Response<proto::rpc::GetNoteErrorResponse>, Status> {
+    ) -> Result<Response<proto::rpc::GetNetworkNoteStatusResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         let Some(ntx_builder) = &self.ntx_builder else {
             return Err(Status::unavailable("Network transaction builder is not enabled"));
         };
 
-        let response = ntx_builder.clone().get_note_error(request).await?.into_inner();
+        let response = ntx_builder.clone().get_network_note_status(request).await?.into_inner();
 
-        Ok(Response::new(proto::rpc::GetNoteErrorResponse {
-            error: response.error,
-            attempt_count: response.attempt_count,
-            last_attempt_block_num: response.last_attempt_block_num,
-        }))
+        Ok(Response::new(response))
     }
 }
 

@@ -16,17 +16,17 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [GetBlockByNumber](#getblockbynumber)
 - [GetBlockHeaderByNumber](#getblockheaderbynumber)
 - [GetLimits](#getlimits)
+- [GetNetworkNoteStatus](#getnetworknotestatus)
 - [GetNotesById](#getnotesbyid)
 - [GetNoteScriptByRoot](#getnotescriptbyroot)
-- [SubmitProvenTransaction](#submitproventransaction)
-- [SyncNullifiers](#syncnullifiers)
-- [SyncAccountVault](#syncaccountvault)
-- [SyncNotes](#syncnotes)
-- [SyncAccountStorageMaps](#syncaccountstoragemaps)
-- [SyncChainMmr](#syncchainmmr)
-- [SyncTransactions](#synctransactions)
 - [Status](#status)
-- [GetNoteError](#getnoteerror)
+- [SubmitProvenTransaction](#submitproventransaction)
+- [SyncAccountStorageMaps](#syncaccountstoragemaps)
+- [SyncAccountVault](#syncaccountvault)
+- [SyncChainMmr](#syncchainmmr)
+- [SyncNotes](#syncnotes)
+- [SyncNullifiers](#syncnullifiers)
+- [SyncTransactions](#synctransactions)
 
 <!--toc:end-->
 
@@ -157,9 +157,48 @@ Request a set of notes.
 
 **Limits:** `note_id` (100)
 
+### GetNetworkNoteStatus
+
+Returns the current lifecycle status of a network note. The status indicates where the note is in its lifecycle: pending execution, processed (consumed by a transaction in the mempool), or discarded after too many failed attempts. The response also includes the latest execution error, if any.
+
+This endpoint is only available when the network transaction builder is enabled and connected. If it is not configured, the endpoint returns `UNAVAILABLE`.
+
+#### Request
+
+```protobuf
+message NoteId {
+    Digest id = 1;  // The note ID
+}
+```
+
+#### Response
+
+```protobuf
+enum NetworkNoteStatus {
+    NETWORK_NOTE_STATUS_UNSPECIFIED = 0;
+    NETWORK_NOTE_STATUS_PENDING = 1;    // Awaiting execution or being retried
+    NETWORK_NOTE_STATUS_NULLIFIER_INFLIGHT = 2;  // Consumed by a transaction sent to block producer
+    NETWORK_NOTE_STATUS_DISCARDED = 3;  // Exceeded max retries, will not be retried
+    NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;  // Consuming transaction committed on-chain
+}
+
+message GetNetworkNoteStatusResponse {
+    NetworkNoteStatus status = 1;                // Current lifecycle status
+    optional string last_error = 2;              // The latest error message, if any
+    uint32 attempt_count = 3;                    // Number of failed execution attempts
+    optional fixed32 last_attempt_block_num = 4; // Block number of the last failed attempt, if any
+}
+```
+
+If the note is not found in the network transaction builder's database, the endpoint returns `NOT_FOUND`.
+
 ### GetNoteScriptByRoot
 
 Request the script for a note by its root.
+
+### Status
+
+Request the status of the node components. The response contains the current version of the RPC component and the connection status of the other components, including their versions and the number of the most recent block in the chain (chain tip).
 
 ### SubmitProvenTransaction
 
@@ -182,21 +221,25 @@ When transaction submission fails, detailed error information is provided throug
 | `OUTPUT_NOTES_ALREADY_EXIST`                  | 6     | `INVALID_ARGUMENT` | Output note IDs are already in use                            |
 | `TRANSACTION_EXPIRED`                         | 7     | `INVALID_ARGUMENT` | Transaction has exceeded its expiration block height          |
 
-### SyncNullifiers
+### SyncAccountStorageMaps
 
-Returns nullifier synchronization data for a set of prefixes within a given block range. This method allows clients to efficiently track nullifier creation by retrieving only the nullifiers produced between two blocks.
+Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
 
-Caller specifies the `prefix_len` (currently only 16), the list of prefix values (`nullifiers`), and the block range (`block_from`, optional `block_to`). The response includes all matching nullifiers created within that range, the last block included in the response (`block_num`), and the current chain tip (`chain_tip`).
+Caller specifies the `account_id` of the public account and the block range (`block_from`, `block_to`) for which to retrieve storage updates. The response includes all storage map key-value updates that occurred within that range, along with the last block included in the sync and the current chain tip.
 
-If the response is chunked (i.e., `block_num < block_to`), continue by issuing another request with `block_from = block_num + 1` to retrieve subsequent updates.
-
-**Limits:** `nullifier` (1000)
+This endpoint enables clients to maintain an updated view of account storage.
 
 ### SyncAccountVault
 
 Returns information that allows clients to sync asset values for specific public accounts within a block range.
 
 For any `[block_from..block_to]` range, the latest known set of assets is returned for the requested account ID. The data can be split and a cutoff block may be selected if there are too many assets to sync. The response contains the chain tip so that the caller knows when it has been reached.
+
+### SyncChainMmr
+
+Returns MMR delta information needed to synchronize the chain MMR within a block range.
+
+Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range, but at most to (including) the chain tip.
 
 ### SyncNotes
 
@@ -210,53 +253,19 @@ A basic note sync can be implemented by repeatedly requesting the previous respo
 
 **Limits:** `note_tag` (1000)
 
-### SyncAccountStorageMaps
+### SyncNullifiers
 
-Returns storage map synchronization data for a specified public account within a given block range. This method allows clients to efficiently sync the storage map state of an account by retrieving only the changes that occurred between two blocks.
+Returns nullifier synchronization data for a set of prefixes within a given block range. This method allows clients to efficiently track nullifier creation by retrieving only the nullifiers produced between two blocks.
 
-Caller specifies the `account_id` of the public account and the block range (`block_from`, `block_to`) for which to retrieve storage updates. The response includes all storage map key-value updates that occurred within that range, along with the last block included in the sync and the current chain tip.
+Caller specifies the `prefix_len` (currently only 16), the list of prefix values (`nullifiers`), and the block range (`block_from`, optional `block_to`). The response includes all matching nullifiers created within that range, the last block included in the response (`block_num`), and the current chain tip (`chain_tip`).
 
-This endpoint enables clients to maintain an updated view of account storage.
+If the response is chunked (i.e., `block_num < block_to`), continue by issuing another request with `block_from = block_num + 1` to retrieve subsequent updates.
 
-### SyncChainMmr
-
-Returns MMR delta information needed to synchronize the chain MMR within a block range.
-
-Caller specifies the `block_range`, starting from the last block already represented in its local MMR. The response contains the MMR delta for the requested range, but at most to (including) the chain tip.
+**Limits:** `nullifier` (1000)
 
 ### SyncTransactions
 
 Returns transaction records for specific accounts within a block range.
-
-### Status
-
-Request the status of the node components. The response contains the current version of the RPC component and the connection status of the other components, including their versions and the number of the most recent block in the chain (chain tip).
-
-### GetNoteError
-
-Returns the latest execution error for a network note, if any. This is useful for debugging notes that are failing to be consumed by the network transaction builder.
-
-This endpoint is only available when the network transaction builder is enabled and connected. If it is not configured, the endpoint returns `UNAVAILABLE`.
-
-#### Request
-
-```protobuf
-message NoteId {
-    Digest id = 1;  // The note ID
-}
-```
-
-#### Response
-
-```protobuf
-message GetNoteErrorResponse {
-    optional string error = 1;                  // The latest error message, if any
-    uint32 attempt_count = 2;                   // Number of failed execution attempts
-    optional fixed32 last_attempt_block_num = 3; // Block number of the last failed attempt, if any
-}
-```
-
-If the note is not found in the network transaction builder's database, the endpoint returns `NOT_FOUND`.
 
 ## Error Handling
 

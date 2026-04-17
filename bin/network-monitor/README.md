@@ -33,6 +33,7 @@ miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 - `--faucet-url`: Faucet service URL for testing. If omitted, faucet testing is disabled.
 - `--explorer-url`: Explorer service GraphQL endpoint. If omitted, explorer checks are disabled.
 - `--note-transport-url`: Note transport service URL for health checking. If omitted, note transport checks are disabled.
+- `--validator-url`: Validator service URL for status checking. If omitted, validator checks are disabled.
 - `--disable-ntx-service`: Disable the network transaction service checks (enabled by default). The network transaction service consists of two components: counter increment (sending increment transactions) and counter tracking (monitoring counter value changes).
 - `--remote-prover-test-interval`: Interval at which to test the remote provers services (default: `2m`)
 - `--faucet-test-interval`: Interval at which to test the faucet services (default: `2m`)
@@ -58,6 +59,7 @@ If command-line arguments are not provided, the application falls back to enviro
 - `MIDEN_MONITOR_FAUCET_URL`: Faucet service URL for testing. If unset, faucet testing is disabled.
 - `MIDEN_MONITOR_EXPLORER_URL`: Explorer service GraphQL endpoint. If unset, explorer checks are disabled.
 - `MIDEN_MONITOR_NOTE_TRANSPORT_URL`: Note transport service URL for health checking. If unset, note transport checks are disabled.
+- `MIDEN_MONITOR_VALIDATOR_URL`: Validator service URL for status checking. If unset, validator checks are disabled.
 - `MIDEN_MONITOR_DISABLE_NTX_SERVICE`: Set to `true` to disable the network transaction service checks (enabled by default). This affects both counter increment and tracking components.
 - `MIDEN_MONITOR_REMOTE_PROVER_TEST_INTERVAL`: Interval at which to test the remote provers services
 - `MIDEN_MONITOR_FAUCET_TEST_INTERVAL`: Interval at which to test the faucet services
@@ -83,6 +85,7 @@ Starts the network monitoring service with the web dashboard. RPC status is alwa
 - Faucet testing: enabled when `--faucet-url` (or `MIDEN_MONITOR_FAUCET_URL`) is provided
 - Network transaction service: enabled when `--disable-ntx-service=false` or unset (or `MIDEN_MONITOR_DISABLE_NTX_SERVICE=false` or unset)
 - Note transport checks: enabled when `--note-transport-url` (or `MIDEN_MONITOR_NOTE_TRANSPORT_URL`) is provided
+- Validator checks: enabled when `--validator-url` (or `MIDEN_MONITOR_VALIDATOR_URL`) is provided
 
 ```bash
 # Start with default configuration (RPC only)
@@ -215,6 +218,14 @@ The monitor application provides real-time status monitoring for the following M
 - **Metrics**:
   - Service URL
   - gRPC serving status (Serving, NotServing, Unknown)
+
+### Validator
+- **Service Health**: Checks the validator service via its gRPC Status endpoint
+- **Metrics**:
+  - Service URL and version
+  - Chain tip (highest signed block number)
+  - Validated transactions count (total transactions validated via `SubmitProvenTransaction`)
+  - Signed blocks count (total blocks signed via `SignBlock`)
 
 ## User Interface
 

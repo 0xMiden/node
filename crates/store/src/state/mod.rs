@@ -813,6 +813,7 @@ impl State {
     /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
     /// the latest state. Note that historical states are only available for recent blocks close
     /// to the chain tip.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn get_account(
         &self,
         account_request: AccountRequest,
@@ -845,6 +846,7 @@ impl State {
     ///
     /// If `block_num` is provided, returns the witness at that historical block;
     /// otherwise, returns the witness at the latest block.
+    #[instrument(target = COMPONENT, skip_all)]
     fn get_account_witness(
         snapshot: &Arc<InMemoryState>,
         block_num: Option<BlockNumber>,
@@ -886,6 +888,7 @@ impl State {
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
     #[expect(clippy::too_many_lines)]
+    #[instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
         db: &Arc<Db>,
         snapshot: &Arc<InMemoryState>,

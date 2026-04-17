@@ -101,7 +101,7 @@ pub(crate) fn read_count(what: &'static str, bytes: &[u8]) -> Result<usize, Stor
 /// Deserializes a single SMT leaf from raw bytes.
 #[expect(clippy::needless_pass_by_value, reason = "simplifies chaining")]
 pub(crate) fn read_leaf(leaf_bytes: Vec<u8>) -> Result<Option<SmtLeaf>, StorageError> {
-    let leaf = SmtLeaf::read_from_bytes(&leaf_bytes)?;
+    let leaf = SmtLeaf::read_from_bytes_with_budget(&leaf_bytes, leaf_bytes.len())?;
     Ok(Some(leaf))
 }
 
@@ -112,7 +112,7 @@ pub(crate) fn read_leaves(
     leaves
         .into_iter()
         .map(|leaf| match leaf {
-            Some(bytes) => Ok(Some(SmtLeaf::read_from_bytes(&bytes)?)),
+            Some(bytes) => Ok(Some(SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?)),
             None => Ok(None),
         })
         .collect()
