@@ -12,6 +12,7 @@ services:
       - ./compose/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
       - ./compose/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
       - ./compose/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./compose/grafana/provisioning/alerting:/etc/grafana/provisioning/alerting
       - grafana-data:/var/lib/grafana
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
@@ -27,6 +28,7 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=miden-node-store
     depends_on:
       - otel-collector
 
@@ -34,6 +36,7 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=miden-node-validator
     depends_on:
       - otel-collector
 
@@ -41,6 +44,7 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=miden-node-block-producer
     depends_on:
       - otel-collector
 
@@ -48,6 +52,7 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=miden-node-rpc
     depends_on:
       - otel-collector
 
@@ -55,6 +60,7 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=miden-node-ntx-builder
     depends_on:
       - otel-collector
 

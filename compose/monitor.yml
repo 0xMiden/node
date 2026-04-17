@@ -6,15 +6,31 @@ services:
       - miden-network-monitor
       - start
     environment:
+      # `localhost` resolves to:
+      #   - the browser → 127.0.0.1 → RPC's published host port 57291
+      #   - the monitor container → host-gateway (via extra_hosts below) → same RPC port
+      # This avoids the need for a second URL or host /etc/hosts edits.
       - MIDEN_MONITOR_RPC_URL=http://localhost:57291
       - MIDEN_MONITOR_PORT=3001
       - MIDEN_MONITOR_NETWORK_NAME=Localhost
-      - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
       - MIDEN_MONITOR_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=miden-network-monitor
+      # NTX service: counter + wallet files are auto-deployed on first start. Persist them in
+      # a named volume so subsequent restarts skip redeploy.
+      - MIDEN_MONITOR_COUNTER_FILEPATH=/data/counter_program.mac
+      - MIDEN_MONITOR_WALLET_FILEPATH=/data/wallet_account.mac
+    # Overrides `localhost` inside this container to the docker host gateway so the server-side
+    # RPC poll reaches the RPC container via its published host port. Works on Linux, Docker
+    # Desktop for Mac and Windows (all support the `host-gateway` magic value).
     extra_hosts:
       - "localhost:host-gateway"
+    volumes:
+      - monitor-data:/data
     ports:
       - "3001:3001"
     depends_on:
       - otel-collector
+
+volumes:
+  monitor-data:

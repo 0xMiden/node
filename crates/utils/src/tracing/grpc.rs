@@ -19,16 +19,20 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
 
     // Create a span with a generic, static name. Fields to be recorded after needs to be
     // initialized as empty since otherwise the assignment will have no effect.
+    // `otel.kind = "server"` lets Tempo's service_graph processor pair this with the
+    // corresponding client span on the caller side.
     let span = match method {
         "SyncState" | "SyncNullifiers" => tracing::debug_span!(
             "rpc",
             otel.name = field::Empty,
+            otel.kind = "server",
             rpc.service = service,
             rpc.method = method
         ),
         _ => tracing::info_span!(
             "rpc",
             otel.name = field::Empty,
+            otel.kind = "server",
             rpc.service = service,
             rpc.method = method
         ),
@@ -87,6 +91,13 @@ impl tonic::service::Interceptor for OtelInterceptor {
         mut request: tonic::Request<()>,
     ) -> Result<tonic::Request<()>, tonic::Status> {
         use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        // Emit a CLIENT-kind span so Tempo's service_graph processor can pair it with the
+        // SERVER span on the callee. The span closes at the end of this function, which is
+        // acceptable — service_graph pairs by trace_id + span_id, not by duration overlap.
+        let client_span = tracing::info_span!("grpc.client", otel.kind = "client");
+        let _enter = client_span.enter();
+
         let ctx = tracing::Span::current().context();
         opentelemetry::global::get_text_map_propagator(|propagator| {
             propagator.inject_context(&ctx, &mut MetadataInjector(request.metadata_mut()));
