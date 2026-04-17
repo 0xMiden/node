@@ -1439,11 +1439,11 @@ impl Default for RocksDbBloomFilterBitsPerKey {
         Self {
             leaves: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
             depth_24: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
-            subtree_24: 8.0,
+            subtree_24: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
             subtree_32: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
             subtree_40: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
-            subtree_48: 12.0,
-            subtree_56: 12.0,
+            subtree_48: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            subtree_56: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
         }
     }
 }
