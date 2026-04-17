@@ -180,10 +180,8 @@ impl RocksDbStorage {
         depth24_opts.set_compression_type(DBCompressionType::Lz4);
         depth24_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
         // Enable the bottommost compression setting; selecting ZSTD alone is not enough.
-        depth24_opts.set_bottommost_zstd_max_train_bytes(
-            DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES,
-            true,
-        );
+        depth24_opts
+            .set_bottommost_zstd_max_train_bytes(DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES, true);
         depth24_opts.set_block_based_table_factory(&depth24_table_opts);
         if let Some(write_buffer_manager) = write_buffer_manager.as_ref() {
             depth24_opts.set_write_buffer_manager(write_buffer_manager);
@@ -1474,7 +1472,6 @@ mod tests {
                 subtree_48: 16.0,
                 subtree_56: 17.0,
             },
-            ..RocksDbTuningOptions::default()
         };
 
         let config = RocksDbConfig::new("/tmp/smt")
@@ -1498,10 +1495,7 @@ mod tests {
 
     #[test]
     fn rocksdb_config_defaults_to_relaxed_durability() {
-        assert_eq!(
-            RocksDbConfig::new("/tmp/smt").durability_mode,
-            RocksDbDurabilityMode::Relaxed
-        );
+        assert_eq!(RocksDbConfig::new("/tmp/smt").durability_mode, RocksDbDurabilityMode::Relaxed);
     }
 }
 
