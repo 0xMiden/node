@@ -21,7 +21,13 @@ use miden_node_utils::limiter::{
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
-use miden_protocol::transaction::{InputNoteCommitment, OrderedTransactionHeaders, TransactionId};
+use miden_protocol::transaction::{
+    InputNoteCommitment,
+    InputNotes,
+    OrderedTransactionHeaders,
+    TransactionHeader,
+    TransactionId,
+};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::{DatabaseError, select_note_sync_records};
@@ -322,26 +328,27 @@ fn with_output_note_proofs(
         .zip(tx_output_notes)
         .map(|(raw, output_notes)| {
             let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
-            // Filter out erased notes: notes created and consumed within the same
-            // block are removed from the block's output notes and thus have no entry
-            // in the `notes` table.
-            let enriched_notes = output_notes
-                .into_iter()
-                .filter_map(|note| {
-                    let note_id = note.id();
-                    output_notes_by_id.get(&note_id).cloned()
-                })
-                .collect::<Vec<_>>();
+            // Collect inclusion proofs for committed output notes. Notes not found in
+            // the `notes` table were erased (created and consumed in the same batch).
+            let output_note_proofs = output_notes
+                .iter()
+                .filter_map(|note| output_notes_by_id.get(&note.id()).cloned())
+                .collect();
+
+            let header = TransactionHeader::new_unchecked(
+                transaction_id,
+                AccountId::read_from_bytes(&raw.account_id)?,
+                Word::read_from_bytes(&raw.initial_state_commitment)?,
+                Word::read_from_bytes(&raw.final_state_commitment)?,
+                InputNotes::new_unchecked(Deserializable::read_from_bytes(&raw.input_notes)?),
+                output_notes,
+                FungibleAsset::read_from_bytes(&raw.fee)?,
+            );
 
             Ok(crate::db::TransactionRecord {
-                account_id: AccountId::read_from_bytes(&raw.account_id)?,
                 block_num: BlockNumber::from_raw_sql(raw.block_num)?,
-                transaction_id,
-                initial_state_commitment: Word::read_from_bytes(&raw.initial_state_commitment)?,
-                final_state_commitment: Word::read_from_bytes(&raw.final_state_commitment)?,
-                input_notes: Deserializable::read_from_bytes(&raw.input_notes)?,
-                output_notes: enriched_notes,
-                fee: FungibleAsset::read_from_bytes(&raw.fee)?,
+                header,
+                output_note_proofs,
             })
         })
         .collect()

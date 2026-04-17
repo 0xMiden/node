@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.7 (2026-04-15)
+
+- [BREAKING] Aligned proto `TransactionHeader` with domain type and exposed erased notes in `SyncTransactions` ([#1941](https://github.com/0xMiden/node/pull/1941)).
+
 ## v0.14.6 (2026-04-10)
 
 - Fixed network monitor explorer health check failing to parse string-encoded numeric fields from the Explorer GraphQL API ([#1922](https://github.com/0xMiden/node/pull/1922)).
