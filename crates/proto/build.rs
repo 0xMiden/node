@@ -3,7 +3,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 
-use codegen::{Function, Impl, Module, Struct, Trait, Type};
+use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
     block_producer_api_descriptor,
@@ -232,7 +232,7 @@ impl Service {
         }
 
         for stream in &self.server_streams {
-            module.push_struct(stream.marker_struct());
+            module.push_trait(stream.as_trait());
         }
 
         module
@@ -258,6 +258,10 @@ impl Service {
             ret.parent(method.as_trait().ty());
         }
 
+        for stream in &self.server_streams {
+            ret.parent(stream.as_trait().ty());
+        }
+
         ret
     }
 
@@ -279,6 +283,10 @@ impl Service {
 
         for method in &self.unary_methods {
             ret.bound("T", method.as_trait().ty());
+        }
+
+        for stream in &self.server_streams {
+            ret.bound("T", stream.as_trait().ty());
         }
 
         ret
@@ -429,14 +437,68 @@ impl ServerStream {
         Self { name, request, response }
     }
 
-    /// This stream's marker struct.
+    /// This stream's per-method trait definition.
     ///
     /// ```rust
-    /// pub struct <Self::name>;
+    /// trait <Method::name> {
+    ///     type Input;
+    ///     type Item;
+    ///     type ItemStream: Stream<Item = tonic::Result<Self::Item>> + Send + 'static;
+    ///
+    ///     fn decode(request: <Method::request>) -> tonic::Result<Self::Input>;
+    ///     fn encode(item: Self::Item) -> tonic::Result<Method::response>;
+    ///     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::ItemStream>;
+    ///
+    ///     async fn full(&self, request: <Method::request>) -> tonic::Result<Pin<Box<dyn Stream<...>>>> {
+    ///         use tokio_stream::StreamExt as _;
+    ///         let input = Self::decode(request)?;
+    ///         let stream = self.handle(input).await?;
+    ///         Ok(Box::pin(stream.map(|item| item.and_then(|i| Self::encode(i)))))
+    ///     }
+    /// }
     /// ```
-    fn marker_struct(&self) -> Struct {
-        let mut ret = Struct::new(&self.name);
+    fn as_trait(&self) -> Trait {
+        let stream_bound =
+            format!("tonic::codegen::tokio_stream::Stream<Item = tonic::Result<Self::Item>>");
+        let boxed_stream = format!(
+            "std::pin::Pin<Box<dyn tonic::codegen::tokio_stream::Stream<Item = tonic::Result<{}>> + Send + 'static>>",
+            self.response
+        );
+
+        let mut ret = Trait::new(&self.name);
         ret.vis("pub");
+        ret.attr("tonic::async_trait");
+        ret.associated_type("Input");
+        ret.associated_type("Item");
+        ret.associated_type("ItemStream")
+            .bound(&stream_bound)
+            .bound("Send")
+            .bound("'static");
+
+        ret.new_fn("decode")
+            .arg("request", &self.request)
+            .ret("tonic::Result<Self::Input>");
+
+        ret.new_fn("encode")
+            .arg("item", "Self::Item")
+            .ret(format!("tonic::Result<{}>", &self.response));
+
+        ret.new_fn("handle")
+            .set_async(true)
+            .arg_ref_self()
+            .arg("input", "Self::Input")
+            .ret("tonic::Result<Self::ItemStream>");
+
+        ret.new_fn("full")
+            .set_async(true)
+            .arg_ref_self()
+            .arg("request", &self.request)
+            .ret(format!("tonic::Result<{boxed_stream}>"))
+            .line("use tonic::codegen::tokio_stream::StreamExt as _;")
+            .line("let input = Self::decode(request)?;")
+            .line("let stream = self.handle(input).await?;")
+            .line("Ok(Box::pin(stream.map(|item| item.and_then(|i| Self::encode(i)))))");
+
         ret
     }
 
@@ -444,11 +506,11 @@ impl ServerStream {
         let mut ret = Function::new(to_snake_case(&self.name));
         ret.set_async(true)
             .arg_ref_self()
-            .arg("_request", format!("tonic::Request<{}>", self.request))
+            .arg("request", format!("tonic::Request<{}>", self.request))
             .ret(format!("tonic::Result<tonic::Response<Self::{}>>", self.associated_type().0))
             .line(format!(
-                "Err(tonic::Status::unimplemented({:?}))",
-                format!("server-streaming RPC `{}` is not implemented", self.name)
+                "<T as {}>::full(self, request.into_inner()).await.map(tonic::Response::new)",
+                self.name
             ));
 
         ret
