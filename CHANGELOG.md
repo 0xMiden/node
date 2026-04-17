@@ -3,6 +3,7 @@
 ## v0.14.8 (TBA)
 
 - Enabled `miden-tx/concurrent` feature across all crates ([#1956](https://github.com/0xMiden/node/pull/1956)).
+- Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).
 
 ## v0.14.7 (2026-04-15)
 
