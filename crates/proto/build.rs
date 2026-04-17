@@ -157,7 +157,7 @@ fn generate_server_modules(
                 let module_name = format!("{}_{}", &package, service_name);
 
                 let contents =
-                    Service::from_descriptor(service, &package).generate().scope().to_string();
+                    Service::from_descriptor(service, &package)?.generate().scope().to_string();
 
                 let path = dst_dir.join(format!("{module_name}.rs"));
                 fs::write(path, contents).into_diagnostic().wrap_err("writing server module")?;
@@ -188,7 +188,7 @@ struct ServerStream {
 }
 
 impl Service {
-    fn from_descriptor(descriptor: &ServiceDescriptorProto, package: &str) -> Self {
+    fn from_descriptor(descriptor: &ServiceDescriptorProto, package: &str) -> miette::Result<Self> {
         let name = descriptor.name().to_string();
         let unary_methods = descriptor
             .method
@@ -205,17 +205,17 @@ impl Service {
         let package = package.to_string();
 
         // We don't have any client streams, so no need to support them.
-        assert!(
+        miette::ensure!(
             !descriptor.method.iter().any(MethodDescriptorProto::client_streaming),
             "client streams are not supported"
         );
 
-        Self {
+        Ok(Self {
             name,
             package,
             unary_methods,
             server_streams,
-        }
+        })
     }
 
     /// Generates a module containing the service's interface and implementation, including the
