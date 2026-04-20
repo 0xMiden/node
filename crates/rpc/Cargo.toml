@@ -23,7 +23,7 @@ miden-node-proto       = { workspace = true }
 miden-node-proto-build = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { default-features = true, workspace = true }
-miden-tx               = { default-features = true, workspace = true }
+miden-tx               = { features = ["concurrent"], workspace = true }
 miden-tx-batch-prover  = { workspace = true }
 semver                 = { version = "1.0" }
 thiserror              = { workspace = true }

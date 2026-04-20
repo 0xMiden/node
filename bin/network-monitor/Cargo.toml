@@ -25,7 +25,7 @@ miden-node-utils = { workspace = true }
 miden-protocol   = { features = ["std", "testing"], workspace = true }
 miden-standards  = { workspace = true }
 miden-testing    = { workspace = true }
-miden-tx         = { features = ["std"], workspace = true }
+miden-tx         = { features = ["concurrent", "std"], workspace = true }
 rand             = { workspace = true }
 rand_chacha      = { workspace = true }
 reqwest          = { features = ["json", "query"], workspace = true }

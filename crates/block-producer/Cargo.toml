@@ -47,7 +47,7 @@ miden-node-utils      = { features = ["testing"], workspace = true }
 miden-node-validator  = { workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
-miden-tx              = { features = ["testing"], workspace = true }
+miden-tx              = { features = ["concurrent", "testing"], workspace = true }
 pretty_assertions     = "1.4"
 rand_chacha           = { default-features = false, workspace = true }
 rstest                = { workspace = true }
