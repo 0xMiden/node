@@ -20,6 +20,8 @@ use rocksdb::{
     Options,
     ReadOptions,
     WriteBatch,
+    WriteBufferManager,
+    WriteOptions,
 };
 
 use super::{SmtStorage, StorageError, StorageUpdateParts, StorageUpdates, SubtreeUpdate};
@@ -27,6 +29,12 @@ use crate::helpers::{insert_into_leaf, map_rocksdb_err, remove_from_leaf};
 use crate::{EMPTY_WORD, Word};
 
 const IN_MEMORY_DEPTH: u8 = 24;
+const DEFAULT_CACHE_SIZE: usize = 1 << 30;
+const DEFAULT_MAX_OPEN_FILES: i32 = 512;
+const DEFAULT_BLOCK_SIZE: usize = 16 << 10;
+const DEFAULT_MAX_TOTAL_WAL_SIZE: u64 = 512 * 1024 * 1024;
+const DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES: i32 = 1 << 20;
+const DEFAULT_BLOOM_FILTER_BITS_PER_KEY: f64 = 10.0;
 
 /// The name of the `RocksDB` column family used for storing SMT leaves.
 const LEAVES_CF: &str = "leaves";
@@ -70,6 +78,7 @@ const ENTRY_COUNT_KEY: &[u8] = b"entry_count";
 #[derive(Debug, Clone)]
 pub struct RocksDbStorage {
     db: Arc<DB>,
+    durability_mode: RocksDbDurabilityMode,
 }
 
 impl RocksDbStorage {
@@ -80,10 +89,20 @@ impl RocksDbStorage {
     /// and applies various RocksDB options for performance, such as caching, bloom filters,
     /// and compaction strategies tailored for SMT workloads.
     ///
+    /// The default profile uses:
+    /// - a 1 GiB block cache shared by this database's column families
+    /// - up to 512 open files
+    /// - 16 KiB block-based table blocks with cached index/filter blocks
+    /// - 128 MiB write buffers with up to 3 memtables per write-heavy column family
+    /// - LZ4 compression for active data and ZSTD for bottommost files
+    ///
     /// # Errors
     /// Returns `StorageError::Backend` if the database cannot be opened or configured,
     /// for example, due to path issues, permissions, or RocksDB internal errors.
+    #[expect(clippy::too_many_lines)]
     pub fn open(config: RocksDbConfig) -> Result<Self, StorageError> {
+        let tuning_options = &config.tuning_options;
+
         // Base DB options
         let mut db_opts = Options::default();
         // Create DB if it doesn't exist
@@ -99,90 +118,130 @@ impl RocksDbStorage {
         // Parallelize flush/compaction up to CPU count
         db_opts.set_max_background_jobs(rayon::current_num_threads() as i32);
         // Maximum WAL size
-        db_opts.set_max_total_wal_size(512 * 1024 * 1024);
+        db_opts.set_max_total_wal_size(tuning_options.max_total_wal_size);
 
-        // Shared block cache across all column families
+        // Cache and optional write-buffer manager are shared across this DB's column families.
         let cache = Cache::new_lru_cache(config.cache_size);
+        let write_buffer_manager = config.write_buffer_manager(&cache);
 
         // Common table options for bloom filtering and cache
         let mut table_opts = BlockBasedOptions::default();
-        // Use shared LRU cache for block data
-        table_opts.set_block_cache(&cache);
-        table_opts.set_bloom_filter(10.0, false);
-        // Enable whole-key bloom filtering (better with point lookups)
-        table_opts.set_whole_key_filtering(true);
-        // Pin L0 filter and index blocks in cache (improves performance)
-        table_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        configure_block_table_options(
+            &mut table_opts,
+            &cache,
+            tuning_options,
+            tuning_options.bloom_filter_bits_per_key.leaves,
+        );
 
         // Column family for leaves
         let mut leaves_opts = Options::default();
         leaves_opts.set_block_based_table_factory(&table_opts);
-        // 128 MB memtable
-        leaves_opts.set_write_buffer_size(128 << 20);
-        // Allow up to 3 memtables
-        leaves_opts.set_max_write_buffer_number(3);
-        leaves_opts.set_min_write_buffer_number_to_merge(1);
-        // Do not retain flushed memtables in memory
-        leaves_opts.set_max_write_buffer_size_to_maintain(0);
-        // Use level-based compaction
-        leaves_opts.set_compaction_style(DBCompactionStyle::Level);
-        // 512 MB target file size
-        leaves_opts.set_target_file_size_base(512 << 20);
-        leaves_opts.set_target_file_size_multiplier(2);
-        // LZ4 compression
-        leaves_opts.set_compression_type(DBCompressionType::Lz4);
-        // Set level-based compaction parameters
-        leaves_opts.set_level_zero_file_num_compaction_trigger(8);
+        configure_smt_cf_options(&mut leaves_opts);
+        if let Some(write_buffer_manager) = write_buffer_manager.as_ref() {
+            db_opts.set_write_buffer_manager(write_buffer_manager);
+            leaves_opts.set_write_buffer_manager(write_buffer_manager);
+        }
 
-        // Helper to build subtree CF options with correct prefix length
+        // Helper to build subtree CF options with the tuned block-table profile
         #[expect(clippy::items_after_statements)]
-        fn subtree_cf(cache: &Cache, bloom_filter_bits: f64) -> Options {
-            let mut tbl = BlockBasedOptions::default();
-            // Use shared LRU cache for block data
-            tbl.set_block_cache(cache);
-            // Set bloom filter for subtree lookups
-            tbl.set_bloom_filter(bloom_filter_bits, false);
-            // Enable whole-key bloom filtering
-            tbl.set_whole_key_filtering(true);
-            // Pin L0 filter and index blocks in cache
-            tbl.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        fn subtree_cf(
+            cache: &Cache,
+            tuning_options: &RocksDbTuningOptions,
+            bloom_filter_bits: f64,
+            write_buffer_manager: Option<&WriteBufferManager>,
+        ) -> Options {
+            let mut table_opts = BlockBasedOptions::default();
+            configure_block_table_options(
+                &mut table_opts,
+                cache,
+                tuning_options,
+                bloom_filter_bits,
+            );
 
             let mut opts = Options::default();
-            opts.set_block_based_table_factory(&tbl);
-            // 128 MB memtable
-            opts.set_write_buffer_size(128 << 20);
-            opts.set_max_write_buffer_number(3);
-            opts.set_min_write_buffer_number_to_merge(1);
-            // Do not retain flushed memtables in memory
-            opts.set_max_write_buffer_size_to_maintain(0);
-            // Use level-based compaction
-            opts.set_compaction_style(DBCompactionStyle::Level);
-            // 512 MB target file size
-            opts.set_target_file_size_base(512 << 20);
-            opts.set_target_file_size_multiplier(2);
-            // LZ4 compression
-            opts.set_compression_type(DBCompressionType::Lz4);
-            // Set level-based compaction parameters
-            opts.set_level_zero_file_num_compaction_trigger(8);
+            opts.set_block_based_table_factory(&table_opts);
+            configure_smt_cf_options(&mut opts);
+            if let Some(write_buffer_manager) = write_buffer_manager {
+                opts.set_write_buffer_manager(write_buffer_manager);
+            }
             opts
         }
 
+        // Depth-24 cache column family
+        let mut depth24_table_opts = BlockBasedOptions::default();
+        configure_block_table_options(
+            &mut depth24_table_opts,
+            &cache,
+            tuning_options,
+            tuning_options.bloom_filter_bits_per_key.depth_24,
+        );
+
         let mut depth24_opts = Options::default();
         depth24_opts.set_compression_type(DBCompressionType::Lz4);
-        depth24_opts.set_block_based_table_factory(&table_opts);
+        depth24_opts.set_bottommost_compression_type(DBCompressionType::Zstd);
+        // Enable the bottommost compression setting; selecting ZSTD alone is not enough.
+        depth24_opts
+            .set_bottommost_zstd_max_train_bytes(DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES, true);
+        depth24_opts.set_block_based_table_factory(&depth24_table_opts);
+        if let Some(write_buffer_manager) = write_buffer_manager.as_ref() {
+            depth24_opts.set_write_buffer_manager(write_buffer_manager);
+        }
 
         // Metadata CF with no compression
         let mut metadata_opts = Options::default();
         metadata_opts.set_compression_type(DBCompressionType::None);
+        if let Some(write_buffer_manager) = write_buffer_manager.as_ref() {
+            metadata_opts.set_write_buffer_manager(write_buffer_manager);
+        }
 
         // Define column families with tailored options
         let cfs = vec![
             ColumnFamilyDescriptor::new(LEAVES_CF, leaves_opts),
-            ColumnFamilyDescriptor::new(SUBTREE_24_CF, subtree_cf(&cache, 8.0)),
-            ColumnFamilyDescriptor::new(SUBTREE_32_CF, subtree_cf(&cache, 10.0)),
-            ColumnFamilyDescriptor::new(SUBTREE_40_CF, subtree_cf(&cache, 10.0)),
-            ColumnFamilyDescriptor::new(SUBTREE_48_CF, subtree_cf(&cache, 12.0)),
-            ColumnFamilyDescriptor::new(SUBTREE_56_CF, subtree_cf(&cache, 12.0)),
+            ColumnFamilyDescriptor::new(
+                SUBTREE_24_CF,
+                subtree_cf(
+                    &cache,
+                    tuning_options,
+                    tuning_options.bloom_filter_bits_per_key.subtree_24,
+                    write_buffer_manager.as_ref(),
+                ),
+            ),
+            ColumnFamilyDescriptor::new(
+                SUBTREE_32_CF,
+                subtree_cf(
+                    &cache,
+                    tuning_options,
+                    tuning_options.bloom_filter_bits_per_key.subtree_32,
+                    write_buffer_manager.as_ref(),
+                ),
+            ),
+            ColumnFamilyDescriptor::new(
+                SUBTREE_40_CF,
+                subtree_cf(
+                    &cache,
+                    tuning_options,
+                    tuning_options.bloom_filter_bits_per_key.subtree_40,
+                    write_buffer_manager.as_ref(),
+                ),
+            ),
+            ColumnFamilyDescriptor::new(
+                SUBTREE_48_CF,
+                subtree_cf(
+                    &cache,
+                    tuning_options,
+                    tuning_options.bloom_filter_bits_per_key.subtree_48,
+                    write_buffer_manager.as_ref(),
+                ),
+            ),
+            ColumnFamilyDescriptor::new(
+                SUBTREE_56_CF,
+                subtree_cf(
+                    &cache,
+                    tuning_options,
+                    tuning_options.bloom_filter_bits_per_key.subtree_56,
+                    write_buffer_manager.as_ref(),
+                ),
+            ),
             ColumnFamilyDescriptor::new(METADATA_CF, metadata_opts),
             ColumnFamilyDescriptor::new(DEPTH_24_CF, depth24_opts),
         ];
@@ -190,7 +249,24 @@ impl RocksDbStorage {
         // Open the database with our tuned CFs
         let db = DB::open_cf_descriptors(&db_opts, config.path, cfs).map_err(map_rocksdb_err)?;
 
-        Ok(Self { db: Arc::new(db) })
+        Ok(Self {
+            db: Arc::new(db),
+            durability_mode: config.durability_mode,
+        })
+    }
+
+    fn write_options(&self) -> WriteOptions {
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(self.should_sync_writes());
+        write_opts
+    }
+
+    fn write_batch(&self, batch: WriteBatch) -> Result<(), StorageError> {
+        self.db.write_opt(batch, &self.write_options()).map_err(map_rocksdb_err)
+    }
+
+    fn should_sync_writes(&self) -> bool {
+        self.durability_mode == RocksDbDurabilityMode::Sync
     }
 
     /// Syncs the RocksDB database to disk.
@@ -376,7 +452,7 @@ impl SmtStorage for RocksDbStorage {
         batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, current_entry_count.to_be_bytes());
 
         // Atomically write all changes (leaf data and metadata counts).
-        self.db.write(batch).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
 
         Ok(value_to_return)
     }
@@ -423,7 +499,7 @@ impl SmtStorage for RocksDbStorage {
         }
         batch.put_cf(metadata_cf, LEAF_COUNT_KEY, leaf_count.to_be_bytes());
         batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, entry_count.to_be_bytes());
-        self.db.write(batch).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
         Ok(current_value)
     }
 
@@ -470,7 +546,7 @@ impl SmtStorage for RocksDbStorage {
         let metadata_cf = self.cf_handle(METADATA_CF)?;
         batch.put_cf(metadata_cf, LEAF_COUNT_KEY, leaf_count.to_be_bytes());
         batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, entry_count.to_be_bytes());
-        self.db.write(batch).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
         Ok(())
     }
 
@@ -492,7 +568,7 @@ impl SmtStorage for RocksDbStorage {
         let key = Self::index_db_key(index);
         let cf = self.cf_handle(LEAVES_CF)?;
         let old_bytes = self.db.get_cf(cf, key).map_err(map_rocksdb_err)?;
-        self.db.delete_cf(cf, key).map_err(map_rocksdb_err)?;
+        self.db.delete_cf_opt(cf, key, &self.write_options()).map_err(map_rocksdb_err)?;
         Ok(old_bytes.map(|bytes| {
             SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())
                 .expect("failed to deserialize leaf")
@@ -669,7 +745,7 @@ impl SmtStorage for RocksDbStorage {
             batch.put_cf(depth24_cf, hash_key, root_hash.to_bytes());
         }
 
-        self.db.write(batch).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
         Ok(())
     }
 
@@ -705,7 +781,7 @@ impl SmtStorage for RocksDbStorage {
             }
         }
 
-        self.db.write(batch).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
         Ok(())
     }
 
@@ -728,7 +804,7 @@ impl SmtStorage for RocksDbStorage {
             batch.delete_cf(depth24_cf, hash_key);
         }
 
-        self.db.write(batch).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
         Ok(())
     }
 
@@ -915,10 +991,7 @@ impl SmtStorage for RocksDbStorage {
             batch.put_cf(metadata_cf, ENTRY_COUNT_KEY, new_entry_count.to_be_bytes());
         }
 
-        let mut write_opts = rocksdb::WriteOptions::default();
-        // Disable immediate WAL sync to disk for better performance
-        write_opts.set_sync(false);
-        self.db.write_opt(batch, &write_opts).map_err(map_rocksdb_err)?;
+        self.write_batch(batch)?;
 
         Ok(())
     }
@@ -1099,6 +1172,43 @@ impl Iterator for RocksDbSubtreeIterator<'_> {
     }
 }
 
+fn configure_smt_cf_options(opts: &mut Options) {
+    // 128 MB memtable
+    opts.set_write_buffer_size(128 << 20);
+    // Allow up to 3 memtables
+    opts.set_max_write_buffer_number(3);
+    opts.set_min_write_buffer_number_to_merge(1);
+    // Do not retain flushed memtables in memory
+    opts.set_max_write_buffer_size_to_maintain(0);
+    // Use level-based compaction
+    opts.set_compaction_style(DBCompactionStyle::Level);
+    // 512 MB target file size
+    opts.set_target_file_size_base(512 << 20);
+    opts.set_target_file_size_multiplier(2);
+    // LZ4 compression for active files, ZSTD for bottommost files
+    opts.set_compression_type(DBCompressionType::Lz4);
+    opts.set_bottommost_compression_type(DBCompressionType::Zstd);
+    // Enable the bottommost compression setting; selecting ZSTD alone is not enough.
+    opts.set_bottommost_zstd_max_train_bytes(DEFAULT_BOTTOMMOST_ZSTD_MAX_TRAIN_BYTES, true);
+    // Set level-based compaction parameters
+    opts.set_level_zero_file_num_compaction_trigger(8);
+}
+
+fn configure_block_table_options(
+    table_opts: &mut BlockBasedOptions,
+    cache: &Cache,
+    tuning_options: &RocksDbTuningOptions,
+    bloom_bits_per_key: f64,
+) {
+    // Keep all block-based column families on the same cache and metadata policy.
+    table_opts.set_block_cache(cache);
+    table_opts.set_cache_index_and_filter_blocks(true);
+    table_opts.set_bloom_filter(bloom_bits_per_key, false);
+    table_opts.set_block_size(tuning_options.block_size);
+    table_opts.set_whole_key_filtering(true);
+    table_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+}
+
 // ROCKSDB CONFIGURATION
 // --------------------------------------------------------------------------------------------
 
@@ -1107,7 +1217,7 @@ impl Iterator for RocksDbSubtreeIterator<'_> {
 /// This struct contains the essential configuration parameters needed to initialize
 /// and optimize RocksDB for SMT storage operations. It provides sensible defaults
 /// while allowing customization for specific performance requirements.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RocksDbConfig {
     /// The filesystem path where the RocksDB database will be stored.
     ///
@@ -1129,6 +1239,15 @@ pub struct RocksDbConfig {
     /// process. Higher values may improve performance for databases with many SST files but
     /// increase resource usage. Default: 512 files
     pub(crate) max_open_files: i32,
+
+    /// Optional per-DB write-buffer manager shared by this DB's column families.
+    pub(crate) write_buffer_manager: Option<RocksDbWriteBufferManagerBudget>,
+
+    /// Tunable RocksDB profile values.
+    pub(crate) tuning_options: RocksDbTuningOptions,
+
+    /// Write durability mode for RocksDB write operations.
+    pub(crate) durability_mode: RocksDbDurabilityMode,
 }
 
 impl RocksDbConfig {
@@ -1141,6 +1260,9 @@ impl RocksDbConfig {
     /// # Default Settings
     /// * `cache_size`: 1GB (1,073,741,824 bytes)
     /// * `max_open_files`: 512
+    /// * `write_buffer_manager`: disabled
+    /// * `tuning_options`: [`RocksDbTuningOptions::default()`]
+    /// * `durability_mode`: [`RocksDbDurabilityMode::Relaxed`]
     ///
     /// # Examples
     /// ```
@@ -1151,8 +1273,11 @@ impl RocksDbConfig {
     pub fn new<P: Into<PathBuf>>(path: P) -> Self {
         Self {
             path: path.into(),
-            cache_size: 1 << 30,
-            max_open_files: 512,
+            cache_size: DEFAULT_CACHE_SIZE,
+            max_open_files: DEFAULT_MAX_OPEN_FILES,
+            write_buffer_manager: None,
+            tuning_options: RocksDbTuningOptions::default(),
+            durability_mode: RocksDbDurabilityMode::default(),
         }
     }
 
@@ -1178,6 +1303,22 @@ impl RocksDbConfig {
         self
     }
 
+    /// Sets the RocksDB memory budget for this database instance.
+    ///
+    /// This controls the block cache size and optional write-buffer manager created by
+    /// [`RocksDbStorage::open`] for one DB and its column families. It is not a process-wide
+    /// budget across multiple RocksDB instances.
+    ///
+    /// # Arguments
+    /// * `memory_budget` - Memory budget settings for RocksDB.
+    #[must_use]
+    pub fn with_memory_budget(mut self, memory_budget: RocksDbMemoryBudget) -> Self {
+        let RocksDbMemoryBudget { block_cache_size, write_buffer_manager } = memory_budget;
+        self.cache_size = block_cache_size;
+        self.write_buffer_manager = write_buffer_manager;
+        self
+    }
+
     /// Sets the maximum number of files that RocksDB can have open simultaneously.
     ///
     /// This setting affects both memory usage and the number of file descriptors used by the
@@ -1198,6 +1339,163 @@ impl RocksDbConfig {
     pub fn with_max_open_files(mut self, count: i32) -> Self {
         self.max_open_files = count;
         self
+    }
+
+    /// Sets the RocksDB tuning options.
+    #[must_use]
+    pub fn with_tuning_options(mut self, tuning_options: RocksDbTuningOptions) -> Self {
+        self.tuning_options = tuning_options;
+        self
+    }
+
+    /// Sets the RocksDB write durability mode.
+    ///
+    /// The default is [`RocksDbDurabilityMode::Relaxed`], matching RocksDB's default non-sync
+    /// writes.
+    #[must_use]
+    pub fn with_durability_mode(mut self, durability_mode: RocksDbDurabilityMode) -> Self {
+        self.durability_mode = durability_mode;
+        self
+    }
+
+    fn write_buffer_manager(&self, cache: &Cache) -> Option<WriteBufferManager> {
+        self.write_buffer_manager.as_ref().map(|budget| {
+            if budget.charge_to_block_cache {
+                WriteBufferManager::new_write_buffer_manager_with_cache(
+                    budget.buffer_size,
+                    budget.allow_stall,
+                    cache.clone(),
+                )
+            } else {
+                WriteBufferManager::new_write_buffer_manager(budget.buffer_size, budget.allow_stall)
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub enum RocksDbDurabilityMode {
+    #[default]
+    Relaxed,
+    Sync,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RocksDbMemoryBudget {
+    /// Block cache size for one RocksDB instance.
+    pub block_cache_size: usize,
+    /// Optional write-buffer manager for one RocksDB instance.
+    pub write_buffer_manager: Option<RocksDbWriteBufferManagerBudget>,
+}
+
+impl Default for RocksDbMemoryBudget {
+    fn default() -> Self {
+        Self {
+            block_cache_size: DEFAULT_CACHE_SIZE,
+            write_buffer_manager: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RocksDbWriteBufferManagerBudget {
+    pub buffer_size: usize,
+    pub allow_stall: bool,
+    pub charge_to_block_cache: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RocksDbTuningOptions {
+    pub block_size: usize,
+    pub max_total_wal_size: u64,
+    pub bloom_filter_bits_per_key: RocksDbBloomFilterBitsPerKey,
+}
+
+impl Default for RocksDbTuningOptions {
+    fn default() -> Self {
+        Self {
+            block_size: DEFAULT_BLOCK_SIZE,
+            max_total_wal_size: DEFAULT_MAX_TOTAL_WAL_SIZE,
+            bloom_filter_bits_per_key: RocksDbBloomFilterBitsPerKey::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RocksDbBloomFilterBitsPerKey {
+    pub leaves: f64,
+    pub depth_24: f64,
+    pub subtree_24: f64,
+    pub subtree_32: f64,
+    pub subtree_40: f64,
+    pub subtree_48: f64,
+    pub subtree_56: f64,
+}
+
+impl Default for RocksDbBloomFilterBitsPerKey {
+    fn default() -> Self {
+        Self {
+            leaves: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            depth_24: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            subtree_24: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            subtree_32: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            subtree_40: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            subtree_48: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+            subtree_56: DEFAULT_BLOOM_FILTER_BITS_PER_KEY,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rocksdb_config_builders_update_independent_knobs() {
+        let memory_budget = RocksDbMemoryBudget {
+            block_cache_size: 512 << 20,
+            write_buffer_manager: Some(RocksDbWriteBufferManagerBudget {
+                buffer_size: 64 << 20,
+                allow_stall: true,
+                charge_to_block_cache: true,
+            }),
+        };
+        let tuning_options = RocksDbTuningOptions {
+            block_size: 8 << 10,
+            max_total_wal_size: 2 << 30,
+            bloom_filter_bits_per_key: RocksDbBloomFilterBitsPerKey {
+                leaves: 11.0,
+                depth_24: 12.0,
+                subtree_24: 13.0,
+                subtree_32: 14.0,
+                subtree_40: 15.0,
+                subtree_48: 16.0,
+                subtree_56: 17.0,
+            },
+        };
+
+        let config = RocksDbConfig::new("/tmp/smt")
+            .with_memory_budget(memory_budget)
+            .with_max_open_files(1024)
+            .with_tuning_options(tuning_options.clone())
+            .with_durability_mode(RocksDbDurabilityMode::Sync);
+
+        assert_eq!(
+            config,
+            RocksDbConfig {
+                path: PathBuf::from("/tmp/smt"),
+                cache_size: 512 << 20,
+                max_open_files: 1024,
+                write_buffer_manager: memory_budget.write_buffer_manager,
+                tuning_options,
+                durability_mode: RocksDbDurabilityMode::Sync,
+            }
+        );
+    }
+
+    #[test]
+    fn rocksdb_config_defaults_to_relaxed_durability() {
+        assert_eq!(RocksDbConfig::new("/tmp/smt").durability_mode, RocksDbDurabilityMode::Relaxed);
     }
 }
 

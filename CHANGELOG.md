@@ -3,13 +3,19 @@
 ## v0.15.0 (TBD)
 
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- - [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
 - Extended `ValidatorStatus` proto response with `chain_tip`, `validated_transactions_count`, and `signed_blocks_count`; added Validator card to the network monitor dashboard ([#1900](https://github.com/0xMiden/node/pull/1900)).
 - Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
-- [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
+
+## v0.14.8 (2026-04-19)
+
+- Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).
+- Enabled `miden-tx/concurrent` feature across all crates ([#1956](https://github.com/0xMiden/node/pull/1956)).
 
 ## v0.14.7 (2026-04-15)
 
 - [BREAKING] Aligned proto `TransactionHeader` with domain type and exposed erased notes in `SyncTransactions` ([#1941](https://github.com/0xMiden/node/pull/1941)).
+- Improved LargeSmt RocksDB defaults, added per-DB memory-budget controls, and exposed durability mode selection ([#1947](https://github.com/0xMiden/node/pull/1947)).
 
 ## v0.14.6 (2026-04-10)
 
