@@ -17,7 +17,7 @@ use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::FailedNote;
-use tokio::sync::{RwLock, Semaphore, mpsc};
+use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
 
 use crate::NoteError;
 use crate::chain_state::ChainState;
@@ -177,14 +177,14 @@ enum ActorMode {
 ///    block producer.
 /// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
 ///    notified.
-/// 5. **Shutdown**: Terminates gracefully when the coordinator drops the notification sender or
-///    encounters unrecoverable errors.
+/// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
+///    failures.
 ///
 /// ## Concurrency
 ///
 /// Each actor runs in its own async task and communicates with other system components through
-/// channels and shared state. Cancellation is signalled by the coordinator dropping its end of
-/// the [`mpsc`] notification channel.
+/// shared state. The coordinator signals state changes by notifying a shared [`Notify`]; the
+/// actor exits of its own accord when idle for longer than [`ActorConfig::idle_timeout`].
 pub struct AccountActor {
     /// The network account this actor is responsible for.
     account_id: NetworkAccountId,
@@ -194,10 +194,9 @@ pub struct AccountActor {
     state: State,
     /// Per-actor configuration knobs.
     config: ActorConfig,
-    /// Receiver signalled by the coordinator when DB state relevant to this actor may have
-    /// changed. The coordinator drops its sender to request shutdown: at that point
-    /// [`mpsc::Receiver::recv`] returns `None` after draining any pending message.
-    notify: mpsc::Receiver<()>,
+    /// Notification signal from the coordinator indicating that DB state relevant to this actor
+    /// may have changed. The actor re-evaluates its state from the DB on each notification.
+    notify: Arc<Notify>,
     /// Channel for sending requests to the coordinator.
     request: mpsc::Sender<ActorRequest>,
 }
@@ -207,7 +206,7 @@ impl AccountActor {
     pub fn new(
         account_id: NetworkAccountId,
         actor_context: &AccountActorContext,
-        notify: mpsc::Receiver<()>,
+        notify: Arc<Notify>,
     ) -> Self {
         Self {
             account_id,
@@ -223,10 +222,9 @@ impl AccountActor {
     ///
     /// The return value signals the shutdown category to the coordinator:
     ///
-    /// - `Ok(())`: intentional shutdown (idle timeout, coordinator dropped notify sender, or
-    ///   account removal).
+    /// - `Ok(())`: intentional shutdown (idle timeout or account removal).
     /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
-    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
+    pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
         // Wait for the account to be committed to the DB. For newly created accounts,
@@ -270,11 +268,7 @@ impl AccountActor {
 
             tokio::select! {
                 // Handle coordinator notifications. On notification, re-evaluate state from DB.
-                // `None` is returned when the coordinator drops its sender, signalling shutdown.
-                notification = self.notify.recv() => {
-                    let Some(()) = notification else {
-                        return Ok(());
-                    };
+                _ = self.notify.notified() => {
                     match mode {
                         ActorMode::TransactionInflight(awaited_id) => {
                             // Check DB: is the inflight tx still pending?
@@ -360,10 +354,13 @@ impl AccountActor {
     /// Waits until a committed account state exists in the DB.
     ///
     /// For accounts that are being created by an inflight transaction, this will idle
-    /// until the transaction is committed. Returns `true` when the account is ready,
-    /// or `false` if the coordinator dropped its notify sender while waiting.
+    /// until the transaction is committed. Returns `true` when the account is ready, or
+    /// `false` if no commit arrived within [`ActorConfig::idle_timeout`] — in which case
+    /// the coordinator will respawn a new actor when the account reappears through
+    /// [`Coordinator::send_targeted`](crate::coordinator::Coordinator::send_targeted) or the
+    /// account loader.
     async fn wait_for_committed_account(
-        &mut self,
+        &self,
         account_id: NetworkAccountId,
     ) -> anyhow::Result<bool> {
         // Check if the account is already committed.
@@ -378,18 +375,26 @@ impl AccountActor {
         }
 
         loop {
-            let Some(()) = self.notify.recv().await else {
-                return Ok(false);
-            };
-            if self
-                .state
-                .db
-                .has_committed_account(account_id)
-                .await
-                .context("failed to check for committed account")?
-            {
-                tracing::info!(account.id=%account_id, "Account committed, starting normal operation");
-                return Ok(true);
+            tokio::select! {
+                _ = self.notify.notified() => {
+                    if self
+                        .state
+                        .db
+                        .has_committed_account(account_id)
+                        .await
+                        .context("failed to check for committed account")?
+                    {
+                        tracing::info!(account.id=%account_id, "Account committed, starting normal operation");
+                        return Ok(true);
+                    }
+                }
+                _ = tokio::time::sleep(self.config.idle_timeout) => {
+                    tracing::info!(
+                        %account_id,
+                        "Account actor deactivated while waiting for account commit",
+                    );
+                    return Ok(false);
+                }
             }
         }
     }

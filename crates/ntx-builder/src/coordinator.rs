@@ -5,7 +5,7 @@ use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::account::delta::AccountUpdateDetails;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::actor::{AccountActor, AccountActorContext};
@@ -24,34 +24,38 @@ pub struct WriteEventResult {
 // ================================================================================================
 
 /// Handle to an account actor spawned by the coordinator.
-///
-/// The coordinator sends notifications to the actor via [`ActorHandle::notify`]. Dropping the
-/// handle closes the channel, which the actor observes as a cancellation signal.
 #[derive(Clone)]
 struct ActorHandle {
-    /// Sender for notifying the actor that DB state may have changed. Capacity is `1` so repeated
-    /// notifications coalesce; [`mpsc::Sender::try_send`] returns
-    /// [`mpsc::error::TrySendError::Full`] when a notification is already pending.
-    notify: mpsc::Sender<()>,
+    /// [`Notify`] shared with the actor. The coordinator calls [`Notify::notify_one`] when DB
+    /// state relevant to the actor may have changed, the actor awaits [`Notify::notified`] and
+    /// re-evaluates its state on wake-up.
+    notify: Arc<Notify>,
 }
 
 impl ActorHandle {
-    fn new(notify: mpsc::Sender<()>) -> Self {
+    fn new(notify: Arc<Notify>) -> Self {
         Self { notify }
     }
 
     /// Signals the actor that DB state may have changed. Notifications coalesce when one is
     /// already pending.
-    fn notify(&self) -> Result<(), mpsc::error::TrySendError<()>> {
-        self.notify.try_send(())
+    fn notify(&self) {
+        self.notify.notify_one();
     }
 
     /// Returns `true` if a notification is queued but not yet consumed by the actor.
     ///
-    /// Used after an actor has shut down to detect the race where a notification arrived just as
-    /// the actor timed out; if so, the coordinator should respawn the actor.
+    /// Used after an actor has shut down to detect the race where a notification arrived just
+    /// as the actor timed out. If so, the coordinator should respawn the actor.
     fn has_pending_notification(&self) -> bool {
-        self.notify.max_capacity() > self.notify.capacity()
+        use futures::FutureExt;
+        if self.notify.notified().now_or_never().is_some() {
+            // Restore the permit so the respawned actor still sees the notification.
+            self.notify.notify_one();
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -72,10 +76,10 @@ impl ActorHandle {
 /// - Monitors actor tasks through a join set to detect completion or errors.
 ///
 /// ## Event Notification
-/// - Notifies actors by sending on a per-actor [`mpsc`] channel when state may have changed.
+/// - Notifies actors via a shared [`Notify`] when state may have changed.
 /// - The DB is the source of truth: actors re-evaluate their state from DB on notification.
-/// - Notifications are coalesced: the channel's capacity of 1 means multiple notifications while an
-///   actor is busy result in a single wake-up.
+/// - Notifications are coalesced: [`Notify`] stores at most one permit, so multiple notifications
+///   while an actor is busy result in a single wake-up.
 ///
 /// ## Resource Management
 /// - Controls transaction concurrency across all network accounts using a semaphore.
@@ -87,8 +91,6 @@ impl ActorHandle {
 ///   timed out. If so, the actor is respawned immediately.
 /// - Deactivated actors are re-spawned when [`Coordinator::send_targeted`] detects notes targeting
 ///   an account without an active actor.
-/// - Dropping the [`ActorHandle`] (and thus the notification sender) signals the actor to shut
-///   down: the actor's `mpsc::Receiver::recv` returns `None` after draining any pending messages.
 ///
 /// The coordinator operates in an event-driven manner:
 /// 1. Network accounts are registered and actors spawned as needed.
@@ -171,18 +173,19 @@ impl Coordinator {
             }
         }
 
-        // If an actor already exists for this account ID, something has gone wrong.
-        // Dropping the existing handle closes its notify channel, signalling the actor to exit.
-        if self.actor_registry.remove(&account_id).is_some() {
+        // If an actor already exists for this account ID, something has gone wrong. Reject the
+        // spawn rather than replacing.
+        if self.actor_registry.contains_key(&account_id) {
             tracing::error!(
                 account_id = %account_id,
                 "Account actor already exists"
             );
+            return;
         }
 
-        let (notify_tx, notify_rx) = mpsc::channel(1);
-        let actor = AccountActor::new(account_id, actor_context, notify_rx);
-        let handle = ActorHandle::new(notify_tx);
+        let notify = Arc::new(Notify::new());
+        let actor = AccountActor::new(account_id, actor_context, notify.clone());
+        let handle = ActorHandle::new(notify);
 
         // Run the actor. Actor reads state from DB on startup.
         let semaphore = self.semaphore.clone();
@@ -201,7 +204,7 @@ impl Coordinator {
     pub fn notify_accounts(&self, account_ids: &[NetworkAccountId]) {
         for account_id in account_ids {
             if let Some(handle) = self.actor_registry.get(account_id) {
-                let _ = handle.notify();
+                handle.notify();
             }
         }
     }
@@ -297,7 +300,7 @@ impl Coordinator {
         // Notify target actors.
         for account_id in &target_account_ids {
             if let Some(handle) = self.actor_registry.get(account_id) {
-                let _ = handle.notify();
+                handle.notify();
             }
         }
 
@@ -368,16 +371,9 @@ mod tests {
     use crate::test_utils::*;
 
     /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
-    ///
-    /// Returns the paired receiver, which must be kept alive by the caller so that the sender's
-    /// `try_send` calls in the coordinator see the channel as open.
-    fn register_dummy_actor(
-        coordinator: &mut Coordinator,
-        account_id: NetworkAccountId,
-    ) -> mpsc::Receiver<()> {
-        let (tx, rx) = mpsc::channel(1);
-        coordinator.actor_registry.insert(account_id, ActorHandle::new(tx));
-        rx
+    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
+        let notify = Arc::new(Notify::new());
+        coordinator.actor_registry.insert(account_id, ActorHandle::new(notify));
     }
 
     // SEND TARGETED TESTS
@@ -390,8 +386,8 @@ mod tests {
         let active_id = mock_network_account_id();
         let inactive_id = mock_network_account_id_seeded(42);
 
-        // Only register the active account; keep the receiver alive for the duration of the test.
-        let _active_rx = register_dummy_actor(&mut coordinator, active_id);
+        // Only register the active account.
+        register_dummy_actor(&mut coordinator, active_id);
 
         let note_active = mock_single_target_note(active_id, 10);
         let note_inactive = mock_single_target_note(inactive_id, 20);
