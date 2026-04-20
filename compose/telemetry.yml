@@ -2,7 +2,7 @@ services:
   tempo:
     image: grafana/tempo:2.10.4
     volumes:
-      - ./compose/tempo/tempo.yaml:/etc/tempo.yaml
+      - ./compose/tempo/tempo.yml:/etc/tempo.yaml
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
       - "3200:3200"
@@ -11,8 +11,8 @@ services:
   grafana:
     image: grafana/grafana:12.4
     volumes:
-      - ./compose/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
-      - ./compose/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./compose/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./compose/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yaml
       - ./compose/grafana/dashboards:/var/lib/grafana/dashboards
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
