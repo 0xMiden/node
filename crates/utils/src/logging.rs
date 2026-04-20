@@ -2,7 +2,6 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::subscriber::Subscriber;
@@ -114,10 +113,9 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
 }
 
 fn init_tracer_provider() -> anyhow::Result<SdkTracerProvider> {
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
-        .build()?;
+    let builder = opentelemetry_otlp::SpanExporter::builder().with_tonic();
+
+    let exporter = builder.build()?;
 
     Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)

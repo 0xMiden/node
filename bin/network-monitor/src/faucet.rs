@@ -193,8 +193,8 @@ async fn perform_faucet_test(
     let response_text: String = response.text().await?;
     debug!("Faucet PoW response: {}", response_text);
 
-    let challenge_response: PowChallengeResponse = serde_json::from_str(&response_text)
-        .with_context(|| format!("Failed to parse PoW response: {response_text}"))?;
+    let challenge_response: PowChallengeResponse =
+        serde_json::from_str(&response_text).context("unexpected response from /pow")?;
 
     debug!(
         "Received PoW challenge: target={}, challenge={}...",
@@ -221,9 +221,10 @@ async fn perform_faucet_test(
     let response = client.get(tokens_url).send().await?;
 
     let response_text: String = response.text().await?;
+    debug!("Faucet /get_tokens response: {}", response_text);
 
-    let tokens_response: GetTokensResponse = serde_json::from_str(&response_text)
-        .with_context(|| format!("Failed to parse tokens response: {response_text}"))?;
+    let tokens_response: GetTokensResponse =
+        serde_json::from_str(&response_text).context("unexpected response from /get_tokens")?;
 
     // Step 4: Get faucet metadata
     let metadata_url = faucet_url.join("/get_metadata")?;
@@ -231,9 +232,10 @@ async fn perform_faucet_test(
     let response = client.get(metadata_url).send().await?;
 
     let response_text = response.text().await?;
+    debug!("Faucet /get_metadata response: {}", response_text);
 
-    let metadata: GetMetadataResponse = serde_json::from_str(&response_text)
-        .with_context(|| format!("Failed to parse metadata response: {response_text}"))?;
+    let metadata: GetMetadataResponse =
+        serde_json::from_str(&response_text).context("unexpected response from /get_metadata")?;
 
     Ok((tokens_response, metadata))
 }
