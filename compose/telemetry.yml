@@ -1,6 +1,6 @@
 services:
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.10.4
     volumes:
       - ./compose/tempo/tempo.yaml:/etc/tempo.yaml
     command: ["-config.file=/etc/tempo.yaml"]
@@ -9,7 +9,7 @@ services:
       - "4317:4317"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.4
     volumes:
       - ./compose/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
       - ./compose/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
@@ -27,23 +27,28 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=store
 
   validator:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=validator
 
   block-producer:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=block-producer
 
   rpc:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=rpc
 
   ntx-builder:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=ntx-builder

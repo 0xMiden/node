@@ -28,10 +28,6 @@ services:
     pull_policy: if_not_present
     volumes:
       - store-data:/data
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=store
     command:
       - miden-node
       - store
@@ -54,10 +50,6 @@ services:
     pull_policy: if_not_present
     volumes:
       - validator-data:/data
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=validator
     command:
       - miden-node
       - validator
@@ -70,10 +62,6 @@ services:
   block-producer:
     image: miden-node-image
     pull_policy: if_not_present
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=block-producer
     command:
       - miden-node
       - block-producer
@@ -87,10 +75,6 @@ services:
   rpc:
     image: miden-node-image
     pull_policy: if_not_present
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=rpc
     command:
       - miden-node
       - rpc
@@ -107,10 +91,6 @@ services:
     pull_policy: if_not_present
     volumes:
       - ntx-builder-data:/data
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=ntx-builder
     command:
       - miden-node
       - ntx-builder
@@ -119,47 +99,6 @@ services:
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101
       - --data-directory=/data
-
-  tempo:
-    image: grafana/tempo:2.10.4
-    volumes:
-      - ./compose/tempo/tempo.yaml:/etc/tempo.yaml
-    command: ["-config.file=/etc/tempo.yaml"]
-    ports:
-      - "3200:3200"
-      - "4317:4317"
-
-  grafana:
-    image: grafana/grafana:12.4
-    volumes:
-      - ./compose/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
-      - ./compose/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
-      - ./compose/grafana/dashboards:/var/lib/grafana/dashboards
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/miden-node.json
-    ports:
-      - "3000:3000"
-    depends_on:
-      - tempo
-
-  monitor:
-    image: miden-network-monitor-image
-    pull_policy: if_not_present
-    command:
-      - miden-network-monitor
-      - start
-    environment:
-      - MIDEN_MONITOR_RPC_URL=http://rpc:57291
-      - MIDEN_MONITOR_PORT=3001
-      - MIDEN_MONITOR_NETWORK_NAME=Localhost
-      - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
-      - MIDEN_MONITOR_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=monitor
-    ports:
-      - "3001:3001"
 
 volumes:
   genesis-data:
