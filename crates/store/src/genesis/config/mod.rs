@@ -163,7 +163,20 @@ impl GenesisConfig {
                 let full_path = config_dir.join(&acc.path);
                 let account_file = AccountFile::read(&full_path)
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
-                Ok(account_file.account)
+                let mut account = account_file.account;
+                // Genesis accounts must have nonce=1. If the .mac file contains a new account
+                // (nonce=0, seed present), bump the nonce so the seed is cleared and the account
+                // can be represented as a delta in the genesis block.
+                if account.is_new() {
+                    let delta = AccountDelta::new(
+                        account.id(),
+                        AccountStorageDelta::default(),
+                        AccountVaultDelta::default(),
+                        ONE,
+                    )?;
+                    account.apply_delta(&delta)?;
+                }
+                Ok(account)
             })
             .collect::<Result<Vec<_>, GenesisConfigError>>()?;
 

@@ -1,7 +1,8 @@
 use miden_node_utils::signer::BlockSigner;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::account::{Account, AccountDelta};
+use miden_protocol::account::{Account, AccountDelta, AccountStorageDelta, AccountVaultDelta};
+use miden_protocol::ONE;
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::{
     BlockAccountUpdate,
@@ -15,7 +16,6 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
-use miden_protocol::errors::AccountError;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
 
@@ -92,11 +92,22 @@ impl<S: BlockSigner> GenesisState<S> {
     pub async fn into_block(self) -> anyhow::Result<GenesisBlock> {
         let accounts: Vec<BlockAccountUpdate> = self
             .accounts
-            .iter()
-            .map(|account| {
+            .into_iter()
+            .map(|mut account| -> anyhow::Result<BlockAccountUpdate> {
                 let account_update_details = if account.id().is_private() {
                     AccountUpdateDetails::Private
                 } else {
+                    // Genesis accounts must have nonce >= 1 to be representable as deltas.
+                    // Accounts loaded from .mac files with nonce=0 (seed present) are bumped here.
+                    if account.is_new() {
+                        let delta = AccountDelta::new(
+                            account.id(),
+                            AccountStorageDelta::default(),
+                            AccountVaultDelta::default(),
+                            ONE,
+                        )?;
+                        account.apply_delta(&delta)?;
+                    }
                     AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone())?)
                 };
 
@@ -106,7 +117,7 @@ impl<S: BlockSigner> GenesisState<S> {
                     account_update_details,
                 ))
             })
-            .collect::<Result<Vec<_>, AccountError>>()?;
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         // Convert account updates to SMT entries using account_id_to_smt_key
         let smt_entries = accounts.iter().map(|update| {
