@@ -28,6 +28,10 @@ services:
     pull_policy: if_not_present
     volumes:
       - store-data:/data
+    environment:
+      - MIDEN_NODE_ENABLE_OTEL=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=store
     command:
       - miden-node
       - store
@@ -51,7 +55,9 @@ services:
     volumes:
       - validator-data:/data
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=false
+      - MIDEN_NODE_ENABLE_OTEL=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=validator
     command:
       - miden-node
       - validator
@@ -64,6 +70,10 @@ services:
   block-producer:
     image: miden-node-image
     pull_policy: if_not_present
+    environment:
+      - MIDEN_NODE_ENABLE_OTEL=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=block-producer
     command:
       - miden-node
       - block-producer
@@ -77,6 +87,10 @@ services:
   rpc:
     image: miden-node-image
     pull_policy: if_not_present
+    environment:
+      - MIDEN_NODE_ENABLE_OTEL=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=rpc
     command:
       - miden-node
       - rpc
@@ -93,6 +107,10 @@ services:
     pull_policy: if_not_present
     volumes:
       - ntx-builder-data:/data
+    environment:
+      - MIDEN_NODE_ENABLE_OTEL=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=ntx-builder
     command:
       - miden-node
       - ntx-builder
