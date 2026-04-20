@@ -161,10 +161,12 @@ impl StorageOptions {
             let account_tree = AccountTreeRocksDbOptions {
                 max_open_fds: self::rocksdb::BENCH_ROCKSDB_MAX_OPEN_FDS,
                 cache_size_in_bytes: self::rocksdb::DEFAULT_ROCKSDB_CACHE_SIZE,
+                durability_mode: None,
             };
             let nullifier_tree = NullifierTreeRocksDbOptions {
                 max_open_fds: BENCH_ROCKSDB_MAX_OPEN_FDS,
                 cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
+                durability_mode: None,
             };
             Self { account_tree, nullifier_tree }
         }

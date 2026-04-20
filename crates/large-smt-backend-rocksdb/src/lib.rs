@@ -56,4 +56,12 @@ pub use miden_protocol::{
         merkle::{EmptySubtreeRoots, InnerNodeInfo, MerkleError, NodeIndex, SparseMerklePath},
     },
 };
-pub use rocksdb::{RocksDbConfig, RocksDbStorage};
+pub use rocksdb::{
+    RocksDbBloomFilterBitsPerKey,
+    RocksDbConfig,
+    RocksDbDurabilityMode,
+    RocksDbMemoryBudget,
+    RocksDbStorage,
+    RocksDbTuningOptions,
+    RocksDbWriteBufferManagerBudget,
+};
