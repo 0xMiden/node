@@ -60,6 +60,11 @@ pub async fn create_genesis_aware_rpc_client(
 ) -> Result<RpcClient> {
     // First, create a temporary client without genesis metadata to discover the
     // genesis block header and its commitment.
+    //
+    // We use `connect_lazy` here so that a temporarily unreachable RPC server does
+    // not fail client construction and crash the monitor at startup. Actual RPC
+    // failures surface on the first real request below and are handled by the
+    // caller's retry logic.
     let mut rpc: RpcClient = Builder::new(rpc_url.clone())
         .with_tls()
         .context("Failed to configure TLS for RPC client")?
@@ -67,9 +72,7 @@ pub async fn create_genesis_aware_rpc_client(
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
-        .connect()
-        .await
-        .context("Failed to create RPC client for genesis discovery")?;
+        .connect_lazy();
 
     let block_header_request = BlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
@@ -92,7 +95,8 @@ pub async fn create_genesis_aware_rpc_client(
     let genesis = genesis_commitment.to_hex();
 
     // Rebuild the client, this time including the required genesis metadata so that
-    // write RPCs like SubmitProvenTransaction are accepted by the node.
+    // write RPCs like SubmitProvenTransaction are accepted by the node. `connect_lazy`
+    // is used for the same reason as above.
     let rpc_client = Builder::new(rpc_url.clone())
         .with_tls()
         .context("Failed to configure TLS for RPC client")?
@@ -100,9 +104,7 @@ pub async fn create_genesis_aware_rpc_client(
         .without_metadata_version()
         .with_metadata_genesis(genesis)
         .without_otel_context_injection()
-        .connect()
-        .await
-        .context("Failed to connect to RPC server with genesis metadata")?;
+        .connect_lazy();
 
     Ok(rpc_client)
 }

@@ -18,8 +18,7 @@ use tracing::{debug, instrument};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
-use crate::counter::{LatencyState, run_counter_tracking_task, run_increment_task};
-use crate::deploy::ensure_accounts_exist;
+use crate::counter::{LatencyState, run_counter_tracking_supervisor, run_increment_supervisor};
 use crate::explorer::{initial_explorer_status, run_explorer_status_task};
 use crate::faucet::run_faucet_test_task;
 use crate::frontend::{ServerState, serve};
@@ -348,24 +347,24 @@ impl Tasks {
         faucet_rx
     }
 
-    /// Spawn the network transaction service checker task.
+    /// Spawn the network transaction service checker tasks.
+    ///
+    /// The tasks are spawned behind supervisors that retry with exponential backoff
+    /// on any failure (RPC unreachable, version/genesis mismatch, account bootstrap
+    /// error) and publish `Status::Unhealthy` on the watch channel instead of
+    /// terminating the process. This mirrors the pattern used by `spawn_faucet`.
     #[instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.tasks.spawn_ntx_service",
         skip_all,
         level = "info",
-        ret(level = "debug"),
-        err
+        ret(level = "debug")
     )]
-    pub async fn spawn_ntx_service(
+    pub fn spawn_ntx_service(
         &mut self,
         config: &MonitorConfig,
-    ) -> Result<(Receiver<ServiceStatus>, Receiver<ServiceStatus>)> {
-        // Ensure accounts exist before starting monitoring tasks
-        ensure_accounts_exist(&config.wallet_filepath, &config.counter_filepath, &config.rpc_url)
-            .await?;
-
+    ) -> (Receiver<ServiceStatus>, Receiver<ServiceStatus>) {
         let current_time = current_unix_timestamp_secs();
 
         // Create shared atomic counter for tracking expected counter value
@@ -404,45 +403,43 @@ impl Tasks {
             ),
         };
 
-        // Spawn the increment task
+        // Spawn the increment supervisor (handles account bootstrap + retry).
         let (increment_tx, increment_rx) = watch::channel(initial_increment_status);
         let config_clone = config.clone();
         let counter_clone = Arc::clone(&expected_counter_value);
         let increment_id = self
             .handles
             .spawn(async move {
-                Box::pin(run_increment_task(
+                Box::pin(run_increment_supervisor(
                     config_clone,
                     increment_tx,
                     counter_clone,
                     latency_state_for_increment,
                 ))
-                .await
-                .expect("Counter increment task runs indefinitely");
+                .await;
             })
             .id();
         self.names.insert(increment_id, "counter-increment".to_string());
 
-        // Spawn the tracking task
+        // Spawn the tracking supervisor.
         let (tracking_tx, tracking_rx) = watch::channel(initial_tracking_status);
         let config_clone = config.clone();
         let counter_clone = Arc::clone(&expected_counter_value);
         let tracking_id = self
             .handles
             .spawn(async move {
-                Box::pin(run_counter_tracking_task(
+                Box::pin(run_counter_tracking_supervisor(
                     config_clone,
                     tracking_tx,
                     counter_clone,
                     latency_state_for_tracking,
                 ))
-                .await
-                .expect("Counter tracking task runs indefinitely");
+                .await;
             })
             .id();
         self.names.insert(tracking_id, "counter-tracking".to_string());
 
-        Ok((increment_rx, tracking_rx))
+        (increment_rx, tracking_rx)
     }
 
     /// Spawn the HTTP frontend server.

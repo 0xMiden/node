@@ -79,7 +79,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         (None, None)
     } else {
         debug!(target: COMPONENT, "Initializing counter increment task");
-        let (increment_rx, tracking_rx) = tasks.spawn_ntx_service(&config).await?;
+        let (increment_rx, tracking_rx) = tasks.spawn_ntx_service(&config);
         (Some(increment_rx), Some(tracking_rx))
     };
 

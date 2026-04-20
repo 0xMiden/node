@@ -46,7 +46,12 @@ const RESYNC_FAILURE_THRESHOLD: usize = 3;
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
-use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client, get_counter_library};
+use crate::deploy::{
+    MonitorDataStore,
+    create_genesis_aware_rpc_client,
+    ensure_accounts_exist,
+    get_counter_library,
+};
 use crate::status::{
     CounterTrackingDetails,
     IncrementDetails,
@@ -362,6 +367,104 @@ async fn setup_increment_task(
         increment_script,
         secret_key,
     ))
+}
+
+// NTX SUPERVISORS
+// ================================================================================================
+
+/// Supervises [`run_increment_task`] so that startup failures (RPC unavailable,
+/// genesis/version mismatch, account bootstrap errors) surface as
+/// [`Status::Unhealthy`] updates on the watch channel rather than terminating the
+/// monitor process.
+///
+/// Retries follow the task's own `counter_increment_interval` — failure is
+/// reported immediately and the next attempt happens at the next regular tick.
+pub async fn run_increment_supervisor(
+    config: MonitorConfig,
+    tx: watch::Sender<ServiceStatus>,
+    expected_counter_value: Arc<AtomicU64>,
+    latency_state: Arc<Mutex<LatencyState>>,
+) {
+    loop {
+        // Ensure the local wallet/counter account files exist. If the RPC is
+        // unreachable or incompatible, this fails; we mark the service unhealthy
+        // and retry rather than crashing the monitor process.
+        if let Err(e) = ensure_accounts_exist(
+            &config.wallet_filepath,
+            &config.counter_filepath,
+            &config.rpc_url,
+        )
+        .await
+        {
+            let msg = format!("NTX account bootstrap failed: {e:#}");
+            warn!("{msg}; retrying at next tick");
+            publish_ntx_unhealthy(&tx, msg);
+            tokio::time::sleep(config.counter_increment_interval).await;
+            continue;
+        }
+
+        let msg = match Box::pin(run_increment_task(
+            config.clone(),
+            tx.clone(),
+            expected_counter_value.clone(),
+            latency_state.clone(),
+        ))
+        .await
+        {
+            Ok(()) => "NTX increment task returned unexpectedly".to_string(),
+            Err(e) => format!("NTX increment task failed: {e:#}"),
+        };
+        warn!("{msg}; retrying at next tick");
+        publish_ntx_unhealthy(&tx, msg);
+        tokio::time::sleep(config.counter_increment_interval).await;
+    }
+}
+
+/// Supervises [`run_counter_tracking_task`] for the same reason as
+/// [`run_increment_supervisor`].
+///
+/// Waits for the counter account file to be created (by the increment supervisor)
+/// before starting the tracking loop. Retries follow the tracking task's own poll
+/// cadence (half the increment interval).
+pub async fn run_counter_tracking_supervisor(
+    config: MonitorConfig,
+    tx: watch::Sender<ServiceStatus>,
+    expected_counter_value: Arc<AtomicU64>,
+    latency_state: Arc<Mutex<LatencyState>>,
+) {
+    let retry_interval = config.counter_increment_interval / 2;
+    loop {
+        if !config.counter_filepath.exists() {
+            publish_ntx_unhealthy(&tx, "counter account not yet deployed".to_string());
+            tokio::time::sleep(retry_interval).await;
+            continue;
+        }
+
+        let msg = match Box::pin(run_counter_tracking_task(
+            config.clone(),
+            tx.clone(),
+            expected_counter_value.clone(),
+            latency_state.clone(),
+        ))
+        .await
+        {
+            Ok(()) => "NTX tracking task returned unexpectedly".to_string(),
+            Err(e) => format!("NTX tracking task failed: {e:#}"),
+        };
+        warn!("{msg}; retrying at next tick");
+        publish_ntx_unhealthy(&tx, msg);
+        tokio::time::sleep(retry_interval).await;
+    }
+}
+
+/// Publishes an [`Status::Unhealthy`] update, preserving the previously reported
+/// name and details so the dashboard only transitions status and error fields.
+fn publish_ntx_unhealthy(tx: &watch::Sender<ServiceStatus>, error: String) {
+    let mut status = tx.borrow().clone();
+    status.status = Status::Unhealthy;
+    status.error = Some(error);
+    status.last_checked = crate::monitor::tasks::current_unix_timestamp_secs();
+    let _ = tx.send(status);
 }
 
 /// Run the counter increment task.
