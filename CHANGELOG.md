@@ -1,7 +1,8 @@
 # Changelog
 
-## v0.14.8 (TBA)
+## v0.14.8 (2026-04-19)
 
+- Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).
 - Enabled `miden-tx/concurrent` feature across all crates ([#1956](https://github.com/0xMiden/node/pull/1956)).
 
 ## v0.14.7 (2026-04-15)
