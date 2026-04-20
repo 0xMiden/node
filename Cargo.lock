@@ -3227,6 +3227,7 @@ dependencies = [
  "deadpool-diesel",
  "deadpool-sync",
  "diesel",
+ "libsqlite3-sys",
  "miden-protocol",
  "thiserror 2.0.18",
  "tracing",
