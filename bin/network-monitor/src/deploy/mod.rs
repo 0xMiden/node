@@ -150,6 +150,28 @@ pub async fn ensure_accounts_exist(
     save_counter_account(&counter_account, counter_filepath)
 }
 
+/// Unconditionally creates fresh wallet and counter accounts, deploys the counter, and saves both
+/// to disk. Unlike [`ensure_accounts_exist`], this always replaces existing account files.
+///
+/// Used by the increment task when accounts are fundamentally outdated (e.g., after a network
+/// reset) and re-syncing from the RPC is not sufficient.
+pub async fn force_recreate_accounts(
+    wallet_filepath: &Path,
+    counter_filepath: &Path,
+    rpc_url: &Url,
+) -> Result<()> {
+    tracing::warn!("Regenerating monitor accounts (force recreate)");
+
+    let (wallet_account, secret_key) = create_wallet_account()?;
+    let counter_account = create_counter_account(wallet_account.id())?;
+
+    deploy_counter_account(&counter_account, rpc_url).await?;
+    tracing::info!("Successfully recreated and deployed accounts");
+
+    save_wallet_account(&wallet_account, &secret_key, wallet_filepath)?;
+    save_counter_account(&counter_account, counter_filepath)
+}
+
 /// Deploy counter account to the network.
 ///
 /// This function creates a counter program account,

@@ -104,13 +104,24 @@ path = "eth_faucet.mac"
 
 ### Using docker compose
 
-Build the Docker image and start the node. Bootstrap happens automatically on first run:
+Build the Docker image and start the node. Bootstrap happens automatically on first run.
+The default `compose-up` target starts all node components along with a telemetry stack
+([Tempo](https://grafana.com/oss/tempo/) + [Grafana](https://grafana.com/oss/grafana/)) and
+a network monitor:
 
 ```sh
 make docker-build-node
+make docker-build-monitor
 make compose-genesis
 make compose-up
 ```
+
+This starts:
+
+- All node components (store, validator, block-producer, rpc, ntx-builder) with OpenTelemetry tracing enabled
+- **Tempo** — receives OTLP traces from the node on port `4317`, HTTP API on port `3200`
+- **Grafana** — pre-configured with a Tempo datasource and a Miden Node dashboard, available at `http://localhost:3000`
+- **Network monitor** — monitors the local node, available at `http://localhost:3001`
 
 Follow logs:
 
