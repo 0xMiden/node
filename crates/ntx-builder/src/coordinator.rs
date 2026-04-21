@@ -224,7 +224,7 @@ impl Coordinator {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok((account_id, Ok(())))) => {
-                // Actor shut down intentionally (idle timeout, cancelled, account removed).
+                // Actor shut down intentionally (idle timeout or account removed).
                 // Remove from registry and check if a notification arrived just as it shut
                 // down. If so, the caller should respawn it.
                 let should_respawn = self
