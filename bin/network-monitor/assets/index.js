@@ -460,13 +460,18 @@ function updateDisplay() {
                             ${p.workers && p.workers.length > 0 ? `
                                 <div class="nested-status">
                                     <strong>Workers (${p.workers.length}):</strong>
-                                    ${p.workers.map(worker => `
-                                        <div class="worker-status">
-                                            <span class="worker-name">${worker.name}</span> -
-                                            <span class="worker-version">${worker.version}</span> -
-                                            <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
-                                        </div>
-                                    `).join('')}
+                                    ${p.workers.map(worker => {
+                                        const nameDisplay = worker.name.length > 20
+                                            ? `${worker.name.substring(0, 20)}...${renderCopyButton(worker.name, 'worker name')}`
+                                            : worker.name;
+                                        return `
+                                            <div class="worker-status">
+                                                <span class="worker-name">${nameDisplay}</span> -
+                                                <span class="worker-version">${worker.version}</span> -
+                                                <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
+                                            </div>
+                                        `;
+                                    }).join('')}
                                 </div>
                             ` : ''}
                         `;
