@@ -343,6 +343,10 @@ body {
     background: rgba(0, 0, 0, 0.05);
     border-radius: 4px;
     font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .worker-name {

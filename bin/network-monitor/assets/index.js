@@ -466,8 +466,8 @@ function updateDisplay() {
                                             : worker.name;
                                         return `
                                             <div class="worker-status">
-                                                <span class="worker-name">${nameDisplay}</span> -
-                                                <span class="worker-version">${worker.version}</span> -
+                                                <span class="worker-name">${nameDisplay}</span>
+                                                <span class="worker-version">${worker.version}</span>
                                                 <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
                                             </div>
                                         `;
