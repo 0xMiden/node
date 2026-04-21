@@ -16,8 +16,11 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
     type Output = Signature;
 
     fn decode(request: grpc::blockchain::ProposedBlock) -> tonic::Result<Self::Input> {
-        ProposedBlock::read_from_bytes(&request.proposed_block)
-            .map_err(|err| tonic::Status::invalid_argument(err.as_report()))
+        ProposedBlock::read_from_bytes(&request.proposed_block).map_err(|err| {
+            tonic::Status::invalid_argument(
+                err.as_report_context("Failed to deserialize proposed block"),
+            )
+        })
     }
 
     fn encode(output: Self::Output) -> tonic::Result<grpc::blockchain::BlockSignature> {
