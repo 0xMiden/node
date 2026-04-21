@@ -1,10 +1,13 @@
 # Changelog
 
+## v0.14.9 (2026-04-21)
+
+- Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).
+
 ## v0.14.8 (2026-04-19)
 
 - Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).
 - Enabled `miden-tx/concurrent` feature across all crates ([#1956](https://github.com/0xMiden/node/pull/1956)).
-- Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).
 
 ## v0.14.7 (2026-04-15)
 
