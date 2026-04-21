@@ -3,7 +3,8 @@
 ## v0.15.0 (TBD)
 
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
-- - [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
+- Network monitor now auto-regenerates accounts after persistent increment failures instead of staying unhealthy indefinitely ([#1942](https://github.com/0xMiden/node/pull/1942)).
+- [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
 - Extended `ValidatorStatus` proto response with `chain_tip`, `validated_transactions_count`, and `signed_blocks_count`; added Validator card to the network monitor dashboard ([#1900](https://github.com/0xMiden/node/pull/1900)).
 - Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
 
