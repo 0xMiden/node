@@ -274,7 +274,7 @@ impl Tasks {
 
             // Extract proof_type directly from the service status
             // If the prover is not available during startup, skip spawning test tasks
-            let proof_type = if let ServiceDetails::RemoteProverStatus(details) =
+            let proof_type = if let ServiceDetails::ProverStatusCheck(details) =
                 &initial_prover_status.details
             {
                 Some(details.supported_proof_type.clone())

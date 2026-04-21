@@ -181,7 +181,7 @@ async fn test_remote_prover(
 
             ServiceStatus::healthy(
                 name,
-                ServiceDetails::RemoteProverTest(ProverTestDetails {
+                ServiceDetails::ProverTestResult(ProverTestDetails {
                     test_duration_ms: duration.as_millis() as u64,
                     proof_size_bytes: response_inner.payload.len(),
                     success_count: *success_count,
@@ -196,7 +196,7 @@ async fn test_remote_prover(
             ServiceStatus::unhealthy(
                 name,
                 tonic_status_to_json(&e),
-                ServiceDetails::RemoteProverTest(ProverTestDetails {
+                ServiceDetails::ProverTestResult(ProverTestDetails {
                     test_duration_ms: 0,
                     proof_size_bytes: 0,
                     success_count: *success_count,

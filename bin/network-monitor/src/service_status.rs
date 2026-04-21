@@ -110,6 +110,16 @@ impl ServiceStatus {
             details: ServiceDetails::Error,
         }
     }
+
+    /// Overrides the `last_checked` timestamp on an existing status.
+    ///
+    /// Useful when composing a new status from pre-existing data where we want to preserve the
+    /// original check timestamp instead of using the moment of construction.
+    #[must_use]
+    pub fn with_last_checked(mut self, ts: u64) -> Self {
+        self.last_checked = ts;
+        self
+    }
 }
 
 // SERVICE DETAILS
@@ -119,8 +129,12 @@ impl ServiceStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServiceDetails {
     RpcStatus(RpcStatusDetails),
-    RemoteProverStatus(RemoteProverStatusDetails),
-    RemoteProverTest(ProverTestDetails),
+    /// Remote prover status combined with its most recent test result.
+    RemoteProverStatus(RemoteProverDetails),
+    /// Internal: raw output of a remote prover status check task.
+    ProverStatusCheck(RemoteProverStatusDetails),
+    /// Internal: raw output of a remote prover test task.
+    ProverTestResult(ProverTestDetails),
     FaucetTest(FaucetTestDetails),
     NtxIncrement(IncrementDetails),
     NtxTracking(CounterTrackingDetails),
@@ -128,6 +142,15 @@ pub enum ServiceDetails {
     NoteTransportStatus(NoteTransportStatusDetails),
     ValidatorStatus(ValidatorStatusDetails),
     Error,
+}
+
+/// Remote prover status combined with its most recent test result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteProverDetails {
+    pub status: RemoteProverStatusDetails,
+    pub test: Option<ProverTestDetails>,
+    pub test_status: Option<Status>,
+    pub test_error: Option<String>,
 }
 
 /// Details of the increment service.
