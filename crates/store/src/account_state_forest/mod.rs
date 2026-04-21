@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
-use miden_node_proto::domain::account::AccountStorageMapDetails;
+use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
@@ -12,7 +12,7 @@ use miden_protocol::account::{
     StorageMapWitness,
     StorageSlotName,
 };
-use miden_protocol::asset::{AssetVaultKey, AssetWitness, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -268,6 +268,23 @@ impl AccountStateForest {
                 Ok(asset)
             }));
         witnessees
+    }
+
+    /// Enumerates vault contents for the specified account at the requested block.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub(crate) fn get_vault_details(
+        &self,
+        account_id: AccountId,
+        block_num: BlockNumber,
+    ) -> Result<AccountVaultDetails, WitnessError> {
+        let lineage = Self::vault_lineage_id(account_id);
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
+        let assets = entries
+            .map(|entry| Asset::from_key_value_words(entry.key, entry.value))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(AccountVaultDetails::from_assets(assets))
     }
 
     /// Opens a storage map and returns storage map details with SMT proofs for the given keys.

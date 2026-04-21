@@ -1,13 +1,20 @@
 use assert_matches::assert_matches;
-use miden_node_proto::domain::account::StorageMapEntries;
+use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_protocol::Felt;
-use miden_protocol::account::{AccountCode, StorageMapKey};
-use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
+use miden_protocol::account::{AccountCode, AccountStorageMode, AccountType, StorageMapKey};
+use miden_protocol::asset::{
+    Asset,
+    AssetVault,
+    FungibleAsset,
+    NonFungibleAsset,
+    NonFungibleAssetDetails,
+};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
+    AccountIdBuilder,
 };
 
 use super::*;
@@ -159,6 +166,57 @@ fn vault_incremental_updates_with_add_and_remove() {
     let root_full_state_120 = fresh_forest.get_vault_root(account_id, block_3).unwrap();
 
     assert_eq!(root_after_120, root_full_state_120);
+}
+
+#[test]
+fn vault_details_returns_latest_and_historical_assets() {
+    let mut forest = AccountStateForest::new();
+    let account_id = dummy_account();
+    let faucet_id = dummy_faucet();
+
+    let block_1 = BlockNumber::GENESIS.child();
+    let asset_100 = dummy_fungible_asset(faucet_id, 100);
+    let full_delta = dummy_full_state_delta(account_id, &[asset_100]);
+    forest.update_account(block_1, &full_delta).unwrap();
+
+    let block_2 = block_1.child();
+    let mut vault_delta_2 = AccountVaultDelta::default();
+    vault_delta_2.add_asset(dummy_fungible_asset(faucet_id, 50)).unwrap();
+    let delta_2 = dummy_partial_delta(account_id, vault_delta_2, AccountStorageDelta::default());
+    forest.update_account(block_2, &delta_2).unwrap();
+
+    let historical = forest.get_vault_details(account_id, block_1).unwrap();
+    assert_eq!(historical, AccountVaultDetails::Assets(vec![asset_100]));
+
+    let latest = forest.get_vault_details(account_id, block_2).unwrap();
+    assert_eq!(latest, AccountVaultDetails::Assets(vec![dummy_fungible_asset(faucet_id, 150)]));
+}
+
+#[test]
+fn vault_details_limit_exceeded_for_large_vault() {
+    let mut forest = AccountStateForest::new();
+    let account_id = dummy_account();
+    let block_num = BlockNumber::GENESIS.child();
+
+    let faucet_id = AccountIdBuilder::new()
+        .account_type(AccountType::NonFungibleFaucet)
+        .storage_mode(AccountStorageMode::Public)
+        .build_with_seed([7; 32]);
+    let assets = (0..=AccountVaultDetails::MAX_RETURN_ENTRIES)
+        .map(|i| {
+            let details =
+                NonFungibleAssetDetails::new(faucet_id, vec![i as u8, (i >> 8) as u8]).unwrap();
+            Asset::NonFungible(NonFungibleAsset::new(&details).unwrap())
+        })
+        .collect::<Vec<_>>();
+
+    let full_delta = dummy_full_state_delta(account_id, &assets);
+    forest.update_account(block_num, &full_delta).unwrap();
+
+    assert_eq!(
+        forest.get_vault_details(account_id, block_num).unwrap(),
+        AccountVaultDetails::LimitExceeded
+    );
 }
 
 #[test]
