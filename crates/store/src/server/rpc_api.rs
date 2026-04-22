@@ -1,4 +1,11 @@
 use miden_node_proto::convert;
+use miden_node_proto::decode::{
+    convert_digests_to_words,
+    read_account_id,
+    read_account_ids,
+    read_block_range,
+    read_root,
+};
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::rpc_server;
@@ -31,16 +38,7 @@ use crate::errors::{
     SyncNullifiersError,
     SyncTransactionsError,
 };
-use crate::server::api::{
-    StoreApi,
-    convert_digests_to_words,
-    internal_error,
-    read_account_id,
-    read_account_ids,
-    read_block_range,
-    read_root,
-    validate_nullifiers,
-};
+use crate::server::api::{StoreApi, internal_error, validate_nullifiers};
 
 // CLIENT ENDPOINTS
 // ================================================================================================

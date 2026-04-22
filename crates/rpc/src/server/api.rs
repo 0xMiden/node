@@ -9,6 +9,7 @@ use miden_node_proto::clients::{
     StoreRpcClient,
     ValidatorClient,
 };
+use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
 use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
@@ -216,10 +217,12 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncNullifiersRequest>,
     ) -> Result<Response<proto::rpc::SyncNullifiersResponse>, Status> {
-        if let Some(range) = request.get_ref().block_range {
-            Span::current().set_attribute("block_range.from", range.block_from);
-            Span::current().set_attribute("block_range.to", range.block_to());
-        }
+        let range =
+            read_block_range::<Status>(request.get_ref().block_range, "SyncNullifiersRequest")?;
+
+        let span = Span::current();
+        span.set_attribute("block_range.from", range.block_from);
+        span.set_attribute("block_range.to", range.block_to());
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
@@ -258,11 +261,13 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
-        if let Some(range) = request.get_ref().block_range {
-            Span::current().set_attribute("block_range.from", range.block_from);
-            Span::current().set_attribute("block_range.to", range.block_to());
-        }
-        Span::current().set_attribute("finality", request.get_ref().finality().as_str_name());
+        let range =
+            read_block_range::<Status>(request.get_ref().block_range, "SyncChainMmrRequest")?;
+
+        let span = Span::current();
+        span.set_attribute("block_range.from", range.block_from);
+        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("finality", request.get_ref().finality().as_str_name());
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
@@ -275,10 +280,11 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncNotesRequest>,
     ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
-        if let Some(range) = request.get_ref().block_range {
-            Span::current().set_attribute("block_range.from", range.block_from);
-            Span::current().set_attribute("block_range.to", range.block_to());
-        }
+        let range = read_block_range::<Status>(request.get_ref().block_range, "SyncNotesRequest")?;
+
+        let span = Span::current();
+        span.set_attribute("block_range.from", range.block_from);
+        span.set_attribute("block_range.to", range.block_to());
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
@@ -322,10 +328,19 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
     ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
-        if let Some(range) = request.get_ref().block_range {
-            Span::current().set_attribute("block_range.from", range.block_from);
-            Span::current().set_attribute("block_range.to", range.block_to());
-        }
+        let account_id = read_account_id::<proto::rpc::SyncAccountStorageMapsRequest, Status>(
+            request.get_ref().account_id.clone(),
+        )?;
+        let range = read_block_range::<Status>(
+            request.get_ref().block_range,
+            "SyncAccountStorageMapsRequest",
+        )?;
+
+        let span = Span::current();
+        span.set_attribute("account.id", account_id);
+        span.set_attribute("block_range.from", range.block_from);
+        span.set_attribute("block_range.to", range.block_to());
+
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         self.store.clone().sync_account_storage_maps(request).await
@@ -336,10 +351,17 @@ impl api_server::Api for RpcService {
         request: tonic::Request<proto::rpc::SyncAccountVaultRequest>,
     ) -> std::result::Result<tonic::Response<proto::rpc::SyncAccountVaultResponse>, tonic::Status>
     {
-        if let Some(range) = request.get_ref().block_range {
-            Span::current().set_attribute("block_range.from", range.block_from);
-            Span::current().set_attribute("block_range.to", range.block_to());
-        }
+        let account_id = read_account_id::<proto::rpc::SyncAccountVaultRequest, Status>(
+            request.get_ref().account_id.clone(),
+        )?;
+        let range =
+            read_block_range::<Status>(request.get_ref().block_range, "SyncAccountVaultRequest")?;
+
+        let span = Span::current();
+        span.set_attribute("account.id", account_id);
+        span.set_attribute("block_range.from", range.block_from);
+        span.set_attribute("block_range.to", range.block_to());
+
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         self.store.clone().sync_account_vault(request).await
@@ -579,10 +601,15 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncTransactionsRequest>,
     ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
-        if let Some(range) = request.get_ref().block_range {
-            Span::current().set_attribute("block_range.from", range.block_from);
-            Span::current().set_attribute("block_range.to", range.block_to());
-        }
+        let range =
+            read_block_range::<Status>(request.get_ref().block_range, "SyncTransactionsRequest")?;
+        let account_ids = read_account_ids::<Status>(&request.get_ref().account_ids)?;
+
+        let span = Span::current();
+        span.set_attribute("block_range.from", range.block_from);
+        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("account.ids", format!("{account_ids:?}").as_str());
+        span.set_attribute("account.ids.count", account_ids.len());
 
         debug!(target: COMPONENT, request = ?request);
 
