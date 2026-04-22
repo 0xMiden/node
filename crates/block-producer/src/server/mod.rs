@@ -336,28 +336,7 @@ impl BlockProducerRpcServer {
             .map(Arc::new)
             .map_err(MempoolSubmissionError::StateConflict)?;
 
-        // This is a hack-around a race condition where the store has committed block N+1,
-        // but the block has not been committed in the mempool yet. The transaction inputs
-        // will be authenticated against N+1 which will cause the mempool to panic.
-        //
-        // The hack-around is to detect this situation, and wait a short while to let the mempool
-        // catch up.
-        //
-        // FIXME: figure out an architectural solution to this instead.
-        let mempool = self.mempool.lock().await;
-        let mut mempool = loop {
-            // Ensure inner mempool mutex guard is dropped before we sleep.
-            {
-                let mempool = mempool.lock().await;
-                if mempool.chain_tip() >= tx.authentication_height() {
-                    break mempool;
-                }
-            }
-            tracing::warn!("waiting for block to commit in mempool");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        };
-
-        mempool.add_transaction(tx).map(Into::into)
+        self.mempool.lock().await.lock().await.add_transaction(tx).map(Into::into)
     }
 
     #[instrument(
@@ -395,29 +374,7 @@ impl BlockProducerRpcServer {
             txs.push(tx);
         }
 
-        // This is a hack-around a race condition where the store has committed block N+1,
-        // but the block has not been committed in the mempool yet. The transaction inputs
-        // will be authenticated against N+1 which will cause the mempool to panic.
-        //
-        // The hack-around is to detect this situation, and wait a short while to let the mempool
-        // catch up.
-        //
-        // FIXME: figure out an architectural solution to this instead.
-        let mempool = self.mempool.lock().await;
-        let auth_height = txs.last().expect("user batch cannot be empty").authentication_height();
-        let mut mempool = loop {
-            // Ensure inner mempool mutex guard is dropped before we sleep.
-            {
-                let mempool = mempool.lock().await;
-                if mempool.chain_tip() >= auth_height {
-                    break mempool;
-                }
-            }
-            tracing::warn!("waiting for block to commit in mempool");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        };
-
-        mempool.add_user_batch(&txs).map(Into::into)
+        self.mempool.lock().await.lock().await.add_user_batch(&txs).map(Into::into)
     }
 }
 
