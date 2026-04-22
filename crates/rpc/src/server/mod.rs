@@ -74,7 +74,6 @@ impl Rpc {
             .max_connection_age(self.grpc_options.max_connection_age)
             .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(grpc::connect_info_layer())
             .layer(
                 TraceLayer::new(SharedClassifier::new(
                     GrpcErrorsAsFailures::new()
