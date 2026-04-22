@@ -1,3 +1,4 @@
+use http::header::HeaderName;
 use tracing::field;
 
 use crate::tracing::OpenTelemetrySpanExt;
@@ -71,6 +72,21 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         match addr.ip() {
             std::net::IpAddr::V4(_) => span.set_attribute("network.type", "ipv4"),
             std::net::IpAddr::V6(_) => span.set_attribute("network.type", "ipv6"),
+        }
+    }
+
+    for header in [
+        http::header::ACCEPT,
+        http::header::ORIGIN,
+        http::header::USER_AGENT,
+        http::header::FORWARDED,
+        HeaderName::from_static("x-forwarded-for"),
+        HeaderName::from_static("x-real-ip"),
+    ] {
+        if let Some(value) = request.headers().get(&header) {
+            if let Ok(value) = value.to_str() {
+                span.set_attribute(format!("http.request.header.{header}"), value);
+            }
         }
     }
 
