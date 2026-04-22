@@ -8,6 +8,7 @@
 - Extended `ValidatorStatus` proto response with `chain_tip`, `validated_transactions_count`, and `signed_blocks_count`; added Validator card to the network monitor dashboard ([#1900](https://github.com/0xMiden/node/pull/1900)).
 - Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
 - [BREAKING] Network monitor `/status` endpoint now emits a single `RemoteProverStatus` entry per remote prover that bundles status, workers, and test results, instead of separate entries ([#1980](https://github.com/0xMiden/node/pull/1980)).
+- Refactored the validator gRPC API implementation to use the new per-method trait implementations ([#1959](https://github.com/0xMiden/node/pull/1959)).
 
 ## v0.14.9 (2026-04-21)
 
