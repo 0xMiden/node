@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.10 (TBD)
+
+- Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
+
 ## v0.14.9 (2026-04-21)
 
 - Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).

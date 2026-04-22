@@ -9,6 +9,7 @@ use miden_node_proto::clients::{
     StoreRpcClient,
     ValidatorClient,
 };
+use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
@@ -23,6 +24,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierLimit,
     QueryParamStorageMapKeyTotalLimit,
 };
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{
@@ -36,7 +38,7 @@ use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
 use tonic::{IntoRequest, Request, Response, Status};
-use tracing::{debug, info, info_span};
+use tracing::{Span, debug, info, info_span};
 use url::Url;
 
 use crate::COMPONENT;
@@ -214,6 +216,11 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncNullifiersRequest>,
     ) -> Result<Response<proto::rpc::SyncNullifiersResponse>, Status> {
+        if let Some(range) = request.get_ref().block_range {
+            Span::current().set_attribute("block_range.from", range.block_from);
+            Span::current().set_attribute("block_range.to", range.block_to());
+        }
+
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         check::<QueryParamNullifierLimit>(request.get_ref().nullifiers.len())?;
@@ -227,7 +234,9 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::BlockHeaderByNumberRequest>,
     ) -> Result<Response<proto::rpc::BlockHeaderByNumberResponse>, Status> {
-        info!(target: COMPONENT, request = ?request.get_ref());
+        debug!(target: COMPONENT, request = ?request.get_ref());
+
+        Span::current().set_attribute("block.number", request.get_ref().block_num());
 
         self.store.clone().get_block_header_by_number(request).await
     }
@@ -236,6 +245,8 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::blockchain::BlockNumber>,
     ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
+        Span::current().set_attribute("block.number", request.get_ref().block_num);
+
         let request = request.into_inner();
 
         debug!(target: COMPONENT, ?request);
@@ -247,6 +258,12 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
+        if let Some(range) = request.get_ref().block_range {
+            Span::current().set_attribute("block_range.from", range.block_from);
+            Span::current().set_attribute("block_range.to", range.block_to());
+        }
+        Span::current().set_attribute("finality", request.get_ref().finality().as_str_name());
+
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         self.store.clone().sync_chain_mmr(request).await
@@ -258,6 +275,10 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncNotesRequest>,
     ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
+        if let Some(range) = request.get_ref().block_range {
+            Span::current().set_attribute("block_range.from", range.block_from);
+            Span::current().set_attribute("block_range.to", range.block_to());
+        }
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
@@ -301,6 +322,10 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
     ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
+        if let Some(range) = request.get_ref().block_range {
+            Span::current().set_attribute("block_range.from", range.block_from);
+            Span::current().set_attribute("block_range.to", range.block_to());
+        }
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         self.store.clone().sync_account_storage_maps(request).await
@@ -311,6 +336,10 @@ impl api_server::Api for RpcService {
         request: tonic::Request<proto::rpc::SyncAccountVaultRequest>,
     ) -> std::result::Result<tonic::Response<proto::rpc::SyncAccountVaultResponse>, tonic::Status>
     {
+        if let Some(range) = request.get_ref().block_range {
+            Span::current().set_attribute("block_range.from", range.block_from);
+            Span::current().set_attribute("block_range.to", range.block_to());
+        }
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         self.store.clone().sync_account_vault(request).await
@@ -319,32 +348,34 @@ impl api_server::Api for RpcService {
     /// Validates storage map key limits before forwarding the account request to the store.
     async fn get_account(
         &self,
-        request: Request<proto::rpc::AccountRequest>,
+        raw_request: Request<proto::rpc::AccountRequest>,
     ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
-        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::{
-            SlotData::AllEntries as ProtoMapAllEntries, SlotData::MapKeys as ProtoMapKeys,
-        };
+        let raw_request = raw_request.into_inner();
+        debug!(target: COMPONENT, ?raw_request);
 
-        let request = request.into_inner();
+        let request = AccountRequest::try_from(raw_request.clone())?;
 
-        debug!(target: COMPONENT, ?request);
+        let span = Span::current();
+        span.set_attribute("account.id", request.account_id);
+        if let Some(block) = request.block_num {
+            span.set_attribute("block.number", block);
+        }
 
         // Validate total storage map key limit before forwarding to store
         if let Some(details) = &request.details {
             let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
             let total_keys: usize = details
-                .storage_maps
+                .storage_requests
                 .iter()
-                .filter_map(|m| m.slot_data.as_ref())
-                .filter_map(|d| match d {
-                    ProtoMapKeys(keys) => Some(keys.map_keys.len()),
-                    ProtoMapAllEntries(_) => None,
+                .filter_map(|d| match &d.slot_data {
+                    SlotData::All => None,
+                    SlotData::MapKeys(items) => Some(items.len()),
                 })
                 .sum();
             check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
         }
 
-        self.store.clone().get_account(request).await
+        self.store.clone().get_account(raw_request).await
     }
 
     // -- Transaction submission --------------------------------------------------------------
@@ -369,6 +400,13 @@ impl api_server::Api for RpcService {
         let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid transaction"))
         })?;
+
+        let span = Span::current();
+        span.set_attribute("transaction.id", tx.id());
+        span.set_attribute("account.id", tx.account_id());
+        span.set_attribute("transaction.expires_at", tx.expiration_block_num());
+        span.set_attribute("transaction.reference_block.number", tx.ref_block_num());
+        span.set_attribute("transaction.reference_block.commitment", tx.ref_block_commitment());
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
         let account_update = TxAccountUpdate::new(
@@ -440,6 +478,15 @@ impl api_server::Api for RpcService {
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proven_batch"))
         })?;
+
+        let span = Span::current();
+        span.set_attribute("batch.id", proven_batch.id());
+        span.set_attribute("batch.expires_at", proven_batch.batch_expiration_block_num());
+        span.set_attribute("batch.reference_block.number", proven_batch.reference_block_num());
+        span.set_attribute(
+            "batch.reference_block.commitment",
+            proven_batch.reference_block_commitment(),
+        );
 
         let proposed_batch = request
             .proposed_batch
@@ -532,6 +579,11 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncTransactionsRequest>,
     ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
+        if let Some(range) = request.get_ref().block_range {
+            Span::current().set_attribute("block_range.from", range.block_from);
+            Span::current().set_attribute("block_range.to", range.block_to());
+        }
+
         debug!(target: COMPONENT, request = ?request);
 
         check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
