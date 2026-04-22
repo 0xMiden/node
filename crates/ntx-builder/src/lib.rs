@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use actor::AccountActorContext;
+use actor::{AccountActorContext, ActorConfig, GrpcClients, State};
 use anyhow::Context;
 use builder::MempoolEventStream;
 use chain_state::ChainState;
@@ -294,18 +294,24 @@ impl NtxBuilderConfig {
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
         let actor_context = AccountActorContext {
-            block_producer: block_producer.clone(),
-            validator,
-            prover,
-            chain_state: chain_state.clone(),
-            store: store.clone(),
-            script_cache,
-            max_notes_per_tx: self.max_notes_per_tx,
-            max_note_attempts: self.max_note_attempts,
-            idle_timeout: self.idle_timeout,
-            db: db.clone(),
+            clients: GrpcClients {
+                store: store.clone(),
+                block_producer: block_producer.clone(),
+                validator,
+                prover,
+            },
+            state: State {
+                db: db.clone(),
+                chain: chain_state.clone(),
+                script_cache,
+            },
+            config: ActorConfig {
+                max_notes_per_tx: self.max_notes_per_tx,
+                max_note_attempts: self.max_note_attempts,
+                idle_timeout: self.idle_timeout,
+                max_cycles: self.max_cycles,
+            },
             request_tx,
-            max_cycles: self.max_cycles,
         };
 
         Ok(NetworkTransactionBuilder::new(
