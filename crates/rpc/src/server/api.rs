@@ -605,7 +605,7 @@ impl api_server::Api for RpcService {
             read_block_range::<Status>(request.get_ref().block_range, "SyncTransactionsRequest")?;
         let n_accounts = request.get_ref().account_ids.len();
         let account_ids =
-            read_account_ids::<Status>(&request.get_ref().account_ids[..n_accounts.min(10)])?;
+            read_account_ids::<Status, _>(request.get_ref().account_ids.iter().take(10).cloned())?;
 
         let span = Span::current();
         span.set_attribute("block_range.from", range.block_from);

@@ -134,7 +134,7 @@ impl block_producer_server::BlockProducer for StoreApi {
     ) -> Result<Response<proto::store::BlockInputs>, Status> {
         let request = request.into_inner();
 
-        let account_ids = read_account_ids::<Status>(&request.account_ids)?;
+        let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
         let nullifiers = validate_nullifiers(&request.nullifiers)
             .map_err(|err| conversion_error_to_status(&err))?;
         let unauthenticated_note_commitments =

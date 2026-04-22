@@ -421,7 +421,7 @@ impl rpc_server::Rpc for StoreApi {
         .into_inclusive_range::<SyncTransactionsError>(&chain_tip)?;
 
         let account_ids: Vec<AccountId> =
-            read_account_ids::<SyncTransactionsError>(&request.account_ids)?;
+            read_account_ids::<SyncTransactionsError, _>(request.account_ids)?;
 
         // Validate account IDs count
         check::<QueryParamAccountIdLimit>(account_ids.len())?;

@@ -50,13 +50,13 @@ where
 }
 
 /// Reads account IDs from a request, returning a specific error type if conversion fails
-pub fn read_account_ids<E>(account_ids: &[proto::account::AccountId]) -> Result<Vec<AccountId>, E>
+pub fn read_account_ids<E, I>(account_ids: I) -> Result<Vec<AccountId>, E>
 where
     E: From<ConversionError>,
+    I: IntoIterator<Item = proto::account::AccountId>,
 {
     account_ids
-        .iter()
-        .cloned()
+        .into_iter()
         .map(AccountId::try_from)
         .collect::<Result<_, ConversionError>>()
         .context("account_ids")
