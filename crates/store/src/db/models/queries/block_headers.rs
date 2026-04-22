@@ -231,14 +231,10 @@ pub(crate) fn insert_block_header(
     signature: &Signature,
     proving_inputs: Option<BlockProofRequest>,
 ) -> Result<usize, DatabaseError> {
-    // Only the genesis block should be inserted without proving inputs.
-    if proving_inputs.is_none() && block_header.block_num() != BlockNumber::GENESIS {
-        return Err(DatabaseError::DataCorrupted(
-            "Only the genesis block should be inserted without proving inputs".into(),
-        ));
-    }
-    // We treat the genesis as proven.
-    let proven_in_sequence = proving_inputs.is_none();
+    // Genesis block has no proving inputs and is treated as proven in sequence.
+    // Non-genesis blocks without proving inputs are replica blocks: they arrive pre-proven from
+    // an upstream store and will not be scheduled for local proving (proven_in_sequence = false).
+    let proven_in_sequence = block_header.block_num() == BlockNumber::GENESIS;
     let row = BlockHeaderInsert {
         block_num: block_header.block_num().to_raw_sql(),
         block_header: block_header.to_bytes(),
