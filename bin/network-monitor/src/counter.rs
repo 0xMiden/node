@@ -14,7 +14,6 @@ use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountFile, AccountHeader, AccountId};
-use miden_protocol::assembly::Library;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::note::{
@@ -51,7 +50,7 @@ const REGENERATE_COOLDOWN: Duration = Duration::from_secs(3600);
 
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
-use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client, get_counter_library};
+use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client};
 use crate::status::{
     CounterTrackingDetails,
     IncrementDetails,
@@ -350,13 +349,12 @@ async fn setup_increment_task(
     let block_header = get_genesis_block_header(rpc_client).await?;
 
     // Create the increment procedure script and get the library
-    let (increment_script, library) = create_increment_script()?;
+    let increment_script = create_increment_script()?;
 
     // Create unified data store for transaction execution
     let mut data_store = MonitorDataStore::new(block_header.clone(), PartialBlockchain::default());
     data_store.add_account(wallet_account.clone());
     data_store.add_account(counter_account.clone());
-    data_store.insert_library(&library);
 
     Ok((
         details,
@@ -987,11 +985,12 @@ async fn create_and_submit_network_note(
 }
 
 /// Create the increment procedure script.
-fn create_increment_script() -> Result<(NoteScript, Library)> {
-    let library = get_counter_library()?;
+fn create_increment_script() -> Result<NoteScript> {
+    let script =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/counter_program.masm"));
 
     let script_builder = CodeBuilder::new()
-        .with_dynamically_linked_library(&library)
+        .with_linked_module("external_contract::counter_contract", script)
         .context("Failed to create script builder with library")?;
 
     // Compile the script directly as a NoteScript
@@ -1002,7 +1001,7 @@ fn create_increment_script() -> Result<(NoteScript, Library)> {
         )))
         .context("Failed to compile note script")?;
 
-    Ok((note_script, library))
+    Ok(note_script)
 }
 
 /// Create a network note that targets the counter account.
