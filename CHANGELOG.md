@@ -3,6 +3,7 @@
 ## v0.14.10 (TBD)
 
 - Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
+- Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982).
 
 ## v0.14.9 (2026-04-21)
 
