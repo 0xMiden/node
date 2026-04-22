@@ -12,24 +12,11 @@ use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_protocol::account::{Account, AccountId, PartialAccount, StorageMapKey};
-use miden_protocol::assembly::{
-    DefaultSourceManager,
-    Library,
-    Module,
-    ModuleKind,
-    Path as MidenPath,
-};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
 use miden_protocol::note::NoteScript;
-use miden_protocol::transaction::{
-    AccountInputs,
-    InputNotes,
-    PartialBlockchain,
-    TransactionArgs,
-    TransactionKernel,
-};
+use miden_protocol::transaction::{AccountInputs, InputNotes, PartialBlockchain, TransactionArgs};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, Word};
 use miden_tx::auth::BasicAuthenticator;
@@ -240,26 +227,6 @@ pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) ->
     Ok(())
 }
 
-pub(crate) fn get_counter_library() -> Result<Library> {
-    let assembler = TransactionKernel::assembler();
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let script =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/counter_program.masm"));
-
-    let library_path = MidenPath::new("external_contract::counter_contract");
-
-    let module = Module::parser(ModuleKind::Library)
-        .parse_str(library_path, script, source_manager)
-        .map_err(|e| anyhow::anyhow!("Failed to parse module: {e}"))?;
-
-    let library = assembler
-        .clone()
-        .assemble_library([module])
-        .map_err(|e| anyhow::anyhow!("Failed to assemble library: {e}"))?;
-
-    Ok(Arc::unwrap_or_clone(library))
-}
-
 // MONITOR DATA STORE
 // ================================================================================================
 
@@ -290,11 +257,6 @@ impl MonitorDataStore {
     /// Update an account after a transaction (loads latest code too).
     pub fn update_account(&mut self, account: Account) {
         self.add_account(account);
-    }
-
-    /// Insert external library procedures used by transactions.
-    pub fn insert_library(&mut self, library: &Library) {
-        self.mast_store.insert(library.mast_forest().clone());
     }
 
     /// Returns a reference to the account or a standardized "unknown account" error.
