@@ -47,10 +47,7 @@ use crate::db::{AccountVaultValue, schema};
 use crate::errors::DatabaseError;
 
 mod at_block;
-pub(crate) use at_block::{
-    select_account_header_with_storage_header_at_block,
-    select_account_vault_at_block,
-};
+pub(crate) use at_block::select_account_header_with_storage_header_at_block;
 
 mod delta;
 use delta::{
