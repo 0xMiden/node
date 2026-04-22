@@ -21,6 +21,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
     QueryParamNullifierLimit,
+    QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
 };
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
@@ -216,7 +217,7 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::SyncNullifiersResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        check::<QueryParamNullifierLimit>(request.get_ref().nullifiers.len())?;
+        check::<QueryParamNullifierPrefixLimit>(request.get_ref().nullifiers.len())?;
 
         self.store.clone().sync_nullifiers(request).await
     }
@@ -652,6 +653,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamNoteIdLimit as NoteId;
     use QueryParamNoteTagLimit as NoteTag;
     use QueryParamNullifierLimit as Nullifier;
+    use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
 
     proto::rpc::RpcLimits {
@@ -662,7 +664,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
             ),
             (
                 "SyncNullifiers".into(),
-                endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
+                endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),
             ),
             (
                 "SyncTransactions".into(),
