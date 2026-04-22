@@ -2,18 +2,11 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use governor::middleware::StateInformationMiddleware;
-use tonic::service::InterceptorLayer;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::key_extractor::SmartIpKeyExtractor;
 
-use super::connect_info::ConnectInfoInterceptor;
 use crate::clap::GrpcOptionsExternal;
-
-/// Creates the gRPC interceptor layer that attaches connection metadata.
-pub fn connect_info_layer() -> InterceptorLayer<ConnectInfoInterceptor> {
-    InterceptorLayer::new(ConnectInfoInterceptor)
-}
 
 /// Builds a global concurrency limit layer using the configured semaphore.
 pub fn rate_limit_concurrent_connections(
