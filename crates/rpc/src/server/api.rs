@@ -603,13 +603,15 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
         let range =
             read_block_range::<Status>(request.get_ref().block_range, "SyncTransactionsRequest")?;
-        let account_ids = read_account_ids::<Status>(&request.get_ref().account_ids[0..10])?;
+        let n_accounts = request.get_ref().account_ids.len();
+        let account_ids =
+            read_account_ids::<Status>(&request.get_ref().account_ids[..n_accounts.min(10)])?;
 
         let span = Span::current();
         span.set_attribute("block_range.from", range.block_from);
         span.set_attribute("block_range.to", range.block_to());
         span.set_attribute("account.ids", format!("{account_ids:?}").as_str());
-        span.set_attribute("account.ids.count", account_ids.len());
+        span.set_attribute("account.ids.count", n_accounts);
 
         debug!(target: COMPONENT, request = ?request);
 
