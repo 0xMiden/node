@@ -104,7 +104,6 @@ struct BlockCommittal {
     account_tree_update: AccountMutationSet,
     notes: Vec<(NoteRecord, Option<miden_protocol::note::Nullifier>)>,
     account_deltas: Vec<AccountDelta>,
-    snapshot: Arc<InMemoryState>,
     block_num: BlockNumber,
     block_commitment: Word,
 }
@@ -162,15 +161,12 @@ impl BlockWriter {
 
         self.validate_block_header(header, body).await?;
 
-        // Load the current in-memory state snapshot (wait-free).
-        let snapshot = self.in_memory.load_full();
-
         // Tree mutation computation and note record building are CPU-bound. Run them inside
         // block_in_place so tokio can evacuate other tasks from this thread for the duration.
         let (nullifier_tree_update, account_tree_update, notes, account_deltas) =
             tokio::task::block_in_place(|| -> Result<_, ApplyBlockError> {
                 let (nullifier_tree_update, account_tree_update) =
-                    self.compute_tree_mutations(&snapshot, header, body)?;
+                    self.compute_tree_mutations(header, body)?;
 
                 let notes = build_note_records(header, body)?;
 
@@ -192,7 +188,6 @@ impl BlockWriter {
             account_tree_update,
             notes,
             account_deltas,
-            snapshot,
             block_num,
             block_commitment,
         })
@@ -228,7 +223,6 @@ impl BlockWriter {
             account_tree_update,
             notes,
             account_deltas,
-            snapshot,
             block_num,
             block_commitment,
         } = prepared;
@@ -247,6 +241,7 @@ impl BlockWriter {
             (self.build_snapshot_nullifier_tree(), self.build_snapshot_account_tree())
         });
 
+        let snapshot = self.in_memory.load_full();
         let mut new_blockchain = snapshot.blockchain.clone();
         new_blockchain.push(block_commitment);
 
@@ -315,13 +310,18 @@ impl BlockWriter {
             return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
         }
 
+        // New block chain root must be equal to the chain MMR root prior to the update.
+        let snapshot = self.in_memory.load_full();
+        if snapshot.blockchain.peaks().hash_peaks() != header.chain_commitment() {
+            return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
+        }
+
         Ok(())
     }
 
     /// Compute mutations for the nullifier tree and account tree.
     fn compute_tree_mutations(
         &self,
-        snapshot: &Arc<InMemoryState>,
         header: &BlockHeader,
         body: &BlockBody,
     ) -> Result<(NullifierMutationSet, AccountMutationSet), ApplyBlockError> {
@@ -334,12 +334,6 @@ impl BlockWriter {
             .collect();
         if !duplicate_nullifiers.is_empty() {
             return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
-        }
-
-        // new_block.chain_root must be equal to the chain MMR root prior to the update.
-        let peaks = snapshot.blockchain.peaks();
-        if peaks.hash_peaks() != header.chain_commitment() {
-            return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
         }
 
         // Compute update for nullifier tree.
