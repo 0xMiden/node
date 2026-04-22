@@ -22,6 +22,5 @@ mod private {
     impl Sealed for url::Url {}
 }
 
-pub mod connect_info;
 mod layers;
 pub use layers::*;
