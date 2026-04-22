@@ -90,8 +90,7 @@ $BINARY store start \
     --rpc.url "$STORE_RPC_URL" \
     --ntx-builder.url "$STORE_NTX_BUILDER_URL" \
     --block-producer.url "$STORE_BLOCK_PRODUCER_URL" \
-    --data-directory "$STORE_DIR" \
-    --enable-otel &
+    --data-directory "$STORE_DIR" &
 PIDS+=($!)
 
 KMS_START_ARGS=()
@@ -101,7 +100,6 @@ fi
 
 echo "Starting validator..."
 $BINARY validator start "$VALIDATOR_URL" \
-    --enable-otel \
     --data-directory "$VALIDATOR_DIR" \
     "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)
