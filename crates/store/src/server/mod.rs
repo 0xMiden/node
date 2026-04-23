@@ -35,6 +35,9 @@ mod replica;
 mod replica_client;
 mod rpc_api;
 
+// Create the proof broadcast channel for replica sync.
+const PROOF_BROADCAST_CAPACITY: usize = 512;
+
 /// Determines how the store receives new blocks.
 ///
 /// The two modes are mutually exclusive: a store either accepts blocks from a block producer
@@ -118,12 +121,14 @@ impl Store {
                 .await
                 .context("failed to load state")?;
 
-        // Create the proof broadcast channel for replica sync.
-        const PROOF_BROADCAST_CAPACITY: usize = 512;
         let (proof_sender, _) = broadcast::channel(PROOF_BROADCAST_CAPACITY);
 
         let (mut join_set, mode_task) = match self.mode {
-            StoreMode::BlockProducer { listener, block_prover_url, max_concurrent_proofs } => {
+            StoreMode::BlockProducer {
+                listener,
+                block_prover_url,
+                max_concurrent_proofs,
+            } => {
                 let block_producer_address = listener.local_addr()?;
                 info!(target: COMPONENT, block_producer_endpoint=?block_producer_address,
                     "Starting in block-producer mode");
@@ -138,7 +143,7 @@ impl Store {
                 .await;
 
                 let join_set = Self::spawn_grpc_servers(
-                    Arc::new(state),
+                    &Arc::new(state),
                     chain_tip_sender,
                     block_sender,
                     proof_sender,
@@ -148,7 +153,7 @@ impl Store {
                     Some(listener),
                 )?;
 
-                (join_set, Some(proof_scheduler_task))
+                (join_set, proof_scheduler_task)
             },
 
             StoreMode::Replica { upstream_url } => {
@@ -163,7 +168,7 @@ impl Store {
                 let replica_task = replica_client::spawn(Arc::clone(&state), upstream_url);
 
                 let join_set = Self::spawn_grpc_servers(
-                    state,
+                    &state,
                     chain_tip_sender,
                     block_sender,
                     proof_sender,
@@ -173,7 +178,7 @@ impl Store {
                     None, // no block-producer listener in replica mode
                 )?;
 
-                (join_set, Some(replica_task))
+                (join_set, replica_task)
             },
         };
 
@@ -182,26 +187,17 @@ impl Store {
             join_set.join_next().await.expect("joinset is not empty")?.map_err(Into::into)
         };
 
-        if let Some(mode_task) = mode_task {
-            tokio::select! {
-                result = service => result,
-                Some(err) = termination_signal.recv() => {
-                    Err(anyhow::anyhow!("received termination signal").context(err))
-                },
-                result = mode_task => {
-                    match result {
-                        Ok(Ok(())) => Err(anyhow::anyhow!("mode task exited unexpectedly")),
-                        Ok(Err(err)) => Err(err.context("mode task fatal error")),
-                        Err(join_err) => Err(join_err).context("mode task panicked"),
-                    }
+        tokio::select! {
+            result = service => result,
+            Some(err) = termination_signal.recv() => {
+                Err(anyhow::anyhow!("received termination signal").context(err))
+            },
+            result = mode_task => {
+                match result {
+                    Ok(Ok(())) => Err(anyhow::anyhow!("mode task exited unexpectedly")),
+                    Ok(Err(err)) => Err(err.context("mode task fatal error")),
+                    Err(join_err) => Err(join_err).context("mode task panicked"),
                 }
-            }
-        } else {
-            tokio::select! {
-                result = service => result,
-                Some(err) = termination_signal.recv() => {
-                    Err(anyhow::anyhow!("received termination signal").context(err))
-                },
             }
         }
     }
@@ -248,7 +244,7 @@ impl Store {
     /// `BlockProducer` gRPC service. Pass `None` in replica mode to omit it.
     #[expect(clippy::too_many_arguments)]
     fn spawn_grpc_servers(
-        state: Arc<State>,
+        state: &Arc<State>,
         chain_tip_sender: watch::Sender<miden_protocol::block::BlockNumber>,
         block_sender: broadcast::Sender<crate::state::BlockNotification>,
         proof_sender: broadcast::Sender<proof_scheduler::ProofNotification>,
@@ -264,9 +260,9 @@ impl Store {
             proof_sender: proof_sender.clone(),
         };
 
-        let rpc_service = store::rpc_server::RpcServer::new(make_api(&state));
-        let replica_service = store::store_replica_server::StoreReplicaServer::new(make_api(&state));
-        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(make_api(&state));
+        let rpc_service = store::rpc_server::RpcServer::new(make_api(state));
+        let replica_service = store::store_replica_server::StoreReplicaServer::new(make_api(state));
+        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(make_api(state));
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_api_descriptor())
@@ -277,7 +273,7 @@ impl Store {
 
         let mut join_set = JoinSet::new();
 
-        let state_for_maintenance = Arc::clone(&state);
+        let state_for_maintenance = Arc::clone(state);
         join_set.spawn(async move {
             // Manual tests on testnet indicate each iteration takes ~2s once things are OS cached.
             //
@@ -314,7 +310,7 @@ impl Store {
         if let Some(listener) = block_producer_listener {
             let block_producer_service =
                 store::block_producer_server::BlockProducerServer::new(api::StoreApi {
-                    state: Arc::clone(&state),
+                    state: Arc::clone(state),
                     chain_tip_sender,
                     block_sender,
                     proof_sender,
