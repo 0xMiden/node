@@ -568,9 +568,9 @@ pub async fn start_store(
     task::spawn(async move {
         Store {
             rpc_listener,
-            ntx_builder_listener,
             mode: miden_node_store::StoreMode::BlockProducer {
-                listener: block_producer_listener,
+                block_producer_listener,
+                ntx_builder_listener,
                 block_prover_url: None,
                 max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             },

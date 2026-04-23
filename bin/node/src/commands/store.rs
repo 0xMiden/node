@@ -82,17 +82,13 @@ pub enum StoreCommand {
 
     /// Starts the store in replica mode.
     ///
-    /// In this mode the store does not accept blocks from a block producer. Instead it connects to
-    /// an upstream store's `StoreReplica` gRPC service and applies blocks as they arrive. No proof
-    /// scheduler is started — proofs are the upstream store's responsibility.
+    /// In this mode the store syncs blocks from an upstream store's `StoreReplica` gRPC service.
+    /// Only the `Rpc` and `StoreReplica` gRPC services are exposed — the `BlockProducer` and
+    /// `NtxBuilder` services are not started and no proof scheduler runs.
     StartReplica {
         /// Url at which to serve the store's RPC API.
         #[arg(long = "rpc.url", env = ENV_STORE_RPC_URL, value_name = "URL")]
         rpc_url: Url,
-
-        /// Url at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
-        ntx_builder_url: Url,
 
         /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_STORE_UPSTREAM_URL, value_name = "URL")]
@@ -147,22 +143,14 @@ impl StoreCommand {
             },
             StoreCommand::StartReplica {
                 rpc_url,
-                ntx_builder_url,
                 upstream_store_url,
                 data_directory,
                 enable_otel: _,
                 grpc_options,
                 storage_options,
             } => {
-                Self::start_replica(
-                    rpc_url,
-                    ntx_builder_url,
-                    upstream_store_url,
-                    data_directory,
-                    grpc_options,
-                    storage_options,
-                )
-                .await
+                Self::start_replica(rpc_url, upstream_store_url, data_directory, grpc_options, storage_options)
+                    .await
             },
         }
     }
@@ -210,9 +198,9 @@ impl StoreCommand {
 
         Store {
             rpc_listener,
-            ntx_builder_listener,
             mode: StoreMode::BlockProducer {
-                listener: block_producer_listener,
+                block_producer_listener,
+                ntx_builder_listener,
                 block_prover_url,
                 max_concurrent_proofs,
             },
@@ -227,7 +215,6 @@ impl StoreCommand {
 
     async fn start_replica(
         rpc_url: Url,
-        ntx_builder_url: Url,
         upstream_store_url: Url,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
@@ -240,16 +227,8 @@ impl StoreCommand {
             .await
             .context("Failed to bind to store's RPC gRPC URL")?;
 
-        let ntx_builder_addr = ntx_builder_url
-            .to_socket()
-            .context("Failed to extract socket address from store ntx-builder URL")?;
-        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_addr)
-            .await
-            .context("Failed to bind to store's ntx-builder gRPC URL")?;
-
         Store {
             rpc_listener,
-            ntx_builder_listener,
             mode: StoreMode::Replica { upstream_url: upstream_store_url },
             data_directory,
             grpc_options,

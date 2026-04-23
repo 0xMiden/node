@@ -42,13 +42,17 @@ const PROOF_BROADCAST_CAPACITY: usize = 512;
 ///
 /// The two modes are mutually exclusive: a store either accepts blocks from a block producer
 /// via its `BlockProducer` gRPC service, or it syncs blocks from an upstream store instance.
+/// The services exposed on the network differ between modes accordingly.
 pub enum StoreMode {
     /// Accepts blocks from a block producer via the `BlockProducer` gRPC service.
     ///
-    /// In this mode the store binds a dedicated listener for the block producer and runs the
-    /// proof scheduler to generate block proofs locally.
+    /// Exposes the `BlockProducer` and `NtxBuilder` gRPC services and runs the proof scheduler
+    /// to generate block proofs locally.
     BlockProducer {
-        listener: TcpListener,
+        /// Listener for the block producer gRPC endpoint.
+        block_producer_listener: TcpListener,
+        /// Listener for the network transaction builder gRPC endpoint.
+        ntx_builder_listener: TcpListener,
         /// URL of the remote block prover. Uses a local prover if `None`.
         block_prover_url: Option<Url>,
         /// Maximum number of blocks proven concurrently by the proof scheduler.
@@ -57,15 +61,14 @@ pub enum StoreMode {
 
     /// Receives blocks from an upstream store's `StoreReplica` gRPC service.
     ///
-    /// In this mode no `BlockProducer` endpoint is exposed and no proof scheduler is started.
-    /// The store connects to `upstream_url` and applies blocks as they arrive.
+    /// Only the `Rpc` and `StoreReplica` gRPC services are exposed. The `BlockProducer` and
+    /// `NtxBuilder` services are not started and no proof scheduler runs.
     Replica { upstream_url: Url },
 }
 
 /// The store server.
 pub struct Store {
     pub rpc_listener: TcpListener,
-    pub ntx_builder_listener: TcpListener,
     pub mode: StoreMode,
     pub data_directory: PathBuf,
     pub storage_options: StorageOptions,
@@ -109,8 +112,7 @@ impl Store {
     /// Note: this blocks until the server dies.
     pub async fn serve(self) -> anyhow::Result<()> {
         let rpc_address = self.rpc_listener.local_addr()?;
-        let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
-        info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
+        info!(target: COMPONENT, rpc_endpoint=?rpc_address,
             ?self.data_directory, ?self.grpc_options.request_timeout, "Loading database");
 
         // Load initial state.
@@ -125,12 +127,16 @@ impl Store {
 
         let (mut join_set, mode_task) = match self.mode {
             StoreMode::BlockProducer {
-                listener,
+                block_producer_listener,
+                ntx_builder_listener,
                 block_prover_url,
                 max_concurrent_proofs,
             } => {
-                let block_producer_address = listener.local_addr()?;
-                info!(target: COMPONENT, block_producer_endpoint=?block_producer_address,
+                let block_producer_address = block_producer_listener.local_addr()?;
+                let ntx_builder_address = ntx_builder_listener.local_addr()?;
+                info!(target: COMPONENT,
+                    block_producer_endpoint=?block_producer_address,
+                    ntx_builder_endpoint=?ntx_builder_address,
                     "Starting in block-producer mode");
 
                 let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
@@ -149,8 +155,8 @@ impl Store {
                     proof_sender,
                     self.grpc_options,
                     self.rpc_listener,
-                    self.ntx_builder_listener,
-                    Some(listener),
+                    Some(ntx_builder_listener),
+                    Some(block_producer_listener),
                 )?;
 
                 (join_set, proof_scheduler_task)
@@ -174,8 +180,8 @@ impl Store {
                     proof_sender,
                     self.grpc_options,
                     self.rpc_listener,
-                    self.ntx_builder_listener,
-                    None, // no block-producer listener in replica mode
+                    None, // no ntx-builder in replica mode
+                    None, // no block-producer in replica mode
                 )?;
 
                 (join_set, replica_task)
@@ -240,8 +246,8 @@ impl Store {
 
     /// Spawns the gRPC servers and the DB maintenance background task.
     ///
-    /// Pass `block_producer_listener = Some(...)` in block-producer mode to expose the
-    /// `BlockProducer` gRPC service. Pass `None` in replica mode to omit it.
+    /// - `ntx_builder_listener`: `Some` in block-producer mode, `None` in replica mode.
+    /// - `block_producer_listener`: `Some` in block-producer mode, `None` in replica mode.
     #[expect(clippy::too_many_arguments)]
     fn spawn_grpc_servers(
         state: &Arc<State>,
@@ -250,7 +256,7 @@ impl Store {
         proof_sender: broadcast::Sender<proof_scheduler::ProofNotification>,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
-        ntx_builder_listener: TcpListener,
+        ntx_builder_listener: Option<TcpListener>,
         block_producer_listener: Option<TcpListener>,
     ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
         let make_api = |state: &Arc<State>| api::StoreApi {
@@ -262,7 +268,6 @@ impl Store {
 
         let rpc_service = store::rpc_server::RpcServer::new(make_api(state));
         let replica_service = store::store_replica_server::StoreReplicaServer::new(make_api(state));
-        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(make_api(state));
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_api_descriptor())
@@ -297,15 +302,19 @@ impl Store {
                 .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
         );
 
-        join_set.spawn(
-            tonic::transport::Server::builder()
-                .timeout(grpc_options.request_timeout)
-                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-                .add_service(ntx_builder_service)
-                .add_service(reflection_service.clone())
-                .serve_with_incoming(TcpListenerStream::new(ntx_builder_listener)),
-        );
+        if let Some(listener) = ntx_builder_listener {
+            let ntx_builder_service =
+                store::ntx_builder_server::NtxBuilderServer::new(make_api(state));
+            join_set.spawn(
+                tonic::transport::Server::builder()
+                    .timeout(grpc_options.request_timeout)
+                    .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+                    .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+                    .add_service(ntx_builder_service)
+                    .add_service(reflection_service.clone())
+                    .serve_with_incoming(TcpListenerStream::new(listener)),
+            );
+        }
 
         if let Some(listener) = block_producer_listener {
             let block_producer_service =

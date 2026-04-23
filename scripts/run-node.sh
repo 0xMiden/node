@@ -23,13 +23,9 @@ STORE_RPC_URL="http://0.0.0.0:50001"
 STORE_NTX_BUILDER_URL="http://0.0.0.0:50002"
 STORE_BLOCK_PRODUCER_URL="http://0.0.0.0:50003"
 
-# Replica 1 (upstream: primary store): 2 APIs.
+# Replica stores expose only the RPC API (no block-producer or ntx-builder endpoints).
 STORE_REPLICA_1_RPC_URL="http://0.0.0.0:50011"
-STORE_REPLICA_1_NTX_BUILDER_URL="http://0.0.0.0:50012"
-
-# Replica 2 (upstream: replica 1): 2 APIs.
 STORE_REPLICA_2_RPC_URL="http://0.0.0.0:50021"
-STORE_REPLICA_2_NTX_BUILDER_URL="http://0.0.0.0:50022"
 
 VALIDATOR_URL="http://0.0.0.0:50101"
 BLOCK_PRODUCER_URL="http://0.0.0.0:50201"
@@ -51,7 +47,7 @@ trap cleanup EXIT INT TERM
 
 # --- Kill processes on required ports ---
 
-PORTS=(50001 50002 50003 50011 50012 50021 50022 50101 50201 57291 57292 57293)
+PORTS=(50001 50002 50003 50011 50021 50101 50201 57291 57292 57293)
 echo "=== Killing processes on required ports ==="
 for port in "${PORTS[@]}"; do
     pids=$(lsof -ti :"$port" 2>/dev/null || true)
@@ -134,7 +130,6 @@ sleep 2
 echo "Starting store replica 1 (upstream: primary store at $STORE_RPC_URL)..."
 $BINARY store start-replica \
     --rpc.url "$STORE_REPLICA_1_RPC_URL" \
-    --ntx-builder.url "$STORE_REPLICA_1_NTX_BUILDER_URL" \
     --upstream-store.url "$STORE_RPC_URL" \
     --data-directory "$STORE_REPLICA_1_DIR" &
 PIDS+=($!)
@@ -143,7 +138,6 @@ PIDS+=($!)
 echo "Starting store replica 2 (upstream: replica 1 at $STORE_REPLICA_1_RPC_URL)..."
 $BINARY store start-replica \
     --rpc.url "$STORE_REPLICA_2_RPC_URL" \
-    --ntx-builder.url "$STORE_REPLICA_2_NTX_BUILDER_URL" \
     --upstream-store.url "$STORE_REPLICA_1_RPC_URL" \
     --data-directory "$STORE_REPLICA_2_DIR" &
 PIDS+=($!)
