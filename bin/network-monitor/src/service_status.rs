@@ -148,9 +148,14 @@ pub enum ServiceDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteProverDetails {
     pub status: RemoteProverStatusDetails,
-    pub test: Option<ProverTestDetails>,
-    pub test_status: Option<Status>,
-    pub test_error: Option<String>,
+    pub test: Option<ProverTestOutcome>,
+}
+
+/// Most recent outcome of a remote prover test task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProverTestOutcome {
+    pub details: ProverTestDetails,
+    pub status: Status,
 }
 
 /// Details of the increment service.

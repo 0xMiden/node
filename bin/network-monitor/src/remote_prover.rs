@@ -23,7 +23,13 @@ use tracing::{info, instrument};
 use url::Url;
 
 use crate::COMPONENT;
-use crate::status::{ServiceDetails, ServiceStatus};
+use crate::status::{
+    ProverTestOutcome,
+    RemoteProverDetails,
+    ServiceDetails,
+    ServiceStatus,
+    Status,
+};
 
 // PROOF TYPE
 // ================================================================================================
@@ -324,5 +330,85 @@ pub(crate) async fn generate_prover_test_payload() -> proto::remote_prover::Proo
     proto::remote_prover::ProofRequest {
         proof_type: proto::remote_prover::ProofType::Transaction.into(),
         payload: generate_mock_transaction().await.unwrap().to_bytes(),
+    }
+}
+
+// PROVER MERGE
+// ================================================================================================
+
+/// Merges the status and test receivers for a single remote prover into one `ServiceStatus`.
+///
+/// The combined status is `Unhealthy` if either the status check or the test failed, `Unknown`
+/// if the status checker has not yet seen the prover, and `Healthy` otherwise. The test result
+/// is only attached when the test task has produced an actual `ProverTestResult` value (before
+/// the first test completes, the test channel holds the initial prover status and should not be
+/// surfaced as a test).
+pub(crate) fn merge_prover(status: &ServiceStatus, test: &ServiceStatus) -> ServiceStatus {
+    // If the status checker hasn't produced a real result (prover is down), pass its error
+    // status straight through.
+    let ServiceDetails::ProverStatusCheck(status_details) = &status.details else {
+        return status.clone();
+    };
+
+    // Attach test info only once the test task has produced a real result.
+    let test_outcome = if let ServiceDetails::ProverTestResult(d) = &test.details {
+        Some(ProverTestOutcome {
+            details: d.clone(),
+            status: test.status.clone(),
+        })
+    } else {
+        None
+    };
+    let test_unhealthy = test_outcome.as_ref().is_some_and(|t| t.status == Status::Unhealthy);
+    let test_error = test_outcome.as_ref().and_then(|_| test.error.clone());
+
+    let details = ServiceDetails::RemoteProverStatus(RemoteProverDetails {
+        status: status_details.clone(),
+        test: test_outcome,
+    });
+
+    let result = if status.status == Status::Unhealthy || test_unhealthy {
+        let err = status
+            .error
+            .clone()
+            .or(test_error)
+            .unwrap_or_else(|| "prover is unhealthy".to_string());
+        ServiceStatus::unhealthy(&status.name, err, details)
+    } else if status.status == Status::Unknown {
+        ServiceStatus::unknown(&status.name, details)
+    } else {
+        ServiceStatus::healthy(&status.name, details)
+    };
+
+    result.with_last_checked(status.last_checked)
+}
+
+/// Watches a prover's status and test channels, publishing the merged [`ServiceStatus`] on every
+/// upstream change.
+///
+/// Exits when the output channel has no receivers or when the upstream status channel's sender is
+/// dropped. If the test channel's sender is dropped (e.g. a non-transaction prover with no test
+/// task), the combiner falls back to watching the status channel only.
+pub(crate) async fn run_prover_combiner(
+    mut status_rx: watch::Receiver<ServiceStatus>,
+    mut test_rx: watch::Receiver<ServiceStatus>,
+    merged_tx: watch::Sender<ServiceStatus>,
+) {
+    let mut test_alive = true;
+    loop {
+        let merged = merge_prover(&status_rx.borrow(), &test_rx.borrow());
+        if merged_tx.send(merged).is_err() {
+            info!("No receivers for merged prover status updates, shutting down");
+            return;
+        }
+
+        if test_alive {
+            tokio::select! {
+                r = status_rx.changed() => if r.is_err() { return; },
+                r = test_rx.changed()   => if r.is_err() { test_alive = false; },
+            }
+        } else if status_rx.changed().await.is_err() {
+            return;
+        }
     }
 }

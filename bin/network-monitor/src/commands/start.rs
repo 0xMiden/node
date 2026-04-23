@@ -4,12 +4,14 @@
 
 use anyhow::Result;
 use miden_node_utils::logging::OpenTelemetry;
+use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::frontend::ServerState;
 use crate::monitor::tasks::Tasks;
+use crate::status::ServiceStatus;
 
 /// Start the network monitoring service.
 ///
@@ -92,15 +94,31 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
 
     // Initialize HTTP server.
     debug!(target: COMPONENT, "Initializing HTTP server");
+
+    // Build the flat services Vec in the order the dashboard expects to render cards.
+    let mut services: Vec<watch::Receiver<ServiceStatus>> = vec![rpc_rx];
+    if let Some(rx) = faucet_rx {
+        services.push(rx);
+    }
+    services.extend(prover_rxs);
+    if let Some(rx) = explorer_rx {
+        services.push(rx);
+    }
+    if let Some(rx) = ntx_increment_rx {
+        services.push(rx);
+    }
+    if let Some(rx) = ntx_tracking_rx {
+        services.push(rx);
+    }
+    if let Some(rx) = note_transport_rx {
+        services.push(rx);
+    }
+    if let Some(rx) = validator_rx {
+        services.push(rx);
+    }
+
     let server_state = ServerState {
-        rpc: rpc_rx,
-        provers: prover_rxs,
-        faucet: faucet_rx,
-        ntx_increment: ntx_increment_rx,
-        ntx_tracking: ntx_tracking_rx,
-        explorer: explorer_rx,
-        note_transport: note_transport_rx,
-        validator: validator_rx,
+        services,
         monitor_version: env!("CARGO_PKG_VERSION").to_string(),
         network_name: config.network_name.clone(),
     };
