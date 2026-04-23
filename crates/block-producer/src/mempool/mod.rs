@@ -174,7 +174,7 @@ pub struct Mempool {
     /// committed it is appended here, and the oldest block's state is pruned.
     committed_blocks: VecDeque<SelectedBlock>,
 
-    chain_tip: BlockNumber,
+    committed_chain_tip: BlockNumber,
 
     config: MempoolConfig,
     subscription: subscription::SubscriptionProvider,
@@ -192,7 +192,7 @@ impl Mempool {
     fn new(chain_tip: BlockNumber, config: MempoolConfig) -> Mempool {
         Self {
             config,
-            chain_tip,
+            committed_chain_tip: chain_tip,
             subscription: SubscriptionProvider::new(chain_tip),
             transactions: graph::TransactionGraph::default(),
             batches: graph::BatchGraph::default(),
@@ -207,7 +207,7 @@ impl Mempool {
     pub fn chain_tip(&self) -> BlockNumber {
         self.pending_block
             .as_ref()
-            .map_or(self.chain_tip, |pending| pending.block_number)
+            .map_or(self.committed_chain_tip, |pending| pending.block_number)
     }
 
     // TRANSACTION & BATCH LIFECYCLE
@@ -391,6 +391,7 @@ impl Mempool {
     /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
     pub fn commit_block(&mut self, block_header: BlockHeader) {
+        assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
             .pending_block
             .take_if(|pending| pending.block_number == block_header.block_num())
@@ -403,7 +404,7 @@ impl Mempool {
             .map(miden_protocol::transaction::TransactionHeader::id)
             .collect();
 
-        self.chain_tip = self.chain_tip.child();
+        self.committed_chain_tip = self.committed_chain_tip.child();
         self.subscription.block_committed(block_header, tx_ids);
 
         self.committed_blocks.push_back(block);
@@ -572,7 +573,7 @@ impl Mempool {
             .parent()
             .unwrap_or_default();
 
-        if authentication_height < dbg!(limit) {
+        if authentication_height < limit {
             return Err(MempoolSubmissionError::StaleInputs {
                 input_block: authentication_height,
                 stale_limit: limit,

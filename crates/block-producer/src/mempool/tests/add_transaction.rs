@@ -157,7 +157,6 @@ mod authentication_height {
         let mut uut = setup();
 
         let oldest_mempool = uut.committed_blocks.front().map(|block| block.block_number).unwrap();
-        dbg!(oldest_mempool);
 
         let tx = MockProvenTxBuilder::with_account_index(0).build();
         let tx = AuthenticatedTransaction::from_inner(tx)
