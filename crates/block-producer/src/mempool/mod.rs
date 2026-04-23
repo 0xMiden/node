@@ -248,7 +248,7 @@ impl Mempool {
         self.subscription.transaction_added(&tx);
         self.inject_telemetry();
 
-        Ok(self.chain_tip())
+        Ok(self.committed_chain_tip)
     }
 
     #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
@@ -285,7 +285,7 @@ impl Mempool {
         }
         self.inject_telemetry();
 
-        Ok(self.chain_tip())
+        Ok(self.committed_chain_tip)
     }
 
     /// Returns a set of transactions for the next batch.
