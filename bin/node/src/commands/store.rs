@@ -17,11 +17,8 @@ use super::{
     ENV_STORE_NTX_BUILDER_URL,
     ENV_STORE_RPC_URL,
 };
-use crate::commands::{ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL};
+use crate::commands::{ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL, ENV_STORE_UPSTREAM_URL};
 
-const ENV_STORE_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_URL";
-
-#[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
     /// Bootstraps the blockchain database with a pre-existing genesis block.
@@ -97,7 +94,7 @@ pub enum StoreCommand {
         #[arg(long = "ntx-builder.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
         ntx_builder_url: Url,
 
-        /// gRPC URL of the upstream store's StoreReplica endpoint to sync blocks from.
+        /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_STORE_UPSTREAM_URL, value_name = "URL")]
         upstream_store_url: Url,
 
