@@ -35,7 +35,10 @@ mod replica;
 mod replica_client;
 mod rpc_api;
 
-// Create the proof broadcast channel for replica sync.
+/// Broadcast channel capacity for replica proof notifications.
+///
+/// 512 slots gives replicas ~512 proofs of buffer during historical replay before
+/// the sender considers them lagged. On lag, the replica should reconnect.
 const PROOF_BROADCAST_CAPACITY: usize = 512;
 
 /// Determines how the store receives new blocks.
