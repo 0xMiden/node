@@ -295,7 +295,7 @@ pub(crate) async fn check_remote_prover_status(
                 .filter(|w| w.status != Status::Healthy)
                 .map(|w| w.name.clone())
                 .collect();
-            let details = ServiceDetails::RemoteProverStatus(remote_prover_details);
+            let details = ServiceDetails::ProverStatusCheck(remote_prover_details);
 
             if no_workers {
                 ServiceStatus::unknown(display_name, details)

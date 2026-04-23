@@ -172,10 +172,11 @@ function collectGrpcWebEndpoints() {
                 });
             }
             // Remote Prover service
-            if (service.details.RemoteProverStatus && service.details.RemoteProverStatus.url) {
+            const proverUrl = service.details.RemoteProverStatus?.status?.url;
+            if (proverUrl) {
                 endpoints.push({
-                    serviceKey: service.details.RemoteProverStatus.url,
-                    baseUrl: service.details.RemoteProverStatus.url,
+                    serviceKey: proverUrl,
+                    baseUrl: proverUrl,
                     grpcPath: '/remote_prover.ProxyStatusApi/Status',
                 });
             }
@@ -303,55 +304,6 @@ async function fetchStatus() {
     }
 }
 
-// Merge Remote Prover status and test entries into a single card per prover.
-function mergeProverStatusAndTests(services) {
-    const testsByName = new Map();
-    const merged = [];
-    const usedTests = new Set();
-
-    services.forEach(service => {
-        if (service.details && service.details.RemoteProverTest) {
-            testsByName.set(service.name, service);
-        }
-    });
-
-    services.forEach(service => {
-        if (service.details && service.details.RemoteProverStatus) {
-            const test = testsByName.get(service.name);
-            if (test) {
-                usedTests.add(service.name);
-            }
-            merged.push({
-                ...service,
-                testDetails: test?.details?.RemoteProverTest ?? null,
-                testStatus: test?.status ?? null,
-                testError: test?.error ?? null
-            });
-        } else if (!(service.details && service.details.RemoteProverTest)) {
-            // Non-prover entries pass through unchanged
-            merged.push(service);
-        }
-    });
-
-    // Add orphaned tests (in case a test arrives before a status)
-    testsByName.forEach((test, name) => {
-        if (!usedTests.has(name)) {
-            merged.push({
-                name,
-                status: test.status,
-                last_checked: test.last_checked,
-                error: test.error,
-                details: null,
-                testDetails: test.details.RemoteProverTest,
-                testStatus: test.status,
-                testError: test.error
-            });
-        }
-    });
-
-    return merged;
-}
-
 function updateDisplay() {
     if (!statusData) return;
 
@@ -364,29 +316,28 @@ function updateDisplay() {
     const lastUpdateTime = new Date(statusData.last_updated * 1000);
     lastUpdated.textContent = lastUpdateTime.toLocaleString();
 
-    // Group remote prover status + test into single cards
-    const processedServices = mergeProverStatusAndTests(statusData.services);
-    const rpcService = processedServices.find(s => s.details && s.details.RpcStatus);
+    const services = statusData.services;
+    const rpcService = services.find(s => s.details && s.details.RpcStatus);
     const rpcChainTip =
         rpcService?.details?.RpcStatus?.store_status?.chain_tip ??
         rpcService?.details?.RpcStatus?.block_producer_status?.chain_tip ??
         null;
 
-    // Compute effective health for a service, considering all signals for remote provers.
+    // Compute effective health
     const isServiceHealthy = (s) => {
-        if (s.details && s.details.RemoteProverStatus) {
-            const statusOk = s.status === 'Healthy';
-            const testOk = s.testStatus == null || s.testStatus === 'Healthy';
-            const probeResult = grpcWebProbeResults.get(s.details.RemoteProverStatus.url);
-            const probeOk = !probeResult || probeResult.ok;
-            return statusOk && testOk && probeOk;
+        if (s.status !== 'Healthy') return false;
+        const probeUrl = s.details?.RemoteProverStatus?.status?.url
+            ?? s.details?.RpcStatus?.url;
+        if (probeUrl) {
+            const probe = grpcWebProbeResults.get(probeUrl);
+            if (probe && !probe.ok) return false;
         }
-        return s.status === 'Healthy';
+        return true;
     };
 
     // Count healthy vs unhealthy services
-    const healthyServices = processedServices.filter(isServiceHealthy).length;
-    const totalServices = processedServices.length;
+    const healthyServices = services.filter(isServiceHealthy).length;
+    const totalServices = services.length;
     const allHealthy = healthyServices === totalServices;
 
     // Update footer
@@ -404,7 +355,7 @@ function updateDisplay() {
     }
 
     // Generate status cards
-    const serviceCardsHtml = processedServices.map(service => {
+    const serviceCardsHtml = services.map(service => {
         const isHealthy = isServiceHealthy(service);
         const statusColor = isHealthy ? COLOR_HEALTHY : COLOR_UNHEALTHY;
         const statusIcon = isHealthy ? '✓' : '✗';
@@ -499,24 +450,32 @@ function updateDisplay() {
                             </div>
                         ` : ''}
                     ` : ''}
-                    ${details.RemoteProverStatus ? `
-                        <div class="detail-item"><strong>URL:</strong> ${details.RemoteProverStatus.url}${renderCopyButton(details.RemoteProverStatus.url, 'URL')}</div>
-                        <div class="detail-item"><strong>Version:</strong> ${details.RemoteProverStatus.version}</div>
-                        <div class="detail-item"><strong>Proof Type:</strong> ${details.RemoteProverStatus.supported_proof_type}</div>
-                        ${renderGrpcWebProbeSection(details.RemoteProverStatus.url)}
-                        ${details.RemoteProverStatus.workers && details.RemoteProverStatus.workers.length > 0 ? `
-                            <div class="nested-status">
-                                <strong>Workers (${details.RemoteProverStatus.workers.length}):</strong>
-                                ${details.RemoteProverStatus.workers.map(worker => `
-                                    <div class="worker-status">
-                                        <span class="worker-name">${worker.name}</span> -
-                                        <span class="worker-version">${worker.version}</span> -
-                                        <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        ` : ''}
-                    ` : ''}
+                    ${details.RemoteProverStatus ? (() => {
+                        const p = details.RemoteProverStatus.status;
+                        return `
+                            <div class="detail-item"><strong>URL:</strong> ${p.url}${renderCopyButton(p.url, 'URL')}</div>
+                            <div class="detail-item"><strong>Version:</strong> ${p.version}</div>
+                            <div class="detail-item"><strong>Proof Type:</strong> ${p.supported_proof_type}</div>
+                            ${renderGrpcWebProbeSection(p.url)}
+                            ${p.workers && p.workers.length > 0 ? `
+                                <div class="nested-status">
+                                    <strong>Workers (${p.workers.length}):</strong>
+                                    ${p.workers.map(worker => {
+                                        const nameDisplay = worker.name.length > 20
+                                            ? `${worker.name.substring(0, 20)}...${renderCopyButton(worker.name, 'worker name')}`
+                                            : worker.name;
+                                        return `
+                                            <div class="worker-status">
+                                                <span class="worker-name">${nameDisplay}</span>
+                                                <span class="worker-version">${worker.version}</span>
+                                                <span class="worker-status-badge ${worker.status === 'Healthy' ? 'healthy' : worker.status === 'Unhealthy' ? 'unhealthy' : 'unknown'}">${worker.status}</span>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            ` : ''}
+                        `;
+                    })() : ''}
                     ${details.FaucetTest ? `
                         <div class="nested-status">
                             <strong>Faucet:</strong>
@@ -683,25 +642,29 @@ function updateDisplay() {
                             </div>
                         </div>
                     ` : ''}
-                    ${service.testDetails ? `
-                        <div class="nested-status">
-                            <strong>Proof Generation Testing (${service.testDetails.proof_type}):</strong>
-                            <div class="test-metrics ${service.testStatus === 'Healthy' ? 'healthy' : 'unhealthy'}">
-                                <div class="metric-row">
-                                    <span class="metric-label">Success Rate:</span>
-                                    <span class="metric-value">${formatSuccessRate(service.testDetails.success_count, service.testDetails.failure_count)}</span>
-                                </div>
-                                <div class="metric-row">
-                                    <span class="metric-label">Last Response Time:</span>
-                                    <span class="metric-value">${service.testDetails.test_duration_ms}ms</span>
-                                </div>
-                                <div class="metric-row">
-                                    <span class="metric-label">Last Proof Size:</span>
-                                    <span class="metric-value">${(service.testDetails.proof_size_bytes / 1024).toFixed(2)} KB</span>
+                    ${details.RemoteProverStatus?.test ? (() => {
+                        const t = details.RemoteProverStatus.test;
+                        const ts = details.RemoteProverStatus.test_status;
+                        return `
+                            <div class="nested-status">
+                                <strong>Proof Generation Testing (${t.proof_type}):</strong>
+                                <div class="test-metrics ${ts === 'Healthy' ? 'healthy' : 'unhealthy'}">
+                                    <div class="metric-row">
+                                        <span class="metric-label">Success Rate:</span>
+                                        <span class="metric-value">${formatSuccessRate(t.success_count, t.failure_count)}</span>
+                                    </div>
+                                    <div class="metric-row">
+                                        <span class="metric-label">Last Response Time:</span>
+                                        <span class="metric-value">${t.test_duration_ms}ms</span>
+                                    </div>
+                                    <div class="metric-row">
+                                        <span class="metric-label">Last Proof Size:</span>
+                                        <span class="metric-value">${(t.proof_size_bytes / 1024).toFixed(2)} KB</span>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    ` : ''}
+                        `;
+                    })() : ''}
                 </div>
             `;
         }
@@ -864,4 +827,3 @@ window.addEventListener('beforeunload', () => {
         clearInterval(grpcWebProbeInterval);
     }
 });
-
