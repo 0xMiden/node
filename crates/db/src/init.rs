@@ -5,7 +5,7 @@ static INIT: Once = Once::new();
 /// Initialize SQLite configuration.
 ///
 /// SQLite has a global configuration that must be initialized before any other SQLite operations.
-pub(super) fn initialize_sqlite_configuration() {
+pub fn initialize_sqlite_configuration() {
     INIT.call_once(|| {
         disable_sqlite_memory_accounting();
     });
@@ -25,5 +25,6 @@ pub(super) fn initialize_sqlite_configuration() {
 fn disable_sqlite_memory_accounting() {
     let result =
         unsafe { libsqlite3_sys::sqlite3_config(libsqlite3_sys::SQLITE_CONFIG_MEMSTATUS, 0) };
+    // assert!((result == libsqlite3_sys::SQLITE_OK) || (result == libsqlite3_sys::SQLITE_MISUSE));
     assert!(result == libsqlite3_sys::SQLITE_OK);
 }

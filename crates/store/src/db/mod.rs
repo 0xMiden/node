@@ -256,6 +256,9 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
+        // Initialize SQLite configuration _before_ creating a connection.
+        miden_node_db::initialize_sqlite_configuration();
+
         // Create database.
         //
         // This will create the file if it does not exist, but will also happily open it if already

@@ -8,6 +8,7 @@ use std::path::Path;
 pub use conv::{DatabaseTypeConversionError, SqlTypeConvert};
 use diesel::{RunQueryDsl, SqliteConnection};
 pub use errors::{DatabaseError, SchemaVerificationError};
+pub use init::initialize_sqlite_configuration;
 pub use manager::{ConnectionManager, ConnectionManagerError, configure_connection_on_creation};
 use tracing::Instrument;
 
@@ -23,7 +24,7 @@ pub struct Db {
 impl Db {
     /// Creates a new database instance with the provided connection pool.
     pub fn new(database_filepath: &Path) -> Result<Self, DatabaseError> {
-        init::initialize_sqlite_configuration();
+        initialize_sqlite_configuration();
         let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
         let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
         Ok(Self { pool })
