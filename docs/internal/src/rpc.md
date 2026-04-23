@@ -29,21 +29,21 @@ the store) to keep database queries bounded and to keep response payloads within
 
 `GENERAL_REQUEST_LIMIT` is currently `1000`, and endpoint-specific limits are:
 
-| Endpoint | Parameter | Limit | Rationale |
-|---|---:|---:|---|
-| `CheckNullifiers` | `nullifier` | `1000` | Bounds `IN`-style lookups and keeps responses under payload budget |
-| `SyncNullifiers` | `nullifier_prefix` | `1000` | Bounds prefix-based nullifier scans |
-| `SyncNotes` | `note_tag` | `1000` | Keeps note sync responses within payload budget |
-| `GetNotesById` | `note_id` | `100` | Notes can be large (~32 KiB), so this is intentionally tighter |
-| `SyncTransactions` | `account_id` | `1000` | Bounds account filter fan-out and response size |
-| `GetAccount` | `storage_map_key` | `64` | SMT proof generation for storage map keys is comparatively expensive |
+| Endpoint           | Parameter          | Limit  | Rationale                                                            |
+| ------------------ | ------------------ | ------ | -------------------------------------------------------------------- |
+| `CheckNullifiers`  | `nullifier`        | `1000` | Bounds `IN`-style lookups and keeps responses under payload budget   |
+| `SyncNullifiers`   | `nullifier_prefix` | `1000` | Bounds prefix-based nullifier scans                                  |
+| `SyncNotes`        | `note_tag`         | `1000` | Keeps note sync responses within payload budget                      |
+| `GetNotesById`     | `note_id`          | `100`  | Notes can be large (~32 KiB), so this is intentionally tighter       |
+| `SyncTransactions` | `account_id`       | `1000` | Bounds account filter fan-out and response size                      |
+| `GetAccount`       | `storage_map_key`  | `64`   | SMT proof generation for storage map keys is comparatively expensive |
 
 Additional internal-only limits in `miden_node_utils::limiter` (not surfaced by `GetLimits`) include:
 
-| Parameter | Limit | Used by |
-|---:|---:|---|
-| `note_commitment` | `1000` | Internal note proof lookups |
-| `block_header` | `1000` | Internal batch/block header operations |
+| Parameter         | Limit  | Used by                                |
+| ----------------- | ------ | -------------------------------------- |
+| `note_commitment` | `1000` | Internal note proof lookups            |
+| `block_header`    | `1000` | Internal batch/block header operations |
 
 ## Error Handling
 
