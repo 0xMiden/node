@@ -69,6 +69,13 @@ pub enum StoreMode {
     Replica { upstream_url: Url },
 }
 
+struct ModeSetup {
+    /// gRPC server tasks (one per bound listener + the DB maintenance loop).
+    grpc_servers: tokio::task::JoinSet<Result<(), tonic::transport::Error>>,
+    /// Mode-specific background task: proof scheduler or replica sync.
+    mode_task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
 /// The store server.
 pub struct Store {
     pub rpc_listener: TcpListener,
@@ -118,7 +125,6 @@ impl Store {
         info!(target: COMPONENT, rpc_endpoint=?rpc_address,
             ?self.data_directory, ?self.grpc_options.request_timeout, "Loading database");
 
-        // Load initial state.
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
         let (state, tx_proven_tip, block_sender) =
@@ -128,72 +134,46 @@ impl Store {
 
         let (proof_sender, _) = broadcast::channel(PROOF_BROADCAST_CAPACITY);
 
-        let (mut join_set, mode_task) = match self.mode {
+        let ModeSetup { mut grpc_servers, mode_task } = match self.mode {
             StoreMode::BlockProducer {
                 block_producer_listener,
                 ntx_builder_listener,
                 block_prover_url,
                 max_concurrent_proofs,
             } => {
-                let block_producer_address = block_producer_listener.local_addr()?;
-                let ntx_builder_address = ntx_builder_listener.local_addr()?;
-                info!(target: COMPONENT,
-                    block_producer_endpoint=?block_producer_address,
-                    ntx_builder_endpoint=?ntx_builder_address,
-                    "Starting in block-producer mode");
-
-                let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
-                    &state,
+                Self::setup_block_producer_mode(
+                    state,
+                    block_producer_listener,
+                    ntx_builder_listener,
                     block_prover_url,
                     max_concurrent_proofs,
                     tx_proven_tip,
-                    proof_sender.clone(),
+                    block_sender,
+                    proof_sender,
+                    self.grpc_options,
+                    self.rpc_listener,
                 )
-                .await;
-
-                let join_set = Self::spawn_grpc_servers(
-                    &Arc::new(state),
-                    chain_tip_sender,
-                    block_sender,
-                    proof_sender,
-                    self.grpc_options,
-                    self.rpc_listener,
-                    Some(ntx_builder_listener),
-                    Some(block_producer_listener),
-                )?;
-
-                (join_set, proof_scheduler_task)
+                .await?
             },
-
             StoreMode::Replica { upstream_url } => {
-                info!(target: COMPONENT, %upstream_url, "Starting in replica mode");
-
-                // A dummy watch channel satisfies StoreApi's chain_tip_sender field. No proof
-                // scheduler reads from it in replica mode.
-                let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
-                let (chain_tip_sender, _) = watch::channel(chain_tip);
-
-                let state = Arc::new(state);
-                let replica_task = replica_client::spawn(Arc::clone(&state), upstream_url);
-
-                let join_set = Self::spawn_grpc_servers(
-                    &state,
-                    chain_tip_sender,
+                Self::setup_replica_mode(
+                    state,
+                    upstream_url,
                     block_sender,
                     proof_sender,
                     self.grpc_options,
                     self.rpc_listener,
-                    None, // no ntx-builder in replica mode
-                    None, // no block-producer in replica mode
-                )?;
-
-                (join_set, replica_task)
+                )
+                .await?
             },
         };
 
-        // Wait on any workload to finish / error out.
         let service = async move {
-            join_set.join_next().await.expect("joinset is not empty")?.map_err(Into::into)
+            grpc_servers
+                .join_next()
+                .await
+                .expect("joinset is not empty")?
+                .map_err(Into::into)
         };
 
         tokio::select! {
@@ -209,6 +189,85 @@ impl Store {
                 }
             }
         }
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    async fn setup_block_producer_mode(
+        state: State,
+        block_producer_listener: TcpListener,
+        ntx_builder_listener: TcpListener,
+        block_prover_url: Option<Url>,
+        max_concurrent_proofs: NonZeroUsize,
+        tx_proven_tip: ProvenTipWriter,
+        block_sender: broadcast::Sender<crate::state::BlockNotification>,
+        proof_sender: broadcast::Sender<proof_scheduler::ProofNotification>,
+        grpc_options: GrpcOptionsInternal,
+        rpc_listener: TcpListener,
+    ) -> anyhow::Result<ModeSetup> {
+        info!(target: COMPONENT,
+            block_producer_endpoint=?block_producer_listener.local_addr()?,
+            ntx_builder_endpoint=?ntx_builder_listener.local_addr()?,
+            "Starting in block-producer mode");
+
+        let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
+            &state,
+            block_prover_url,
+            max_concurrent_proofs,
+            tx_proven_tip,
+            proof_sender.clone(),
+        )
+        .await;
+
+        let join_set = Self::spawn_grpc_servers(
+            &Arc::new(state),
+            chain_tip_sender,
+            block_sender,
+            proof_sender,
+            grpc_options,
+            rpc_listener,
+            Some(ntx_builder_listener),
+            Some(block_producer_listener),
+        )?;
+
+        Ok(ModeSetup {
+            grpc_servers: join_set,
+            mode_task: proof_scheduler_task,
+        })
+    }
+
+    async fn setup_replica_mode(
+        state: State,
+        upstream_url: Url,
+        block_sender: broadcast::Sender<crate::state::BlockNotification>,
+        proof_sender: broadcast::Sender<proof_scheduler::ProofNotification>,
+        grpc_options: GrpcOptionsInternal,
+        rpc_listener: TcpListener,
+    ) -> anyhow::Result<ModeSetup> {
+        info!(target: COMPONENT, %upstream_url, "Starting in replica mode");
+
+        // A dummy watch channel satisfies StoreApi's chain_tip_sender field; no proof
+        // scheduler reads from it in replica mode.
+        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
+        let (chain_tip_sender, _) = watch::channel(chain_tip);
+
+        let state = Arc::new(state);
+        let replica_task = replica_client::spawn(Arc::clone(&state), upstream_url);
+
+        let join_set = Self::spawn_grpc_servers(
+            &state,
+            chain_tip_sender,
+            block_sender,
+            proof_sender,
+            grpc_options,
+            rpc_listener,
+            None,
+            None,
+        )?;
+
+        Ok(ModeSetup {
+            grpc_servers: join_set,
+            mode_task: replica_task,
+        })
     }
 
     /// Initializes the block prover client and spawns the proof scheduler as a background task.
