@@ -9,7 +9,6 @@ RUN apt-get update && \
         cmake \
         pkg-config \
         libssl-dev \
-        libsqlite3-dev \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
@@ -21,6 +20,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
+ENV LIBSQLITE3_FLAGS="-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
 # Build dependencies - this is the caching Docker layer!
 RUN cargo chef cook --release --recipe-path recipe.json
 # Build application
@@ -31,8 +31,7 @@ RUN cargo build --release --locked --bin miden-node
 FROM debian:bullseye-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
-    apt-get install -y --no-install-recommends sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS runtime
 COPY --from=builder /app/target/release/miden-node /usr/local/bin/miden-node
@@ -52,4 +51,4 @@ LABEL org.opencontainers.image.created=$CREATED \
 # Expose RPC port
 EXPOSE 57291
 # Miden node does not spawn sub-processes, so it can be used as the PID1
-CMD miden-node
+CMD ["miden-node"]
