@@ -279,8 +279,12 @@ impl AccountStateForest {
     ) -> Result<AccountVaultDetails, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        // TODO: we should be checking `.entry_count()` instead of pulling entries from the tree
+        // once the optimization making `.entry_count()` cheap once `miden-crypto` is upgraded to
+        // > 0.23.
         let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
         let assets = entries
+            .take(AccountVaultDetails::MAX_RETURN_ENTRIES + 1)
             .map(|entry| Asset::from_key_value_words(entry.key, entry.value))
             .collect::<Result<Vec<_>, _>>()?;
 
