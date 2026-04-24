@@ -5,9 +5,10 @@ use miden_node_proto::generated::store::{SubscribeBlocksRequest, store_replica_c
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt as _;
-use tracing::{error, info, warn};
+use tracing::{info, instrument, warn};
 use url::Url;
 
+use crate::COMPONENT;
 use crate::state::{Finality, State};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -27,8 +28,8 @@ async fn run(state: Arc<State>, upstream_url: Url) -> anyhow::Result<()> {
             Ok(()) => {
                 warn!("Upstream block stream ended unexpectedly; reconnecting");
             },
-            Err(err) => {
-                error!(%err, "Upstream sync error; reconnecting in {RECONNECT_DELAY:?}");
+            Err(_) => {
+                warn!("Upstream sync error; reconnecting in {RECONNECT_DELAY:?}");
             },
         }
         tokio::time::sleep(RECONNECT_DELAY).await;
@@ -37,6 +38,7 @@ async fn run(state: Arc<State>, upstream_url: Url) -> anyhow::Result<()> {
 
 /// Connects to the upstream store, subscribes to blocks starting from the current local tip + 1,
 /// and applies them one by one. Returns when the stream ends or on any error.
+#[instrument(target = COMPONENT, skip_all, err)]
 async fn sync(state: &State, upstream_url: &Url) -> anyhow::Result<()> {
     let local_tip = state.chain_tip(Finality::Committed).await;
     // Subscribe from the next block we don't yet have.
