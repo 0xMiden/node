@@ -15,7 +15,7 @@ use miden_protocol::transaction::{
     TxAccountUpdate,
 };
 pub use miden_prover::ProvingOptions;
-use miden_prover::{ExecutionProof, Word, prove};
+use miden_prover::{ExecutionProof, Word, prove_dyn_host};
 
 use super::TransactionProverError;
 use crate::host::{AccountProcedureIndexMap, ScriptMastForestStore};
@@ -135,7 +135,7 @@ impl LocalTransactionProver {
 
         let advice_inputs = advice_inputs.into_advice_inputs();
 
-        let (stack_outputs, proof) = prove(
+        let (stack_outputs, proof) = prove_dyn_host(
             &TransactionKernel::main(),
             stack_inputs,
             advice_inputs.clone(),

@@ -5,6 +5,7 @@ use miden_processor::advice::AdviceMutation;
 use miden_processor::event::EventError;
 use miden_processor::mast::MastForest;
 use miden_processor::{FutureMaybeSend, Host, MastForestStore, ProcessorState};
+use miden_prover::HostDyn;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountDelta, PartialAccount};
 use miden_protocol::assembly::debuginfo::Location;
@@ -88,6 +89,33 @@ where
     ) -> impl FutureMaybeSend<Result<Vec<AdviceMutation>, EventError>> {
         let result = self.on_event_sync(process);
         async move { result }
+    }
+
+    fn resolve_event(&self, event_id: EventId) -> Option<&EventName> {
+        self.base_host.resolve_event(event_id)
+    }
+}
+
+impl<STORE> HostDyn for TransactionProverHost<'_, STORE>
+where
+    STORE: MastForestStore + Sync,
+{
+    fn get_label_and_source_file(
+        &self,
+        _location: &Location,
+    ) -> (SourceSpan, Option<Arc<SourceFile>>) {
+        (SourceSpan::UNKNOWN, None)
+    }
+
+    fn get_mast_forest_sync(&self, node_digest: &Word) -> Option<Arc<MastForest>> {
+        self.base_host.get_mast_forest(node_digest)
+    }
+
+    fn on_event_sync_dyn(
+        &mut self,
+        process: &ProcessorState<'_>,
+    ) -> Result<Vec<AdviceMutation>, EventError> {
+        TransactionProverHost::on_event_sync(self, process)
     }
 
     fn resolve_event(&self, event_id: EventId) -> Option<&EventName> {

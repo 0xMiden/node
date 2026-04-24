@@ -3573,8 +3573,6 @@ dependencies = [
 [[package]]
 name = "miden-prover"
 version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb2c94e36f57684d7fa0cd382adeedc1728d502dbbe69ad1c12f4a931f45511"
 dependencies = [
  "bincode",
  "miden-air",

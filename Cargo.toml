@@ -123,6 +123,7 @@ tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3"
 url                = { features = ["serde"], version = "2.5" }
 
 [patch.crates-io]
+miden-prover = { path = "vendor/miden-prover" }
 miden-tx = { path = "vendor/miden-tx" }
 
 # Lints are set to warn for development, which are promoted to errors in CI.
