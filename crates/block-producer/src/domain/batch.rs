@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -23,6 +23,7 @@ pub(crate) struct SelectedBatch {
     txs: Vec<Arc<AuthenticatedTransaction>>,
     id: BatchId,
     account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
+    unauthenticated_notes: HashSet<Word>,
 }
 
 impl SelectedBatch {
@@ -53,6 +54,10 @@ impl SelectedBatch {
         self.account_updates
             .iter()
             .map(|(account, (from, to, store))| (*account, *from, *to, *store))
+    }
+
+    pub(crate) fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> {
+        self.unauthenticated_notes.iter().copied()
     }
 
     pub(crate) fn expires_at(&self) -> BlockNumber {
@@ -116,6 +121,18 @@ not match the current commitment {}",
         let Self { txs, account_updates } = self;
         let id = BatchId::from_ids(txs.iter().map(|tx| (tx.id(), tx.account_id())));
 
-        SelectedBatch { txs, id, account_updates }
+        let mut unauthenticated_notes: HashSet<_> =
+            txs.iter().flat_map(|tx| tx.unauthenticated_note_commitments()).collect();
+
+        for output_note in txs.iter().flat_map(|tx| tx.output_note_commitments()) {
+            unauthenticated_notes.remove(&output_note);
+        }
+
+        SelectedBatch {
+            txs,
+            id,
+            account_updates,
+            unauthenticated_notes,
+        }
     }
 }
