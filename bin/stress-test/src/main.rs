@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
 use seeding::seed_store;
 use store::{
+    bench_get_account,
     bench_sync_chain_mmr,
     bench_sync_notes,
     bench_sync_nullifiers,
@@ -39,6 +40,10 @@ pub enum Command {
         /// private accounts.
         #[arg(short, long, value_name = "PUBLIC_ACCOUNTS_PERCENTAGE", default_value = "0")]
         public_accounts_percentage: u8,
+
+        /// Number of entries to add to a deterministic storage map on every public account.
+        #[arg(long, value_name = "STORAGE_MAP_ENTRIES", default_value = "0")]
+        storage_map_entries: usize,
     },
 
     /// Benchmark the performance of the store endpoints.
@@ -62,7 +67,7 @@ pub enum Command {
     },
 }
 
-#[derive(Subcommand, Clone, Copy)]
+#[derive(Subcommand, Clone)]
 pub enum Endpoint {
     #[command(name = "sync-nullifiers")]
     SyncNullifiers {
@@ -89,6 +94,56 @@ pub enum Endpoint {
     },
     #[command(name = "load-state")]
     LoadState,
+    #[command(name = "get-account")]
+    GetAccount {
+        /// Storage slot name to request with all entries.
+        #[arg(long, value_name = "SLOT_NAME", default_value = "miden::mock::1")]
+        storage_map_slot: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_store_accepts_storage_map_entries_option() {
+        let cli = Cli::try_parse_from([
+            "stress-test",
+            "seed-store",
+            "--data-directory",
+            "/tmp/store",
+            "--num-accounts",
+            "10",
+            "--public-accounts-percentage",
+            "100",
+            "--storage-map-entries",
+            "128",
+        ])
+        .unwrap();
+
+        let Command::SeedStore { storage_map_entries, .. } = cli.command else {
+            panic!("expected seed-store command");
+        };
+        assert_eq!(storage_map_entries, 128);
+    }
+
+    #[test]
+    fn benchmark_store_accepts_get_account_endpoint() {
+        let cli = Cli::try_parse_from([
+            "stress-test",
+            "benchmark-store",
+            "--data-directory",
+            "/tmp/store",
+            "get-account",
+        ])
+        .unwrap();
+
+        let Command::BenchmarkStore { endpoint, .. } = cli.command else {
+            panic!("expected benchmark-store command");
+        };
+        assert!(matches!(endpoint, Endpoint::GetAccount { .. }));
+    }
 }
 
 #[tokio::main]
@@ -103,8 +158,15 @@ async fn main() {
             data_directory,
             num_accounts,
             public_accounts_percentage,
+            storage_map_entries,
         } => {
-            seed_store(data_directory, num_accounts, public_accounts_percentage).await;
+            seed_store(
+                data_directory,
+                num_accounts,
+                public_accounts_percentage,
+                storage_map_entries,
+            )
+            .await;
         },
         Command::BenchmarkStore {
             endpoint,
@@ -133,6 +195,9 @@ async fn main() {
             },
             Endpoint::LoadState => {
                 load_state(&data_directory).await;
+            },
+            Endpoint::GetAccount { storage_map_slot } => {
+                bench_get_account(data_directory, iterations, concurrency, storage_map_slot).await;
             },
         },
     }

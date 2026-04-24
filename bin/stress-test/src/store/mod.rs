@@ -34,6 +34,126 @@ const NOTE_IDS_PER_NULLIFIERS_CHECK: usize = 20;
 /// Number of attempts the benchmark will make to reach the store before proceeding.
 const STORE_STATUS_RETRIES: usize = 10;
 
+// GET ACCOUNT
+// ================================================================================================
+
+/// Sends multiple `get_account` requests to the store and prints the performance.
+///
+/// Each request asks for all entries in `storage_map_slot`, which is intended to exercise the
+/// storage-map reconstruction path for public accounts seeded by this stress-test tool.
+pub async fn bench_get_account(
+    data_directory: PathBuf,
+    iterations: usize,
+    concurrency: usize,
+    storage_map_slot: String,
+) {
+    let accounts_file = data_directory.join(ACCOUNTS_FILENAME);
+    let accounts = fs::read_to_string(&accounts_file)
+        .await
+        .unwrap_or_else(|e| panic!("missing file {}: {e:?}", accounts_file.display()));
+    let mut account_ids: Vec<AccountId> = accounts
+        .lines()
+        .map(|a| AccountId::from_hex(a).expect("invalid account id"))
+        .filter(AccountId::has_public_state)
+        .collect();
+
+    assert!(
+        !account_ids.is_empty(),
+        "no public accounts found in {}; seed with --public-accounts-percentage > 0",
+        accounts_file.display()
+    );
+
+    let mut rng = rand::rng();
+    account_ids.shuffle(&mut rng);
+    let mut account_ids = account_ids.into_iter().cycle();
+
+    let (store_client, _) = start_store(data_directory).await;
+
+    wait_for_store(&store_client).await.unwrap();
+
+    let request = |_| {
+        let mut client = store_client.clone();
+        let account_id = account_ids.next().expect("cycled public account ids never end");
+        let storage_map_slot = storage_map_slot.clone();
+        tokio::spawn(async move { get_account(&mut client, account_id, storage_map_slot).await })
+    };
+
+    let results = stream::iter(0..iterations)
+        .map(request)
+        .buffer_unordered(concurrency)
+        .map(|res| res.unwrap())
+        .collect::<Vec<_>>()
+        .await;
+
+    let timers_accumulator: Vec<Duration> = results.iter().map(|r| r.duration).collect();
+    print_summary(&timers_accumulator);
+
+    let total_runs = results.len();
+    let limit_exceeded = results.iter().filter(|r| r.limit_exceeded).count();
+    #[expect(clippy::cast_precision_loss)]
+    let average_entries = if total_runs > 0 {
+        results.iter().map(|r| r.entries as f64).sum::<f64>() / total_runs as f64
+    } else {
+        0.0
+    };
+
+    println!("GetAccount statistics:");
+    println!("  Total runs: {total_runs}");
+    println!("  Limit exceeded responses: {limit_exceeded}");
+    println!("  Average returned storage map entries: {average_entries:.2}");
+}
+
+#[derive(Clone)]
+struct GetAccountRun {
+    duration: Duration,
+    entries: usize,
+    limit_exceeded: bool,
+}
+
+async fn get_account(
+    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    account_id: AccountId,
+    storage_map_slot: String,
+) -> GetAccountRun {
+    use proto::rpc::account_request::AccountDetailRequest;
+    use proto::rpc::account_request::account_detail_request::StorageMapDetailRequest;
+    use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
+    use proto::rpc::account_storage_details::account_storage_map_details::Entries;
+
+    let request = proto::rpc::AccountRequest {
+        account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
+        block_num: None,
+        details: Some(AccountDetailRequest {
+            code_commitment: None,
+            asset_vault_commitment: None,
+            storage_maps: vec![StorageMapDetailRequest {
+                slot_name: storage_map_slot,
+                slot_data: Some(SlotData::AllEntries(true)),
+            }],
+        }),
+    };
+
+    let start = Instant::now();
+    let response = api_client.get_account(request).await.unwrap().into_inner();
+    let duration = start.elapsed();
+
+    let map_details = response
+        .details
+        .and_then(|details| details.storage_details)
+        .and_then(|storage_details| storage_details.map_details.into_iter().next());
+
+    let (entries, limit_exceeded) = match map_details {
+        Some(details) if details.too_many_entries => (0, true),
+        Some(details) => match details.entries {
+            Some(Entries::AllEntries(entries)) => (entries.entries.len(), false),
+            _ => (0, false),
+        },
+        None => (0, false),
+    };
+
+    GetAccountRun { duration, entries, limit_exceeded }
+}
+
 // SYNC NOTES
 // ================================================================================================
 

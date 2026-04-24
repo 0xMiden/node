@@ -15,10 +15,16 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
+    AccountComponent,
+    AccountComponentMetadata,
     AccountDelta,
     AccountId,
     AccountStorageMode,
     AccountType,
+    StorageMap,
+    StorageMapKey,
+    StorageSlot,
+    StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
@@ -53,6 +59,7 @@ use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::BasicFungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
+use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::P2idNote;
 use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -74,6 +81,8 @@ const TRANSACTIONS_PER_BATCH: usize = 16;
 
 pub const ACCOUNTS_FILENAME: &str = "accounts.txt";
 
+pub const BENCHMARK_STORAGE_MAP_SLOT_NAME: &str = "miden::mock::1";
+
 // SEED STORE
 // ================================================================================================
 
@@ -82,6 +91,7 @@ pub async fn seed_store(
     data_directory: PathBuf,
     num_accounts: usize,
     public_accounts_percentage: u8,
+    storage_map_entries: usize,
 ) {
     let start = Instant::now();
 
@@ -121,6 +131,7 @@ pub async fn seed_store(
         data_directory,
         accounts_filepath,
         &signer,
+        storage_map_entries,
     )
     .await;
 
@@ -142,6 +153,7 @@ async fn generate_blocks(
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
     signer: &EcdsaSecretKey,
+    storage_map_entries: usize,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
     // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx
@@ -186,6 +198,7 @@ async fn generate_blocks(
             &rng,
             faucet.id(),
             i,
+            storage_map_entries,
         );
 
         // create private accounts and notes that mint assets for these accounts
@@ -196,6 +209,7 @@ async fn generate_blocks(
             &rng,
             faucet.id(),
             i,
+            storage_map_entries,
         );
 
         let notes = [pub_notes, priv_notes].concat();
@@ -297,6 +311,7 @@ fn create_accounts_and_notes(
     rng: &Arc<Mutex<RandomCoin>>,
     faucet_id: AccountId,
     block_num: usize,
+    storage_map_entries: usize,
 ) -> (Vec<Account>, Vec<Note>) {
     (0..num_accounts)
         .into_par_iter()
@@ -305,6 +320,7 @@ fn create_accounts_and_notes(
                 key_pair.public_key(),
                 ((block_num * num_accounts) + account_index) as u64,
                 storage_mode,
+                storage_map_entries,
             );
             let note = {
                 let mut rng = rng.lock().unwrap();
@@ -330,17 +346,100 @@ fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RandomCoin)
     .expect("note creation failed")
 }
 
-/// Creates a new private account with a given public key and anchor block. Generates the seed from
-/// the given index.
-fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorageMode) -> Account {
+/// Creates a new account with a given public key and storage mode. Generates the seed from the
+/// given index.
+pub fn benchmark_storage_map_slot() -> StorageSlotName {
+    StorageSlotName::new(BENCHMARK_STORAGE_MAP_SLOT_NAME).unwrap()
+}
+
+fn create_account(
+    public_key: PublicKey,
+    index: u64,
+    storage_mode: AccountStorageMode,
+    storage_map_entries: usize,
+) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
-    AccountBuilder::new(init_seed.try_into().unwrap())
+    let mut builder = AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(storage_mode)
         .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
-        .with_component(BasicWallet)
-        .build()
-        .unwrap()
+        .with_component(BasicWallet);
+
+    if storage_mode == AccountStorageMode::Public && storage_map_entries > 0 {
+        let entries = (1..=storage_map_entries)
+            .map(|i| {
+                let i = u32::try_from(i).expect("storage map entry index fits into u32");
+                (
+                    StorageMapKey::from_index(i),
+                    Word::from([Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::from(i)]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let storage_map = StorageMap::with_entries(entries).unwrap();
+        let component_storage =
+            vec![StorageSlot::with_map(benchmark_storage_map_slot(), storage_map)];
+        let component_code = CodeBuilder::default()
+            .compile_component_code("benchmark::storage_map", "pub proc noop push.0 drop end")
+            .unwrap();
+        let component = AccountComponent::new(
+            component_code,
+            component_storage,
+            AccountComponentMetadata::new(
+                "benchmark_storage_map",
+                [AccountType::RegularAccountImmutableCode],
+            ),
+        )
+        .unwrap();
+        builder = builder.with_component(component);
+    }
+
+    builder.build().unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::account::StorageSlotContent;
+
+    use super::*;
+
+    #[test]
+    fn public_account_can_be_created_with_large_storage_map() {
+        let coin_seed = [1, 2, 3, 4].map(Felt::new);
+        let mut rng = RandomCoin::new(coin_seed.into());
+        let key_pair = SecretKey::with_rng(&mut rng);
+
+        let account = create_account(key_pair.public_key(), 42, AccountStorageMode::Public, 128);
+
+        let map_slot = account
+            .storage()
+            .slots()
+            .iter()
+            .find(|slot| slot.name() == &benchmark_storage_map_slot())
+            .expect("benchmark storage map slot should exist");
+
+        let StorageSlotContent::Map(storage_map) = map_slot.content() else {
+            panic!("benchmark slot should be a storage map");
+        };
+
+        assert_eq!(storage_map.num_entries(), 128);
+    }
+
+    #[test]
+    fn private_account_ignores_large_storage_map_entries() {
+        let coin_seed = [1, 2, 3, 4].map(Felt::new);
+        let mut rng = RandomCoin::new(coin_seed.into());
+        let key_pair = SecretKey::with_rng(&mut rng);
+
+        let account = create_account(key_pair.public_key(), 42, AccountStorageMode::Private, 128);
+
+        assert!(
+            account
+                .storage()
+                .slots()
+                .iter()
+                .all(|slot| slot.name() != &benchmark_storage_map_slot())
+        );
+    }
 }
 
 /// Creates a new faucet account.
