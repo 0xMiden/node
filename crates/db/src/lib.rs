@@ -1,6 +1,5 @@
 mod conv;
 mod errors;
-mod init;
 mod manager;
 
 use std::path::Path;
@@ -23,7 +22,6 @@ pub struct Db {
 impl Db {
     /// Creates a new database instance with the provided connection pool.
     pub fn new(database_filepath: &Path) -> Result<Self, DatabaseError> {
-        init::initialize_sqlite_configuration();
         let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
         let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
         Ok(Self { pool })

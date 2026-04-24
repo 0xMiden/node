@@ -18,7 +18,6 @@ deadpool        = { default-features = false, workspace = true }
 deadpool-diesel = { features = ["sqlite"], workspace = true }
 deadpool-sync   = { default-features = false, workspace = true }
 diesel          = { features = ["sqlite"], workspace = true }
-libsqlite3-sys  = { workspace = true }
 miden-protocol  = { workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
