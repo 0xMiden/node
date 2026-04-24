@@ -27,6 +27,8 @@ env:
   #
   # This provides a convenient way to evict old or corrupted cache.
   RUST_CACHE_KEY: rust-cache-2026.02.02
+  # Shared branch-aware cache namespace for rust-cache.
+  RUST_CACHE_SHARED_KEY: ${{ github.workflow }}-build-${{ github.base_ref || github.ref_name }}
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
 
@@ -53,9 +55,9 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
+          shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
           prefix-key: ${{ env.RUST_CACHE_KEY }}
-          save-if: ${{ github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/next' || github.ref == 'refs/heads/main' }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -106,7 +108,7 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
+          shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
       - name: clippy
@@ -125,7 +127,7 @@ jobs:
           tool: nextest@0.9.122
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
+          shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
       - name: Build tests
@@ -146,7 +148,7 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
+          shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
       - name: Build docs
@@ -166,7 +168,7 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
+          shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
       - uses: taiki-e/install-action@v2
@@ -181,12 +183,12 @@ jobs:
           cargo run --bin miden-node-stress-test seed-store \
             --data-directory ${{ env.DATA_DIR }} \
             --num-accounts 500 --public-accounts-percentage 50
-  # TODO re-introduce
+      # TODO re-introduce
       # - name: Benchmark state sync
-        # run: |
-          # cargo run --bin miden-node-stress-test benchmark-store \
-            # --data-directory ${{ env.DATA_DIR }} \
-            # --iterations 10 --concurrency 1 sync-state
+      # run: |
+      # cargo run --bin miden-node-stress-test benchmark-store \
+      # --data-directory ${{ env.DATA_DIR }} \
+      # --iterations 10 --concurrency 1 sync-state
       - name: Benchmark notes sync
         run: |
           cargo run --bin miden-node-stress-test benchmark-store \
@@ -210,19 +212,19 @@ jobs:
     name: wasm targets
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v6
-    - name: Rustup
-      run: rustup update --no-self-update
-    - name: cargo build
-      run: |
-        cargo build --locked -p miden-remote-prover-client \
-          --target wasm32-unknown-unknown --no-default-features \
-          --features batch-prover,block-prover,tx-prover # no-std compatible build
-    - name: clippy
-      run: |
-        cargo clippy --locked -p miden-remote-prover-client \
-          --target wasm32-unknown-unknown --no-default-features \
-          --features batch-prover,block-prover,tx-prover -- -D warnings
+      - uses: actions/checkout@v6
+      - name: Rustup
+        run: rustup update --no-self-update
+      - name: cargo build
+        run: |
+          cargo build --locked -p miden-remote-prover-client \
+            --target wasm32-unknown-unknown --no-default-features \
+            --features batch-prover,block-prover,tx-prover # no-std compatible build
+      - name: clippy
+        run: |
+          cargo clippy --locked -p miden-remote-prover-client \
+            --target wasm32-unknown-unknown --no-default-features \
+            --features batch-prover,block-prover,tx-prover -- -D warnings
 
   # ===============================================================================================
   # Jobs that don't require caching to be efficient
