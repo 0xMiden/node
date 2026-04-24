@@ -225,11 +225,10 @@ impl Db {
     #[cfg(test)]
     pub fn test_conn() -> (diesel::SqliteConnection, tempfile::TempDir) {
         use diesel::{Connection, SqliteConnection};
-        use miden_node_db::{configure_connection_on_creation, initialize_sqlite_configuration};
+        use miden_node_db::configure_connection_on_creation;
 
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("test.sqlite3");
-        initialize_sqlite_configuration();
         let mut conn = SqliteConnection::establish(db_path.to_str().unwrap())
             .expect("temp file sqlite should always work");
         configure_connection_on_creation(&mut conn).expect("connection configuration should work");
