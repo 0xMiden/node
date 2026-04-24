@@ -26,5 +26,5 @@ fn disable_sqlite_memory_accounting() {
     let result =
         unsafe { libsqlite3_sys::sqlite3_config(libsqlite3_sys::SQLITE_CONFIG_MEMSTATUS, 0) };
     // assert!((result == libsqlite3_sys::SQLITE_OK) || (result == libsqlite3_sys::SQLITE_MISUSE));
-    assert_eq!(result, libsqlite3_sys::SQLITE_OK);
+    assert!(result == libsqlite3_sys::SQLITE_OK);
 }
