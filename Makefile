@@ -9,10 +9,6 @@ help:
 WARNINGS=RUSTDOCFLAGS="-D warnings"
 CONTAINER_RUNTIME ?= docker
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
-# These compile-time flags are used to disable SQLite's memory accounting features. These introduce global mutexes
-# into SQLite's memory allocator which can cause contention and performance degradation in high-concurrency scenarios
-# we have in the node.
-LIBSQLITE3_FLAGS ?= "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
 
 # -- linting --------------------------------------------------------------------------------------
 
@@ -106,25 +102,24 @@ build: ## Builds all crates and re-builds protobuf bindings for proto crates
 
 .PHONY: install-node
 install-node: ## Installs node
-	LIBSQLITE3_FLAGS=$(LIBSQLITE3_FLAGS) cargo install --path bin/node --locked
+	cargo install --path bin/node --locked
 
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
 	cargo install --path bin/remote-prover --bin miden-remote-prover --locked
 
-.PHONY: stress-test
+.PHONY: stress-test-smoke
 stress-test: ## Runs stress-test benchmarks
-	LIBSQLITE3_FLAGS=$(LIBSQLITE3_FLAGS) cargo build --release --locked -p miden-node-stress-test
+	cargo build --release --locked -p miden-node-stress-test
 	@mkdir -p $(STRESS_TEST_DATA_DIR)
 	./target/release/miden-node-stress-test seed-store --data-directory $(STRESS_TEST_DATA_DIR) --num-accounts 500 --public-accounts-percentage 50
+	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-state
 	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-notes
 	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
-	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-transactions
-	./target/release/miden-node-stress-test benchmark-store --data-directory $(STRESS_TEST_DATA_DIR) --iterations 10 --concurrency 1 sync-chain-mmr
 
 .PHONY: install-stress-test
 install-stress-test: ## Installs stress-test binary
-	LIBSQLITE3_FLAGS=$(LIBSQLITE3_FLAGS) cargo install --path bin/stress-test --locked
+	cargo install --path bin/stress-test --locked
 
 .PHONY: install-network-monitor
 install-network-monitor: ## Installs network monitor binary
