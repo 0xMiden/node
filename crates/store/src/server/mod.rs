@@ -165,24 +165,21 @@ impl Store {
             )?,
         };
 
-        let service = async move {
-            grpc_servers
-                .join_next()
-                .await
-                .expect("joinset is not empty")?
-                .map_err(Into::into)
-        };
-
         tokio::select! {
-            result = service => result,
+            // GRPC service task.
+            result = grpc_servers.join_next() => {
+                result.expect("joinset is not empty")?.map_err(Into::into)
+            },
+            // Termination signal from apply_block.
             Some(err) = termination_signal.recv() => {
                 Err(anyhow::anyhow!("received termination signal").context(err))
             },
+            // Proof scheduler or replica task, depending on mode the store is running.
             result = mode_task => {
                 match result {
-                    Ok(Ok(())) => Err(anyhow::anyhow!("mode task exited unexpectedly")),
-                    Ok(Err(err)) => Err(err.context("mode task fatal error")),
-                    Err(join_err) => Err(join_err).context("mode task panicked"),
+                    Ok(Ok(())) => Err(anyhow::anyhow!("task exited unexpectedly")),
+                    Ok(Err(err)) => Err(err.context("task fatal error")),
+                    Err(join_err) => Err(join_err).context("task panicked"),
                 }
             }
         }
@@ -216,11 +213,7 @@ impl Store {
         .await;
 
         let state = Arc::new(state);
-        let store_api = api::StoreApi {
-            state,
-            block_sender,
-            proof_sender,
-        };
+        let store_api = api::StoreApi { state, block_sender, proof_sender };
         let block_producer_api = block_producer::BlockProducerApi {
             inner: store_api.clone(),
             chain_tip_sender,
@@ -310,9 +303,13 @@ impl Store {
         ntx_builder_listener: TcpListener,
         block_producer_listener: TcpListener,
     ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
+        let mut join_set = JoinSet::new();
+        Self::spawn_db_maintenance(&mut join_set, &store_api.state);
+
         let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
-        let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api.clone());
-        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api.clone());
+        let replica_service =
+            store::store_replica_server::StoreReplicaServer::new(store_api.clone());
+        let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api);
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(block_producer_api);
 
@@ -329,9 +326,6 @@ impl Store {
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
         };
-
-        let mut join_set = JoinSet::new();
-        Self::spawn_db_maintenance(&mut join_set, &store_api.state);
 
         join_set.spawn(
             make_server()
@@ -368,8 +362,11 @@ impl Store {
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
     ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
+        let mut join_set = JoinSet::new();
+        Self::spawn_db_maintenance(&mut join_set, &store_api.state);
+
         let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
-        let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api.clone());
+        let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_api_descriptor())
@@ -377,9 +374,6 @@ impl Store {
             .context("failed to build reflection service")?;
 
         info!(target: COMPONENT, "Database loaded");
-
-        let mut join_set = JoinSet::new();
-        Self::spawn_db_maintenance(&mut join_set, &store_api.state);
 
         join_set.spawn(
             tonic::transport::Server::builder()
