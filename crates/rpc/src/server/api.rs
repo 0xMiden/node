@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierLimit,
     QueryParamStorageMapKeyTotalLimit,
 };
+use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -53,6 +55,7 @@ pub struct RpcService {
     validator: ValidatorClient,
     ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
+    block_commitment_cache: LruCache<BlockNumber, Word>,
 }
 
 impl RpcService {
@@ -61,6 +64,7 @@ impl RpcService {
         block_producer_url: Option<Url>,
         validator_url: Url,
         ntx_builder_url: Option<Url>,
+        commitment_cache_capacity: NonZeroUsize,
     ) -> Self {
         let store = {
             info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
@@ -124,6 +128,7 @@ impl RpcService {
             validator,
             ntx_builder,
             genesis_commitment: None,
+            block_commitment_cache: LruCache::new(commitment_cache_capacity),
         }
     }
 
@@ -185,6 +190,52 @@ impl RpcService {
                 Err(other) => return Err(other.into()),
             }
         }
+    }
+
+    /// Returns the given block's onchain commitment.
+    ///
+    /// This is retrieved from the local LRU cache, or otherwise from the store on cache miss.
+    #[tracing::instrument(target = COMPONENT, name = "get_block_commitment", skip_all, fields(block.number = %block))]
+    async fn get_block_commitment(&self, block: BlockNumber) -> Result<Word, Status> {
+        if let Some(commitment) = self.block_commitment_cache.get(&block).await {
+            return Ok(commitment);
+        }
+
+        let header = self
+            .store
+            .clone()
+            .get_block_header_by_number(Request::new(proto::rpc::BlockHeaderByNumberRequest {
+                block_num: Some(block.as_u32()),
+                include_mmr_proof: false.into(),
+            }))
+            .await?
+            .into_inner()
+            .block_header
+            .map(BlockHeader::try_from)
+            .transpose()?
+            .ok_or_else(|| Status::invalid_argument(format!("unknown block {block}")))?;
+
+        let commitment = header.commitment();
+        self.block_commitment_cache.put(block, commitment).await;
+
+        Ok(commitment)
+    }
+
+    /// Returns an error if the provided block's commitment does not match the one on chain.
+    async fn verify_reference_commitment(
+        &self,
+        block: BlockNumber,
+        commitment: Word,
+    ) -> Result<(), Status> {
+        let onchain = self.get_block_commitment(block).await?;
+
+        if onchain != commitment {
+            return Err(Status::invalid_argument(format!(
+                "reference block's commitment {commitment} at block {block} does not match the chain's commitment of {onchain}",
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -430,6 +481,10 @@ impl api_server::Api for RpcService {
         span.set_attribute("transaction.reference_block.number", tx.ref_block_num());
         span.set_attribute("transaction.reference_block.commitment", tx.ref_block_commitment());
 
+        // Verify the reference block is actually part of the chain.
+        self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
+            .await?;
+
         // Rebuild a new ProvenTransaction with decorators removed from output notes
         let account_update = TxAccountUpdate::new(
             tx.account_id(),
@@ -465,7 +520,6 @@ impl api_server::Api for RpcService {
         }
 
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
-
         tx_verifier.verify(&tx).map_err(|err| {
             Status::invalid_argument(format!(
                 "Invalid proof for transaction {}: {}",
@@ -520,6 +574,13 @@ impl api_server::Api for RpcService {
             })?
             .ok_or(Status::invalid_argument("missing `proposed_batch` field"))?;
 
+        // Verify the reference block is actually part of the chain.
+        self.verify_reference_commitment(
+            proven_batch.reference_block_num(),
+            proven_batch.reference_block_commitment(),
+        )
+        .await?;
+
         // Perform this check here since its cheap. If this passes we can safely zip inputs and
         // transactions.
         if request.transaction_inputs.len() != proposed_batch.transactions().len() {
@@ -553,32 +614,6 @@ impl api_server::Api for RpcService {
 
         if expected_proof != proven_batch {
             return Err(Status::invalid_argument("batch proof did not match proposed batch"));
-        }
-
-        // Verify the reference header matches the canonical chain.
-        let reference_header = self
-            .get_block_header_by_number(Request::new(proto::rpc::BlockHeaderByNumberRequest {
-                block_num: expected_proof.reference_block_num().as_u32().into(),
-                include_mmr_proof: false.into(),
-            }))
-            .await?
-            .into_inner()
-            .block_header
-            .map(BlockHeader::try_from)
-            .transpose()?
-            .ok_or_else(|| {
-                Status::invalid_argument(format!(
-                    "unknown reference block {}",
-                    expected_proof.reference_block_num()
-                ))
-            })?;
-        if reference_header.commitment() != expected_proof.reference_block_commitment() {
-            return Err(Status::invalid_argument(format!(
-                "batch reference commitment {} at block {} does not match canonical chain's commitment of {}",
-                expected_proof.reference_block_commitment(),
-                expected_proof.reference_block_num(),
-                reference_header.commitment()
-            )));
         }
 
         // Submit each transaction to the validator.
