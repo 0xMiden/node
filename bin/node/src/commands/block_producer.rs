@@ -4,8 +4,11 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{ENV_BLOCK_PRODUCER_STORE_URL, ENV_BLOCK_PRODUCER_URL};
-use crate::commands::{BlockProducerConfig, ENV_BLOCK_PRODUCER_VALIDATOR_URL, ENV_ENABLE_OTEL};
+use super::{ENV_BLOCK_PRODUCER_URL, ENV_ENABLE_OTEL};
+use crate::commands::BlockProducerConfig;
+
+const ENV_BLOCK_PRODUCER_STORE_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_STORE_URL";
+const ENV_BLOCK_PRODUCER_VALIDATOR_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_VALIDATOR_URL";
 
 #[derive(clap::Subcommand)]
 pub enum BlockProducerCommand {

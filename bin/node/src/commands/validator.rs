@@ -15,13 +15,14 @@ use url::Url;
 use crate::commands::{
     ENV_DATA_DIRECTORY,
     ENV_ENABLE_OTEL,
-    ENV_GENESIS_CONFIG_FILE,
     ENV_VALIDATOR_KEY,
     ENV_VALIDATOR_KMS_KEY_ID,
     ENV_VALIDATOR_URL,
     INSECURE_VALIDATOR_KEY_HEX,
     ValidatorKey,
 };
+
+const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_GENESIS_CONFIG_FILE";
 
 /// The filename used for the genesis block file.
 pub const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";

@@ -11,13 +11,12 @@ use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
-use super::{
-    ENV_DATA_DIRECTORY,
-    ENV_STORE_BLOCK_PRODUCER_URL,
-    ENV_STORE_NTX_BUILDER_URL,
-    ENV_STORE_RPC_URL,
-};
-use crate::commands::{ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL};
+use super::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL};
+
+const ENV_STORE_RPC_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
+const ENV_STORE_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
+const ENV_STORE_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
+const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 
 #[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]

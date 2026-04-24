@@ -4,14 +4,10 @@ use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{
-    ENV_BLOCK_PRODUCER_URL,
-    ENV_NTX_BUILDER_URL,
-    ENV_RPC_STORE_URL,
-    ENV_RPC_URL,
-    ENV_VALIDATOR_URL,
-};
-use crate::commands::ENV_ENABLE_OTEL;
+use super::{ENV_BLOCK_PRODUCER_URL, ENV_ENABLE_OTEL, ENV_NTX_BUILDER_URL, ENV_VALIDATOR_URL};
+
+const ENV_RPC_URL: &str = "MIDEN_NODE_RPC_URL";
+const ENV_RPC_STORE_URL: &str = "MIDEN_NODE_RPC_STORE_URL";
 
 #[derive(clap::Subcommand)]
 pub enum RpcCommand {
