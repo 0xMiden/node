@@ -7,8 +7,8 @@ use url::Url;
 use super::{
     ENV_BLOCK_PRODUCER_URL,
     ENV_NTX_BUILDER_URL,
+    ENV_RPC_STORE_URL,
     ENV_RPC_URL,
-    ENV_STORE_RPC_URL,
     ENV_VALIDATOR_URL,
 };
 use crate::commands::ENV_ENABLE_OTEL;
@@ -22,7 +22,7 @@ pub enum RpcCommand {
         url: Url,
 
         /// The store's RPC service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_RPC_URL, value_name = "URL")]
+        #[arg(long = "store.url", env = ENV_RPC_STORE_URL, value_name = "URL")]
         store_url: Url,
 
         /// The block-producer's gRPC url. If unset, will run the RPC in read-only mode,

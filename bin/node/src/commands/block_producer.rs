@@ -4,8 +4,8 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{ENV_BLOCK_PRODUCER_URL, ENV_STORE_BLOCK_PRODUCER_URL};
-use crate::commands::{BlockProducerConfig, ENV_ENABLE_OTEL, ENV_VALIDATOR_BLOCK_PRODUCER_URL};
+use super::{ENV_BLOCK_PRODUCER_STORE_URL, ENV_BLOCK_PRODUCER_URL};
+use crate::commands::{BlockProducerConfig, ENV_BLOCK_PRODUCER_VALIDATOR_URL, ENV_ENABLE_OTEL};
 
 #[derive(clap::Subcommand)]
 pub enum BlockProducerCommand {
@@ -16,11 +16,11 @@ pub enum BlockProducerCommand {
         url: Url,
 
         /// The store's block-producer service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_BLOCK_PRODUCER_URL)]
+        #[arg(long = "store.url", env = ENV_BLOCK_PRODUCER_STORE_URL)]
         store_url: Url,
 
         /// The validator's service gRPC url.
-        #[arg(long = "validator.url", env = ENV_VALIDATOR_BLOCK_PRODUCER_URL)]
+        #[arg(long = "validator.url", env = ENV_BLOCK_PRODUCER_VALIDATOR_URL)]
         validator_url: Url,
 
         #[command(flatten)]

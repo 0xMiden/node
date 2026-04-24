@@ -14,11 +14,11 @@ use super::{
     DEFAULT_NTX_SCRIPT_CACHE_SIZE,
     ENV_BLOCK_PRODUCER_URL,
     ENV_ENABLE_OTEL,
+    ENV_NTX_BUILDER_STORE_URL,
     ENV_NTX_DATA_DIRECTORY,
     ENV_NTX_MAX_CYCLES,
     ENV_NTX_PROVER_URL,
     ENV_NTX_SCRIPT_CACHE_SIZE,
-    ENV_STORE_NTX_BUILDER_URL,
     ENV_VALIDATOR_URL,
 };
 use crate::commands::ENV_NTX_BUILDER_URL;
@@ -32,7 +32,7 @@ pub enum NtxBuilderCommand {
         url: Option<Url>,
 
         /// The store's ntx-builder service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
+        #[arg(long = "store.url", env = ENV_NTX_BUILDER_STORE_URL, value_name = "URL")]
         store_url: Url,
 
         /// The block-producer's gRPC url.
