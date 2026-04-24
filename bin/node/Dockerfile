@@ -28,7 +28,7 @@ COPY . .
 RUN cargo build --release --locked --bin miden-node
 
 # Base line runtime image with runtime dependencies installed.
-FROM debian:bookworm-slim AS runtime-base
+FROM debian:bullseye-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
     rm -rf /var/lib/apt/lists/*
