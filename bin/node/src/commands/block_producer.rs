@@ -4,26 +4,27 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{ENV_BLOCK_PRODUCER_URL, ENV_ENABLE_OTEL};
+use super::ENV_ENABLE_OTEL;
 use crate::commands::BlockProducerConfig;
 
-const ENV_BLOCK_PRODUCER_STORE_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_STORE_URL";
-const ENV_BLOCK_PRODUCER_VALIDATOR_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_VALIDATOR_URL";
+const ENV_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_URL";
+const ENV_STORE_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_STORE_URL";
+const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_VALIDATOR_URL";
 
 #[derive(clap::Subcommand)]
 pub enum BlockProducerCommand {
     /// Starts the block-producer component.
     Start {
         /// Url at which to serve the gRPC API.
-        #[arg(env = ENV_BLOCK_PRODUCER_URL)]
+        #[arg(env = ENV_URL)]
         url: Url,
 
         /// The store's block-producer service gRPC url.
-        #[arg(long = "store.url", env = ENV_BLOCK_PRODUCER_STORE_URL)]
+        #[arg(long = "store.url", env = ENV_STORE_URL)]
         store_url: Url,
 
         /// The validator's service gRPC url.
-        #[arg(long = "validator.url", env = ENV_BLOCK_PRODUCER_VALIDATOR_URL)]
+        #[arg(long = "validator.url", env = ENV_VALIDATOR_URL)]
         validator_url: Url,
 
         #[command(flatten)]

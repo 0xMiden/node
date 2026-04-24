@@ -17,11 +17,11 @@ use crate::commands::{
     ENV_ENABLE_OTEL,
     ENV_VALIDATOR_KEY,
     ENV_VALIDATOR_KMS_KEY_ID,
-    ENV_VALIDATOR_URL,
     INSECURE_VALIDATOR_KEY_HEX,
     ValidatorKey,
 };
 
+const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_GENESIS_CONFIG_FILE";
 
 /// The filename used for the genesis block file.
@@ -55,7 +55,7 @@ pub enum ValidatorCommand {
     /// Starts the validator component.
     Start {
         /// Url at which to serve the gRPC API.
-        #[arg(env = ENV_VALIDATOR_URL)]
+        #[arg(env = ENV_URL)]
         url: Url,
 
         /// Enables the exporting of traces for OpenTelemetry.
