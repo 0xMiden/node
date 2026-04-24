@@ -23,10 +23,8 @@ pub fn initialize_sqlite_configuration() {
 /// According to the [documentation](https://sqlite.org/c3ref/c_config_covering_index_scan.html)
 /// the only thing we lose is access to memory allocation statistics -- we don't use that.
 fn disable_sqlite_memory_accounting() {
-    // SAFETY: `sqlite3_config` is called at most once through `INIT.call_once` during process
-    // initialization. Calling this _after_ performing SQLite operations results is considered
-    // a programming error and results in a panic.
     let result =
         unsafe { libsqlite3_sys::sqlite3_config(libsqlite3_sys::SQLITE_CONFIG_MEMSTATUS, 0) };
+    // assert!((result == libsqlite3_sys::SQLITE_OK) || (result == libsqlite3_sys::SQLITE_MISUSE));
     assert_eq!(result, libsqlite3_sys::SQLITE_OK);
 }
