@@ -7,17 +7,12 @@
 
 use std::time::Duration;
 
-use miden_node_proto::clients::{
-    Builder as ClientBuilder,
-    RemoteProverProxyStatusClient,
-    RpcClient,
-};
-use tokio::sync::watch;
-use tokio::time::MissedTickBehavior;
-use tracing::{debug, info, instrument};
+use miden_node_proto::clients::RpcClient;
+use tracing::{debug, instrument};
 use url::Url;
 
 use crate::COMPONENT;
+use crate::service::{Service, build_tls_client};
 pub use crate::service_status::*;
 
 // STALE CHAIN TIP TRACKER
@@ -75,243 +70,95 @@ impl StaleChainTracker {
 // RPC STATUS CHECKER
 // ================================================================================================
 
-/// Runs a task that continuously checks RPC status and updates a watch channel.
-///
-/// This function spawns a task that periodically checks the RPC service status
-/// and sends updates through a watch channel. It also detects stale chain tips
-/// and marks the RPC as unhealthy if the chain tip hasn't changed for longer
-/// than the configured threshold.
-///
-/// # Arguments
-///
-/// * `rpc_url` - The URL of the RPC service.
-/// * `status_sender` - The sender for the watch channel.
-/// * `status_check_interval` - The interval at which to check the status of the services.
-/// * `request_timeout` - The timeout for outgoing requests.
-/// * `stale_chain_tip_threshold` - Maximum time without a chain tip update before marking as
-///   unhealthy.
-///
-/// # Returns
-///
-/// `Ok(())` if the task completes successfully, or an error if the task fails.
-pub async fn run_rpc_status_task(
-    rpc_url: Url,
-    status_sender: watch::Sender<ServiceStatus>,
-    status_check_interval: Duration,
-    request_timeout: Duration,
-    stale_chain_tip_threshold: Duration,
-) {
-    let url_str = rpc_url.to_string();
-    let mut rpc = ClientBuilder::new(rpc_url)
-        .with_tls()
-        .expect("TLS is enabled")
-        .with_timeout(request_timeout)
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect_lazy::<RpcClient>();
+pub struct RpcService {
+    url: String,
+    rpc: RpcClient,
+    stale_tracker: StaleChainTracker,
+    interval: Duration,
+}
 
-    let mut interval = tokio::time::interval(status_check_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    let mut stale_tracker = StaleChainTracker::new(stale_chain_tip_threshold);
-
-    loop {
-        interval.tick().await;
-
-        let current_time = current_unix_timestamp_secs();
-
-        let status =
-            check_rpc_status(&mut rpc, url_str.clone(), current_time, &mut stale_tracker).await;
-
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for RPC status updates, shutting down");
-            return;
+impl RpcService {
+    pub fn new(
+        rpc_url: Url,
+        interval: Duration,
+        request_timeout: Duration,
+        stale_threshold: Duration,
+    ) -> Self {
+        let url = rpc_url.to_string();
+        let rpc = build_tls_client::<RpcClient>(rpc_url, request_timeout);
+        Self {
+            url,
+            rpc,
+            stale_tracker: StaleChainTracker::new(stale_threshold),
+            interval,
         }
     }
 }
 
-/// Checks the status of the RPC service.
-///
-/// This function checks the status of the RPC service and detects stale chain tips.
-/// If the chain tip hasn't changed for longer than the configured threshold, the RPC
-/// is marked as unhealthy.
-///
-/// # Arguments
-///
-/// * `rpc` - The RPC client.
-/// * `url` - The URL of the RPC service.
-/// * `current_time` - The current time.
-/// * `stale_tracker` - Tracker for detecting stale chain tips.
-///
-/// # Returns
-///
-/// A `ServiceStatus` containing the status of the RPC service.
-#[instrument(
-    parent = None,
-    target = COMPONENT,
-    name = "network_monitor.status.check_rpc_status",
-    skip_all,
-    level = "info",
-    ret(level = "debug")
-)]
-pub(crate) async fn check_rpc_status(
-    rpc: &mut miden_node_proto::clients::RpcClient,
-    url: String,
-    current_time: u64,
-    stale_tracker: &mut StaleChainTracker,
-) -> ServiceStatus {
-    match rpc.status(()).await {
-        Ok(response) => {
-            let status = response.into_inner();
-            let rpc_details = RpcStatusDetails::from_rpc_status(status, url);
+impl Service for RpcService {
+    fn name(&self) -> &'static str {
+        "RPC"
+    }
 
-            // Check for stale chain tip using the store's chain tip
-            if let Some(store_status) = &rpc_details.store_status {
-                if let Some(stale_duration) =
-                    stale_tracker.update(store_status.chain_tip, current_time)
-                {
-                    debug!(
-                        target: COMPONENT,
-                        chain_tip = store_status.chain_tip,
-                        stale_duration_secs = stale_duration,
-                        "Chain tip is stale"
-                    );
-                    return ServiceStatus::unhealthy(
-                        "RPC",
-                        format!(
-                            "Chain tip {} has not changed for {} seconds",
-                            store_status.chain_tip, stale_duration
-                        ),
-                        ServiceDetails::RpcStatus(rpc_details),
-                    );
+    fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    fn initial_status(&self) -> ServiceStatus {
+        ServiceStatus::unknown(
+            self.name(),
+            ServiceDetails::RpcStatus(RpcStatusDetails {
+                url: self.url.clone(),
+                version: String::new(),
+                genesis_commitment: None,
+                store_status: None,
+                block_producer_status: None,
+            }),
+        )
+    }
+
+    #[instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "network_monitor.status.check_rpc",
+        skip_all,
+        level = "info",
+        ret(level = "debug")
+    )]
+    async fn check(&mut self) -> ServiceStatus {
+        match self.rpc.status(()).await {
+            Ok(response) => {
+                let rpc_details =
+                    RpcStatusDetails::from_rpc_status(response.into_inner(), self.url.clone());
+
+                if let Some(store_status) = &rpc_details.store_status {
+                    if let Some(stale_duration) = self
+                        .stale_tracker
+                        .update(store_status.chain_tip, current_unix_timestamp_secs())
+                    {
+                        debug!(
+                            target: COMPONENT,
+                            chain_tip = store_status.chain_tip,
+                            stale_duration_secs = stale_duration,
+                            "Chain tip is stale"
+                        );
+                        return ServiceStatus::unhealthy(
+                            self.name(),
+                            format!(
+                                "Chain tip {} has not changed for {} seconds",
+                                store_status.chain_tip, stale_duration
+                            ),
+                            ServiceDetails::RpcStatus(rpc_details),
+                        );
+                    }
                 }
-            }
 
-            ServiceStatus::healthy("RPC", ServiceDetails::RpcStatus(rpc_details))
-        },
-        Err(e) => {
-            debug!(target: COMPONENT, error = %e, "RPC status check failed");
-            ServiceStatus::error("RPC", e)
-        },
-    }
-}
-
-// REMOTE PROVER STATUS CHECKER
-// ================================================================================================
-
-/// Runs a task that continuously checks remote prover status and updates a watch channel.
-///
-/// This function spawns a task that periodically checks a remote prover service status
-/// and sends updates through a watch channel.
-///
-/// # Arguments
-///
-/// * `prover_url` - The URL of the remote prover service.
-/// * `name` - The name of the remote prover.
-/// * `status_sender` - The sender for the watch channel.
-/// * `status_check_interval` - The interval at which to check the status of the services.
-///
-/// # Returns
-///
-/// `Ok(())` if the monitoring task runs and completes successfully, or an error if there are
-/// connection issues or failures while checking the remote prover status.
-pub async fn run_remote_prover_status_task(
-    prover_url: Url,
-    name: String,
-    status_sender: watch::Sender<ServiceStatus>,
-    status_check_interval: Duration,
-    request_timeout: Duration,
-) {
-    let url_str = prover_url.to_string();
-    let mut remote_prover = ClientBuilder::new(prover_url)
-        .with_tls()
-        .expect("TLS is enabled")
-        .with_timeout(request_timeout)
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect_lazy::<RemoteProverProxyStatusClient>();
-
-    let mut interval = tokio::time::interval(status_check_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        interval.tick().await;
-
-        let status =
-            check_remote_prover_status(&mut remote_prover, name.clone(), url_str.clone()).await;
-
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for remote prover status updates, shutting down");
-            return;
+                ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
+            },
+            Err(e) => {
+                debug!(target: COMPONENT, error = %e, "RPC status check failed");
+                ServiceStatus::error(self.name(), e)
+            },
         }
-    }
-}
-
-/// Checks the status of the remote prover service.
-///
-/// This function checks the status of the remote prover service.
-///
-/// # Arguments
-///
-/// * `remote_prover` - The remote prover client.
-/// * `name` - The name of the remote prover.
-/// * `url` - The URL of the remote prover.
-///
-/// # Returns
-///
-/// A `ServiceStatus` containing the status of the remote prover service.
-#[instrument(
-    parent = None,
-    target = COMPONENT,
-    name = "network_monitor.status.check_remote_prover_status",
-    skip_all,
-    level = "info",
-    ret(level = "debug")
-)]
-pub(crate) async fn check_remote_prover_status(
-    remote_prover: &mut miden_node_proto::clients::RemoteProverProxyStatusClient,
-    display_name: String,
-    url: String,
-) -> ServiceStatus {
-    match remote_prover.status(()).await {
-        Ok(response) => {
-            let status = response.into_inner();
-
-            // Use the new method to convert gRPC status to domain type
-            let remote_prover_details = RemoteProverStatusDetails::from_proxy_status(status, url);
-
-            // Determine overall health based on worker statuses.
-            // All workers must be healthy for the prover to be considered healthy.
-            let no_workers = remote_prover_details.workers.is_empty();
-            let all_healthy =
-                remote_prover_details.workers.iter().all(|w| w.status == Status::Healthy);
-            let unhealthy_worker_names: Vec<_> = remote_prover_details
-                .workers
-                .iter()
-                .filter(|w| w.status != Status::Healthy)
-                .map(|w| w.name.clone())
-                .collect();
-            let details = ServiceDetails::ProverStatusCheck(remote_prover_details);
-
-            if no_workers {
-                ServiceStatus::unknown(display_name, details)
-            } else if all_healthy {
-                ServiceStatus::healthy(display_name, details)
-            } else {
-                ServiceStatus::unhealthy(
-                    display_name,
-                    format!("unhealthy workers: {}", unhealthy_worker_names.join(", ")),
-                    details,
-                )
-            }
-        },
-        Err(e) => {
-            debug!(target: COMPONENT, prover_name = %display_name, error = %e, "Remote prover status check failed");
-            ServiceStatus::error(display_name, e)
-        },
     }
 }

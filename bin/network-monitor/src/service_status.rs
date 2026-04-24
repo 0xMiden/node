@@ -129,12 +129,7 @@ impl ServiceStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServiceDetails {
     RpcStatus(RpcStatusDetails),
-    /// Remote prover status combined with its most recent test result.
     RemoteProverStatus(RemoteProverDetails),
-    /// Internal: raw output of a remote prover status check task.
-    ProverStatusCheck(RemoteProverStatusDetails),
-    /// Internal: raw output of a remote prover test task.
-    ProverTestResult(ProverTestDetails),
     FaucetTest(FaucetTestDetails),
     NtxIncrement(IncrementDetails),
     NtxTracking(CounterTrackingDetails),
@@ -156,6 +151,8 @@ pub struct RemoteProverDetails {
 pub struct ProverTestOutcome {
     pub details: ProverTestDetails,
     pub status: Status,
+    /// Error message from the most recent test attempt; `None` when the last attempt succeeded.
+    pub error: Option<String>,
 }
 
 /// Details of the increment service.

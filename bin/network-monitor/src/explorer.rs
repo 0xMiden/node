@@ -6,12 +6,11 @@ use std::time::Duration;
 
 use reqwest::Client;
 use serde::Serialize;
-use tokio::sync::watch;
-use tokio::time::MissedTickBehavior;
-use tracing::{info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::COMPONENT;
+use crate::service::Service;
 use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus};
 
 const LATEST_BLOCK_QUERY: &str = "
@@ -48,103 +47,69 @@ const LATEST_BLOCK_REQUEST: GraphqlRequest<EmptyVariables> = GraphqlRequest {
     variables: EmptyVariables,
 };
 
-/// Runs a task that continuously checks explorer status and updates a watch channel.
-///
-/// This function spawns a task that periodically checks the explorer service status
-/// and sends updates through a watch channel.
-///
-/// # Arguments
-///
-/// * `explorer_url` - The URL of the explorer service.
-/// * `name` - The name of the explorer.
-/// * `status_sender` - The sender for the watch channel.
-/// * `status_check_interval` - The interval at which to check the status of the services.
-///
-/// # Returns
-///
-/// `Ok(())` if the monitoring task runs and completes successfully, or an error if there are
-/// connection issues or failures while checking the explorer status.
-pub async fn run_explorer_status_task(
-    explorer_url: Url,
-    name: String,
-    status_sender: watch::Sender<ServiceStatus>,
-    status_check_interval: Duration,
+pub struct ExplorerService {
+    url: Url,
+    client: Client,
+    interval: Duration,
     request_timeout: Duration,
-) {
-    let mut explorer_client = reqwest::Client::new();
+}
 
-    let mut interval = tokio::time::interval(status_check_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        interval.tick().await;
-
-        let status = check_explorer_status(
-            &mut explorer_client,
-            explorer_url.clone(),
-            name.clone(),
+impl ExplorerService {
+    pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
+        Self {
+            url,
+            client: reqwest::Client::new(),
+            interval,
             request_timeout,
-        )
-        .await;
-
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for explorer status updates, shutting down");
-            return;
         }
     }
 }
 
-/// Checks the status of the explorer service.
-///
-/// This function checks the status of the explorer service.
-///
-/// # GraphQL Query
-///
-/// See [`LATEST_BLOCK_QUERY`] for the exact query string used.
-///
-/// # Arguments
-///
-/// * `explorer` - The explorer client.
-/// * `name` - The name of the explorer.
-/// * `url` - The URL of the explorer.
-/// * `current_time` - The current time.
-///
-/// # Returns
-///
-/// A `ServiceStatus` containing the status of the explorer service.
-#[instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
-pub(crate) async fn check_explorer_status(
-    explorer_client: &mut Client,
-    explorer_url: Url,
-    name: String,
-    request_timeout: Duration,
-) -> ServiceStatus {
-    let resp = explorer_client
-        .post(explorer_url.clone())
-        .json(&LATEST_BLOCK_REQUEST)
-        .timeout(request_timeout)
-        .send()
-        .await;
+impl Service for ExplorerService {
+    fn name(&self) -> &'static str {
+        "Explorer"
+    }
 
-    let body = match resp {
-        Ok(resp) => match resp.text().await {
-            Ok(body) => body,
-            Err(e) => return ServiceStatus::error(&name, e),
-        },
-        Err(e) => return ServiceStatus::error(&name, e),
-    };
+    fn interval(&self) -> Duration {
+        self.interval
+    }
 
-    let value: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(value) => value,
-        Err(e) => {
-            return ServiceStatus::error(&name, format!("{e}: {body}"));
-        },
-    };
+    fn initial_status(&self) -> ServiceStatus {
+        ServiceStatus::unknown(
+            self.name(),
+            ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
+        )
+    }
 
-    match ExplorerStatusDetails::try_from(value) {
-        Ok(details) => ServiceStatus::healthy(name, ServiceDetails::ExplorerStatus(details)),
-        Err(e) => ServiceStatus::error(&name, e),
+    #[instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
+    async fn check(&mut self) -> ServiceStatus {
+        let resp = self
+            .client
+            .post(self.url.clone())
+            .json(&LATEST_BLOCK_REQUEST)
+            .timeout(self.request_timeout)
+            .send()
+            .await;
+
+        let body = match resp {
+            Ok(resp) => match resp.text().await {
+                Ok(body) => body,
+                Err(e) => return ServiceStatus::error(self.name(), e),
+            },
+            Err(e) => return ServiceStatus::error(self.name(), e),
+        };
+
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(value) => value,
+            Err(e) => return ServiceStatus::error(self.name(), format!("{e}: {body}")),
+        };
+
+        match ExplorerStatusDetails::try_from(value) {
+            Ok(details) => {
+                ServiceStatus::healthy(self.name(), ServiceDetails::ExplorerStatus(details))
+            },
+            Err(e) => ServiceStatus::error(self.name(), e),
+        }
     }
 }
 
@@ -245,13 +210,6 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
             proof_commitment: require_str(node, "proof_commitment")?,
         })
     }
-}
-
-pub(crate) fn initial_explorer_status() -> ServiceStatus {
-    ServiceStatus::unknown(
-        "Explorer",
-        ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
-    )
 }
 
 // TESTS

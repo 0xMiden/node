@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use miden_node_utils::logging::OpenTelemetry;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
@@ -26,7 +26,6 @@ use crate::monitor::tasks::Tasks;
     err
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
-    // Load configuration from command-line arguments and environment variables
     info!("Loaded configuration: {:?}", config);
 
     let _otel_guard = if config.enable_otel {
@@ -37,61 +36,32 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
 
     let mut tasks = Tasks::new();
 
-    // Initialize the RPC Status endpoint checker task.
-    debug!(target: COMPONENT, "Initializing RPC status checker");
-    let rpc_rx = tasks.spawn_rpc_checker(&config).await?;
+    let rpc_rx = tasks.spawn_rpc_checker(&config);
 
-    // Initialize the explorer status checker task.
-    let explorer_rx = if config.explorer_url.is_some() {
-        Some(tasks.spawn_explorer_checker(&config).await?)
-    } else {
-        None
-    };
-
-    // Initialize the note transport status checker task.
-    let note_transport_rx = if config.note_transport_url.is_some() {
-        Some(tasks.spawn_note_transport_checker(&config).await?)
-    } else {
-        None
-    };
-
-    // Initialize the validator status checker task.
-    let validator_rx = if config.validator_url.is_some() {
-        Some(tasks.spawn_validator_checker(&config).await?)
-    } else {
-        None
-    };
-
-    // Initialize the prover checkers & tests tasks, only if URLs were provided.
     let prover_rxs = if config.remote_prover_urls.is_empty() {
-        debug!(target: COMPONENT, "No remote prover URLs configured, skipping prover tasks");
         Vec::new()
     } else {
-        debug!(target: COMPONENT, "Initializing prover checkers and tests");
-        tasks.spawn_prover_tasks(&config).await?
+        tasks.spawn_prover_tasks(&config).await
     };
 
-    // Initialize the faucet testing task.
-    let faucet_rx = if config.faucet_url.is_some() {
-        debug!(target: COMPONENT, "Initializing faucet testing task");
-        Some(tasks.spawn_faucet(&config))
-    } else {
-        warn!("Faucet URL not configured, skipping faucet testing");
-        None
-    };
+    let faucet_rx = config.faucet_url.is_some().then(|| tasks.spawn_faucet(&config));
 
-    // Initialize the counter increment and tracking tasks only if enabled.
+    let explorer_rx = config.explorer_url.is_some().then(|| tasks.spawn_explorer_checker(&config));
+
     let (ntx_increment_rx, ntx_tracking_rx) = if config.disable_ntx_service {
-        debug!(target: COMPONENT, "NTX service disabled, skipping counter increment task");
         (None, None)
     } else {
-        debug!(target: COMPONENT, "Initializing counter increment task");
         let (increment_rx, tracking_rx) = tasks.spawn_ntx_service(&config).await?;
         (Some(increment_rx), Some(tracking_rx))
     };
 
-    // Initialize HTTP server.
-    debug!(target: COMPONENT, "Initializing HTTP server");
+    let note_transport_rx = config
+        .note_transport_url
+        .is_some()
+        .then(|| tasks.spawn_note_transport_checker(&config));
+
+    let validator_rx =
+        config.validator_url.is_some().then(|| tasks.spawn_validator_checker(&config));
 
     // Build the flat services Vec in the order the dashboard expects to render cards.
     let services = std::iter::once(rpc_rx)
