@@ -12,17 +12,10 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use url::Url;
 
-use crate::commands::{
-    ENV_DATA_DIRECTORY,
-    ENV_ENABLE_OTEL,
-    ENV_VALIDATOR_KEY,
-    ENV_VALIDATOR_KMS_KEY_ID,
-    INSECURE_VALIDATOR_KEY_HEX,
-    ValidatorKey,
-};
+use crate::commands::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL, ENV_VALIDATOR_KEY, ENV_VALIDATOR_KMS_KEY_ID, INSECURE_VALIDATOR_KEY_HEX, ValidatorKey};
 
 const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
-const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_GENESIS_CONFIG_FILE";
+const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
 
 /// The filename used for the genesis block file.
 pub const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";
