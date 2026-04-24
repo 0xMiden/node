@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use miden_node_proto::generated::store::{
-    SubscribeBlocksRequest, SubscribeProofsRequest, store_replica_client,
+    SubscribeBlocksRequest,
+    SubscribeProofsRequest,
+    store_replica_client,
 };
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
@@ -43,9 +45,10 @@ async fn run(
             sync_blocks(&state, &upstream_url),
             sync_proofs(&state, &upstream_url, &proven_tip, &proof_sender),
         );
-        match result {
-            Ok(_) => warn!("Upstream streams ended unexpectedly; reconnecting"),
-            Err(_) => warn!("Upstream sync error; reconnecting in {RECONNECT_DELAY:?}"),
+        if result.is_err() {
+            warn!("Upstream sync error; reconnecting in {RECONNECT_DELAY:?}");
+        } else {
+            warn!("Upstream streams ended unexpectedly; reconnecting");
         }
         tokio::time::sleep(RECONNECT_DELAY).await;
     }
