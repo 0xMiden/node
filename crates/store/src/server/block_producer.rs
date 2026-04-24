@@ -81,11 +81,13 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
 
         // Get block inputs from ordered batches.
         let block_inputs =
-            self.inner.block_inputs_from_ordered_batches(&ordered_batches).await.map_err(|err| {
-                Status::invalid_argument(
-                    err.as_report_context("failed to get block inputs from ordered batches"),
-                )
-            })?;
+            self.inner.block_inputs_from_ordered_batches(&ordered_batches).await.map_err(
+                |err| {
+                    Status::invalid_argument(
+                        err.as_report_context("failed to get block inputs from ordered batches"),
+                    )
+                },
+            )?;
 
         let span = tracing::Span::current();
         span.set_attribute("block.number", header.block_num());
@@ -116,7 +118,8 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
                     .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
-                this.inner.state
+                this.inner
+                    .state
                     .apply_block(signed_block, Some(proving_inputs))
                     .await
                     .inspect(|_| {

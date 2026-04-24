@@ -177,7 +177,10 @@ impl State {
         data_path: &Path,
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<(Self, ProvenTipWriter, broadcast::Sender<BlockNotification>), StateInitializationError> {
+    ) -> Result<
+        (Self, ProvenTipWriter, broadcast::Sender<BlockNotification>),
+        StateInitializationError,
+    > {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 

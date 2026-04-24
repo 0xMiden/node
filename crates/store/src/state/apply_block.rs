@@ -297,10 +297,9 @@ impl State {
         self.forest.write().await.apply_block_updates(block_num, account_deltas)?;
 
         // Notify replica subscribers. Errors here mean no active subscribers, which is fine.
-        let _ = self.block_sender.send(crate::state::BlockNotification {
-            block_num,
-            block_bytes: broadcast_bytes,
-        });
+        let _ = self
+            .block_sender
+            .send(crate::state::BlockNotification { block_num, block_bytes: broadcast_bytes });
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 
