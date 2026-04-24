@@ -44,6 +44,10 @@ pub enum Command {
         /// Number of entries to add to a deterministic storage map on every public account.
         #[arg(long, value_name = "STORAGE_MAP_ENTRIES", default_value = "0")]
         storage_map_entries: usize,
+
+        /// Number of distinct vault assets to add to every public account.
+        #[arg(long, value_name = "VAULT_ENTRIES", default_value = "1")]
+        vault_entries: usize,
     },
 
     /// Benchmark the performance of the store endpoints.
@@ -119,13 +123,16 @@ mod tests {
             "100",
             "--storage-map-entries",
             "128",
+            "--vault-entries",
+            "7",
         ])
         .unwrap();
 
-        let Command::SeedStore { storage_map_entries, .. } = cli.command else {
+        let Command::SeedStore { storage_map_entries, vault_entries, .. } = cli.command else {
             panic!("expected seed-store command");
         };
         assert_eq!(storage_map_entries, 128);
+        assert_eq!(vault_entries, 7);
     }
 
     #[test]
@@ -159,12 +166,14 @@ async fn main() {
             num_accounts,
             public_accounts_percentage,
             storage_map_entries,
+            vault_entries,
         } => {
             seed_store(
                 data_directory,
                 num_accounts,
                 public_accounts_percentage,
                 storage_map_entries,
+                vault_entries,
             )
             .await;
         },

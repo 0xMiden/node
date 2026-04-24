@@ -7,6 +7,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteDetails, NoteTag};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -89,25 +90,37 @@ pub async fn bench_get_account(
     print_summary(&timers_accumulator);
 
     let total_runs = results.len();
-    let limit_exceeded = results.iter().filter(|r| r.limit_exceeded).count();
+    let storage_map_limit_exceeded =
+        results.iter().filter(|r| r.storage_map_limit_exceeded).count();
+    let vault_limit_exceeded = results.iter().filter(|r| r.vault_limit_exceeded).count();
     #[expect(clippy::cast_precision_loss)]
-    let average_entries = if total_runs > 0 {
-        results.iter().map(|r| r.entries as f64).sum::<f64>() / total_runs as f64
+    let average_storage_map_entries = if total_runs > 0 {
+        results.iter().map(|r| r.storage_map_entries as f64).sum::<f64>() / total_runs as f64
+    } else {
+        0.0
+    };
+    #[expect(clippy::cast_precision_loss)]
+    let average_vault_assets = if total_runs > 0 {
+        results.iter().map(|r| r.vault_assets as f64).sum::<f64>() / total_runs as f64
     } else {
         0.0
     };
 
     println!("GetAccount statistics:");
     println!("  Total runs: {total_runs}");
-    println!("  Limit exceeded responses: {limit_exceeded}");
-    println!("  Average returned storage map entries: {average_entries:.2}");
+    println!("  Storage map limit exceeded responses: {storage_map_limit_exceeded}");
+    println!("  Average returned storage map entries: {average_storage_map_entries:.2}");
+    println!("  Vault limit exceeded responses: {vault_limit_exceeded}");
+    println!("  Average returned vault assets: {average_vault_assets:.2}");
 }
 
 #[derive(Clone)]
 struct GetAccountRun {
     duration: Duration,
-    entries: usize,
-    limit_exceeded: bool,
+    storage_map_entries: usize,
+    storage_map_limit_exceeded: bool,
+    vault_assets: usize,
+    vault_limit_exceeded: bool,
 }
 
 async fn get_account(
@@ -115,43 +128,84 @@ async fn get_account(
     account_id: AccountId,
     storage_map_slot: String,
 ) -> GetAccountRun {
-    use proto::rpc::account_request::AccountDetailRequest;
-    use proto::rpc::account_request::account_detail_request::StorageMapDetailRequest;
-    use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
     use proto::rpc::account_storage_details::account_storage_map_details::Entries;
 
-    let request = proto::rpc::AccountRequest {
-        account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
-        block_num: None,
-        details: Some(AccountDetailRequest {
-            code_commitment: None,
-            asset_vault_commitment: None,
-            storage_maps: vec![StorageMapDetailRequest {
-                slot_name: storage_map_slot,
-                slot_data: Some(SlotData::AllEntries(true)),
-            }],
-        }),
-    };
+    let request = get_account_request(account_id, storage_map_slot);
 
     let start = Instant::now();
     let response = api_client.get_account(request).await.unwrap().into_inner();
     let duration = start.elapsed();
 
-    let map_details = response
-        .details
-        .and_then(|details| details.storage_details)
-        .and_then(|storage_details| storage_details.map_details.into_iter().next());
-
-    let (entries, limit_exceeded) = match map_details {
+    let details = response.details;
+    let map_details = details
+        .as_ref()
+        .and_then(|details| details.storage_details.as_ref())
+        .and_then(|storage_details| storage_details.map_details.first());
+    let (storage_map_entries, storage_map_limit_exceeded) = match map_details {
         Some(details) if details.too_many_entries => (0, true),
-        Some(details) => match details.entries {
+        Some(details) => match &details.entries {
             Some(Entries::AllEntries(entries)) => (entries.entries.len(), false),
             _ => (0, false),
         },
         None => (0, false),
     };
 
-    GetAccountRun { duration, entries, limit_exceeded }
+    let vault_details = details.and_then(|details| details.vault_details);
+    let (vault_assets, vault_limit_exceeded) = match vault_details {
+        Some(details) if details.too_many_assets => (0, true),
+        Some(details) => (details.assets.len(), false),
+        None => (0, false),
+    };
+
+    GetAccountRun {
+        duration,
+        storage_map_entries,
+        storage_map_limit_exceeded,
+        vault_assets,
+        vault_limit_exceeded,
+    }
+}
+
+fn get_account_request(
+    account_id: AccountId,
+    storage_map_slot: String,
+) -> proto::rpc::AccountRequest {
+    use proto::rpc::account_request::AccountDetailRequest;
+    use proto::rpc::account_request::account_detail_request::StorageMapDetailRequest;
+    use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
+
+    proto::rpc::AccountRequest {
+        account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
+        block_num: None,
+        details: Some(AccountDetailRequest {
+            code_commitment: None,
+            asset_vault_commitment: Some(proto::primitives::Digest::from(Word::empty())),
+            storage_maps: vec![StorageMapDetailRequest {
+                slot_name: storage_map_slot,
+                slot_data: Some(SlotData::AllEntries(true)),
+            }],
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
+
+    use super::*;
+
+    #[test]
+    fn get_account_request_includes_vault_details() {
+        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
+            .expect("test account id should be valid");
+        let request = get_account_request(account_id, "miden::mock::1".to_string());
+
+        let details = request.details.expect("details should be requested");
+        assert!(
+            details.asset_vault_commitment.is_some(),
+            "benchmark get-account should request vault asset details"
+        );
+    }
 }
 
 // SYNC NOTES

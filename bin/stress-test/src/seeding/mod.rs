@@ -41,7 +41,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
-use miden_protocol::note::{Note, NoteHeader, NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteAssets, NoteHeader, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
@@ -92,8 +92,14 @@ pub async fn seed_store(
     num_accounts: usize,
     public_accounts_percentage: u8,
     storage_map_entries: usize,
+    vault_entries: usize,
 ) {
     let start = Instant::now();
+    assert!(
+        vault_entries <= NoteAssets::MAX_NUM_ASSETS,
+        "--vault-entries must be at most {}",
+        NoteAssets::MAX_NUM_ASSETS
+    );
 
     // Recreate the data directory (it should be empty for store bootstrapping).
     //
@@ -102,10 +108,12 @@ pub async fn seed_store(
     fs_err::create_dir_all(&data_directory).expect("created data directory");
 
     // generate the faucet account and the genesis state
-    let faucet = create_faucet();
+    let benchmark_faucets = create_benchmark_faucets(vault_entries);
+    let faucet = benchmark_faucets[0].clone();
+    let asset_faucet_ids = benchmark_faucets.iter().map(Account::id).collect::<Vec<_>>();
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
     let signer = EcdsaSecretKey::new();
-    let genesis_state = GenesisState::new(vec![faucet.clone()], fee_params, 1, 1, signer.clone());
+    let genesis_state = GenesisState::new(benchmark_faucets, fee_params, 1, 1, signer.clone());
     let genesis_block = genesis_state
         .clone()
         .into_block()
@@ -132,6 +140,8 @@ pub async fn seed_store(
         accounts_filepath,
         &signer,
         storage_map_entries,
+        vault_entries,
+        asset_faucet_ids,
     )
     .await;
 
@@ -154,6 +164,8 @@ async fn generate_blocks(
     accounts_filepath: PathBuf,
     signer: &EcdsaSecretKey,
     storage_map_entries: usize,
+    vault_entries: usize,
+    asset_faucet_ids: Vec<AccountId>,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
     // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx
@@ -196,9 +208,10 @@ async fn generate_blocks(
             AccountStorageMode::Public,
             &key_pair,
             &rng,
-            faucet.id(),
+            &asset_faucet_ids,
             i,
             storage_map_entries,
+            vault_entries,
         );
 
         // create private accounts and notes that mint assets for these accounts
@@ -207,9 +220,10 @@ async fn generate_blocks(
             AccountStorageMode::Private,
             &key_pair,
             &rng,
-            faucet.id(),
+            &asset_faucet_ids,
             i,
             storage_map_entries,
+            vault_entries,
         );
 
         let notes = [pub_notes, priv_notes].concat();
@@ -309,10 +323,22 @@ fn create_accounts_and_notes(
     storage_mode: AccountStorageMode,
     key_pair: &SecretKey,
     rng: &Arc<Mutex<RandomCoin>>,
-    faucet_id: AccountId,
+    asset_faucet_ids: &[AccountId],
     block_num: usize,
     storage_map_entries: usize,
+    vault_entries: usize,
 ) -> (Vec<Account>, Vec<Note>) {
+    assert!(
+        !asset_faucet_ids.is_empty(),
+        "at least one faucet id is required to create benchmark notes"
+    );
+    let note_faucet_ids = match storage_mode {
+        AccountStorageMode::Public => {
+            asset_faucet_ids.iter().take(vault_entries).copied().collect()
+        },
+        AccountStorageMode::Private | AccountStorageMode::Network => vec![asset_faucet_ids[0]],
+    };
+
     (0..num_accounts)
         .into_par_iter()
         .map(|account_index| {
@@ -324,21 +350,25 @@ fn create_accounts_and_notes(
             );
             let note = {
                 let mut rng = rng.lock().unwrap();
-                create_note(faucet_id, account.id(), &mut rng)
+                create_note(&note_faucet_ids, account.id(), &mut rng)
             };
             (account, note)
         })
         .collect()
 }
 
-/// Creates a public P2ID note containing 10 tokens of the fungible asset associated with the
-/// specified `faucet_id` and sent to the specified target account.
-fn create_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RandomCoin) -> Note {
-    let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+/// Creates a public P2ID note containing 10 tokens for each requested fungible asset and sends it
+/// to the specified target account.
+fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomCoin) -> Note {
+    let assets = faucet_ids
+        .iter()
+        .map(|faucet_id| Asset::Fungible(FungibleAsset::new(*faucet_id, 10).unwrap()))
+        .collect();
+    let sender = faucet_ids.first().copied().unwrap_or(target_id);
     P2idNote::create(
-        faucet_id,
+        sender,
         target_id,
-        vec![asset],
+        assets,
         miden_protocol::note::NoteType::Public,
         miden_protocol::note::NoteAttachment::default(),
         rng,
@@ -440,17 +470,81 @@ mod tests {
                 .all(|slot| slot.name() != &benchmark_storage_map_slot())
         );
     }
+
+    #[test]
+    fn public_account_note_contains_requested_distinct_vault_assets() {
+        let coin_seed = [1, 2, 3, 4].map(Felt::new);
+        let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
+        let mut key_rng = rng.lock().unwrap();
+        let key_pair = SecretKey::with_rng(&mut *key_rng);
+        drop(key_rng);
+
+        let faucet_ids = benchmark_fungible_faucet_ids(5);
+        let (_, notes) = create_accounts_and_notes(
+            1,
+            AccountStorageMode::Public,
+            &key_pair,
+            &rng,
+            &faucet_ids,
+            0,
+            0,
+            5,
+        );
+
+        let assets = notes[0].assets();
+        assert_eq!(assets.num_assets(), 5);
+
+        let distinct_vault_keys =
+            assets.iter().map(Asset::vault_key).collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(distinct_vault_keys.len(), 5);
+    }
+
+    #[test]
+    fn private_account_note_keeps_single_vault_asset() {
+        let coin_seed = [1, 2, 3, 4].map(Felt::new);
+        let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
+        let mut key_rng = rng.lock().unwrap();
+        let key_pair = SecretKey::with_rng(&mut *key_rng);
+        drop(key_rng);
+
+        let faucet_ids = benchmark_fungible_faucet_ids(5);
+        let (_, notes) = create_accounts_and_notes(
+            1,
+            AccountStorageMode::Private,
+            &key_pair,
+            &rng,
+            &faucet_ids,
+            0,
+            0,
+            5,
+        );
+
+        assert_eq!(notes[0].assets().num_assets(), 1);
+    }
 }
 
-/// Creates a new faucet account.
-fn create_faucet() -> Account {
+fn create_benchmark_faucets(vault_entries: usize) -> Vec<Account> {
+    (0..vault_entries.max(1))
+        .map(|index| create_faucet_with_seed(index as u64))
+        .collect()
+}
+
+#[cfg(test)]
+fn benchmark_fungible_faucet_ids(vault_entries: usize) -> Vec<AccountId> {
+    create_benchmark_faucets(vault_entries)
+        .into_iter()
+        .map(|account| account.id())
+        .collect()
+}
+
+fn create_faucet_with_seed(index: u64) -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
     let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
     let key_pair = SecretKey::with_rng(&mut rng);
-    let init_seed = [0_u8; 32];
+    let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
 
     let token_symbol = TokenSymbol::new("TEST").unwrap();
-    AccountBuilder::new(init_seed)
+    AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
         .with_component(BasicFungibleFaucet::new(token_symbol, 2, Felt::new(u64::MAX)).unwrap())
