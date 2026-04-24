@@ -2,7 +2,7 @@
 
 ## v0.14.10 (TBD)
 
-- Optimize `GetAccount` implementation to serve vault assets from `AccountStateForest`.
+- Optimize `GetAccount` implementation to serve vault assets from `AccountStateForest` ([#1981](https://github.com/0xMiden/node/pull/1981)).
 - Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
 - Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982)).
 
