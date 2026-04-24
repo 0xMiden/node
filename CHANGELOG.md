@@ -1,6 +1,46 @@
 # Changelog
 
-## v0.14.1 (2025-04-02)
+## v0.14.10 (TBD)
+
+- Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
+- Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982).
+
+## v0.14.9 (2026-04-21)
+
+- Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).
+
+## v0.14.8 (2026-04-19)
+
+- Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).
+- Enabled `miden-tx/concurrent` feature across all crates ([#1956](https://github.com/0xMiden/node/pull/1956)).
+
+## v0.14.7 (2026-04-15)
+
+- [BREAKING] Aligned proto `TransactionHeader` with domain type and exposed erased notes in `SyncTransactions` ([#1941](https://github.com/0xMiden/node/pull/1941)).
+
+## v0.14.6 (2026-04-10)
+
+- Fixed network monitor explorer health check failing to parse string-encoded numeric fields from the Explorer GraphQL API ([#1922](https://github.com/0xMiden/node/pull/1922)).
+
+## v0.14.5 (2026-04-10)
+
+- Removed `issuance` field from the network monitor's faucet `GetMetadataResponse` ([#1918](https://github.com/0xMiden/node/pull/1918)).
+
+## v0.14.4 (2026-04-08)
+
+- Added missing `AuthControlled::allow_all()` mint policy component to genesis faucet accounts ([#1903](https://github.com/0xMiden/node/pull/1903)).
+
+## v0.14.3 (2026-04-07)
+
+- Fixed `SyncTransactions` failing when transactions created notes that were erased within the same block ([#1899](https://github.com/0xMiden/node/pull/1899)).
+- [BREAKING] Migrated to `miden-protocol` v0.14.3 (update to `miden-vm` v0.22.1).
+
+## v0.14.2 (2026-04-07)
+
+- Added inclusion proofs to `SyncTransactions` output notes ([#1893](https://github.com/0xMiden/node/pull/1893)).
+- Added `block_header` field to `SyncChainMmrResponse` so clients can obtain the `block_to` block header without a separate request ([#1881](https://github.com/0xMiden/node/pull/1881)).
+
+## v0.14.1 (2026-04-02)
 
 - Fixed batch building issue with unauthenticated notes consumed in the same batch as they were created ([#1875](https://github.com/0xMiden/node/issues/1875)).
 

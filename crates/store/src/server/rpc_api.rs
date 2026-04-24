@@ -1,4 +1,11 @@
 use miden_node_proto::convert;
+use miden_node_proto::decode::{
+    convert_digests_to_words,
+    read_account_id,
+    read_account_ids,
+    read_block_range,
+    read_root,
+};
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::rpc_server;
@@ -31,16 +38,7 @@ use crate::errors::{
     SyncNullifiersError,
     SyncTransactionsError,
 };
-use crate::server::api::{
-    StoreApi,
-    convert_digests_to_words,
-    internal_error,
-    read_account_id,
-    read_account_ids,
-    read_block_range,
-    read_root,
-    validate_nullifiers,
-};
+use crate::server::api::{StoreApi, internal_error, validate_nullifiers};
 
 // CLIENT ENDPOINTS
 // ================================================================================================
@@ -202,7 +200,7 @@ impl rpc_server::Rpc for StoreApi {
             }))?;
         }
         let block_range = block_from..=block_to;
-        let mmr_delta =
+        let (mmr_delta, block_header) =
             self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
@@ -211,6 +209,7 @@ impl rpc_server::Rpc for StoreApi {
                 block_to: Some(block_range.end().as_u32()),
             }),
             mmr_delta: Some(mmr_delta.into()),
+            block_header: Some(block_header.into()),
         }))
     }
 
@@ -422,7 +421,7 @@ impl rpc_server::Rpc for StoreApi {
         .into_inclusive_range::<SyncTransactionsError>(&chain_tip)?;
 
         let account_ids: Vec<AccountId> =
-            read_account_ids::<SyncTransactionsError>(&request.account_ids)?;
+            read_account_ids::<SyncTransactionsError, _>(request.account_ids)?;
 
         // Validate account IDs count
         check::<QueryParamAccountIdLimit>(account_ids.len())?;

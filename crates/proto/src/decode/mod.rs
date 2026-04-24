@@ -2,6 +2,9 @@ use std::marker::PhantomData;
 
 use miden_protocol::utils::serde::Deserializable;
 
+mod utils;
+pub use utils::*;
+
 use crate::errors::ConversionError;
 // Re-export so callers can import from `conv`.
 pub use crate::errors::ConversionResultExt;

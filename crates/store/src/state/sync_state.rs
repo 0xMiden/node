@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::BlockNumber;
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 use tracing::instrument;
 
@@ -38,22 +38,31 @@ impl State {
         self.db.select_transactions_records(account_ids, block_range).await
     }
 
-    /// Returns the chain MMR delta for the specified block range.
+    /// Returns the chain MMR delta and the `block_to` block header for the specified block range.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<MmrDelta, StateSyncError> {
-        let inner = self.inner.read().await;
-
+    ) -> Result<(MmrDelta, BlockHeader), StateSyncError> {
         let block_from = *block_range.start();
         let block_to = *block_range.end();
 
+        // SAFETY: block_to has been validated to be <= the effective tip (chain tip or latest
+        // proven block) by the caller, so it must exist in the database.
+        let block_header = self
+            .db
+            .select_block_header_by_block_num(Some(block_to))
+            .await?
+            .expect("block_to should exist in the database");
+
         if block_from == block_to {
-            return Ok(MmrDelta {
-                forest: Forest::new(block_from.as_usize()),
-                data: vec![],
-            });
+            return Ok((
+                MmrDelta {
+                    forest: Forest::new(block_from.as_usize()),
+                    data: vec![],
+                },
+                block_header,
+            ));
         }
 
         // Important notes about the boundary conditions:
@@ -68,11 +77,16 @@ impl State {
         let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 
-        inner
+        let mmr_delta = self
+            .inner
+            .read()
+            .await
             .blockchain
             .as_mmr()
             .get_delta(Forest::new(from_forest), Forest::new(to_forest))
-            .map_err(StateSyncError::FailedToBuildMmrDelta)
+            .map_err(StateSyncError::FailedToBuildMmrDelta)?;
+
+        Ok((mmr_delta, block_header))
     }
 
     /// Loads data to synchronize a client's notes.

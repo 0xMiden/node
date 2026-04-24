@@ -80,7 +80,7 @@ use pretty_assertions::assert_eq;
 use rand::Rng;
 use tempfile::tempdir;
 
-use super::{AccountInfo, NoteRecord, NullifierInfo, TransactionRecord};
+use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
@@ -3546,6 +3546,26 @@ fn db_roundtrip_transactions() {
 
     let tx = mock_block_transaction(bob, 1);
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+    let output_notes: Vec<_> = tx
+        .output_notes()
+        .iter()
+        .enumerate()
+        .map(|(idx, note)| {
+            (
+                NoteRecord {
+                    block_num,
+                    note_index: BlockNoteIndex::new(0, idx).unwrap(),
+                    note_id: note.id().as_word(),
+                    note_commitment: note.to_commitment(),
+                    metadata: note.metadata().clone(),
+                    details: None,
+                    inclusion_path: SparseMerklePath::default(),
+                },
+                None,
+            )
+        })
+        .collect();
+    queries::insert_notes(&mut conn, &output_notes).unwrap();
     queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
 
     let retrieved =
@@ -3553,15 +3573,23 @@ fn db_roundtrip_transactions() {
             .unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
+    let expected_sync_records: Vec<_> = tx
+        .output_notes()
+        .iter()
+        .enumerate()
+        .map(|(idx, note)| NoteSyncRecord {
+            block_num,
+            note_index: BlockNoteIndex::new(0, idx).unwrap(),
+            note_id: note.id().as_word(),
+            metadata: note.metadata().clone(),
+            inclusion_path: SparseMerklePath::default(),
+        })
+        .collect();
+
     let expected = TransactionRecord {
         block_num,
-        transaction_id: tx.id(),
-        account_id: tx.account_id(),
-        initial_state_commitment: tx.initial_state_commitment(),
-        final_state_commitment: tx.final_state_commitment(),
-        input_notes: tx.input_notes().iter().cloned().collect(),
-        output_notes: tx.output_notes().to_vec(),
-        fee: tx.fee(),
+        header: tx.clone(),
+        output_note_proofs: expected_sync_records.clone(),
     };
 
     // Verify database roundtrip
@@ -3581,10 +3609,50 @@ fn db_roundtrip_transactions() {
             output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
+        output_note_proofs: expected_sync_records
+            .into_iter()
+            .map(|n| proto::note::NoteInclusionInBlockProof {
+                note_id: Some(n.note_id.into()),
+                block_num: n.block_num.as_u32(),
+                note_index_in_block: n.note_index.leaf_index_value().into(),
+                inclusion_path: Some(n.inclusion_path.into()),
+            })
+            .collect(),
     };
 
     // Proto conversion roundtrip
     assert_eq!(proto_record, expected_proto);
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
+
+    let tx = mock_block_transaction(bob, 1);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+
+    // Notes erased within the same block are not inserted into the `notes` table, so transaction
+    // sync should classify them as erased instead of failing the whole request.
+    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+
+    let retrieved =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
+    let record = retrieved.1.first().expect("entry should exist");
+
+    let expected = TransactionRecord {
+        block_num,
+        header: tx,
+        output_note_proofs: vec![],
+    };
+
+    assert_eq!(*record, expected);
 }
 
 #[test]

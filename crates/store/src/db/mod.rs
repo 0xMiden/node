@@ -12,19 +12,18 @@ use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
-use miden_protocol::asset::{Asset, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVaultKey};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteDetails,
-    NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
     NoteScript,
     Nullifier,
 };
-use miden_protocol::transaction::{InputNoteCommitment, TransactionId};
+use miden_protocol::transaction::TransactionHeader;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
@@ -139,32 +138,43 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
 #[derive(Debug, PartialEq)]
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
-    pub transaction_id: TransactionId,
-    pub account_id: AccountId,
-    pub initial_state_commitment: Word,
-    pub final_state_commitment: Word,
-    pub input_notes: Vec<InputNoteCommitment>,
-    pub output_notes: Vec<NoteHeader>,
-    pub fee: FungibleAsset,
+    pub header: TransactionHeader,
+    /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without
+    /// a corresponding proof here were erased (created and consumed within the same batch).
+    pub output_note_proofs: Vec<NoteSyncRecord>,
 }
 
 impl TransactionRecord {
     /// Convert to proto `TransactionRecord`.
     ///
-    /// The proto `TransactionHeader` is a 1:1 mapping of
-    /// `miden_protocol::transaction::TransactionHeader`.
+    /// The proto `TransactionHeader` contains all output notes as `NoteHeader`. Inclusion
+    /// proofs for committed output notes are placed separately in
+    /// `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing
+    /// note IDs in the proofs with the header's output notes.
     pub fn into_proto(self) -> proto::rpc::TransactionRecord {
+        let output_note_proofs = self
+            .output_note_proofs
+            .into_iter()
+            .map(|n| proto::note::NoteInclusionInBlockProof {
+                note_id: Some(n.note_id.into()),
+                block_num: n.block_num.as_u32(),
+                note_index_in_block: n.note_index.leaf_index_value().into(),
+                inclusion_path: Some(n.inclusion_path.into()),
+            })
+            .collect();
+
         proto::rpc::TransactionRecord {
             header: Some(proto::transaction::TransactionHeader {
-                transaction_id: Some(self.transaction_id.into()),
-                account_id: Some(self.account_id.into()),
-                initial_state_commitment: Some(self.initial_state_commitment.into()),
-                final_state_commitment: Some(self.final_state_commitment.into()),
-                input_notes: self.input_notes.into_iter().map(Into::into).collect(),
-                output_notes: self.output_notes.into_iter().map(Into::into).collect(),
-                fee: Some(Asset::from(self.fee).into()),
+                transaction_id: Some(self.header.id().into()),
+                account_id: Some(self.header.account_id().into()),
+                initial_state_commitment: Some(self.header.initial_state_commitment().into()),
+                final_state_commitment: Some(self.header.final_state_commitment().into()),
+                input_notes: self.header.input_notes().iter().cloned().map(Into::into).collect(),
+                output_notes: self.header.output_notes().iter().cloned().map(Into::into).collect(),
+                fee: Some(Asset::from(self.header.fee()).into()),
             }),
             block_num: self.block_num.as_u32(),
+            output_note_proofs,
         }
     }
 }
@@ -444,7 +454,7 @@ impl Db {
     }
 
     /// Queries vault assets at a specific block
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_account_vault_at_block(
         &self,
         account_id: AccountId,
@@ -459,6 +469,7 @@ impl Db {
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn select_account_code_by_commitment(
         &self,
         code_commitment: Word,
@@ -473,6 +484,7 @@ impl Db {
     ///
     /// Returns both in a single query to avoid querying the database twice.
     /// Returns `None` if the account doesn't exist at that block.
+    #[instrument(target = COMPONENT, skip_all)]
     pub async fn select_account_header_with_storage_header_at_block(
         &self,
         account_id: AccountId,
@@ -650,6 +662,7 @@ impl Db {
     /// Returns:
     ///     - `::LimitExceeded` when too many entries are present
     ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
+    #[instrument(target = COMPONENT, skip_all)]
     pub(crate) async fn reconstruct_storage_map_from_db(
         &self,
         account_id: AccountId,
