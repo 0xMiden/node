@@ -48,6 +48,10 @@ pub enum Command {
         /// Number of distinct vault assets to add to every public account.
         #[arg(long, value_name = "VAULT_ENTRIES", default_value = "1")]
         vault_entries: usize,
+
+        /// Number of post-initialization blocks to generate with random account updates.
+        #[arg(long, value_name = "ACCOUNT_UPDATE_BLOCKS", default_value = "0")]
+        account_update_blocks: usize,
     },
 
     /// Benchmark the performance of the store endpoints.
@@ -125,14 +129,23 @@ mod tests {
             "128",
             "--vault-entries",
             "7",
+            "--account-update-blocks",
+            "12",
         ])
         .unwrap();
 
-        let Command::SeedStore { storage_map_entries, vault_entries, .. } = cli.command else {
+        let Command::SeedStore {
+            storage_map_entries,
+            vault_entries,
+            account_update_blocks,
+            ..
+        } = cli.command
+        else {
             panic!("expected seed-store command");
         };
         assert_eq!(storage_map_entries, 128);
         assert_eq!(vault_entries, 7);
+        assert_eq!(account_update_blocks, 12);
     }
 
     #[test]
@@ -167,6 +180,7 @@ async fn main() {
             public_accounts_percentage,
             storage_map_entries,
             vault_entries,
+            account_update_blocks,
         } => {
             seed_store(
                 data_directory,
@@ -174,6 +188,7 @@ async fn main() {
                 public_accounts_percentage,
                 storage_map_entries,
                 vault_entries,
+                account_update_blocks,
             )
             .await;
         },

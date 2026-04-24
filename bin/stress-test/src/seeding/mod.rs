@@ -19,8 +19,10 @@ use miden_protocol::account::{
     AccountComponentMetadata,
     AccountDelta,
     AccountId,
+    AccountStorageDelta,
     AccountStorageMode,
     AccountType,
+    AccountVaultDelta,
     StorageMap,
     StorageMapKey,
     StorageSlot,
@@ -62,6 +64,7 @@ use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::P2idNote;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSlice;
 use tokio::io::AsyncWriteExt;
@@ -93,6 +96,7 @@ pub async fn seed_store(
     public_accounts_percentage: u8,
     storage_map_entries: usize,
     vault_entries: usize,
+    account_update_blocks: usize,
 ) {
     let start = Instant::now();
     assert!(
@@ -141,6 +145,7 @@ pub async fn seed_store(
         &signer,
         storage_map_entries,
         vault_entries,
+        account_update_blocks,
         asset_faucet_ids,
     )
     .await;
@@ -165,6 +170,7 @@ async fn generate_blocks(
     signer: &EcdsaSecretKey,
     storage_map_entries: usize,
     vault_entries: usize,
+    account_update_blocks: usize,
     asset_faucet_ids: Vec<AccountId>,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
@@ -176,8 +182,10 @@ async fn generate_blocks(
 
     let mut account_ids = vec![];
     let mut note_nullifiers = vec![];
+    let mut account_states: BTreeMap<AccountId, Account> = BTreeMap::new();
 
-    let mut consume_notes_txs = vec![];
+    let mut consume_notes_txs: Vec<ProvenTransaction> = vec![];
+    let mut pending_consumed_accounts: Vec<Account> = vec![];
 
     let consumes_per_block = TRANSACTIONS_PER_BATCH * BATCHES_PER_BLOCK - 1;
     #[expect(clippy::cast_sign_loss, clippy::cast_precision_loss)]
@@ -250,6 +258,8 @@ async fn generate_blocks(
         // update blocks
         prev_block_header =
             apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+        account_states
+            .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
             current_anchor_header = prev_block_header.clone();
         }
@@ -257,11 +267,77 @@ async fn generate_blocks(
         // create the consume notes txs to be used in the next block
         let batch_inputs =
             get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
-        consume_notes_txs =
-            create_consume_note_txs(&prev_block_header, accounts, notes, &batch_inputs.note_proofs);
+        (pending_consumed_accounts, consume_notes_txs) = create_consume_note_txs(
+            &prev_block_header,
+            accounts,
+            notes,
+            &batch_inputs.note_proofs,
+            None,
+        );
 
         // track store size every 50 blocks
         if i % 50 == 0 {
+            metrics.record_store_size();
+        }
+    }
+
+    let update_note_faucet_ids =
+        asset_faucet_ids.iter().take(vault_entries).copied().collect::<Vec<_>>();
+    let mut random = rand::rng();
+    for update_block_index in 0..account_update_blocks {
+        let mut block_txs = Vec::with_capacity(BATCHES_PER_BLOCK * TRANSACTIONS_PER_BATCH);
+
+        let selected_account_ids = select_random_account_ids_for_update_notes(
+            &account_states,
+            &pending_consumed_accounts,
+            consumes_per_block,
+            &mut random,
+        );
+        let notes = {
+            let mut note_rng = rng.lock().unwrap();
+            selected_account_ids
+                .iter()
+                .map(|account_id| create_note(&update_note_faucet_ids, *account_id, &mut note_rng))
+                .collect::<Vec<_>>()
+        };
+
+        let emit_note_tx = create_emit_note_tx(&prev_block_header, &mut faucet, notes.clone());
+        block_txs.push(emit_note_tx);
+        block_txs.extend(consume_notes_txs);
+
+        let batches: Vec<ProvenBatch> = block_txs
+            .par_chunks(TRANSACTIONS_PER_BATCH)
+            .map(|txs| create_batch(txs, &prev_block_header))
+            .collect();
+
+        let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
+
+        prev_block_header =
+            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+        account_states
+            .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
+        if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
+            current_anchor_header = prev_block_header.clone();
+        }
+
+        let batch_inputs =
+            get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
+        let accounts = selected_account_ids
+            .iter()
+            .filter_map(|account_id| account_states.get(account_id).cloned())
+            .collect::<Vec<_>>();
+        (pending_consumed_accounts, consume_notes_txs) = create_consume_note_txs(
+            &prev_block_header,
+            accounts,
+            notes,
+            &batch_inputs.note_proofs,
+            Some(BenchmarkStorageUpdate {
+                block_index: update_block_index,
+                storage_map_entries,
+            }),
+        );
+
+        if update_block_index % 50 == 0 {
             metrics.record_store_size();
         }
     }
@@ -374,6 +450,61 @@ fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomC
         rng,
     )
     .expect("note creation failed")
+}
+
+fn select_random_account_ids_for_update_notes<R: Rng + ?Sized>(
+    account_states: &BTreeMap<AccountId, Account>,
+    pending_accounts: &[Account],
+    max_accounts: usize,
+    rng: &mut R,
+) -> Vec<AccountId> {
+    let mut account_ids = account_states.keys().copied().collect::<Vec<_>>();
+    for account in pending_accounts {
+        let account_id = account.id();
+        if !account_states.contains_key(&account_id) {
+            account_ids.push(account_id);
+        }
+    }
+
+    account_ids.shuffle(rng);
+    account_ids.truncate(max_accounts);
+    account_ids
+}
+
+#[derive(Clone, Copy)]
+struct BenchmarkStorageUpdate {
+    block_index: usize,
+    storage_map_entries: usize,
+}
+
+fn benchmark_storage_map_update_value(block_index: usize, tx_index: usize, key_index: u32) -> Word {
+    Word::from([
+        Felt::ZERO,
+        Felt::from(u32::try_from(block_index).expect("update block index fits into u32")),
+        Felt::from(u32::try_from(tx_index).expect("transaction index fits into u32")),
+        Felt::from(key_index),
+    ])
+}
+
+fn update_benchmark_storage_map_entry(
+    account: &mut Account,
+    block_index: usize,
+    tx_index: usize,
+    storage_map_entries: usize,
+) -> bool {
+    if !account.is_public() || storage_map_entries == 0 {
+        return false;
+    }
+
+    let key_index =
+        u32::try_from((tx_index % storage_map_entries) + 1).expect("storage map key fits into u32");
+    let key = StorageMapKey::from_index(key_index);
+    let value = benchmark_storage_map_update_value(block_index, tx_index, key_index);
+
+    account
+        .storage_mut()
+        .set_map_item(&benchmark_storage_map_slot(), key, value)
+        .is_ok()
 }
 
 /// Creates a new account with a given public key and storage mode. Generates the seed from the
@@ -521,6 +652,42 @@ mod tests {
 
         assert_eq!(notes[0].assets().num_assets(), 1);
     }
+
+    #[test]
+    fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
+        let coin_seed = [1, 2, 3, 4].map(Felt::new);
+        let mut rng = RandomCoin::new(coin_seed.into());
+        let key_pair = SecretKey::with_rng(&mut rng);
+        let mut account = create_account(key_pair.public_key(), 42, AccountStorageMode::Public, 4);
+
+        let key = StorageMapKey::from_index(2);
+        let old_value = account
+            .storage()
+            .get_map_item(&benchmark_storage_map_slot(), key.into())
+            .unwrap();
+
+        let updated = update_benchmark_storage_map_entry(&mut account, 3, 9, 4);
+
+        let new_value = account
+            .storage()
+            .get_map_item(&benchmark_storage_map_slot(), key.into())
+            .unwrap();
+        assert!(updated);
+        assert_ne!(new_value, old_value);
+        assert_eq!(new_value, benchmark_storage_map_update_value(3, 9, 2));
+    }
+
+    #[test]
+    fn private_account_storage_map_update_is_skipped() {
+        let coin_seed = [1, 2, 3, 4].map(Felt::new);
+        let mut rng = RandomCoin::new(coin_seed.into());
+        let key_pair = SecretKey::with_rng(&mut rng);
+        let mut account = create_account(key_pair.public_key(), 42, AccountStorageMode::Private, 4);
+
+        let updated = update_benchmark_storage_map_entry(&mut account, 3, 9, 4);
+
+        assert!(!updated);
+    }
 }
 
 fn create_benchmark_faucets(vault_entries: usize) -> Vec<Account> {
@@ -583,19 +750,22 @@ fn create_consume_note_txs(
     accounts: Vec<Account>,
     notes: Vec<Note>,
     note_proofs: &BTreeMap<NoteId, NoteInclusionProof>,
-) -> Vec<ProvenTransaction> {
+    storage_update: Option<BenchmarkStorageUpdate>,
+) -> (Vec<Account>, Vec<ProvenTransaction>) {
     accounts
         .into_iter()
         .zip(notes)
-        .map(|(account, note)| {
+        .enumerate()
+        .map(|(tx_index, (account, note))| {
             let inclusion_proof = note_proofs.get(&note.id()).unwrap();
             create_consume_note_tx(
                 block_ref,
                 account,
                 InputNote::authenticated(note, inclusion_proof.clone()),
+                storage_update.map(|update| (update, tx_index)),
             )
         })
-        .collect()
+        .unzip()
 }
 
 /// Creates a transaction that creates an account and consumes the given input note.
@@ -605,17 +775,32 @@ fn create_consume_note_tx(
     block_ref: &BlockHeader,
     mut account: Account,
     input_note: InputNote,
-) -> ProvenTransaction {
+    storage_update: Option<(BenchmarkStorageUpdate, usize)>,
+) -> (Account, ProvenTransaction) {
     let init_hash = account.initial_commitment();
+    let is_new_account = account.is_new();
 
     input_note.note().assets().iter().for_each(|asset| {
         account.vault_mut().add_asset(*asset).unwrap();
     });
 
+    if let Some((storage_update, tx_index)) = storage_update {
+        update_benchmark_storage_map_entry(
+            &mut account,
+            storage_update.block_index,
+            tx_index,
+            storage_update.storage_map_entries,
+        );
+    }
+
     account.increment_nonce(ONE).unwrap();
 
     let (details, account_delta_commitment) = if account.is_public() {
-        let account_delta = AccountDelta::try_from(account.clone()).unwrap();
+        let account_delta = if is_new_account {
+            AccountDelta::try_from(account.clone()).unwrap()
+        } else {
+            create_existing_account_delta(&account, input_note.note().assets(), storage_update)
+        };
         let commitment = account_delta.clone().to_commitment();
         (AccountUpdateDetails::Delta(account_delta), commitment)
     } else {
@@ -630,7 +815,7 @@ fn create_consume_note_tx(
         details,
     )
     .unwrap();
-    ProvenTransaction::new(
+    let transaction = ProvenTransaction::new(
         account_update,
         vec![InputNoteCommitment::from(input_note)],
         Vec::<OutputNote>::new(),
@@ -640,7 +825,43 @@ fn create_consume_note_tx(
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
-    .unwrap()
+    .unwrap();
+
+    (account, transaction)
+}
+
+fn create_existing_account_delta(
+    account: &Account,
+    note_assets: &NoteAssets,
+    storage_update: Option<(BenchmarkStorageUpdate, usize)>,
+) -> AccountDelta {
+    let mut vault_delta = AccountVaultDelta::default();
+    for asset in note_assets.iter() {
+        vault_delta.add_asset(*asset).unwrap();
+    }
+
+    let mut storage_delta = AccountStorageDelta::new();
+    if let Some((storage_update, tx_index)) = storage_update {
+        if storage_update.storage_map_entries > 0
+            && account.storage().get(&benchmark_storage_map_slot()).is_some()
+        {
+            let key_index = u32::try_from((tx_index % storage_update.storage_map_entries) + 1)
+                .expect("storage map key fits into u32");
+            storage_delta
+                .set_map_item(
+                    benchmark_storage_map_slot(),
+                    StorageMapKey::from_index(key_index),
+                    benchmark_storage_map_update_value(
+                        storage_update.block_index,
+                        tx_index,
+                        key_index,
+                    ),
+                )
+                .unwrap();
+        }
+    }
+
+    AccountDelta::new(account.id(), storage_delta, vault_delta, ONE).unwrap()
 }
 
 /// Creates a transaction from the faucet that creates the given output notes.
