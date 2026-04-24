@@ -196,7 +196,7 @@ impl RpcService {
     ///
     /// This is retrieved from the local LRU cache, or otherwise from the store on cache miss.
     #[tracing::instrument(target = COMPONENT, name = "get_block_commitment", skip_all, fields(block.number = %block))]
-    async fn block_commitment(&self, block: BlockNumber) -> Result<Word, Status> {
+    async fn get_block_commitment(&self, block: BlockNumber) -> Result<Word, Status> {
         if let Some(commitment) = self.block_commitment_cache.get(&block).await {
             return Ok(commitment);
         }
