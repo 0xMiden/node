@@ -131,31 +131,37 @@ fn failed_batch_transactions_are_requeued() {
 fn block_commit_reverts_expired_txns() {
     let (mut uut, _) = Mempool::for_tests();
     uut.config.expiration_slack = 0;
+    let mut reference = uut.clone();
 
     let tx_to_commit = MockProvenTxBuilder::with_account_index(0).build();
     let tx_to_commit = Arc::new(AuthenticatedTransaction::from_inner(tx_to_commit));
 
-    // Force the tx into a pending block.
+    // Force the tx into the next block by batching it.
     uut.add_transaction(tx_to_commit.clone()).unwrap();
     uut.select_batch().unwrap();
     uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
         tx_to_commit.raw_proven_transaction()
     ])));
-    let block = uut.select_block();
-    // A reverted transaction behaves as if it never existed, the current state is the expected
-    // outcome, plus an extra committed block at the end.
-    let mut reference = uut.clone();
 
-    // Add a new transaction which will expire when the pending block is committed.
+    // Add a new transaction which will expire when the block is committed.
     let tx_to_revert = MockProvenTxBuilder::with_account_index(1)
-        .expiration_block_num(block.block_number)
+        .expiration_block_num(uut.chain_tip().child())
         .build();
     let tx_to_revert = Arc::new(AuthenticatedTransaction::from_inner(tx_to_revert));
     uut.add_transaction(tx_to_revert).unwrap();
 
-    // Commit the pending block which should revert the above tx.
+    // Create and commit the block which should revert the above tx.
+    let block = uut.select_block();
     let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
     uut.commit_block(arb_header.clone());
+
+    // A reverted transaction behaves as if it never existed.
+    reference.add_transaction(tx_to_commit.clone()).unwrap();
+    reference.select_batch().unwrap();
+    reference.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
+        tx_to_commit.raw_proven_transaction()
+    ])));
+    reference.select_block();
     reference.commit_block(arb_header);
 
     assert_eq!(uut, reference);
