@@ -23,14 +23,16 @@ on:
       - "docs/**"
 
 env:
-  # Name of the compilation artifact used to share the build across jobs.
-  BUILD_ARTIFACT_NAME: cargo-target
   # Shared prefix key for the rust cache.
   #
   # This provides a convenient way to evict old or corrupted cache.
   RUST_CACHE_KEY: rust-cache-2026.02.02
   # Shared branch-aware cache namespace for rust-cache.
   RUST_CACHE_SHARED_KEY: ${{ github.workflow }}-build-${{ github.base_ref || github.ref_name }}
+  # Per-run cache used to share build outputs across jobs within a single workflow run.
+  RUN_CACHE_KEY: ${{ github.workflow }}-run-${{ github.run_id }}
+  # Match rust-cache's compilation mode so restored outputs stay reusable downstream.
+  CARGO_INCREMENTAL: 0
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
   # Optimise for test execution speed.
@@ -55,9 +57,8 @@ jobs:
   # Conventional builds, lints and tests that re-use a single cache for efficiency
   # ===============================================================================================
 
-  # Normal cargo build that uploads its outputs for all subsequent jobs to re-use.
-  #
-  # The build job itself maintains a cache on for itself on next and main branches.
+  # Normal cargo build that maintains a persistent trunk cache and publishes a
+  # single per-run cache for downstream jobs to restore immediately.
   build:
     runs-on: ubuntu-24.04
     steps:
@@ -112,12 +113,14 @@ jobs:
             fi
           done
           echo "Static linkage check passed for all of ${bin_targets[@]}"
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Save run cache
+        uses: actions/cache/save@v4
         with:
-          name: ${{ env.BUILD_ARTIFACT_NAME }}
-          path: target
-          if-no-files-found: error
+          key: ${{ env.RUN_CACHE_KEY }}
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
 
   clippy:
     name: lint - clippy
@@ -127,11 +130,14 @@ jobs:
       - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Restore run cache
+        uses: actions/cache/restore@v4
         with:
-          name: ${{ env.BUILD_ARTIFACT_NAME }}
-          path: .
+          key: ${{ env.RUN_CACHE_KEY }}
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
@@ -146,11 +152,14 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.122
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Restore run cache
+        uses: actions/cache/restore@v4
         with:
-          name: ${{ env.BUILD_ARTIFACT_NAME }}
-          path: .
+          key: ${{ env.RUN_CACHE_KEY }}
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -167,11 +176,14 @@ jobs:
         uses: ./.github/actions/cleanup-runner
       - name: Rustup
         run: rustup update --no-self-update
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Restore run cache
+        uses: actions/cache/restore@v4
         with:
-          name: ${{ env.BUILD_ARTIFACT_NAME }}
-          path: .
+          key: ${{ env.RUN_CACHE_KEY }}
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
@@ -187,11 +199,14 @@ jobs:
       - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Restore run cache
+        uses: actions/cache/restore@v4
         with:
-          name: ${{ env.BUILD_ARTIFACT_NAME }}
-          path: .
+          key: ${{ env.RUN_CACHE_KEY }}
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.122
@@ -220,6 +235,29 @@ jobs:
           cargo run --bin miden-node-stress-test benchmark-store \
             --data-directory ${{ env.DATA_DIR }} \
             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
+
+  cleanup-run-cache:
+    name: cleanup run cache
+    runs-on: ubuntu-24.04
+    if: ${{ always() }}
+    needs:
+      - build
+      - clippy
+      - tests
+      - doc
+      - stress-test
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete run cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method DELETE \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUN_CACHE_KEY }}"
 
   # ===============================================================================================
   # WASM related jobs
