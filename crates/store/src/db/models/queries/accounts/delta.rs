@@ -8,7 +8,7 @@
 //!
 //! Instead, only the minimal data needed for the update is fetched.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection};
@@ -151,11 +151,11 @@ pub(super) fn select_vault_balances_by_faucet_ids(
     conn: &mut SqliteConnection,
     account_id: AccountId,
     faucet_ids: &[AccountId],
-) -> Result<BTreeMap<AccountId, u64>, DatabaseError> {
+) -> Result<HashMap<AccountId, u64>, DatabaseError> {
     use schema::account_vault_assets as vault;
 
     if faucet_ids.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(HashMap::new());
     }
 
     let account_id_bytes = account_id.to_bytes();
@@ -175,7 +175,7 @@ pub(super) fn select_vault_balances_by_faucet_ids(
             .filter(vault::vault_key.eq_any(&vault_keys))
             .load(conn)?;
 
-    let mut balances = BTreeMap::from_iter(faucet_ids.iter().map(|faucet_id| (*faucet_id, 0)));
+    let mut balances = HashMap::from_iter(faucet_ids.iter().map(|faucet_id| (*faucet_id, 0)));
 
     for (_vault_key_bytes, maybe_asset_bytes) in entries {
         if let Some(asset_bytes) = maybe_asset_bytes {
@@ -229,10 +229,10 @@ pub(super) fn select_latest_vault_assets(
 pub(super) fn apply_storage_delta(
     header: &AccountStorageHeader,
     delta: &AccountStorageDelta,
-    map_entries: &BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
+    map_entries: &HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
 ) -> Result<AccountStorageHeader, DatabaseError> {
-    let mut value_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
-    let mut map_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
+    let mut value_updates: HashMap<&StorageSlotName, Word> = HashMap::new();
+    let mut map_updates: HashMap<&StorageSlotName, Word> = HashMap::new();
 
     for (slot_name, new_value) in delta.values() {
         value_updates.insert(slot_name, *new_value);
