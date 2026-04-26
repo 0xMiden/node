@@ -37,6 +37,21 @@ version      = "0.14.9"
 [profile.release]
 debug = true
 
+# Optimise for test execution speed.
+#
+# Proving in particular is extremely slow without this.
+#
+# Unfortunately, we cannot simply optimise specific dependencies because at the
+# moment the slow code is monomorphised only at the final executable stage,
+# which means it inherits the binaries optimisation level.
+#
+# This uses the dev profile because we share a single build in CI for all jobs so this
+# cannot be set for test only.
+[profile.dev.package."*"]
+opt-level = 2
+[profile.dev.package.miden-remote-prover]
+opt-level = 2
+
 [workspace.dependencies]
 # Workspace crates.
 miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.14" }

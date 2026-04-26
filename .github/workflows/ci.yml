@@ -35,17 +35,6 @@ env:
   CARGO_INCREMENTAL: 0
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
-  # Optimise for test execution speed.
-  #
-  # Proving in particular is extremely slow without this.
-  #
-  # Unfortunately, we cannot simply optimise specific dependencies because at the
-  # moment the slow code is monomorphised only at the final executable stage,
-  # which means it inherits the binaries optimisation level.
-  #
-  # This uses the dev profile because we share a single build for all jobs so this
-  # cannot be set for test only.
-  CARGO_PROFILE_DEV_OPT_LEVEL: 2
 
 # Limits workflow concurrency to only the latest commit in the PR.
 concurrency:
