@@ -12,9 +12,9 @@ use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
 use super::ENV_ENABLE_OTEL;
+use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_STORE_DATA_DIRECTORY";
-const ENV_RPC_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
+const ENV_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
 const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
@@ -40,7 +40,7 @@ pub enum StoreCommand {
     /// endpoints to be accessed by the node's components.
     Start {
         /// Url at which to serve the store's RPC API.
-        #[arg(long = "rpc.url", env = ENV_RPC_URL, value_name = "URL")]
+        #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
         rpc_url: Url,
 
         /// Url at which to serve the store's network transaction builder API.
