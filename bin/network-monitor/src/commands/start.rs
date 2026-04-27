@@ -94,8 +94,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     debug!(target: COMPONENT, "Initializing HTTP server");
 
     // Build the flat services Vec in the order the dashboard expects to render cards.
-    let services = Some(rpc_rx)
-        .into_iter()
+    let services = std::iter::once(rpc_rx)
         .chain(prover_rxs)
         .chain(faucet_rx)
         .chain(explorer_rx)
