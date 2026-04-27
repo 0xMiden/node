@@ -97,10 +97,10 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
 
     // Build the flat services Vec in the order the dashboard expects to render cards.
     let mut services: Vec<watch::Receiver<ServiceStatus>> = vec![rpc_rx];
+    services.extend(prover_rxs);
     if let Some(rx) = faucet_rx {
         services.push(rx);
     }
-    services.extend(prover_rxs);
     if let Some(rx) = explorer_rx {
         services.push(rx);
     }
