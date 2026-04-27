@@ -4,14 +4,12 @@
 
 use anyhow::Result;
 use miden_node_utils::logging::OpenTelemetry;
-use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::frontend::ServerState;
 use crate::monitor::tasks::Tasks;
-use crate::status::ServiceStatus;
 
 /// Start the network monitoring service.
 ///
@@ -96,26 +94,16 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     debug!(target: COMPONENT, "Initializing HTTP server");
 
     // Build the flat services Vec in the order the dashboard expects to render cards.
-    let mut services: Vec<watch::Receiver<ServiceStatus>> = vec![rpc_rx];
-    services.extend(prover_rxs);
-    if let Some(rx) = faucet_rx {
-        services.push(rx);
-    }
-    if let Some(rx) = explorer_rx {
-        services.push(rx);
-    }
-    if let Some(rx) = ntx_increment_rx {
-        services.push(rx);
-    }
-    if let Some(rx) = ntx_tracking_rx {
-        services.push(rx);
-    }
-    if let Some(rx) = note_transport_rx {
-        services.push(rx);
-    }
-    if let Some(rx) = validator_rx {
-        services.push(rx);
-    }
+    let services = Some(rpc_rx)
+        .into_iter()
+        .chain(prover_rxs)
+        .chain(faucet_rx)
+        .chain(explorer_rx)
+        .chain(ntx_increment_rx)
+        .chain(ntx_tracking_rx)
+        .chain(note_transport_rx)
+        .chain(validator_rx)
+        .collect();
 
     let server_state = ServerState {
         services,
