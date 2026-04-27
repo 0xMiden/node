@@ -1,2 +1,9 @@
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[env]
+# These compile-time flags are used to disable SQLite's memory
+# accounting features. These introduce global mutexes into SQLite's
+# memory allocator which can cause contention and performance
+# degradation in high-concurrency scenarios we have in the node.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"

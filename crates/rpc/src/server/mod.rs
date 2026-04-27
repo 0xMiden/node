@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_proto::generated::rpc::api_server;
@@ -48,6 +50,7 @@ impl Rpc {
             self.block_producer_url.clone(),
             self.validator_url,
             self.ntx_builder_url.clone(),
+            NonZeroUsize::new(1_000_000).unwrap(),
         );
 
         let genesis = api

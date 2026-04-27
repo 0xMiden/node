@@ -79,12 +79,13 @@ mod tx_expiration {
     #[test]
     fn expiration_after_slack_limit_is_accepted() {
         let mut uut = setup();
-        let limit = uut.chain_tip + uut.config.expiration_slack;
+        let limit = uut.chain_tip() + uut.config.expiration_slack;
 
         let tx = MockProvenTxBuilder::with_account_index(0)
             .expiration_block_num(limit.child())
             .build();
-        let tx = AuthenticatedTransaction::from_inner(tx).with_authentication_height(uut.chain_tip);
+        let tx =
+            AuthenticatedTransaction::from_inner(tx).with_authentication_height(uut.chain_tip());
         let tx = Arc::new(tx);
         uut.add_transaction(tx).unwrap();
     }
@@ -92,14 +93,14 @@ mod tx_expiration {
     #[test]
     fn expiration_within_slack_limit_is_rejected() {
         let mut uut = setup();
-        let limit = uut.chain_tip + uut.config.expiration_slack;
+        let limit = uut.chain_tip() + uut.config.expiration_slack;
 
-        for i in uut.chain_tip.child().as_u32()..=limit.as_u32() {
+        for i in uut.chain_tip().child().as_u32()..=limit.as_u32() {
             let tx = MockProvenTxBuilder::with_account_index(0)
                 .expiration_block_num(i.into())
                 .build();
-            let tx =
-                AuthenticatedTransaction::from_inner(tx).with_authentication_height(uut.chain_tip);
+            let tx = AuthenticatedTransaction::from_inner(tx)
+                .with_authentication_height(uut.chain_tip());
             let tx = Arc::new(tx);
             let result = uut.add_transaction(tx);
 
@@ -115,9 +116,10 @@ mod tx_expiration {
     fn already_expired_is_rejected() {
         let mut uut = setup();
         let tx = MockProvenTxBuilder::with_account_index(0)
-            .expiration_block_num(uut.chain_tip)
+            .expiration_block_num(uut.chain_tip())
             .build();
-        let tx = AuthenticatedTransaction::from_inner(tx).with_authentication_height(uut.chain_tip);
+        let tx =
+            AuthenticatedTransaction::from_inner(tx).with_authentication_height(uut.chain_tip());
         let tx = Arc::new(tx);
         let result = uut.add_transaction(tx);
 
@@ -154,11 +156,11 @@ mod authentication_height {
     fn stale_inputs_are_rejected() {
         let mut uut = setup();
 
-        let oldest_local = uut.chain_tip.as_u32() - uut.config.state_retention.get() as u32 + 1;
+        let oldest_mempool = uut.committed_blocks.front().map(|block| block.block_number).unwrap();
 
         let tx = MockProvenTxBuilder::with_account_index(0).build();
         let tx = AuthenticatedTransaction::from_inner(tx)
-            .with_authentication_height((oldest_local - 2).into());
+            .with_authentication_height((oldest_mempool.as_u32() - 2).into());
         let tx = Arc::new(tx);
         uut.add_transaction(tx).unwrap_err();
     }
@@ -173,7 +175,7 @@ mod authentication_height {
 
         let tx = MockProvenTxBuilder::with_account_index(0).build();
         let tx = AuthenticatedTransaction::from_inner(tx)
-            .with_authentication_height(uut.chain_tip.child());
+            .with_authentication_height(uut.chain_tip().child());
         let tx = Arc::new(tx);
         let _ = uut.add_transaction(tx);
     }
@@ -186,9 +188,9 @@ mod authentication_height {
     fn inputs_from_within_overlap_are_accepted() {
         let mut uut = setup();
 
-        let oldest_local = uut.chain_tip.as_u32() - uut.config.state_retention.get() as u32 + 1;
+        let oldest_local = uut.chain_tip().as_u32() - uut.config.state_retention.get() as u32 + 1;
 
-        for i in oldest_local - 1..=uut.chain_tip.as_u32() {
+        for i in oldest_local - 1..=uut.chain_tip().as_u32() {
             let tx = MockProvenTxBuilder::with_account_index(i).build();
             let tx = AuthenticatedTransaction::from_inner(tx).with_authentication_height(i.into());
             let tx = Arc::new(tx);
@@ -199,7 +201,7 @@ mod authentication_height {
                 result,
                 Ok(..),
                 "Failed run with authentication height {i}, chain tip {} and oldest local {oldest_local}",
-                uut.chain_tip
+                uut.chain_tip()
             );
         }
     }

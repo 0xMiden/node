@@ -453,19 +453,6 @@ impl Db {
         .await
     }
 
-    /// Queries vault assets at a specific block
-    #[instrument(target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_account_vault_at_block(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-    ) -> Result<Vec<Asset>> {
-        self.transact("Get account vault at block", move |conn| {
-            queries::select_account_vault_at_block(conn, account_id, block_num)
-        })
-        .await
-    }
-
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
