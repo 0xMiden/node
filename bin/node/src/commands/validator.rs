@@ -18,9 +18,9 @@ const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
 const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
+
 /// A predefined, insecure validator key for development purposes.
 const INSECURE_KEY_HEX: &str = "0101010101010101010101010101010101010101010101010101010101010101";
-
 /// The filename used for the genesis block file.
 pub const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";
 

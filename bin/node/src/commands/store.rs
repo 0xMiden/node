@@ -11,7 +11,9 @@ use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
-use super::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL};
+use super::ENV_ENABLE_OTEL;
+
+const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_STORE_DATA_DIRECTORY";
 const ENV_RPC_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
 const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
