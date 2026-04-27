@@ -12,20 +12,18 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use url::Url;
 
-use crate::commands::{
-    ENV_DATA_DIRECTORY,
-    ENV_ENABLE_OTEL,
-    ENV_VALIDATOR_KEY,
-    ENV_VALIDATOR_KMS_KEY_ID,
-    INSECURE_VALIDATOR_KEY_HEX,
-    ValidatorKey,
-};
+use crate::commands::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL, INSECURE_VALIDATOR_KEY_HEX};
 
 const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
+const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
+const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 
 /// The filename used for the genesis block file.
 pub const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";
+
+// VALIDATOR COMMAND
+// ================================================================================================
 
 #[derive(clap::Subcommand)]
 pub enum ValidatorCommand {
@@ -79,7 +77,7 @@ pub enum ValidatorCommand {
         /// Cannot be used with `key.kms-id`.
         #[arg(
             long = "key.hex",
-            env = ENV_VALIDATOR_KEY,
+            env = ENV_KEY,
             value_name = "VALIDATOR_KEY",
             default_value = INSECURE_VALIDATOR_KEY_HEX,
             group = "key"
@@ -91,7 +89,7 @@ pub enum ValidatorCommand {
         /// Cannot be used with `key.hex`.
         #[arg(
             long = "key.kms-id",
-            env = ENV_VALIDATOR_KMS_KEY_ID,
+            env = ENV_KMS_KEY_ID,
             value_name = "VALIDATOR_KMS_KEY_ID",
             group = "key"
         )]
@@ -266,4 +264,53 @@ async fn build_and_write_genesis(
     .context("failed to persist genesis block header as chain tip")?;
 
     Ok(())
+}
+
+// VALIDATOR KEY
+// ================================================================================================
+
+/// Configuration for the Validator key used to sign blocks.
+///
+/// Used by the Validator command and the genesis bootstrap command.
+#[derive(clap::Args)]
+#[group(required = false, multiple = false)]
+pub struct ValidatorKey {
+    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    ///
+    /// If not provided, a predefined key is used.
+    ///
+    /// Cannot be used with `validator.key.kms-id`.
+    #[arg(
+        long = "validator.key.hex",
+        env = ENV_KEY,
+        value_name = "VALIDATOR_KEY",
+        default_value = INSECURE_VALIDATOR_KEY_HEX,
+    )]
+    validator_key: String,
+    /// Key ID for the KMS key used by validator to sign blocks.
+    ///
+    /// Cannot be used with `validator.key.hex`.
+    #[arg(
+        long = "validator.key.kms-id",
+        env = ENV_KMS_KEY_ID,
+        value_name = "VALIDATOR_KMS_KEY_ID",
+    )]
+    validator_kms_key_id: Option<String>,
+}
+
+impl ValidatorKey {
+    /// Consumes the validator key configuration and returns a KMS or local key signer depending on
+    /// the supplied configuration.
+    pub async fn into_signer(self) -> anyhow::Result<ValidatorSigner> {
+        if let Some(kms_key_id) = self.validator_kms_key_id {
+            // Use KMS key ID to create a ValidatorSigner.
+            let signer = ValidatorSigner::new_kms(kms_key_id).await?;
+            Ok(signer)
+        } else {
+            // Use hex-encoded key to create a ValidatorSigner.
+            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
+            let signer = ValidatorSigner::new_local(signer);
+            Ok(signer)
+        }
+    }
 }

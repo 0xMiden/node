@@ -8,9 +8,6 @@ use miden_node_block_producer::{
     DEFAULT_MAX_TXS_PER_BATCH,
 };
 use miden_node_utils::clap::duration_to_human_readable_string;
-use miden_node_validator::ValidatorSigner;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
 pub mod block_producer;
@@ -29,54 +26,6 @@ const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_TXS_PER_BATCH
 const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_BATCHES_PER_BLOCK";
 const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_BLOCK_PRODUCER_MEMPOOL_TX_CAPACITY";
 const ENV_BATCH_PROVER_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_BATCH_PROVER_URL";
-const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
-const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
-
-/// Configuration for the Validator key used to sign blocks.
-///
-/// Used by the Validator command and the genesis bootstrap command.
-#[derive(clap::Args)]
-#[group(required = false, multiple = false)]
-pub struct ValidatorKey {
-    /// Insecure, hex-encoded validator secret key for development and testing purposes.
-    ///
-    /// If not provided, a predefined key is used.
-    ///
-    /// Cannot be used with `validator.key.kms-id`.
-    #[arg(
-        long = "validator.key.hex",
-        env = ENV_VALIDATOR_KEY,
-        value_name = "VALIDATOR_KEY",
-        default_value = INSECURE_VALIDATOR_KEY_HEX,
-    )]
-    validator_key: String,
-    /// Key ID for the KMS key used by validator to sign blocks.
-    ///
-    /// Cannot be used with `validator.key.hex`.
-    #[arg(
-        long = "validator.key.kms-id",
-        env = ENV_VALIDATOR_KMS_KEY_ID,
-        value_name = "VALIDATOR_KMS_KEY_ID",
-    )]
-    validator_kms_key_id: Option<String>,
-}
-
-impl ValidatorKey {
-    /// Consumes the validator key configuration and returns a KMS or local key signer depending on
-    /// the supplied configuration.
-    pub async fn into_signer(self) -> anyhow::Result<ValidatorSigner> {
-        if let Some(kms_key_id) = self.validator_kms_key_id {
-            // Use KMS key ID to create a ValidatorSigner.
-            let signer = ValidatorSigner::new_kms(kms_key_id).await?;
-            Ok(signer)
-        } else {
-            // Use hex-encoded key to create a ValidatorSigner.
-            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
-            let signer = ValidatorSigner::new_local(signer);
-            Ok(signer)
-        }
-    }
-}
 
 /// Configuration for the Block Producer component
 #[derive(clap::Args)]
