@@ -306,6 +306,7 @@ impl State {
     }
 
     /// Builds note records with inclusion proofs from the block body.
+    #[instrument(target = COMPONENT, skip_all, err)]
     fn build_note_records(
         header: &BlockHeader,
         body: &BlockBody,
