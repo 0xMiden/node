@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use miden_node_proto::generated::store::{
-    SubscribeBlocksRequest,
-    SubscribeProofsRequest,
+    BlockSubscriptionRequest,
+    ProofSubscriptionRequest,
     store_replica_client,
 };
 use miden_protocol::block::{BlockNumber, SignedBlock};
@@ -67,7 +67,7 @@ async fn sync_blocks(state: &State, upstream_url: &Url) -> anyhow::Result<()> {
     let mut client = store_replica_client::StoreReplicaClient::new(channel);
 
     let mut stream = client
-        .subscribe_blocks(SubscribeBlocksRequest { from_block_number })
+        .block_subscription(BlockSubscriptionRequest { from_block_number })
         .await?
         .into_inner();
 
@@ -103,7 +103,7 @@ async fn sync_proofs(
     let mut client = store_replica_client::StoreReplicaClient::new(channel);
 
     let mut stream = client
-        .subscribe_proofs(SubscribeProofsRequest { from_block_number })
+        .proof_subscription(ProofSubscriptionRequest { from_block_number })
         .await?
         .into_inner();
 

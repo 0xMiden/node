@@ -251,20 +251,20 @@ service StoreReplica {
     // Replays historical blocks first, then streams live blocks as they are committed.
     // On lag (replica falls too far behind), the stream is closed with a DATA_LOSS error and
     // the client should reconnect from its local tip.
-    rpc SubscribeBlocks(SubscribeBlocksRequest) returns (stream BlockEvent) {}
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockEvent) {}
 
     // Streams block proofs starting from the given block number (inclusive).
     //
     // Replays existing proofs first, then streams new proofs as they are generated.
     // On lag, the stream is closed with a DATA_LOSS error.
-    rpc SubscribeProofs(SubscribeProofsRequest) returns (stream ProofEvent) {}
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofEvent) {}
 }
 
-// SUBSCRIBE BLOCKS
+// BLOCK SUBSCRIPTION
 // ================================================================================================
 
 // Request to subscribe to the committed block stream.
-message SubscribeBlocksRequest {
+message BlockSubscriptionRequest {
     // The block number to start streaming from (inclusive).
     fixed32 from_block_number = 1;
 }
@@ -276,11 +276,11 @@ message BlockEvent {
     bytes block = 1;
 }
 
-// SUBSCRIBE PROOFS
+// PROOF SUBSCRIPTION
 // ================================================================================================
 
 // Request to subscribe to the block proof stream.
-message SubscribeProofsRequest {
+message ProofSubscriptionRequest {
     // The block number to start streaming from (inclusive).
     fixed32 from_block_number = 1;
 }

@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use miden_node_proto::generated::store::{
     BlockEvent,
+    BlockSubscriptionRequest,
     ProofEvent,
-    SubscribeBlocksRequest,
-    SubscribeProofsRequest,
+    ProofSubscriptionRequest,
     store_replica_server,
 };
 use miden_protocol::block::BlockNumber;
@@ -23,7 +23,7 @@ use crate::state::{BlockNotification, Finality, State};
 
 #[tonic::async_trait]
 impl store_replica_server::StoreReplica for StoreApi {
-    type SubscribeBlocksStream = Pin<
+    type BlockSubscriptionStream = Pin<
         Box<
             dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockEvent, Status>>
                 + Send
@@ -31,7 +31,7 @@ impl store_replica_server::StoreReplica for StoreApi {
         >,
     >;
 
-    type SubscribeProofsStream = Pin<
+    type ProofSubscriptionStream = Pin<
         Box<
             dyn tonic::codegen::tokio_stream::Stream<Item = Result<ProofEvent, Status>>
                 + Send
@@ -51,10 +51,10 @@ impl store_replica_server::StoreReplica for StoreApi {
     ///
     /// On lag (replica falls more than 512 blocks behind), the stream closes with `DATA_LOSS` and
     /// the client should reconnect from its local tip.
-    async fn subscribe_blocks(
+    async fn block_subscription(
         &self,
-        request: Request<SubscribeBlocksRequest>,
-    ) -> Result<Response<Self::SubscribeBlocksStream>, Status> {
+        request: Request<BlockSubscriptionRequest>,
+    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
         let from = BlockNumber::from(request.into_inner().from_block_number);
         // chain_tip is async in this branch (acquires the inner RwLock).
         let chain_tip = self.state.chain_tip(Finality::Committed).await;
@@ -73,10 +73,10 @@ impl store_replica_server::StoreReplica for StoreApi {
     ///
     /// Blocks that are not yet proven are skipped during historical replay; the replica will
     /// receive their proofs via the live stream once proving completes.
-    async fn subscribe_proofs(
+    async fn proof_subscription(
         &self,
-        request: Request<SubscribeProofsRequest>,
-    ) -> Result<Response<Self::SubscribeProofsStream>, Status> {
+        request: Request<ProofSubscriptionRequest>,
+    ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
         let from = BlockNumber::from(request.into_inner().from_block_number);
         let proven_tip = self.state.chain_tip(Finality::Proven).await;
 
