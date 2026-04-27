@@ -12,12 +12,14 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use url::Url;
 
-use crate::commands::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL, INSECURE_VALIDATOR_KEY_HEX};
+use crate::commands::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL};
 
 const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
 const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
+/// A predefined, insecure validator key for development purposes.
+const INSECURE_KEY_HEX: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 
 /// The filename used for the genesis block file.
 pub const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";
@@ -79,7 +81,7 @@ pub enum ValidatorCommand {
             long = "key.hex",
             env = ENV_KEY,
             value_name = "VALIDATOR_KEY",
-            default_value = INSECURE_VALIDATOR_KEY_HEX,
+            default_value = INSECURE_KEY_HEX,
             group = "key"
         )]
         validator_key: String,
@@ -284,7 +286,7 @@ pub struct ValidatorKey {
         long = "validator.key.hex",
         env = ENV_KEY,
         value_name = "VALIDATOR_KEY",
-        default_value = INSECURE_VALIDATOR_KEY_HEX,
+        default_value = INSECURE_KEY_HEX,
     )]
     validator_key: String,
     /// Key ID for the KMS key used by validator to sign blocks.
