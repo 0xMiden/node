@@ -105,7 +105,7 @@ pub enum Endpoint {
     #[command(name = "get-account")]
     GetAccount {
         /// Storage slot name to request with all entries.
-        #[arg(long, value_name = "SLOT_NAME", default_value = "miden::mock::1")]
+        #[arg(long, value_name = "SLOT_NAME", default_value = seeding::BENCHMARK_STORAGE_MAP_SLOT_NAME)]
         storage_map_slot: String,
     },
 }

@@ -198,7 +198,10 @@ mod tests {
     fn get_account_request_includes_vault_details() {
         let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
             .expect("test account id should be valid");
-        let request = get_account_request(account_id, "miden::mock::1".to_string());
+        let request = get_account_request(
+            account_id,
+            crate::seeding::BENCHMARK_STORAGE_MAP_SLOT_NAME.to_string(),
+        );
 
         let details = request.details.expect("details should be requested");
         assert!(
