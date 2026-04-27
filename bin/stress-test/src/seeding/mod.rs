@@ -86,7 +86,7 @@ const TRANSACTIONS_PER_BATCH: usize = 16;
 
 pub const ACCOUNTS_FILENAME: &str = "accounts.txt";
 
-pub const BENCHMARK_STORAGE_MAP_SLOT_NAME: &str = "miden::mock::1";
+pub const BENCHMARK_STORAGE_MAP_SLOT_NAME: &str = "miden::mock::stress_test::map";
 
 // SEED STORE
 // ================================================================================================
