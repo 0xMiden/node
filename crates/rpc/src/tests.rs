@@ -15,7 +15,9 @@ use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteIdLimit,
+    QueryParamNoteTagLimit,
     QueryParamNullifierLimit,
+    QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -574,6 +576,27 @@ async fn get_limits_endpoint() {
         "SyncTransactions {} limit should be {}",
         QueryParamAccountIdLimit::PARAM_NAME,
         QueryParamAccountIdLimit::LIMIT
+    );
+
+    // Verify SyncNullifiers endpoint
+    let sync_nullifiers =
+        limits.endpoints.get("SyncNullifiers").expect("SyncNullifiers should exist");
+    assert_eq!(
+        sync_nullifiers.parameters.get(QueryParamNullifierPrefixLimit::PARAM_NAME),
+        Some(&(QueryParamNullifierPrefixLimit::LIMIT as u32)),
+        "SyncNullifiers {} limit should be {}",
+        QueryParamNullifierPrefixLimit::PARAM_NAME,
+        QueryParamNullifierPrefixLimit::LIMIT
+    );
+
+    // Verify SyncNotes endpoint
+    let sync_notes = limits.endpoints.get("SyncNotes").expect("SyncNotes should exist");
+    assert_eq!(
+        sync_notes.parameters.get(QueryParamNoteTagLimit::PARAM_NAME),
+        Some(&(QueryParamNoteTagLimit::LIMIT as u32)),
+        "SyncNotes {} limit should be {}",
+        QueryParamNoteTagLimit::PARAM_NAME,
+        QueryParamNoteTagLimit::LIMIT
     );
 
     // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id,
