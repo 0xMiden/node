@@ -28,6 +28,7 @@ use miden_node_utils::formatting::format_array;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
+use miden_protocol::account::delta::AccountDelta;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
@@ -183,7 +184,8 @@ impl State {
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
 
-        let forest = load_smt_forest(&mut db, latest_block_num).await?;
+        let (forest, storage_map_key_cache_entries) =
+            load_smt_forest(&mut db, latest_block_num).await?;
 
         let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 
@@ -192,6 +194,7 @@ impl State {
             NonZeroUsize::new(STORAGE_MAP_KEY_CACHE_CAPACITY)
                 .expect("storage map key cache capacity must be non-zero"),
         );
+        storage_map_key_cache.put_many(storage_map_key_cache_entries).await;
         let writer = Mutex::new(());
         let db = Arc::new(db);
 
@@ -797,6 +800,19 @@ impl State {
         Ok(details)
     }
 
+    fn storage_map_key_cache_entries_from_deltas<'a>(
+        account_deltas: impl IntoIterator<Item = &'a AccountDelta>,
+    ) -> Vec<(Word, StorageMapKey)> {
+        account_deltas
+            .into_iter()
+            .flat_map(|delta| {
+                delta.storage().maps().flat_map(|(_slot_name, map_delta)| {
+                    map_delta.entries().keys().map(|raw_key| (raw_key.hash().into(), *raw_key))
+                })
+            })
+            .collect()
+    }
+
     /// Fetches the account details (code, vault, storage) for a public account at the specified
     /// block.
     ///
@@ -1025,5 +1041,74 @@ impl State {
             .await
             .get_storage_map_witness(account_id, slot_name, block_num, raw_key)?;
         Ok(witness)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, StorageMapDelta};
+    use miden_protocol::account::{AccountId, StorageMapKey, StorageSlotName};
+    use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
+    use miden_protocol::{Felt, Word};
+
+    use super::State;
+
+    #[test]
+    fn storage_map_key_cache_entries_include_partial_delta_keys() {
+        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
+            .expect("test account id should be valid");
+        let slot_name = StorageSlotName::mock(7);
+        let key = StorageMapKey::from_index(42);
+
+        let mut map_delta = StorageMapDelta::default();
+        map_delta.insert(key, Word::from([1u32, 2, 3, 4]));
+        let storage_delta = AccountStorageDelta::new().add_updated_maps([(slot_name, map_delta)]);
+        let delta = AccountDelta::new(account_id, storage_delta, Default::default(), Felt::ONE)
+            .expect("account delta should be valid");
+
+        let entries = State::storage_map_key_cache_entries_from_deltas([&delta]);
+
+        assert_eq!(entries, vec![(key.hash().into(), key)]);
+    }
+
+    #[test]
+    fn storage_map_key_cache_entries_include_full_state_delta_keys() {
+        use miden_protocol::account::{
+            Account,
+            AccountCode,
+            AccountStorage,
+            AccountType,
+            StorageMap,
+            StorageSlot,
+        };
+        use miden_protocol::asset::AssetVault;
+
+        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
+            .expect("test account id should be valid");
+        let slot_name = StorageSlotName::mock(8);
+        let key_a = StorageMapKey::from_index(1);
+        let key_b = StorageMapKey::from_index(2);
+        let storage_map = StorageMap::with_entries([
+            (key_a, Word::from([1u32, 0, 0, 0])),
+            (key_b, Word::from([2u32, 0, 0, 0])),
+        ])
+        .expect("storage map should be valid");
+        let storage = AccountStorage::new(vec![StorageSlot::with_map(slot_name, storage_map)])
+            .expect("storage should be valid");
+        let account = Account::new(
+            account_id,
+            AssetVault::new(&[]).expect("vault should be valid"),
+            storage,
+            AccountCode::mock(),
+            Felt::ONE,
+            None,
+        )
+        .expect("account should be valid");
+        assert_eq!(account.account_type(), AccountType::RegularAccountImmutableCode);
+        let delta = AccountDelta::try_from(account).expect("full-state delta should be valid");
+
+        let entries = State::storage_map_key_cache_entries_from_deltas([&delta]);
+
+        assert_eq!(entries, vec![(key_a.hash().into(), key_a), (key_b.hash().into(), key_b)]);
     }
 }
