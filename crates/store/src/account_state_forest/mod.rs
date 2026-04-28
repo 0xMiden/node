@@ -314,6 +314,31 @@ impl AccountStateForest {
         Some(proofs.map(|proofs| AccountStorageMapDetails::from_proofs(slot_name, proofs)))
     }
 
+    /// Enumerates a storage map as it is stored in the SMT.
+    ///
+    /// Storage map keys are hashed before insertion, so returned keys are hashed SMT keys rather
+    /// than the raw [`StorageMapKey`] values supplied by users.
+    ///
+    /// Returns at most `limit` entries.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub(crate) fn get_storage_map_hashed_entries(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+        limit: usize,
+    ) -> Option<Result<Vec<(Word, Word)>, MerkleError>> {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self.get_tree_id(lineage, block_num)?;
+
+        Some(
+            self.forest
+                .entries(tree)
+                .map_err(Self::map_forest_error)
+                .map(|entries| entries.take(limit).map(|entry| (entry.key, entry.value)).collect()),
+        )
+    }
+
     // PUBLIC INTERFACE
     // --------------------------------------------------------------------------------------------
 

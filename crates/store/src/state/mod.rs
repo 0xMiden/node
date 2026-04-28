@@ -4,6 +4,7 @@
 //! data is atomically written, and that reads are consistent.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,12 +19,14 @@ use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountVaultDetails,
     SlotData,
+    StorageMapEntries,
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
+use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
@@ -68,6 +71,8 @@ use loader::{
 
 mod apply_block;
 mod sync_state;
+
+const STORAGE_MAP_KEY_CACHE_CAPACITY: usize = 65_536;
 
 // STRUCTURES
 // ================================================================================================
@@ -118,6 +123,9 @@ pub struct State {
 
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
     forest: RwLock<AccountStateForest>,
+
+    /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
+    storage_map_key_cache: LruCache<Word, StorageMapKey>,
 
     /// To allow readers to access the tree data while an update in being performed, and prevent
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
@@ -180,6 +188,10 @@ impl State {
         let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 
         let forest = RwLock::new(forest);
+        let storage_map_key_cache = LruCache::new(
+            NonZeroUsize::new(STORAGE_MAP_KEY_CACHE_CAPACITY)
+                .expect("storage map key cache capacity must be non-zero"),
+        );
         let writer = Mutex::new(());
         let db = Arc::new(db);
 
@@ -188,6 +200,7 @@ impl State {
             block_store,
             inner,
             forest,
+            storage_map_key_cache,
             writer,
             termination_ask,
         })
@@ -686,6 +699,104 @@ impl State {
         Ok((block_num, witness))
     }
 
+    /// Returns storage map details from the forest for a specific account and storage slot.
+    ///
+    /// The forest can only be used if all hashed keys in the storage map are known in the
+    /// reverse-key LRU cache. If any hashed key is unknown, the method returns `Ok(None)` to signal
+    /// that the caller should fall back to reconstructing the storage map details from the
+    /// database.
+    #[instrument(target = COMPONENT, skip_all)]
+    async fn get_storage_map_details_from_forest(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<Option<AccountStorageMapDetails>, DatabaseError> {
+        let hashed_entries = {
+            let forest_guard = self
+                .forest
+                .read()
+                .instrument(tracing::info_span!("acquire_forest_for_storage_map_entries"))
+                .await;
+            forest_guard
+                .get_storage_map_hashed_entries(
+                    account_id,
+                    &slot_name,
+                    block_num,
+                    AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
+                )
+                .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                    account_id,
+                    slot_name: slot_name.to_string(),
+                    block_num,
+                })?
+                .map_err(DatabaseError::MerkleError)?
+        };
+
+        // Make sure the number of entries does not exceed the maximum allowed.
+        if hashed_entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+            return Ok(Some(AccountStorageMapDetails {
+                slot_name,
+                entries: StorageMapEntries::LimitExceeded,
+            }));
+        }
+
+        // Look up the raw keys for the hashed keys in the reverse-key cache. If any hashed key is
+        // not known, we cannot use the forest data and must fall back to DB reconstruction.
+        let raw_keys = self
+            .storage_map_key_cache
+            .get_many(hashed_entries.iter().map(|(hashed_key, _)| *hashed_key))
+            .await;
+        let all_hashed_keys_known = raw_keys.iter().all(Option::is_some);
+        if !all_hashed_keys_known {
+            return Ok(None);
+        }
+
+        let mut entries = raw_keys
+            .into_iter()
+            .flatten()
+            .zip(hashed_entries.into_iter())
+            .map(|(raw_key, (_hashed_key, value))| (raw_key, value))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b));
+
+        Ok(Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries)))
+    }
+
+    /// Returns storage map details by reconstructing the storage map from the database.
+    ///
+    /// This is used as a fallback when the forest cannot be used, which happens when there are
+    /// hashed keys in the storage map that are not known in the reverse-key LRU cache.
+    async fn reconstruct_storage_map_details_from_db(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<AccountStorageMapDetails, DatabaseError> {
+        let details = self
+            .db
+            .reconstruct_storage_map_from_db(
+                account_id,
+                slot_name,
+                block_num,
+                Some(
+                    // TODO unify this with
+                    // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
+                    // and accumulated the limits
+                    <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
+                ),
+            )
+            .await?;
+
+        if let StorageMapEntries::AllEntries(entries) = &details.entries {
+            self.storage_map_key_cache
+                .put_many(entries.iter().map(|(raw_key, _)| (raw_key.hash().into(), *raw_key)))
+                .await;
+        }
+
+        Ok(details)
+    }
+
     /// Fetches the account details (code, vault, storage) for a public account at the specified
     /// block.
     ///
@@ -694,7 +805,8 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
+    /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
+    /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
     #[expect(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
@@ -804,22 +916,17 @@ impl State {
             }
         }
 
-        // TODO parallelize the read requests
         for (index, slot_name) in all_entries_requests {
-            let details = self
-                .db
-                .reconstruct_storage_map_from_db(
-                    account_id,
-                    slot_name.clone(),
-                    block_num,
-                    Some(
-                        // TODO unify this with
-                        // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                        // and accumulated the limits
-                        <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                    ),
-                )
-                .await?;
+            let details = match self
+                .get_storage_map_details_from_forest(account_id, slot_name.clone(), block_num)
+                .await?
+            {
+                Some(details) => details,
+                None => {
+                    self.reconstruct_storage_map_details_from_db(account_id, slot_name, block_num)
+                        .await?
+                },
+            };
             storage_map_details_by_index[index] = Some(details);
         }
 
