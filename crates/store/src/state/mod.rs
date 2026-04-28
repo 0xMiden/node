@@ -735,12 +735,7 @@ impl State {
                 account_id,
                 slot_name,
                 block_num,
-                Some(
-                    // TODO unify this with
-                    // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                    // and accumulated the limits
-                    <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                ),
+                Some(AccountStorageMapDetails::MAX_RETURN_ENTRIES),
             )
             .await?;
 
