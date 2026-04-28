@@ -266,7 +266,7 @@ service StoreReplica {
 // Request to subscribe to the committed block stream.
 message BlockSubscriptionRequest {
     // The block number to start streaming from (inclusive).
-    fixed32 from_block_number = 1;
+    fixed32 block_from = 1;
 }
 
 // A committed block event streamed to a replica.
@@ -282,7 +282,7 @@ message BlockEvent {
 // Request to subscribe to the block proof stream.
 message ProofSubscriptionRequest {
     // The block number to start streaming from (inclusive).
-    fixed32 from_block_number = 1;
+    fixed32 block_from = 1;
 }
 
 // A block proof event streamed to a replica.

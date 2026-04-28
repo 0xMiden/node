@@ -57,9 +57,9 @@ async fn run(
 /// Subscribes to blocks from the upstream starting at local committed tip + 1, applying each one.
 #[instrument(target = COMPONENT, skip_all, err)]
 async fn sync_blocks(state: &State, upstream_url: &Url) -> anyhow::Result<()> {
-    let from_block_number = state.chain_tip(Finality::Committed).await.as_u32().saturating_add(1);
+    let block_from = state.chain_tip(Finality::Committed).await.as_u32().saturating_add(1);
 
-    info!(from_block_number, %upstream_url, "Connecting to upstream store for blocks");
+    info!(block_from, %upstream_url, "Connecting to upstream store for blocks");
 
     let channel = tonic::transport::Channel::from_shared(upstream_url.to_string())?
         .connect()
@@ -67,7 +67,7 @@ async fn sync_blocks(state: &State, upstream_url: &Url) -> anyhow::Result<()> {
     let mut client = store_replica_client::StoreReplicaClient::new(channel);
 
     let mut stream = client
-        .block_subscription(BlockSubscriptionRequest { from_block_number })
+        .block_subscription(BlockSubscriptionRequest { block_from })
         .await?
         .into_inner();
 
@@ -93,9 +93,9 @@ async fn sync_proofs(
     proven_tip: &ProvenTipWriter,
     proof_sender: &broadcast::Sender<ProofNotification>,
 ) -> anyhow::Result<()> {
-    let from_block_number = state.chain_tip(Finality::Proven).await.as_u32().saturating_add(1);
+    let block_from = state.chain_tip(Finality::Proven).await.as_u32().saturating_add(1);
 
-    info!(from_block_number, %upstream_url, "Connecting to upstream store for proofs");
+    info!(block_from, %upstream_url, "Connecting to upstream store for proofs");
 
     let channel = tonic::transport::Channel::from_shared(upstream_url.to_string())?
         .connect()
@@ -103,7 +103,7 @@ async fn sync_proofs(
     let mut client = store_replica_client::StoreReplicaClient::new(channel);
 
     let mut stream = client
-        .proof_subscription(ProofSubscriptionRequest { from_block_number })
+        .proof_subscription(ProofSubscriptionRequest { block_from })
         .await?
         .into_inner();
 

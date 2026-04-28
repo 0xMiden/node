@@ -55,7 +55,7 @@ impl store_replica_server::StoreReplica for StoreApi {
         &self,
         request: Request<BlockSubscriptionRequest>,
     ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
-        let from = BlockNumber::from(request.into_inner().from_block_number);
+        let from = BlockNumber::from(request.into_inner().block_from);
         // chain_tip is async in this branch (acquires the inner RwLock).
         let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
@@ -77,7 +77,7 @@ impl store_replica_server::StoreReplica for StoreApi {
         &self,
         request: Request<ProofSubscriptionRequest>,
     ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
-        let from = BlockNumber::from(request.into_inner().from_block_number);
+        let from = BlockNumber::from(request.into_inner().block_from);
         let proven_tip = self.state.chain_tip(Finality::Proven).await;
 
         // Subscribe to the live broadcast BEFORE replay.
