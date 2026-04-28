@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 anyhow                          = { workspace = true }
+async-trait                     = { workspace = true }
 deadpool                        = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
 deadpool-diesel                 = { features = ["sqlite"], version = "0.6" }
 diesel                          = { features = ["numeric", "sqlite"], version = "2.3" }

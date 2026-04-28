@@ -23,15 +23,17 @@ use crate::db::Db;
 use crate::errors::ApplyBlockError;
 use crate::genesis::GenesisBlock;
 use crate::proven_tip::ProvenTipWriter;
+use crate::server::replica_sync::{BlockReplicaSync, ProofReplicaSync};
 use crate::state::State;
 use crate::{BlockProver, COMPONENT};
 
 mod api;
 mod block_producer;
 pub mod block_prover_client;
-mod block_replica_client;
 mod ntx_builder;
-mod proof_replica_client;
+mod replica_sync;
+
+use replica_sync::ReplicaSync as _;
 pub mod proof_scheduler;
 mod replica;
 mod rpc_api;
@@ -248,10 +250,8 @@ impl Store {
         info!(target: COMPONENT, %upstream_url, "Starting in replica mode");
 
         let state = Arc::new(state);
-        let block_handle =
-            block_replica_client::BlockReplicaClient::new(Arc::clone(&state), upstream_url.clone())
-                .spawn();
-        let proof_handle = proof_replica_client::ProofReplicaClient::new(
+        let block_handle = BlockReplicaSync::new(Arc::clone(&state), upstream_url.clone()).spawn();
+        let proof_handle = ProofReplicaSync::new(
             Arc::clone(&state),
             upstream_url,
             proven_tip,

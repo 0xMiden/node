@@ -3363,6 +3363,7 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "async-trait",
  "build-rs",
  "criterion",
  "deadpool",
