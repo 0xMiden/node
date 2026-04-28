@@ -16,7 +16,6 @@ use tracing::{info, instrument, warn};
 use url::Url;
 
 use crate::COMPONENT;
-use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::proven_tip::ProvenTipWriter;
 use crate::server::proof_scheduler::ProofNotification;
 use crate::state::{Finality, State};
@@ -119,18 +118,7 @@ impl ReplicaSync for BlockReplicaSync {
                 .context("failed to deserialize block from upstream")?;
 
             // Apply the block to the local state.
-            match self.state.apply_block(block, None).await {
-                Ok(()) => {},
-                Err(ApplyBlockError::InvalidBlockError(
-                    InvalidBlockError::NewBlockInvalidBlockNum { expected, submitted },
-                )) if submitted < expected => {
-                    warn!(
-                        block_num = submitted.as_u32(),
-                        "Skipping already-applied block from upstream"
-                    );
-                },
-                Err(err) => return Err(err.into()),
-            }
+            self.state.apply_block(block, None).await?;
         }
 
         Ok(())
