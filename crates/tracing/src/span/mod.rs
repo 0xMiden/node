@@ -214,6 +214,7 @@ mod tests {
         }
     }
 
+    /// Exercises error status recording for instrumented functions.
     #[crate::instrument(target = rpc, name = "instrumented_error")]
     fn instrumented_error(value: u32) -> Result<(), TestError> {
         let _ = value;
@@ -240,6 +241,7 @@ mod tests {
     struct InstrumentedMethod;
 
     impl InstrumentedMethod {
+        /// Uses the method name as the default span name.
         #[crate::instrument(target = rpc, level = "debug")]
         fn method_with_default_name(&self) -> Result<(), TestError> {
             Ok(())
@@ -251,6 +253,9 @@ mod tests {
     }
 
     impl InstrumentedTrait for InstrumentedMethod {
+        /// Uses the trait method name as the default span name.
+        ///
+        /// This also verifies trait impl methods.
         #[crate::instrument(target = rpc, level = "trace")]
         fn trait_method_with_default_name(&self) -> Result<(), TestError> {
             Ok(())
@@ -309,6 +314,22 @@ mod tests {
         assert_registered_span("rpc", SpanLevel::Debug, "method_with_default_name");
         assert_registered_span("rpc", SpanLevel::Trace, "trait_method_with_default_name");
         assert_registered_span("rpc", SpanLevel::Error, "unused_manual_span");
+        assert_span_description(
+            "instrumented_error",
+            Some("Exercises error status recording for instrumented functions."),
+        );
+        assert_span_description(
+            "method_with_default_name",
+            Some("Uses the method name as the default span name."),
+        );
+        assert_span_description(
+            "trait_method_with_default_name",
+            Some(
+                "Uses the trait method name as the default span name.\n\nThis also verifies trait \
+                 impl methods.",
+            ),
+        );
+        assert_span_description("unused_manual_span", None);
     }
 
     #[test]
@@ -359,5 +380,13 @@ mod tests {
                 .any(|span| span.target == target && span.level == level && span.name == name),
             "missing registered span {target} {level} {name}"
         );
+    }
+
+    fn assert_span_description(name: &str, description: Option<&str>) {
+        let span = registered_spans()
+            .find(|span| span.name == name)
+            .unwrap_or_else(|| panic!("missing registered span {name}"));
+
+        assert_eq!(span.description, description);
     }
 }

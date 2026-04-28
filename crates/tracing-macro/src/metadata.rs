@@ -7,8 +7,13 @@ pub(crate) fn submit_span_metadata(
     target: &LitStr,
     level: SpanLevel,
     name: &LitStr,
+    description: Option<&LitStr>,
 ) -> proc_macro2::TokenStream {
     let level = level.metadata_tokens();
+    let description = match description {
+        Some(description) => quote! { ::core::option::Option::Some(#description) },
+        None => quote! { ::core::option::Option::None },
+    };
 
     quote! {
         ::miden_node_tracing::inventory::submit! {
@@ -16,6 +21,7 @@ pub(crate) fn submit_span_metadata(
                 target: #target,
                 level: #level,
                 name: #name,
+                description: #description,
             }
         }
     }

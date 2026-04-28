@@ -32,7 +32,7 @@ fn expand_span(input: TokenStream, macro_name: &str, level: SpanLevel) -> TokenS
     let macro_name = Ident::new(macro_name, proc_macro2::Span::call_site());
     let target = LitStr::new(&args.target, args.target_span);
     let name = args.name;
-    let submit_metadata = metadata::submit_span_metadata(&target, level, &name);
+    let submit_metadata = metadata::submit_span_metadata(&target, level, &name, None);
 
     quote! {
         {

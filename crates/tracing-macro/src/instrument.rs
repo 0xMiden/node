@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
+use syn::{Attribute, Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
 
 use crate::level::SpanLevel;
 use crate::{metadata, target};
@@ -147,6 +147,8 @@ fn expand_instrument(
     let vis = function.vis;
     let sig = function.sig;
     let block = function.block;
+    let description =
+        doc_description(&attrs).map(|description| LitStr::new(&description, sig.ident.span()));
     let target = LitStr::new(&instrument_args.target, proc_macro2::Span::call_site());
     let default_name;
     let name = if let Some(name) = &instrument_args.name {
@@ -157,7 +159,8 @@ fn expand_instrument(
     };
     let level = instrument_args.level;
     let tracing_args = instrument_args.tracing_args;
-    let submit_metadata = metadata::submit_span_metadata(&target, level, &name);
+    let submit_metadata =
+        metadata::submit_span_metadata(&target, level, &name, description.as_ref());
     let body = if sig.asyncness.is_some() {
         quote! {{
             #submit_metadata
@@ -189,6 +192,38 @@ fn expand_instrument(
     }
 }
 
+fn doc_description(attrs: &[Attribute]) -> Option<String> {
+    let lines = attrs
+        .iter()
+        .filter_map(|attr| {
+            let Meta::NameValue(meta) = &attr.meta else {
+                return None;
+            };
+            if !attr.path().is_ident("doc") {
+                return None;
+            }
+            let Expr::Lit(ExprLit { lit: Lit::Str(line), .. }) = &meta.value else {
+                return None;
+            };
+
+            Some(clean_doc_line(&line.value()))
+        })
+        .collect::<Vec<_>>();
+
+    trim_doc_lines(&lines).map(|lines| lines.join("\n"))
+}
+
+fn clean_doc_line(line: &str) -> String {
+    line.strip_prefix(' ').unwrap_or(line).trim_end().to_owned()
+}
+
+fn trim_doc_lines(lines: &[String]) -> Option<&[String]> {
+    let start = lines.iter().position(|line| !line.is_empty())?;
+    let end = lines.iter().rposition(|line| !line.is_empty())? + 1;
+
+    Some(&lines[start..end])
+}
+
 #[cfg(test)]
 mod tests {
     use quote::quote;
@@ -196,7 +231,7 @@ mod tests {
     use syn::punctuated::Punctuated;
     use syn::{Meta, Token};
 
-    use super::InstrumentArgs;
+    use super::{InstrumentArgs, doc_description};
 
     fn parse_args(
         tokens: proc_macro2::TokenStream,
@@ -237,5 +272,20 @@ mod tests {
 
         assert_eq!(args.level, crate::level::SpanLevel::Debug);
         assert!(args.tracing_args.to_string().contains("level = \"debug\""));
+    }
+
+    #[test]
+    fn extracts_doc_comments_as_description() {
+        let function: syn::ItemFn = syn::parse_quote! {
+            /// First line.
+            ///
+            /// Second line.
+            fn documented() {}
+        };
+
+        assert_eq!(
+            doc_description(&function.attrs).as_deref(),
+            Some("First line.\n\nSecond line.")
+        );
     }
 }

@@ -9,6 +9,8 @@ pub struct SpanMetadata {
     pub level: SpanLevel,
     /// The span name.
     pub name: &'static str,
+    /// A human-oriented description of what the span covers.
+    pub description: Option<&'static str>,
 }
 
 /// The level used by a span declared through the Miden tracing macros.
