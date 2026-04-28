@@ -14,6 +14,7 @@ use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
 use tokio::task::{Id, JoinSet};
 use tracing::{debug, instrument};
+use url::Url;
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
@@ -23,7 +24,13 @@ use crate::explorer::{initial_explorer_status, run_explorer_status_task};
 use crate::faucet::{FaucetTestDetails, run_faucet_test_task};
 use crate::frontend::{ServerState, serve};
 use crate::note_transport::{initial_note_transport_status, run_note_transport_status_task};
-use crate::remote_prover::{ProofType, generate_prover_test_payload, run_remote_prover_test_task};
+use crate::remote_prover::{
+    ProofType,
+    generate_prover_test_payload,
+    merge_prover,
+    run_prover_combiner,
+    run_remote_prover_test_task,
+};
 use crate::status::{
     CounterTrackingDetails,
     IncrementDetails,
@@ -225,114 +232,124 @@ impl Tasks {
     pub async fn spawn_prover_tasks(
         &mut self,
         config: &MonitorConfig,
-    ) -> Result<Vec<(watch::Receiver<ServiceStatus>, watch::Receiver<ServiceStatus>)>> {
+    ) -> Result<Vec<watch::Receiver<ServiceStatus>>> {
         debug!(target: COMPONENT, prover_count = config.remote_prover_urls.len(), "Spawning prover tasks");
         let mut prover_rxs = Vec::new();
-
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
-            let name = format!("Remote Prover ({})", i + 1);
+            prover_rxs.push(self.spawn_single_prover(config, i, prover_url).await);
+        }
+        debug!(target: COMPONENT, spawned_provers = prover_rxs.len(), "All prover tasks spawned successfully");
+        Ok(prover_rxs)
+    }
 
-            let mut remote_prover = ClientBuilder::new(prover_url.clone())
-                .with_tls()
-                .expect("TLS is enabled")
-                .with_timeout(config.request_timeout)
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .without_otel_context_injection()
-                .connect_lazy::<RemoteProverProxyStatusClient>();
+    /// Spawns the status checker, optional test task, and combiner task for a single prover.
+    /// Returns the receiver of the merged status channel.
+    async fn spawn_single_prover(
+        &mut self,
+        config: &MonitorConfig,
+        index: usize,
+        prover_url: &Url,
+    ) -> watch::Receiver<ServiceStatus> {
+        let name = format!("Remote Prover ({})", index + 1);
 
-            let initial_prover_status = check_remote_prover_status(
-                &mut remote_prover,
-                name.clone(),
-                prover_url.to_string(),
-            )
-            .await;
+        let mut remote_prover = ClientBuilder::new(prover_url.clone())
+            .with_tls()
+            .expect("TLS is enabled")
+            .with_timeout(config.request_timeout)
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_otel_context_injection()
+            .connect_lazy::<RemoteProverProxyStatusClient>();
 
-            let (prover_status_tx, prover_status_rx) =
-                watch::channel(initial_prover_status.clone());
+        let initial_prover_status =
+            check_remote_prover_status(&mut remote_prover, name.clone(), prover_url.to_string())
+                .await;
 
-            // Spawn the remote prover status check task
-            let component_name = format!("prover-checker-{}", i + 1);
+        let (prover_status_tx, prover_status_rx) = watch::channel(initial_prover_status.clone());
+
+        // Spawn the remote prover status check task
+        let prover_url_clone = prover_url.clone();
+        let name_clone = name.clone();
+        let status_check_interval = config.status_check_interval;
+        let request_timeout = config.request_timeout;
+        let id = self
+            .handles
+            .spawn(async move {
+                run_remote_prover_status_task(
+                    prover_url_clone,
+                    name_clone,
+                    prover_status_tx,
+                    status_check_interval,
+                    request_timeout,
+                )
+                .await;
+            })
+            .id();
+        self.names.insert(id, format!("prover-checker-{}", index + 1));
+
+        // Extract proof_type directly from the service status. If the prover is not available
+        // during startup, skip spawning test tasks.
+        let proof_type = if let ServiceDetails::ProverStatusCheck(details) =
+            &initial_prover_status.details
+        {
+            Some(details.supported_proof_type.clone())
+        } else {
+            tracing::warn!(
+                "Prover {name} is not available during startup, skipping test task initialization"
+            );
+            None
+        };
+
+        // Only spawn test tasks for transaction provers; others get a dummy closed channel.
+        let prover_test_rx = if matches!(proof_type, Some(ProofType::Transaction)) {
+            debug!("Starting transaction proof tests for prover: {name}");
+            let payload = generate_prover_test_payload().await;
+            let (prover_test_tx, prover_test_rx) = watch::channel(initial_prover_status.clone());
+
             let prover_url_clone = prover_url.clone();
             let name_clone = name.clone();
-            let status_check_interval = config.status_check_interval;
-            let request_timeout = config.request_timeout;
+            let proof_type = proof_type.expect("proof type is Some");
+            let remote_prover_interval = config.remote_prover_test_interval;
+
             let id = self
                 .handles
                 .spawn(async move {
-                    run_remote_prover_status_task(
+                    run_remote_prover_test_task(
                         prover_url_clone,
-                        name_clone,
-                        prover_status_tx,
-                        status_check_interval,
+                        &name_clone,
+                        proof_type,
+                        payload,
+                        prover_test_tx,
                         request_timeout,
+                        remote_prover_interval,
                     )
                     .await;
                 })
                 .id();
-            self.names.insert(id, component_name);
+            self.names.insert(id, format!("prover-test-{}", index + 1));
 
-            // Extract proof_type directly from the service status
-            // If the prover is not available during startup, skip spawning test tasks
-            let proof_type = if let ServiceDetails::ProverStatusCheck(details) =
-                &initial_prover_status.details
-            {
-                Some(details.supported_proof_type.clone())
-            } else {
-                // Prover is not available during startup, but we'll still monitor its status
-                tracing::warn!(
-                    "Prover {} is not available during startup, skipping test task initialization",
-                    name
-                );
-                None
-            };
+            prover_test_rx
+        } else {
+            debug!(
+                "Skipping prover tests for {name} (supports {proof_type:?} proofs, only testing Transaction proofs)"
+            );
+            let (_tx, rx) = watch::channel(initial_prover_status.clone());
+            rx
+        };
 
-            // Only spawn test tasks for transaction provers if proof_type is available
-            let prover_test_rx = if matches!(proof_type, Some(ProofType::Transaction)) {
-                debug!("Starting transaction proof tests for prover: {}", name);
-                let payload = generate_prover_test_payload().await;
-                let (prover_test_tx, prover_test_rx) =
-                    watch::channel(initial_prover_status.clone());
+        // Spawn a combiner task that merges the status and test receivers into a single
+        // `ServiceStatus` channel, which is what `ServerState` consumes.
+        let initial_merged = merge_prover(&prover_status_rx.borrow(), &prover_test_rx.borrow());
+        let (merged_tx, merged_rx) = watch::channel(initial_merged);
+        let id = self
+            .handles
+            .spawn(async move {
+                run_prover_combiner(prover_status_rx, prover_test_rx, merged_tx).await;
+            })
+            .id();
+        self.names.insert(id, format!("prover-combiner-{}", index + 1));
 
-                let prover_url_clone = prover_url.clone();
-                let name_clone = name.clone();
-                let proof_type = proof_type.expect("proof type is Some");
-                let remote_prover_interval = config.remote_prover_test_interval;
-
-                let id = self
-                    .handles
-                    .spawn(async move {
-                        run_remote_prover_test_task(
-                            prover_url_clone,
-                            &name_clone,
-                            proof_type,
-                            payload,
-                            prover_test_tx,
-                            request_timeout,
-                            remote_prover_interval,
-                        )
-                        .await;
-                    })
-                    .id();
-                let component_name = format!("prover-test-{}", i + 1);
-                self.names.insert(id, component_name);
-
-                prover_test_rx
-            } else {
-                debug!(
-                    "Skipping prover tests for {} (supports {:?} proofs, only testing Transaction proofs)",
-                    name, proof_type
-                );
-                // For non-transaction provers, create a dummy receiver with no test task
-                let (_tx, rx) = watch::channel(initial_prover_status.clone());
-                rx
-            };
-
-            prover_rxs.push((prover_status_rx, prover_test_rx));
-        }
-
-        debug!(target: COMPONENT, spawned_provers = prover_rxs.len(), "All prover tasks spawned successfully");
-        Ok(prover_rxs)
+        merged_rx
     }
 
     /// Spawn the faucet testing task.

@@ -58,7 +58,7 @@ impl QueryParamLimiter for QueryParamAccountIdLimit {
 }
 
 /// Used for the following RPC endpoints:
-/// * `select_nullifiers_by_prefix`
+/// * `sync_nullifiers`
 ///
 /// Capped at 1000 prefixes to keep queries and responses comfortably within the 4 MB payload
 /// budget and to avoid unbounded prefix scans.
@@ -69,8 +69,7 @@ impl QueryParamLimiter for QueryParamNullifierPrefixLimit {
 }
 
 /// Used for the following RPC endpoints:
-/// * `select_nullifiers_by_prefix`
-/// * `sync_nullifiers`
+/// * `check_nullifiers`
 ///
 /// Capped at 1000 nullifiers to bound `IN` clauses and keep response sizes under the 4 MB budget.
 pub struct QueryParamNullifierLimit;

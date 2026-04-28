@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
@@ -67,7 +67,7 @@ mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
 type StorageHeaderWithEntries =
-    (AccountStorageHeader, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>);
+    (AccountStorageHeader, HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>);
 
 // NETWORK ACCOUNT TYPE
 // ================================================================================================
@@ -799,7 +799,7 @@ pub(crate) fn select_latest_account_storage_components(
 fn select_latest_storage_map_entries_all(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+) -> Result<HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
@@ -815,20 +815,20 @@ fn select_latest_storage_map_entries_for_slots(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
     slot_names: &[StorageSlotName],
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+) -> Result<HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     if slot_names.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(HashMap::new());
     }
 
     if let [slot_name] = slot_names {
         let entries = select_latest_storage_map_entries_for_slot(conn, account_id, slot_name)?;
         if entries.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(HashMap::new());
         }
 
-        let mut map_entries = BTreeMap::new();
+        let mut map_entries = HashMap::new();
         map_entries.insert(slot_name.clone(), entries);
         return Ok(map_entries);
     }
@@ -863,9 +863,9 @@ fn select_latest_storage_map_entries_for_slot(
 
 fn group_storage_map_entries(
     map_values: Vec<(String, Vec<u8>, Vec<u8>)>,
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>> =
-        BTreeMap::new();
+) -> Result<HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+    let mut map_entries_by_slot: HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>> =
+        HashMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))

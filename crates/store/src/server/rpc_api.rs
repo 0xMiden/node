@@ -8,6 +8,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
     QueryParamNullifierLimit,
+    QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -93,6 +94,9 @@ impl rpc_server::Rpc for StoreApi {
         if request.prefix_len != 16 {
             return Err(SyncNullifiersError::InvalidPrefixLength(request.prefix_len).into());
         }
+
+        // Validate nullifier prefix list size before querying state.
+        check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
 
         let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
