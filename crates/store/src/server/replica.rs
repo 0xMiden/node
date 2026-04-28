@@ -124,9 +124,9 @@ fn build_block_stream(
     // Phase 2: forward live blocks, skipping any already covered by the replay.
     // filter_map in tokio_stream is synchronous.
     let live = BroadcastStream::new(live_rx).filter_map(move |result| match result {
-        Ok(ref notification) if notification.block_num > chain_tip => {
-            Some(Ok(SignedBlock { block: notification.block_bytes.clone() }))
-        },
+        Ok(ref notification) if notification.block_num() > chain_tip => Some(Ok(SignedBlock {
+            block: notification.block_bytes().to_vec(),
+        })),
         Ok(_) => None, // already replayed
         Err(BroadcastStreamRecvError::Lagged(n)) => Some(Err(Status::data_loss(format!(
             "replica lagged by {n} blocks; reconnect from your local tip"

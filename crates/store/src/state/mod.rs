@@ -59,7 +59,24 @@ use crate::{COMPONENT, DataDirectory};
 ///
 /// Wrapped in `Arc` at the sender so all receivers share the same allocation.
 #[derive(Clone, Debug)]
-pub struct BlockNotification {
+pub struct BlockNotification(Arc<Block>);
+
+impl BlockNotification {
+    pub fn new(block_num: BlockNumber, block_bytes: Vec<u8>) -> Self {
+        Self(Arc::new(Block { block_num, block_bytes }))
+    }
+
+    pub fn block_num(&self) -> BlockNumber {
+        self.0.block_num
+    }
+
+    pub fn block_bytes(&self) -> &[u8] {
+        &self.0.block_bytes
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Block {
     pub block_num: BlockNumber,
     pub block_bytes: Vec<u8>,
 }
