@@ -29,11 +29,11 @@ use crate::{BlockProver, COMPONENT};
 mod api;
 mod block_producer;
 pub mod block_prover_client;
+mod block_replica_client;
 mod ntx_builder;
+mod proof_replica_client;
 pub mod proof_scheduler;
 mod replica;
-mod block_replica_client;
-mod proof_replica_client;
 mod rpc_api;
 
 /// Broadcast channel capacity for replica proof notifications.
