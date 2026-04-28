@@ -27,24 +27,27 @@ env:
   #
   # This provides a convenient way to evict old or corrupted cache.
   RUST_CACHE_PREFIX: rust-cache
-  # The trunk branch this run should warm from.
-  #
-  # Prefer the targeted trunk branch for PRs, then direct trunk refs, and
-  # otherwise default to `next`.
-  RUST_CACHE_BASE: >-
-    ${{ github.base_ref == 'main' && 'main'
-    || github.base_ref == 'next' && 'next'
-    || github.ref == 'refs/heads/main' && 'main'
-    || github.ref == 'refs/heads/next' && 'next'
-    || 'next' }}
   # Shared branch-aware cache namespace for rust-cache.
   #
   # Pushes save to the persistent trunk cache, while pull requests append the
   # PR number so they save into an ephemeral PR-specific cache.
+  #
+  # The format is <main | next> with an optional `-pr-<PR>` for pull requests.
+  # We default to next if no suitable is found.
   RUST_CACHE_SUFFIX: >-
-    ${{ github.event_name == 'pull_request'
-    && format('{0}-pr-{1}', env.RUST_CACHE_BASE, github.event.pull_request.number)
-    || env.RUST_CACHE_BASE }}
+    ${{
+      format(
+        '{0}{1}',
+        github.base_ref == 'main' && 'main'
+        || github.base_ref == 'next' && 'next'
+        || github.ref == 'refs/heads/main' && 'main'
+        || github.ref == 'refs/heads/next' && 'next'
+        || 'next',
+        github.event_name == 'pull_request'
+        && format('-pr-{0}', github.event.pull_request.number)
+        || ''
+      )
+    }}
   # Match rust-cache's compilation mode so restored outputs stay reusable downstream.
   CARGO_INCREMENTAL: 0
   # Reduce cache usage by removing debug information.
@@ -238,17 +241,20 @@ jobs:
       actions: write
       contents: read
     steps:
-      - name: Delete run rust caches
+      - name: Delete PR rust cache
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mapfile -t cache_ids < <(
+          mapfile -t cache_entries < <(
             gh api \
               -H "Accept: application/vnd.github+json" \
-              "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUST_CACHE_SUFFIX }}&ref=${{ github.ref }}" \
-              --jq '.actions_caches[].id'
+              "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUST_CACHE_PREFIX }}&ref=${{ github.ref }}" \
+              --jq '.actions_caches[] | @json'
           )
-          for cache_id in "${cache_ids[@]}"; do
+          for cache_entry in "${cache_entries[@]}"; do
+            cache_id="$(jq -r '.id' <<< "${cache_entry}")"
+            cache_key="$(jq -r '.key' <<< "${cache_entry}")"
+            echo "Deleting rust cache key=${cache_key}"
             gh api \
               --method DELETE \
               -H "Accept: application/vnd.github+json" \
