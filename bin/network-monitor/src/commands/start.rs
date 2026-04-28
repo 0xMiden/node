@@ -92,15 +92,20 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
 
     // Initialize HTTP server.
     debug!(target: COMPONENT, "Initializing HTTP server");
+
+    // Build the flat services Vec in the order the dashboard expects to render cards.
+    let services = std::iter::once(rpc_rx)
+        .chain(prover_rxs)
+        .chain(faucet_rx)
+        .chain(explorer_rx)
+        .chain(ntx_increment_rx)
+        .chain(ntx_tracking_rx)
+        .chain(note_transport_rx)
+        .chain(validator_rx)
+        .collect();
+
     let server_state = ServerState {
-        rpc: rpc_rx,
-        provers: prover_rxs,
-        faucet: faucet_rx,
-        ntx_increment: ntx_increment_rx,
-        ntx_tracking: ntx_tracking_rx,
-        explorer: explorer_rx,
-        note_transport: note_transport_rx,
-        validator: validator_rx,
+        services,
         monitor_version: env!("CARGO_PKG_VERSION").to_string(),
         network_name: config.network_name.clone(),
     };

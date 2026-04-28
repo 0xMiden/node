@@ -643,8 +643,8 @@ function updateDisplay() {
                         </div>
                     ` : ''}
                     ${details.RemoteProverStatus?.test ? (() => {
-                        const t = details.RemoteProverStatus.test;
-                        const ts = details.RemoteProverStatus.test_status;
+                        const t = details.RemoteProverStatus.test.details;
+                        const ts = details.RemoteProverStatus.test.status;
                         return `
                             <div class="nested-status">
                                 <strong>Proof Generation Testing (${t.proof_type}):</strong>
