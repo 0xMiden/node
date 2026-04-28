@@ -8,6 +8,7 @@ use tokio_stream::StreamExt as _;
 use tracing::{info, warn};
 use url::Url;
 
+use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::{Finality, State};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -58,7 +59,18 @@ impl BlockReplicaClient {
             let event = result?;
             let block = SignedBlock::read_from_bytes(&event.block)
                 .map_err(|e| anyhow::anyhow!("failed to deserialize block from upstream: {e}"))?;
-            self.state.apply_block(block, None).await?;
+            match self.state.apply_block(block, None).await {
+                Ok(()) => {},
+                Err(ApplyBlockError::InvalidBlockError(
+                    InvalidBlockError::NewBlockInvalidBlockNum { expected, submitted },
+                )) if submitted < expected => {
+                    warn!(
+                        block_num = submitted.as_u32(),
+                        "Skipping already-applied block from upstream"
+                    );
+                },
+                Err(err) => return Err(err.into()),
+            }
         }
 
         Ok(())
