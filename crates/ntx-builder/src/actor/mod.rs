@@ -18,7 +18,6 @@ use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::FailedNote;
 use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
-use tokio_util::sync::CancellationToken;
 
 use crate::NoteError;
 use crate::chain_state::ChainState;
@@ -43,12 +42,12 @@ pub enum ActorRequest {
     CacheNoteScript { script_root: Word, script: NoteScript },
 }
 
-// ACCOUNT ACTOR CONFIG
+// ACTOR SUB-STRUCTS
 // ================================================================================================
 
-/// Contains miscellaneous resources that are required by all account actors.
+/// gRPC clients used by an account actor to interact with the node's services.
 #[derive(Clone)]
-pub struct AccountActorContext {
+pub struct GrpcClients {
     /// Client for interacting with the store in order to load account state.
     pub store: StoreClient,
     /// Client for interacting with the block producer.
@@ -58,24 +57,43 @@ pub struct AccountActorContext {
     /// Client for remote transaction proving. If `None`, transactions will be proven locally,
     /// which is undesirable due to the performance impact.
     pub prover: Option<RemoteTransactionProver>,
-    /// The latest chain state that account all actors can rely on. A single chain state is shared
-    /// among all actors.
-    pub chain_state: Arc<RwLock<ChainState>>,
+}
+
+/// Shared state read (and written, in the case of `db`) by all account actors.
+#[derive(Clone)]
+pub struct State {
+    /// Local database for account state, notes, and transaction tracking.
+    pub db: Db,
+    /// The latest chain state. A single chain state is shared among all actors.
+    pub chain: Arc<RwLock<ChainState>>,
     /// Shared LRU cache for storing retrieved note scripts to avoid repeated store calls.
-    /// This cache is shared across all account actors to maximize cache efficiency.
     pub script_cache: LruCache<Word, NoteScript>,
+}
+
+/// Per-actor configuration knobs.
+#[derive(Debug, Clone, Copy)]
+pub struct ActorConfig {
     /// Maximum number of notes per transaction.
     pub max_notes_per_tx: NonZeroUsize,
     /// Maximum number of note execution attempts before dropping a note.
     pub max_note_attempts: usize,
     /// Duration after which an idle actor will deactivate.
     pub idle_timeout: Duration,
-    /// Database for persistent state.
-    pub db: Db,
-    /// Channel for sending requests to the coordinator (via the builder event loop).
-    pub request_tx: mpsc::Sender<ActorRequest>,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
+}
+
+// ACCOUNT ACTOR CONTEXT
+// ================================================================================================
+
+/// Contains resources shared by all account actors. The coordinator uses this to spawn new actors.
+#[derive(Clone)]
+pub struct AccountActorContext {
+    pub clients: GrpcClients,
+    pub state: State,
+    pub config: ActorConfig,
+    /// Channel for sending requests to the coordinator (via the builder event loop).
+    pub request_tx: mpsc::Sender<ActorRequest>,
 }
 
 #[cfg(test)]
@@ -100,18 +118,24 @@ impl AccountActorContext {
         let (request_tx, _request_rx) = mpsc::channel(1);
 
         Self {
-            block_producer: BlockProducerClient::new(url.clone()),
-            validator: ValidatorClient::new(url.clone()),
-            prover: None,
-            chain_state,
-            store: StoreClient::new(url),
-            script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
-            max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
-            max_note_attempts: 1,
-            idle_timeout: Duration::from_secs(60),
-            db: db.clone(),
+            clients: GrpcClients {
+                store: StoreClient::new(url.clone()),
+                block_producer: BlockProducerClient::new(url.clone()),
+                validator: ValidatorClient::new(url),
+                prover: None,
+            },
+            state: State {
+                db: db.clone(),
+                chain: chain_state,
+                script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
+            },
+            config: ActorConfig {
+                max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
+                max_note_attempts: 1,
+                idle_timeout: Duration::from_secs(60),
+                max_cycles: 1 << 18,
+            },
             request_tx,
-            max_cycles: 1 << 18,
         }
     }
 }
@@ -153,48 +177,28 @@ enum ActorMode {
 ///    block producer.
 /// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
 ///    notified.
-/// 5. **Shutdown**: Terminates gracefully when cancelled or encounters unrecoverable errors.
+/// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
+///    failures.
 ///
 /// ## Concurrency
 ///
 /// Each actor runs in its own async task and communicates with other system components through
-/// channels and shared state. The actor uses a cancellation token for graceful shutdown
-/// coordination.
+/// shared state. The coordinator signals state changes by notifying a shared [`Notify`]; the
+/// actor exits of its own accord when idle for longer than [`ActorConfig::idle_timeout`].
 pub struct AccountActor {
     /// The network account this actor is responsible for.
     account_id: NetworkAccountId,
-    /// Client for fetching chain data (MMR, headers) from the node's store.
-    store: StoreClient,
-    /// Local database for account state, notes, and transaction tracking.
-    db: Db,
-    /// Current operational mode of the actor (idle, notes available, tx inflight, etc.).
-    mode: ActorMode,
-    /// Notification signal from the coordinator indicating that DB state relevant to this
-    /// actor may have changed (e.g., block committed, notes added). The actor re-evaluates
-    /// its state from the DB upon each notification.
+    /// gRPC clients used by the actor.
+    clients: GrpcClients,
+    /// Shared state accessed by the actor.
+    state: State,
+    /// Per-actor configuration knobs.
+    config: ActorConfig,
+    /// Notification signal from the coordinator indicating that DB state relevant to this actor
+    /// may have changed. The actor re-evaluates its state from the DB on each notification.
     notify: Arc<Notify>,
-    /// Token for coordinating graceful shutdown of this actor's task.
-    cancel_token: CancellationToken,
-    /// Client for submitting proven transactions to the block producer.
-    block_producer: BlockProducerClient,
-    /// Client for validating transactions before submission.
-    validator: ValidatorClient,
-    /// Optional remote prover for delegating transaction proving.
-    prover: Option<RemoteTransactionProver>,
-    /// Shared chain state (tip header, MMR) updated by the coordinator on block commits.
-    chain_state: Arc<RwLock<ChainState>>,
-    /// LRU cache of note scripts to avoid redundant fetches from the store.
-    script_cache: LruCache<Word, NoteScript>,
-    /// Maximum number of notes per transaction.
-    max_notes_per_tx: NonZeroUsize,
-    /// Maximum number of note execution attempts before dropping a note.
-    max_note_attempts: usize,
-    /// Duration after which an idle actor will deactivate.
-    idle_timeout: Duration,
     /// Channel for sending requests to the coordinator.
-    request_tx: mpsc::Sender<ActorRequest>,
-    /// Maximum number of VM execution cycles for network transactions.
-    max_cycles: u32,
+    request: mpsc::Sender<ActorRequest>,
 }
 
 impl AccountActor {
@@ -203,25 +207,14 @@ impl AccountActor {
         account_id: NetworkAccountId,
         actor_context: &AccountActorContext,
         notify: Arc<Notify>,
-        cancel_token: CancellationToken,
     ) -> Self {
         Self {
             account_id,
-            store: actor_context.store.clone(),
-            db: actor_context.db.clone(),
-            mode: ActorMode::NoViableNotes,
+            clients: actor_context.clients.clone(),
+            state: actor_context.state.clone(),
+            config: actor_context.config,
             notify,
-            cancel_token,
-            block_producer: actor_context.block_producer.clone(),
-            validator: actor_context.validator.clone(),
-            prover: actor_context.prover.clone(),
-            chain_state: actor_context.chain_state.clone(),
-            script_cache: actor_context.script_cache.clone(),
-            max_notes_per_tx: actor_context.max_notes_per_tx,
-            max_note_attempts: actor_context.max_note_attempts,
-            idle_timeout: actor_context.idle_timeout,
-            request_tx: actor_context.request_tx.clone(),
-            max_cycles: actor_context.max_cycles,
+            request: actor_context.request_tx.clone(),
         }
     }
 
@@ -229,9 +222,9 @@ impl AccountActor {
     ///
     /// The return value signals the shutdown category to the coordinator:
     ///
-    /// - `Ok(())`: intentional shutdown (idle timeout, cancellation, or account removal).
+    /// - `Ok(())`: intentional shutdown (idle timeout or account removal).
     /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
-    pub async fn run(mut self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
+    pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
         // Wait for the account to be committed to the DB. For newly created accounts,
@@ -241,20 +234,23 @@ impl AccountActor {
         }
 
         // Determine initial mode by checking DB for available notes.
-        let block_num = self.chain_state.read().await.chain_tip_header.block_num();
+        let block_num = self.state.chain.read().await.chain_tip_header.block_num();
         let has_notes = self
+            .state
             .db
-            .has_available_notes(account_id, block_num, self.max_note_attempts)
+            .has_available_notes(account_id, block_num, self.config.max_note_attempts)
             .await
             .context("failed to check for available notes")?;
 
-        if has_notes {
-            self.mode = ActorMode::NotesAvailable;
-        }
+        let mut mode = if has_notes {
+            ActorMode::NotesAvailable
+        } else {
+            ActorMode::NoViableNotes
+        };
 
         loop {
             // Enable or disable transaction execution based on actor mode.
-            let tx_permit_acquisition = match self.mode {
+            let tx_permit_acquisition = match mode {
                 // Disable transaction execution.
                 ActorMode::NoViableNotes | ActorMode::TransactionInflight(_) => {
                     std::future::pending().boxed()
@@ -265,31 +261,29 @@ impl AccountActor {
 
             // Idle timeout timer: only ticks when in NoViableNotes mode.
             // Mode changes cause the next loop iteration to create a fresh sleep or pending.
-            let idle_timeout_sleep = match self.mode {
-                ActorMode::NoViableNotes => tokio::time::sleep(self.idle_timeout).boxed(),
+            let idle_timeout_sleep = match mode {
+                ActorMode::NoViableNotes => tokio::time::sleep(self.config.idle_timeout).boxed(),
                 _ => std::future::pending().boxed(),
             };
 
             tokio::select! {
-                _ = self.cancel_token.cancelled() => {
-                    return Ok(());
-                }
                 // Handle coordinator notifications. On notification, re-evaluate state from DB.
                 _ = self.notify.notified() => {
-                    match self.mode {
+                    match mode {
                         ActorMode::TransactionInflight(awaited_id) => {
                             // Check DB: is the inflight tx still pending?
                             let exists = self
+                                .state
                                 .db
                                 .transaction_exists(awaited_id)
                                 .await
                                 .context("failed to check transaction status")?;
                             if exists {
-                                self.mode = ActorMode::NotesAvailable;
+                                mode = ActorMode::NotesAvailable;
                             }
                         },
                         _ => {
-                            self.mode = ActorMode::NotesAvailable;
+                            mode = ActorMode::NotesAvailable;
                         }
                     }
                 },
@@ -298,7 +292,7 @@ impl AccountActor {
                     let _permit = permit.context("semaphore closed")?;
 
                     // Read the chain state.
-                    let chain_state = self.chain_state.read().await.clone();
+                    let chain_state = self.state.chain.read().await.clone();
 
                     // Query DB for latest account and available notes.
                     let tx_candidate = self.select_candidate_from_db(
@@ -307,10 +301,10 @@ impl AccountActor {
                     ).await?;
 
                     if let Some(tx_candidate) = tx_candidate {
-                        self.execute_transactions(account_id, tx_candidate).await;
+                        mode = self.execute_transactions(account_id, tx_candidate).await;
                     } else {
                         // No transactions to execute, wait for events.
-                        self.mode = ActorMode::NoViableNotes;
+                        mode = ActorMode::NoViableNotes;
                     }
                 }
                 // Idle timeout: actor has been idle too long, deactivate account.
@@ -329,11 +323,12 @@ impl AccountActor {
         chain_state: ChainState,
     ) -> anyhow::Result<Option<TransactionCandidate>> {
         let block_num = chain_state.chain_tip_header.block_num();
-        let max_notes = self.max_notes_per_tx.get();
+        let max_notes = self.config.max_notes_per_tx.get();
 
         let (latest_account, notes) = self
+            .state
             .db
-            .select_candidate(account_id, block_num, self.max_note_attempts)
+            .select_candidate(account_id, block_num, self.config.max_note_attempts)
             .await
             .context("failed to query DB for transaction candidate")?;
 
@@ -359,14 +354,18 @@ impl AccountActor {
     /// Waits until a committed account state exists in the DB.
     ///
     /// For accounts that are being created by an inflight transaction, this will idle
-    /// until the transaction is committed. Returns `true` when the account is ready,
-    /// or `false` if the actor was cancelled while waiting.
+    /// until the transaction is committed. Returns `true` when the account is ready, or
+    /// `false` if no commit arrived within [`ActorConfig::idle_timeout`] — in which case
+    /// the coordinator will respawn a new actor when the account reappears through
+    /// [`Coordinator::send_targeted`](crate::coordinator::Coordinator::send_targeted) or the
+    /// account loader.
     async fn wait_for_committed_account(
         &self,
         account_id: NetworkAccountId,
     ) -> anyhow::Result<bool> {
         // Check if the account is already committed.
         if self
+            .state
             .db
             .has_committed_account(account_id)
             .await
@@ -377,11 +376,9 @@ impl AccountActor {
 
         loop {
             tokio::select! {
-                _ = self.cancel_token.cancelled() => {
-                    return Ok(false);
-                }
                 _ = self.notify.notified() => {
                     if self
+                        .state
                         .db
                         .has_committed_account(account_id)
                         .await
@@ -391,30 +388,37 @@ impl AccountActor {
                         return Ok(true);
                     }
                 }
+                _ = tokio::time::sleep(self.config.idle_timeout) => {
+                    tracing::info!(
+                        %account_id,
+                        "Account actor deactivated while waiting for account commit",
+                    );
+                    return Ok(false);
+                }
             }
         }
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
-    /// Updates the state of the actor based on the execution result.
+    /// Returns the new actor mode based on the execution result.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
-        &mut self,
+        &self,
         account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
-    ) {
+    ) -> ActorMode {
         let block_num = tx_candidate.chain_tip_header.block_num();
 
         // Execute the selected transaction.
         let context = execute::NtxContext::new(
-            self.block_producer.clone(),
-            self.validator.clone(),
-            self.prover.clone(),
-            self.store.clone(),
-            self.script_cache.clone(),
-            self.db.clone(),
-            self.max_cycles,
+            self.clients.block_producer.clone(),
+            self.clients.validator.clone(),
+            self.clients.prover.clone(),
+            self.clients.store.clone(),
+            self.state.script_cache.clone(),
+            self.state.db.clone(),
+            self.config.max_cycles,
         );
 
         let notes = tx_candidate.notes.clone();
@@ -441,7 +445,7 @@ impl AccountActor {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                self.mode = ActorMode::TransactionInflight(tx_id);
+                ActorMode::TransactionInflight(tx_id)
             },
             // Transaction execution failed.
             Err(err) => {
@@ -452,7 +456,6 @@ impl AccountActor {
                     err = %error_msg,
                     "network transaction failed",
                 );
-                self.mode = ActorMode::NoViableNotes;
 
                 // For `AllNotesFailed`, use the per-note errors which contain the
                 // specific reason each note failed (e.g. consumability check details).
@@ -475,6 +478,7 @@ impl AccountActor {
                     },
                 };
                 self.mark_notes_failed(&failed_notes, block_num).await;
+                ActorMode::NoViableNotes
             },
         }
     }
@@ -483,7 +487,7 @@ impl AccountActor {
     async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
         for (script_root, script) in scripts {
             if self
-                .request_tx
+                .request
                 .send(ActorRequest::CacheNoteScript { script_root, script })
                 .await
                 .is_err()
@@ -503,7 +507,7 @@ impl AccountActor {
     ) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         if self
-            .request_tx
+            .request
             .send(ActorRequest::NotesFailed {
                 failed_notes: failed_notes.to_vec(),
                 block_num,

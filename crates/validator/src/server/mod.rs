@@ -1,43 +1,30 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use anyhow::Context;
 use miden_node_db::Db;
 use miden_node_proto::generated::validator::api_server;
-use miden_node_proto::generated::{self as proto};
 use miden_node_proto_build::validator_api_descriptor;
-use miden_node_utils::ErrorReport;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use miden_protocol::block::ProposedBlock;
-use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::Status;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{info_span, instrument};
 
-use crate::block_validation::validate_block;
-use crate::db::{
-    count_signed_blocks,
-    count_validated_transactions,
-    insert_transaction,
-    load,
-    load_chain_tip,
-    upsert_block_header,
-};
-use crate::tx_validation::validate_transaction;
+use crate::db::{count_signed_blocks, count_validated_transactions, load, load_chain_tip};
 use crate::{COMPONENT, ValidatorSigner};
 
 #[cfg(test)]
 mod tests;
+
+mod sign_block;
+mod status;
+mod submit_proven_transaction;
 
 // VALIDATOR
 // ================================================================================
@@ -148,127 +135,5 @@ impl ValidatorServer {
             validated_transactions_count: AtomicU64::new(initial_tx_count),
             signed_blocks_count: AtomicU64::new(initial_block_count),
         }
-    }
-}
-
-#[tonic::async_trait]
-impl api_server::Api for ValidatorServer {
-    /// Returns the status of the validator.
-    async fn status(
-        &self,
-        _request: tonic::Request<()>,
-    ) -> Result<tonic::Response<proto::validator::ValidatorStatus>, tonic::Status> {
-        Ok(tonic::Response::new(proto::validator::ValidatorStatus {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            status: "OK".to_string(),
-            chain_tip: self.chain_tip.load(Ordering::Relaxed),
-            validated_transactions_count: self.validated_transactions_count.load(Ordering::Relaxed),
-            signed_blocks_count: self.signed_blocks_count.load(Ordering::Relaxed),
-        }))
-    }
-
-    /// Receives a proven transaction, then validates and stores it.
-    #[instrument(target = COMPONENT, skip_all, err)]
-    async fn submit_proven_transaction(
-        &self,
-        request: tonic::Request<proto::transaction::ProvenTransaction>,
-    ) -> Result<tonic::Response<()>, tonic::Status> {
-        let (tx, inputs) = info_span!("deserialize").in_scope(|| {
-            let request = request.into_inner();
-            let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
-                Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
-            })?;
-            let inputs = request
-                .transaction_inputs
-                .ok_or(Status::invalid_argument("Missing transaction inputs"))?;
-            let inputs = TransactionInputs::read_from_bytes(&inputs).map_err(|err| {
-                Status::invalid_argument(err.as_report_context("Invalid transaction inputs"))
-            })?;
-
-            Result::<_, tonic::Status>::Ok((tx, inputs))
-        })?;
-
-        tracing::Span::current().set_attribute("transaction.id", tx.id());
-
-        // Validate the transaction.
-        let tx_info = validate_transaction(tx, inputs).await.map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction"))
-        })?;
-
-        // Store the validated transaction.
-        let count = self
-            .db
-            .transact("insert_transaction", move |conn| insert_transaction(conn, &tx_info))
-            .await
-            .map_err(|err| {
-                Status::internal(err.as_report_context("Failed to insert transaction"))
-            })?;
-
-        self.validated_transactions_count.fetch_add(count as u64, Ordering::Relaxed);
-
-        Ok(tonic::Response::new(()))
-    }
-
-    /// Validates a proposed block, verifies chain continuity, signs the block header, and updates
-    /// the chain tip.
-    async fn sign_block(
-        &self,
-        request: tonic::Request<proto::blockchain::ProposedBlock>,
-    ) -> Result<tonic::Response<proto::blockchain::BlockSignature>, tonic::Status> {
-        let proposed_block = info_span!("deserialize").in_scope(|| {
-            let proposed_block_bytes = request.into_inner().proposed_block;
-
-            ProposedBlock::read_from_bytes(&proposed_block_bytes).map_err(|err| {
-                tonic::Status::invalid_argument(format!(
-                    "Failed to deserialize proposed block: {err}",
-                ))
-            })
-        })?;
-
-        // Serialize sign_block requests to prevent race conditions between loading the
-        // chain tip and persisting the validated block header.
-        let _permit = self.sign_block_semaphore.acquire().await.map_err(|err| {
-            tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
-        })?;
-
-        // Load the current chain tip from the database.
-        let chain_tip = self
-            .db
-            .query("load_chain_tip", load_chain_tip)
-            .await
-            .map_err(|err| {
-                tonic::Status::internal(format!("Failed to load chain tip: {}", err.as_report()))
-            })?
-            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
-
-        // Validate the block against the current chain tip.
-        let (signature, header) = validate_block(proposed_block, &self.signer, &self.db, chain_tip)
-            .await
-            .map_err(|err| {
-                tonic::Status::invalid_argument(format!(
-                    "Failed to validate block: {}",
-                    err.as_report()
-                ))
-            })?;
-
-        // Persist the validated block header.
-        let new_block_num = header.block_num().as_u32();
-        self.db
-            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
-            .await
-            .map_err(|err| {
-                tonic::Status::internal(format!(
-                    "Failed to persist block header: {}",
-                    err.as_report()
-                ))
-            })?;
-
-        // Update the in-memory counters after successful persistence.
-        self.chain_tip.store(new_block_num, Ordering::Relaxed);
-        self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
-
-        // Send the signature.
-        let response = proto::blockchain::BlockSignature { signature: signature.to_bytes() };
-        Ok(tonic::Response::new(response))
     }
 }

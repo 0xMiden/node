@@ -7,7 +7,6 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 
 use crate::actor::{AccountActor, AccountActorContext};
 use crate::db::Db;
@@ -24,16 +23,39 @@ pub struct WriteEventResult {
 // ACTOR HANDLE
 // ================================================================================================
 
-/// Handle to account actors that are spawned by the coordinator.
+/// Handle to an account actor spawned by the coordinator.
 #[derive(Clone)]
 struct ActorHandle {
+    /// [`Notify`] shared with the actor. The coordinator calls [`Notify::notify_one`] when DB
+    /// state relevant to the actor may have changed, the actor awaits [`Notify::notified`] and
+    /// re-evaluates its state on wake-up.
     notify: Arc<Notify>,
-    cancel_token: CancellationToken,
 }
 
 impl ActorHandle {
-    fn new(notify: Arc<Notify>, cancel_token: CancellationToken) -> Self {
-        Self { notify, cancel_token }
+    fn new(notify: Arc<Notify>) -> Self {
+        Self { notify }
+    }
+
+    /// Signals the actor that DB state may have changed. Notifications coalesce when one is
+    /// already pending.
+    fn notify(&self) {
+        self.notify.notify_one();
+    }
+
+    /// Returns `true` if a notification is queued but not yet consumed by the actor.
+    ///
+    /// Used after an actor has shut down to detect the race where a notification arrived just
+    /// as the actor timed out. If so, the coordinator should respawn the actor.
+    fn has_pending_notification(&self) -> bool {
+        use futures::FutureExt;
+        if self.notify.notified().now_or_never().is_some() {
+            // Restore the permit so the respawned actor still sees the notification.
+            self.notify.notify_one();
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -54,10 +76,10 @@ impl ActorHandle {
 /// - Monitors actor tasks through a join set to detect completion or errors.
 ///
 /// ## Event Notification
-/// - Notifies actors via [`Notify`] when state may have changed.
+/// - Notifies actors via a shared [`Notify`] when state may have changed.
 /// - The DB is the source of truth: actors re-evaluate their state from DB on notification.
-/// - Notifications are coalesced: multiple notifications while an actor is busy result in a single
-///   wake-up.
+/// - Notifications are coalesced: [`Notify`] stores at most one permit, so multiple notifications
+///   while an actor is busy result in a single wake-up.
 ///
 /// ## Resource Management
 /// - Controls transaction concurrency across all network accounts using a semaphore.
@@ -76,7 +98,7 @@ impl ActorHandle {
 /// 3. Actor completion/failure events are monitored and handled.
 /// 4. Failed or completed actors are cleaned up from the registry.
 pub struct Coordinator {
-    /// Mapping of network account IDs to their notification handles and cancellation tokens.
+    /// Mapping of network account IDs to their notification handles.
     ///
     /// This registry serves as the primary directory for notifying active account actors.
     /// When actors are spawned, they register their notification handle here. When events need
@@ -151,20 +173,19 @@ impl Coordinator {
             }
         }
 
-        // If an actor already exists for this account ID, something has gone wrong.
-        if let Some(handle) = self.actor_registry.remove(&account_id) {
+        // If an actor already exists for this account ID, something has gone wrong. Reject the
+        // spawn rather than replacing.
+        if self.actor_registry.contains_key(&account_id) {
             tracing::error!(
                 account_id = %account_id,
                 "Account actor already exists"
             );
-            handle.cancel_token.cancel();
+            return;
         }
 
         let notify = Arc::new(Notify::new());
-        let cancel_token = tokio_util::sync::CancellationToken::new();
-        let actor =
-            AccountActor::new(account_id, actor_context, notify.clone(), cancel_token.clone());
-        let handle = ActorHandle::new(notify, cancel_token);
+        let actor = AccountActor::new(account_id, actor_context, notify.clone());
+        let handle = ActorHandle::new(notify);
 
         // Run the actor. Actor reads state from DB on startup.
         let semaphore = self.semaphore.clone();
@@ -183,7 +204,7 @@ impl Coordinator {
     pub fn notify_accounts(&self, account_ids: &[NetworkAccountId]) {
         for account_id in account_ids {
             if let Some(handle) = self.actor_registry.get(account_id) {
-                handle.notify.notify_one();
+                handle.notify();
             }
         }
     }
@@ -203,15 +224,13 @@ impl Coordinator {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok((account_id, Ok(())))) => {
-                // Actor shut down intentionally (idle timeout, cancelled, account removed).
+                // Actor shut down intentionally (idle timeout or account removed).
                 // Remove from registry and check if a notification arrived just as it shut
                 // down. If so, the caller should respawn it.
-                let should_respawn =
-                    self.actor_registry.remove(&account_id).is_some_and(|handle| {
-                        let notified = handle.notify.notified();
-                        tokio::pin!(notified);
-                        notified.enable()
-                    });
+                let should_respawn = self
+                    .actor_registry
+                    .remove(&account_id)
+                    .is_some_and(|handle| handle.has_pending_notification());
 
                 Ok(should_respawn.then_some(account_id))
             },
@@ -281,7 +300,7 @@ impl Coordinator {
         // Notify target actors.
         for account_id in &target_account_ids {
             if let Some(handle) = self.actor_registry.get(account_id) {
-                handle.notify.notify_one();
+                handle.notify();
             }
         }
 
@@ -344,8 +363,6 @@ impl Coordinator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use miden_node_proto::domain::mempool::MempoolEvent;
 
     use super::*;
@@ -356,10 +373,7 @@ mod tests {
     /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
     fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
         let notify = Arc::new(Notify::new());
-        let cancel_token = CancellationToken::new();
-        coordinator
-            .actor_registry
-            .insert(account_id, ActorHandle::new(notify, cancel_token));
+        coordinator.actor_registry.insert(account_id, ActorHandle::new(notify));
     }
 
     // SEND TARGETED TESTS
