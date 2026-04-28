@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_node_proto::generated::store::{BlockSubscriptionRequest, store_replica_client};
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
@@ -30,18 +31,19 @@ impl BlockReplicaClient {
 
     async fn run(self) -> anyhow::Result<()> {
         loop {
-            if let Err(err) = self.sync().await {
-                warn!(%err, "Block sync error: {err}; reconnecting in {RECONNECT_DELAY:?}");
-            } else {
-                warn!("Block stream ended unexpectedly; reconnecting");
-            }
+            let err = self
+                .sync()
+                .await
+                .and_then(|_| Err::<(), _>(anyhow::anyhow!("unexpected end of stream")))
+                .unwrap_err();
+            warn!(err=%format!("{err:#}"), retry.delay=%RECONNECT_DELAY.as_secs(), "Block sync failed, retrying");
             tokio::time::sleep(RECONNECT_DELAY).await;
         }
     }
 
     async fn sync(&self) -> anyhow::Result<()> {
         // Determine which block to start streaming from based on the chain tip.
-        let block_from = self.state.chain_tip(Finality::Committed).await.as_u32().saturating_add(1);
+        let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for blocks");
 
         // Connect to the upstream store and create a block subscription stream.
@@ -58,7 +60,7 @@ impl BlockReplicaClient {
         while let Some(result) = stream.next().await {
             let event = result?;
             let block = SignedBlock::read_from_bytes(&event.block)
-                .map_err(|e| anyhow::anyhow!("failed to deserialize block from upstream: {e}"))?;
+                .context("failed to deserialize block from upstream")?;
             match self.state.apply_block(block, None).await {
                 Ok(()) => {},
                 Err(ApplyBlockError::InvalidBlockError(

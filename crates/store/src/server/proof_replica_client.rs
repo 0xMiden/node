@@ -44,11 +44,12 @@ impl ProofReplicaClient {
 
     async fn run(self) -> anyhow::Result<()> {
         loop {
-            if let Err(err) = self.sync().await {
-                warn!(%err, "Proof sync error: {err}; reconnecting in {RECONNECT_DELAY:?}");
-            } else {
-                warn!("Proof stream ended unexpectedly; reconnecting");
-            }
+            let err = self
+                .sync()
+                .await
+                .and_then(|_| Err::<(), _>(anyhow::anyhow!("unexpected end of stream")))
+                .unwrap_err();
+            warn!(err=%format!("{err:#}"), retry.delay=%RECONNECT_DELAY.as_secs(), "Proof sync failed, retrying");
             tokio::time::sleep(RECONNECT_DELAY).await;
         }
     }
