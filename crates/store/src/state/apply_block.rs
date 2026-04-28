@@ -130,12 +130,16 @@ impl State {
             }
 
             // compute update for nullifier tree
-            let nullifier_tree_update = inner
-                .nullifier_tree
-                .compute_mutations(
-                    body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
-                )
-                .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
+            let nullifier_tree_update = tokio::task::block_in_place(|| {
+                inner
+                    .nullifier_tree
+                    .compute_mutations(
+                        body.created_nullifiers()
+                            .iter()
+                            .map(|nullifier| (*nullifier, block_num)),
+                    )
+                    .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)
+            })?;
 
             if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
                 // We do our best here to notify the serve routine, if it doesn't care (dropped the
@@ -147,21 +151,25 @@ impl State {
             }
 
             // compute update for account tree
-            let account_tree_update = inner
-                .account_tree
-                .compute_mutations(
-                    body.updated_accounts()
-                        .iter()
-                        .map(|update| (update.account_id(), update.final_state_commitment())),
-                )
-                .map_err(|e| match e {
-                    HistoricalError::AccountTreeError(err) => {
-                        InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-                    },
-                    HistoricalError::MerkleError(_) => {
-                        panic!("Unexpected MerkleError during account tree mutation computation")
-                    },
-                })?;
+            let account_tree_update = tokio::task::block_in_place(|| {
+                inner
+                    .account_tree
+                    .compute_mutations(
+                        body.updated_accounts()
+                            .iter()
+                            .map(|update| (update.account_id(), update.final_state_commitment())),
+                    )
+                    .map_err(|e| match e {
+                        HistoricalError::AccountTreeError(err) => {
+                            InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
+                        },
+                        HistoricalError::MerkleError(_) => {
+                            panic!(
+                                "Unexpected MerkleError during account tree mutation computation"
+                            )
+                        },
+                    })
+            })?;
 
             if account_tree_update.as_mutation_set().root() != header.account_root() {
                 let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
@@ -275,15 +283,20 @@ impl State {
                 .await?
                 .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
 
-            // Update the in-memory data structures after successful commit of the DB transaction
-            inner
-                .nullifier_tree
-                .apply_mutations(nullifier_tree_update)
-                .expect("Unreachable: old nullifier tree root must be checked before this step");
-            inner
-                .account_tree
-                .apply_mutations(account_tree_update)
-                .expect("Unreachable: old account tree root must be checked before this step");
+            // Update the in-memory data structures after successful commit of the DB transaction.
+            // These write to RocksDB and must run on a blocking-capable thread.
+            tokio::task::block_in_place(|| {
+                inner
+                    .nullifier_tree
+                    .apply_mutations(nullifier_tree_update)
+                    .expect(
+                        "Unreachable: old nullifier tree root must be checked before this step",
+                    );
+                inner
+                    .account_tree
+                    .apply_mutations(account_tree_update)
+                    .expect("Unreachable: old account tree root must be checked before this step");
+            });
 
             inner.blockchain.push(block_commitment);
 

@@ -265,11 +265,13 @@ impl State {
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret)]
     pub async fn check_nullifiers(&self, nullifiers: &[Nullifier]) -> Vec<SmtProof> {
         let inner = self.inner.read().await;
-        nullifiers
-            .iter()
-            .map(|n| inner.nullifier_tree.open(n))
-            .map(NullifierWitness::into_proof)
-            .collect()
+        tokio::task::block_in_place(|| {
+            nullifiers
+                .iter()
+                .map(|n| inner.nullifier_tree.open(n))
+                .map(NullifierWitness::into_proof)
+                .collect()
+        })
     }
 
     /// Queries a list of notes from the database.
@@ -552,19 +554,27 @@ impl State {
             );
 
         // Fetch witnesses for all accounts.
-        let account_witnesses = account_ids
-            .iter()
-            .copied()
-            .map(|account_id| (account_id, inner.account_tree.open_latest(account_id)))
-            .collect::<BTreeMap<AccountId, AccountWitness>>();
+        // open_latest() reads from RocksDB for deep subtrees — use block_in_place.
+        let account_witnesses: BTreeMap<AccountId, AccountWitness> =
+            tokio::task::block_in_place(|| {
+                account_ids
+                    .iter()
+                    .copied()
+                    .map(|account_id| (account_id, inner.account_tree.open_latest(account_id)))
+                    .collect()
+            });
 
         // Fetch witnesses for all nullifiers. We don't check whether the nullifiers are spent or
         // not as this is done as part of proposing the block.
-        let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> = nullifiers
-            .iter()
-            .copied()
-            .map(|nullifier| (nullifier, inner.nullifier_tree.open(&nullifier)))
-            .collect();
+        // open() reads from RocksDB for deep subtrees — use block_in_place.
+        let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> =
+            tokio::task::block_in_place(|| {
+                nullifiers
+                    .iter()
+                    .copied()
+                    .map(|nullifier| (nullifier, inner.nullifier_tree.open(&nullifier)))
+                    .collect()
+            });
 
         Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
     }
@@ -581,10 +591,13 @@ impl State {
 
         let inner = self.inner.read().await;
 
-        let account_commitment = inner.account_tree.get_latest_commitment(account_id);
+        let account_commitment =
+            tokio::task::block_in_place(|| inner.account_tree.get_latest_commitment(account_id));
 
         let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
-            Some(!inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
+            Some(!tokio::task::block_in_place(|| {
+                inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix())
+            }))
         } else {
             None
         };
@@ -597,13 +610,15 @@ impl State {
             });
         }
 
-        let nullifiers = nullifiers
-            .iter()
-            .map(|nullifier| NullifierInfo {
-                nullifier: *nullifier,
-                block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
-            })
-            .collect();
+        let nullifiers = tokio::task::block_in_place(|| {
+            nullifiers
+                .iter()
+                .map(|nullifier| NullifierInfo {
+                    nullifier: *nullifier,
+                    block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
+                })
+                .collect()
+        });
 
         let found_unauthenticated_notes = self
             .db
@@ -691,24 +706,28 @@ impl State {
             self.inner.read().instrument(tracing::info_span!("acquire_inner_state")).await;
 
         // Determine which block to query
-        let (block_num, witness) = if let Some(requested_block) = block_num {
-            // Historical query: use the account tree with history
-            let witness =
-                inner_state.account_tree.open_at(account_id, requested_block).ok_or_else(|| {
-                    let latest_block = inner_state.account_tree.block_number_latest();
-                    if requested_block > latest_block {
-                        GetAccountError::UnknownBlock(requested_block)
-                    } else {
-                        GetAccountError::BlockPruned(requested_block)
-                    }
-                })?;
-            (requested_block, witness)
-        } else {
-            // Latest query: use the latest state
-            let block_num = inner_state.account_tree.block_number_latest();
-            let witness = inner_state.account_tree.open_latest(account_id);
-            (block_num, witness)
-        };
+        let (block_num, witness) = tokio::task::block_in_place(|| {
+            if let Some(requested_block) = block_num {
+                // Historical query: use the account tree with history
+                let witness = inner_state
+                    .account_tree
+                    .open_at(account_id, requested_block)
+                    .ok_or_else(|| {
+                        let latest_block = inner_state.account_tree.block_number_latest();
+                        if requested_block > latest_block {
+                            GetAccountError::UnknownBlock(requested_block)
+                        } else {
+                            GetAccountError::BlockPruned(requested_block)
+                        }
+                    })?;
+                Ok::<_, GetAccountError>((requested_block, witness))
+            } else {
+                // Latest query: use the latest state
+                let block_num = inner_state.account_tree.block_number_latest();
+                let witness = inner_state.account_tree.open_latest(account_id);
+                Ok((block_num, witness))
+            }
+        })?;
 
         Ok((block_num, witness))
     }
