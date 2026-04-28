@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn recorder_records_prefixed_fields_and_nested_objects() {
         let span = exported_span(|span| {
-            let mut recorder = OpenTelemetryObjectRecorder::new(span, "root");
+            let mut recorder = OpenTelemetryObjectRecorder::new(span.as_tracing_span(), "root");
             recorder.record_field(&TestField);
             recorder.record_object(&TestObject);
         });

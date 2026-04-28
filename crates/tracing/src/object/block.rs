@@ -76,7 +76,6 @@ mod tests {
     use miden_protocol::block::BlockHeader;
     use miden_protocol::{Felt, Word};
 
-    use crate::OpenTelemetrySpanExt;
     use crate::test_utils::{assert_attribute, exported_span};
 
     #[test]

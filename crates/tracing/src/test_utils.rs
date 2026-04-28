@@ -6,6 +6,8 @@ use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::trace::{SdkTracerProvider, SpanData, SpanExporter};
 use tracing_subscriber::prelude::*;
 
+use crate::Span;
+
 #[derive(Clone, Debug, Default)]
 struct TestExporter(Arc<Mutex<Vec<SpanData>>>);
 
@@ -16,7 +18,7 @@ impl SpanExporter for TestExporter {
     }
 }
 
-pub(crate) fn exported_span(record: impl FnOnce(&tracing::Span)) -> SpanData {
+pub(crate) fn exported_span(record: impl FnOnce(&Span)) -> SpanData {
     let exporter = TestExporter::default();
     let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
     let tracer = provider.tracer("miden-node-tracing-test");
@@ -25,7 +27,9 @@ pub(crate) fn exported_span(record: impl FnOnce(&tracing::Span)) -> SpanData {
 
     tracing::subscriber::with_default(subscriber, || {
         let span = tracing::info_span!("test_span");
-        record(&span);
+        let _guard = span.enter();
+        let wrapped = Span::new(span.clone());
+        record(&wrapped);
     });
 
     drop(provider);

@@ -7,78 +7,91 @@ use opentelemetry::trace::Status;
 
 use crate::{OpenTelemetryField, OpenTelemetryObject, OpenTelemetryObjectRecorder};
 
-/// Extension methods for recording OpenTelemetry fields and objects onto tracing spans.
-pub trait OpenTelemetrySpanExt {
+/// A tracing span with Miden OpenTelemetry recording helpers.
+#[derive(Clone, Debug)]
+pub struct Span(tracing::Span);
+
+impl Span {
+    /// Creates a new wrapper around `span`.
+    pub fn new(span: tracing::Span) -> Self {
+        Self(span)
+    }
+
+    /// Returns a wrapper around the current tracing span.
+    pub fn current() -> Self {
+        Self(tracing::Span::current())
+    }
+
+    /// Returns the wrapped tracing span.
+    pub fn as_tracing_span(&self) -> &tracing::Span {
+        &self.0
+    }
+
+    /// Consumes this wrapper and returns the wrapped tracing span.
+    pub fn into_tracing_span(self) -> tracing::Span {
+        self.0
+    }
+
     /// Records `field` using its default key.
-    fn record_field<F>(&self, field: &F)
-    where
-        F: OpenTelemetryField + ?Sized;
-
-    /// Records `field` using `key` instead of its default key.
-    fn record_field_as<F>(&self, field: &F, key: impl Into<Key>)
-    where
-        F: OpenTelemetryField + ?Sized;
-
-    /// Records `object` using its default key prefix.
-    fn record_object<O>(&self, object: &O)
-    where
-        O: OpenTelemetryObject + ?Sized;
-
-    /// Records `object` using `key_prefix` instead of its default key prefix.
-    fn record_object_as<O>(&self, object: &O, key_prefix: &str)
-    where
-        O: OpenTelemetryObject + ?Sized;
-
-    /// Records `error` on this span by setting the span status to error.
-    fn record_error<E>(&self, error: &E)
-    where
-        E: Error + ?Sized;
-}
-
-impl OpenTelemetrySpanExt for tracing::Span {
-    fn record_field<F>(&self, field: &F)
+    pub fn record_field<F>(&self, field: &F)
     where
         F: OpenTelemetryField + ?Sized,
     {
         self.record_field_as(field, F::DEFAULT_KEY);
     }
 
-    fn record_field_as<F>(&self, field: &F, key: impl Into<Key>)
+    /// Records `field` using `key` instead of its default key.
+    pub fn record_field_as<F>(&self, field: &F, key: impl Into<Key>)
     where
         F: OpenTelemetryField + ?Sized,
     {
         tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
-            self,
+            &self.0,
             key,
             field.to_otel_value(),
         );
     }
 
-    fn record_object<O>(&self, object: &O)
+    /// Records `object` using its default key prefix.
+    pub fn record_object<O>(&self, object: &O)
     where
         O: OpenTelemetryObject + ?Sized,
     {
         self.record_object_as(object, O::DEFAULT_KEY_PREFIX);
     }
 
-    fn record_object_as<O>(&self, object: &O, key_prefix: &str)
+    /// Records `object` using `key_prefix` instead of its default key prefix.
+    pub fn record_object_as<O>(&self, object: &O, key_prefix: &str)
     where
         O: OpenTelemetryObject + ?Sized,
     {
-        let mut recorder = OpenTelemetryObjectRecorder::new(self, key_prefix);
+        let mut recorder = OpenTelemetryObjectRecorder::new(&self.0, key_prefix);
         object.record_otel_fields(&mut recorder);
     }
 
-    fn record_error<E>(&self, error: &E)
+    /// Records `error` on this span by setting the span status to error.
+    pub fn record_error<E>(&self, error: &E)
     where
         E: Error + ?Sized,
     {
         tracing_opentelemetry::OpenTelemetrySpanExt::set_status(
-            self,
+            &self.0,
             Status::Error {
                 description: error::error_report(error).into(),
             },
         );
+    }
+}
+
+impl From<tracing::Span> for Span {
+    fn from(span: tracing::Span) -> Self {
+        Self::new(span)
+    }
+}
+
+impl AsRef<tracing::Span> for Span {
+    fn as_ref(&self) -> &tracing::Span {
+        self.as_tracing_span()
     }
 }
 
@@ -89,7 +102,7 @@ mod tests {
 
     use opentelemetry::trace::Status;
 
-    use super::OpenTelemetrySpanExt;
+    use super::Span;
     use crate::test_utils::{assert_attribute, exported_span};
     use crate::{OpenTelemetryField, OpenTelemetryObject, OpenTelemetryObjectRecorder};
 
@@ -126,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn span_extension_records_fields_with_default_and_override_keys() {
+    fn span_records_fields_with_default_and_override_keys() {
         let span = exported_span(|span| {
             span.record_field(&TestField);
             span.record_field_as(&TestField, "custom.field");
@@ -137,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn span_extension_records_objects_with_default_and_override_prefixes() {
+    fn span_records_objects_with_default_and_override_prefixes() {
         let span = exported_span(|span| {
             span.record_object(&TestObject);
             span.record_object_as(&TestObject, "custom");
@@ -178,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn span_extension_records_error_status() {
+    fn span_records_error_status() {
         let error = TestError { source: SourceError };
         let span = exported_span(|span| span.record_error(&error));
 
@@ -190,5 +203,12 @@ mod tests {
         );
         assert!(!span.attributes.iter().any(|attribute| attribute.key.as_str() == "error.type"));
         assert!(span.events.events.is_empty());
+    }
+
+    #[test]
+    fn span_wraps_current_tracing_span() {
+        let span = exported_span(|_| Span::current().record_field(&TestField));
+
+        assert_attribute(&span, "test.field", "value");
     }
 }
