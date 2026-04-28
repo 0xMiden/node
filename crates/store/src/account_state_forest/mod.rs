@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
+use std::sync::Mutex;
 
 use lru::LruCache;
 use miden_crypto::hash::rpo::Rpo256;
@@ -85,17 +86,17 @@ pub(crate) struct AccountStateForest {
     ///
     /// Ideally this would be a mapping from `StorageMapKeyHash` to `StorageMapKey` but
     /// unfortunately `StorageMapKeyHash` does not implement `Hash`.
-    storage_map_key_cache: LruCache<Word, StorageMapKey>,
+    storage_map_key_cache: Mutex<LruCache<Word, StorageMapKey>>,
 }
 
 impl AccountStateForest {
     pub(crate) fn new() -> Self {
         Self {
             forest: Self::create_forest(),
-            storage_map_key_cache: LruCache::new(
+            storage_map_key_cache: Mutex::new(LruCache::new(
                 NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
-            ),
+            )),
         }
     }
 
@@ -168,12 +169,11 @@ impl AccountStateForest {
         self.cache_storage_map_keys(raw_keys);
     }
 
-    pub(crate) fn cache_storage_map_keys(
-        &mut self,
-        raw_keys: impl IntoIterator<Item = StorageMapKey>,
-    ) {
+    pub(crate) fn cache_storage_map_keys(&self, raw_keys: impl IntoIterator<Item = StorageMapKey>) {
+        let mut cache =
+            self.storage_map_key_cache.lock().expect("cache mutex should not be poisoned");
         for raw_key in raw_keys {
-            self.storage_map_key_cache.put(raw_key.hash().into(), raw_key);
+            cache.put(raw_key.hash().into(), raw_key);
         }
     }
 
@@ -413,10 +413,14 @@ impl AccountStateForest {
             }));
         }
 
-        let raw_keys = hashed_entries
-            .iter()
-            .map(|(hashed_key, _)| self.storage_map_key_cache.peek(hashed_key).copied())
-            .collect::<Vec<_>>();
+        let raw_keys = {
+            let mut cache =
+                self.storage_map_key_cache.lock().expect("cache mutex should not be poisoned");
+            hashed_entries
+                .iter()
+                .map(|(hashed_key, _)| cache.get(hashed_key).copied())
+                .collect::<Vec<_>>()
+        };
         if raw_keys.iter().any(Option::is_none) {
             return Ok(AccountStorageMapResult::CannotReconstructKeysFromCache);
         }
