@@ -3423,6 +3423,7 @@ dependencies = [
 name = "miden-node-tracing"
 version = "0.14.9"
 dependencies = [
+ "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -3615,6 +3616,7 @@ dependencies = [
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
+ "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",

@@ -1,3 +1,5 @@
+mod protocol;
+
 use opentelemetry::Value;
 
 /// A value that can be recorded as an OpenTelemetry attribute.
