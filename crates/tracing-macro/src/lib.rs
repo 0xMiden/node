@@ -1,6 +1,8 @@
 use proc_macro::TokenStream;
 
 mod instrument;
+mod level;
+mod metadata;
 mod span;
 mod target;
 

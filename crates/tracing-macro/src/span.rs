@@ -4,38 +4,43 @@ use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parse_macro_input};
 
-use crate::target;
+use crate::level::SpanLevel;
+use crate::{metadata, target};
 
 pub(crate) fn trace_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "trace_span")
+    expand_span(input, "trace_span", SpanLevel::Trace)
 }
 
 pub(crate) fn debug_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "debug_span")
+    expand_span(input, "debug_span", SpanLevel::Debug)
 }
 
 pub(crate) fn info_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "info_span")
+    expand_span(input, "info_span", SpanLevel::Info)
 }
 
 pub(crate) fn warn_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "warn_span")
+    expand_span(input, "warn_span", SpanLevel::Warn)
 }
 
 pub(crate) fn error_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "error_span")
+    expand_span(input, "error_span", SpanLevel::Error)
 }
 
-fn expand_span(input: TokenStream, macro_name: &str) -> TokenStream {
+fn expand_span(input: TokenStream, macro_name: &str, level: SpanLevel) -> TokenStream {
     let args = parse_macro_input!(input as SpanArgs);
     let macro_name = Ident::new(macro_name, proc_macro2::Span::call_site());
     let target = LitStr::new(&args.target, args.target_span);
     let name = args.name;
+    let submit_metadata = metadata::submit_span_metadata(&target, level, &name);
 
     quote! {
-        ::miden_node_tracing::Span::new(
-            ::miden_node_tracing::tracing::#macro_name!(target: #target, #name)
-        )
+        {
+            #submit_metadata
+            ::miden_node_tracing::Span::new(
+                ::miden_node_tracing::tracing::#macro_name!(target: #target, #name)
+            )
+        }
     }
     .into()
 }

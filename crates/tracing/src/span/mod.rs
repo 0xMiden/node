@@ -122,7 +122,13 @@ mod tests {
 
     use super::Span;
     use crate::test_utils::{assert_attribute, exported_span, exported_spans};
-    use crate::{OpenTelemetryField, OpenTelemetryObject, OpenTelemetryObjectRecorder};
+    use crate::{
+        OpenTelemetryField,
+        OpenTelemetryObject,
+        OpenTelemetryObjectRecorder,
+        SpanLevel,
+        registered_spans,
+    };
 
     struct TestField;
 
@@ -226,6 +232,31 @@ mod tests {
         Err(TestError { source: SourceError })
     }
 
+    #[allow(dead_code)]
+    fn unused_manual_span_declaration() {
+        let _span = crate::error_span!(target = rpc, "unused_manual_span");
+    }
+
+    struct InstrumentedMethod;
+
+    impl InstrumentedMethod {
+        #[crate::instrument(target = rpc, level = "debug")]
+        fn method_with_default_name(&self) -> Result<(), TestError> {
+            Ok(())
+        }
+    }
+
+    trait InstrumentedTrait {
+        fn trait_method_with_default_name(&self) -> Result<(), TestError>;
+    }
+
+    impl InstrumentedTrait for InstrumentedMethod {
+        #[crate::instrument(target = rpc, level = "trace")]
+        fn trait_method_with_default_name(&self) -> Result<(), TestError> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn span_records_error_status() {
         let error = TestError { source: SourceError };
@@ -258,6 +289,26 @@ mod tests {
         let span = exported_span_by_name(&spans, "manual_span");
 
         assert_attribute(span, "test.field", "value");
+    }
+
+    #[test]
+    fn span_macro_registers_metadata() {
+        let _span = crate::warn_span!(target = store::database, "manual_metadata_span");
+
+        assert_registered_span("store::database", SpanLevel::Warn, "manual_metadata_span");
+    }
+
+    #[test]
+    fn instrument_macro_registers_metadata() {
+        let method = InstrumentedMethod;
+        method.method_with_default_name().unwrap();
+        method.trait_method_with_default_name().unwrap();
+
+        assert_registered_span("rpc", SpanLevel::Info, "instrumented_error");
+        assert_registered_span("store::database", SpanLevel::Info, "instrumented_async_error");
+        assert_registered_span("rpc", SpanLevel::Debug, "method_with_default_name");
+        assert_registered_span("rpc", SpanLevel::Trace, "trait_method_with_default_name");
+        assert_registered_span("rpc", SpanLevel::Error, "unused_manual_span");
     }
 
     #[test]
@@ -300,5 +351,13 @@ mod tests {
             .iter()
             .find(|span| span.name == name)
             .unwrap_or_else(|| panic!("missing span {name}; spans: {spans:?}"))
+    }
+
+    fn assert_registered_span(target: &str, level: SpanLevel, name: &str) {
+        assert!(
+            registered_spans()
+                .any(|span| span.target == target && span.level == level && span.name == name),
+            "missing registered span {target} {level} {name}"
+        );
     }
 }

@@ -1,16 +1,17 @@
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
+use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{ItemFn, Meta, Token, parse_macro_input};
+use syn::{Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
 
-use crate::target;
+use crate::level::SpanLevel;
+use crate::{metadata, target};
 
 pub(crate) fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr with Punctuated::<Meta, Token![,]>::parse_terminated);
     let function = parse_macro_input!(item as ItemFn);
 
-    let instrument_args = match instrument_args(args) {
+    let instrument_args = match InstrumentArgs::parse(args) {
         Ok(args) => args,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -18,96 +19,148 @@ pub(crate) fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_instrument(instrument_args, function).into()
 }
 
-fn instrument_args(args: Punctuated<Meta, Token![,]>) -> syn::Result<proc_macro2::TokenStream> {
-    let mut target_seen = false;
-    let mut args = args
-        .into_iter()
-        .map(|arg| {
+#[derive(Debug)]
+struct InstrumentArgs {
+    tracing_args: proc_macro2::TokenStream,
+    target: String,
+    name: Option<String>,
+    level: SpanLevel,
+}
+
+impl InstrumentArgs {
+    fn parse(args: Punctuated<Meta, Token![,]>) -> syn::Result<Self> {
+        let mut target = None;
+        let mut name = None;
+        let mut level = SpanLevel::Info;
+        let mut level_seen = false;
+        let mut tracing_args = Vec::new();
+
+        for arg in args {
             let ident = arg.path().get_ident().map(ToString::to_string);
 
             match ident.as_deref() {
-                Some("name" | "level") => {
-                    validate_name_value_arg(&arg, "`name` and `level`")?;
-                    Ok(arg.into_token_stream())
+                Some("name") => {
+                    let meta = name_value_arg(arg, "`name`")?;
+                    if name.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            meta,
+                            "`name` may only be specified once",
+                        ));
+                    }
+                    let value = string_literal(&meta.value, "`name`")?;
+
+                    name = Some(value.value());
+                    tracing_args.push(quote! { name = #value });
+                },
+                Some("level") => {
+                    let meta = name_value_arg(arg, "`level`")?;
+                    if level_seen {
+                        return Err(syn::Error::new_spanned(
+                            meta,
+                            "`level` may only be specified once",
+                        ));
+                    }
+                    level_seen = true;
+                    level = SpanLevel::parse(&meta.value)?;
+                    let value = LitStr::new(level.as_str(), meta.value.span());
+
+                    tracing_args.push(quote! { level = #value });
                 },
                 Some("target") => {
-                    let Meta::NameValue(meta) = arg else {
-                        return Err(syn::Error::new_spanned(
-                            arg,
-                            "`target` must be specified as a name-value argument",
-                        ));
-                    };
-                    if target_seen {
+                    let meta = name_value_arg(arg, "`target`")?;
+                    if target.is_some() {
                         return Err(syn::Error::new_spanned(
                             meta,
                             "`target` may only be specified once",
                         ));
                     }
-                    target_seen = true;
 
-                    let target = target::parse(&meta.value)?;
-                    let target = syn::LitStr::new(&target, meta.value.span());
+                    let value = target::parse(&meta.value)?;
+                    let value_literal = LitStr::new(&value, meta.value.span());
 
-                    Ok(quote! { target = #target })
+                    target = Some(value);
+                    tracing_args.push(quote! { target = #value_literal });
                 },
-                Some("skip_all") => Err(syn::Error::new_spanned(
-                    arg,
-                    "`skip_all` is always applied by this macro",
-                )),
+                Some("skip_all") => {
+                    Err(syn::Error::new_spanned(arg, "`skip_all` is always applied by this macro"))?
+                },
                 Some("skip") => Err(syn::Error::new_spanned(
                     arg,
                     "`skip` is not supported; this macro always skips all arguments",
-                )),
+                ))?,
                 Some("fields") => Err(syn::Error::new_spanned(
                     arg,
                     "`fields` is not supported; record fields with `miden_node_tracing::Span`",
-                )),
+                ))?,
                 Some("err") => Err(syn::Error::new_spanned(
                     arg,
                     "`err` is not supported; this macro records returned errors with `Span::record_error`",
-                )),
+                ))?,
                 Some(_) => Err(syn::Error::new_spanned(
                     arg,
                     "unsupported instrument argument; only `name`, `target`, and `level` are supported",
-                )),
-                None => Err(syn::Error::new_spanned(arg, "unsupported instrument argument")),
+                ))?,
+                None => Err(syn::Error::new_spanned(arg, "unsupported instrument argument"))?,
             }
+        }
+
+        let target = target.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("`target` is required; expected one of: {}", target::allowed_targets()),
+            )
+        })?;
+
+        tracing_args.insert(0, quote! { skip_all });
+
+        Ok(Self {
+            tracing_args: quote! { #(#tracing_args),* },
+            target,
+            name,
+            level,
         })
-        .collect::<syn::Result<Vec<_>>>()?;
-
-    if !target_seen {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            format!("`target` is required; expected one of: {}", target::allowed_targets()),
-        ));
     }
-
-    args.insert(0, quote! { skip_all });
-
-    Ok(quote! { #(#args),* })
 }
 
-fn validate_name_value_arg(arg: &Meta, name: &str) -> syn::Result<()> {
-    if matches!(arg, Meta::NameValue(_)) {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(
+fn name_value_arg(arg: Meta, name: &str) -> syn::Result<syn::MetaNameValue> {
+    match arg {
+        Meta::NameValue(meta) => Ok(meta),
+        _ => Err(syn::Error::new_spanned(
             arg,
-            format!("{name} must be specified as name-value arguments"),
-        ))
+            format!("{name} must be specified as a name-value argument"),
+        )),
+    }
+}
+
+fn string_literal(value: &Expr, name: &str) -> syn::Result<LitStr> {
+    match value {
+        Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => Ok(lit.clone()),
+        _ => Err(syn::Error::new_spanned(value, format!("{name} must be a string literal"))),
     }
 }
 
 fn expand_instrument(
-    instrument_args: proc_macro2::TokenStream,
+    instrument_args: InstrumentArgs,
     function: ItemFn,
 ) -> proc_macro2::TokenStream {
     let attrs = function.attrs;
     let vis = function.vis;
     let sig = function.sig;
     let block = function.block;
+    let target = LitStr::new(&instrument_args.target, proc_macro2::Span::call_site());
+    let default_name;
+    let name = if let Some(name) = &instrument_args.name {
+        LitStr::new(name, sig.ident.span())
+    } else {
+        default_name = sig.ident.to_string();
+        LitStr::new(&default_name, sig.ident.span())
+    };
+    let level = instrument_args.level;
+    let tracing_args = instrument_args.tracing_args;
+    let submit_metadata = metadata::submit_span_metadata(&target, level, &name);
     let body = if sig.asyncness.is_some() {
         quote! {{
+            #submit_metadata
             let __miden_node_tracing_result = (async #block).await;
             if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
                 __miden_node_tracing_result
@@ -118,6 +171,7 @@ fn expand_instrument(
         }}
     } else {
         quote! {{
+            #submit_metadata
             let __miden_node_tracing_result = (|| #block)();
             if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
                 __miden_node_tracing_result
@@ -130,7 +184,7 @@ fn expand_instrument(
 
     quote! {
         #(#attrs)*
-        #[::miden_node_tracing::tracing::instrument(#instrument_args)]
+        #[::miden_node_tracing::tracing::instrument(#tracing_args)]
         #vis #sig #body
     }
 }
@@ -142,7 +196,7 @@ mod tests {
     use syn::punctuated::Punctuated;
     use syn::{Meta, Token};
 
-    use super::instrument_args;
+    use super::InstrumentArgs;
 
     fn parse_args(
         tokens: proc_macro2::TokenStream,
@@ -154,19 +208,34 @@ mod tests {
 
     #[test]
     fn requires_target() {
-        let err = instrument_args(parse_args(quote!(name = "test"))).unwrap_err();
+        let err = InstrumentArgs::parse(parse_args(quote!(name = "test"))).unwrap_err();
 
         assert!(err.to_string().contains("`target` is required"));
     }
 
     #[test]
     fn rewrites_allowed_target_to_literal() {
-        let args = instrument_args(parse_args(quote!(target = store::database, name = "test")))
-            .unwrap()
-            .to_string();
+        let args =
+            InstrumentArgs::parse(parse_args(quote!(target = store::database, name = "test")))
+                .unwrap()
+                .tracing_args
+                .to_string();
 
         assert!(args.contains("skip_all"));
         assert!(args.contains("target = \"store::database\""));
         assert!(args.contains("name = \"test\""));
+    }
+
+    #[test]
+    fn parses_level_metadata() {
+        let args = InstrumentArgs::parse(parse_args(quote!(
+            target = store::database,
+            level = "debug",
+            name = "test"
+        )))
+        .unwrap();
+
+        assert_eq!(args.level, crate::level::SpanLevel::Debug);
+        assert!(args.tracing_args.to_string().contains("level = \"debug\""));
     }
 }

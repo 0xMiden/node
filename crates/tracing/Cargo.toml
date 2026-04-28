@@ -15,6 +15,7 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
+inventory                = { workspace = true }
 miden-node-tracing-macro = { workspace = true }
 miden-protocol        = { workspace = true }
 opentelemetry         = { workspace = true }
