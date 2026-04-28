@@ -251,13 +251,13 @@ service StoreReplica {
     // Replays historical blocks first, then streams live blocks as they are committed.
     // On lag (replica falls too far behind), the stream is closed with a DATA_LOSS error and
     // the client should reconnect from its local tip.
-    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockEvent) {}
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream SignedBlock) {}
 
     // Streams block proofs starting from the given block number (inclusive).
     //
     // Replays existing proofs first, then streams new proofs as they are generated.
     // On lag, the stream is closed with a DATA_LOSS error.
-    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofEvent) {}
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream BlockProof) {}
 }
 
 // BLOCK SUBSCRIPTION
@@ -269,8 +269,8 @@ message BlockSubscriptionRequest {
     fixed32 block_from = 1;
 }
 
-// A committed block event streamed to a replica.
-message BlockEvent {
+// A committed block streamed to a replica.
+message SignedBlock {
     // The block encoded using [miden_serde_utils::Serializable] implementation for
     // [miden_protocol::block::SignedBlock].
     bytes block = 1;
@@ -285,8 +285,8 @@ message ProofSubscriptionRequest {
     fixed32 block_from = 1;
 }
 
-// A block proof event streamed to a replica.
-message ProofEvent {
+// A block proof streamed to a replica.
+message BlockProof {
     // The block number this proof corresponds to.
     fixed32 block_num = 1;
 

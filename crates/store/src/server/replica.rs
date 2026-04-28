@@ -2,10 +2,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use miden_node_proto::generated::store::{
-    BlockEvent,
     BlockSubscriptionRequest,
-    ProofEvent,
+    BlockProof,
     ProofSubscriptionRequest,
+    SignedBlock,
     store_replica_server,
 };
 use miden_protocol::block::BlockNumber;
@@ -25,7 +25,7 @@ use crate::state::{BlockNotification, Finality, State};
 impl store_replica_server::StoreReplica for StoreApi {
     type BlockSubscriptionStream = Pin<
         Box<
-            dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockEvent, Status>>
+            dyn tonic::codegen::tokio_stream::Stream<Item = Result<SignedBlock, Status>>
                 + Send
                 + 'static,
         >,
@@ -33,7 +33,7 @@ impl store_replica_server::StoreReplica for StoreApi {
 
     type ProofSubscriptionStream = Pin<
         Box<
-            dyn tonic::codegen::tokio_stream::Stream<Item = Result<ProofEvent, Status>>
+            dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockProof, Status>>
                 + Send
                 + 'static,
         >,
@@ -97,7 +97,7 @@ fn build_block_stream(
     chain_tip: BlockNumber,
     state: Arc<State>,
     live_rx: tokio::sync::broadcast::Receiver<BlockNotification>,
-) -> impl tonic::codegen::tokio_stream::Stream<Item = Result<BlockEvent, Status>> + Send + 'static {
+) -> impl tonic::codegen::tokio_stream::Stream<Item = Result<SignedBlock, Status>> + Send + 'static {
     // Phase 1: replay historical blocks from the block store.
     let historical = tokio_stream::iter(from.as_u32()..=chain_tip.as_u32())
         .map(BlockNumber::from)
@@ -116,7 +116,7 @@ fn build_block_stream(
                     .ok_or_else(|| {
                         Status::not_found(format!("block {} not found", block_num.as_u32()))
                     })?;
-                Ok(BlockEvent { block: bytes })
+                Ok(SignedBlock { block: bytes })
             }
         });
 
@@ -124,7 +124,7 @@ fn build_block_stream(
     // filter_map in tokio_stream is synchronous.
     let live = BroadcastStream::new(live_rx).filter_map(move |result| match result {
         Ok(ref notification) if notification.block_num > chain_tip => {
-            Some(Ok(BlockEvent { block: notification.block_bytes.clone() }))
+            Some(Ok(SignedBlock { block: notification.block_bytes.clone() }))
         },
         Ok(_) => None, // already replayed
         Err(BroadcastStreamRecvError::Lagged(n)) => Some(Err(Status::data_loss(format!(
@@ -141,7 +141,7 @@ fn build_proof_stream(
     proven_tip: BlockNumber,
     state: Arc<State>,
     live_rx: tokio::sync::broadcast::Receiver<ProofNotification>,
-) -> impl tonic::codegen::tokio_stream::Stream<Item = Result<ProofEvent, Status>> + Send + 'static {
+) -> impl tonic::codegen::tokio_stream::Stream<Item = Result<BlockProof, Status>> + Send + 'static {
     // Phase 1: replay existing proofs from disk for all proven blocks in the requested range.
     // Blocks without a proof file are skipped (not yet proven). Use then() + filter_map() since
     // load_proof is async but tokio_stream::StreamExt::filter_map is synchronous.
@@ -151,7 +151,7 @@ fn build_proof_stream(
             let state = Arc::clone(&state);
             async move {
                 match state.load_proof(block_num).await {
-                    Ok(Some(bytes)) => Some(Ok(ProofEvent {
+                    Ok(Some(bytes)) => Some(Ok(BlockProof {
                         block_num: block_num.as_u32(),
                         proof: bytes,
                     })),
@@ -167,7 +167,7 @@ fn build_proof_stream(
 
     // Phase 2: forward live proof notifications, skipping those already covered by replay.
     let live = BroadcastStream::new(live_rx).filter_map(move |result| match result {
-        Ok(ref notification) if notification.block_num > proven_tip => Some(Ok(ProofEvent {
+        Ok(ref notification) if notification.block_num > proven_tip => Some(Ok(BlockProof {
             block_num: notification.block_num.as_u32(),
             proof: notification.proof_bytes.clone(),
         })),
