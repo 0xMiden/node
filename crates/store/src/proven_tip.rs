@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use miden_protocol::block::BlockNumber;
 
-/// Single-owner handle that can advance the proven chain tip.
+/// Cheaply cloneable handle that can advance the proven chain tip.
 ///
-/// Not cloneable — only the proof scheduler should write.
+/// Used by the proof scheduler (block producer mode) or replica client (block consumer mode).
+#[derive(Clone)]
 pub struct ProvenTipWriter(Arc<AtomicU32>);
 
 /// Cheaply cloneable handle for reading the current proven chain tip.

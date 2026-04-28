@@ -32,7 +32,8 @@ pub mod block_prover_client;
 mod ntx_builder;
 pub mod proof_scheduler;
 mod replica;
-mod replica_client;
+mod block_replica_client;
+mod proof_replica_client;
 mod rpc_api;
 
 /// Broadcast channel capacity for replica proof notifications.
@@ -247,12 +248,22 @@ impl Store {
         info!(target: COMPONENT, %upstream_url, "Starting in replica mode");
 
         let state = Arc::new(state);
-        let replica_task = replica_client::spawn(
+        let block_handle =
+            block_replica_client::BlockReplicaClient::new(Arc::clone(&state), upstream_url.clone())
+                .spawn();
+        let proof_handle = proof_replica_client::ProofReplicaClient::new(
             Arc::clone(&state),
             upstream_url,
             proven_tip,
             proof_sender.clone(),
-        );
+        )
+        .spawn();
+        let replica_task = tokio::spawn(async move {
+            tokio::select! {
+                result = block_handle => result?,
+                result = proof_handle => result?,
+            }
+        });
 
         let store_api = api::StoreApi { state, block_sender, proof_sender };
         let join_set = Self::spawn_replica_grpc_servers(store_api, grpc_options, rpc_listener)?;
