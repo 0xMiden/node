@@ -62,6 +62,7 @@ jobs:
         with:
           shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
           prefix-key: ${{ env.RUST_CACHE_KEY }}
+          cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/next' || github.ref == 'refs/heads/main' }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
