@@ -24,7 +24,6 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
-use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
