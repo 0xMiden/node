@@ -161,6 +161,7 @@ pub async fn seed_store(
 /// The first transaction in each batch sends assets from the faucet to 255 accounts.
 /// The rest of the transactions consume the notes created by the faucet in the previous block.
 #[expect(clippy::too_many_arguments)]
+#[expect(clippy::too_many_lines)]
 async fn generate_blocks(
     num_accounts: usize,
     public_accounts_percentage: u8,
@@ -396,6 +397,7 @@ fn fee_from_block(block_ref: &BlockHeader) -> Result<FungibleAsset, AssetError> 
 /// Returns a tuple with:
 /// - The list of new accounts
 /// - The list of new notes
+#[expect(clippy::too_many_arguments)]
 fn create_accounts_and_notes(
     num_accounts: usize,
     storage_mode: AccountStorageMode,

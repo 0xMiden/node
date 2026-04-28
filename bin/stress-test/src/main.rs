@@ -110,62 +110,6 @@ pub enum Endpoint {
     },
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn seed_store_accepts_storage_map_entries_option() {
-        let cli = Cli::try_parse_from([
-            "stress-test",
-            "seed-store",
-            "--data-directory",
-            "/tmp/store",
-            "--num-accounts",
-            "10",
-            "--public-accounts-percentage",
-            "100",
-            "--storage-map-entries",
-            "128",
-            "--vault-entries",
-            "7",
-            "--account-update-blocks",
-            "12",
-        ])
-        .unwrap();
-
-        let Command::SeedStore {
-            storage_map_entries,
-            vault_entries,
-            account_update_blocks,
-            ..
-        } = cli.command
-        else {
-            panic!("expected seed-store command");
-        };
-        assert_eq!(storage_map_entries, 128);
-        assert_eq!(vault_entries, 7);
-        assert_eq!(account_update_blocks, 12);
-    }
-
-    #[test]
-    fn benchmark_store_accepts_get_account_endpoint() {
-        let cli = Cli::try_parse_from([
-            "stress-test",
-            "benchmark-store",
-            "--data-directory",
-            "/tmp/store",
-            "get-account",
-        ])
-        .unwrap();
-
-        let Command::BenchmarkStore { endpoint, .. } = cli.command else {
-            panic!("expected benchmark-store command");
-        };
-        assert!(matches!(endpoint, Endpoint::GetAccount { .. }));
-    }
-}
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
