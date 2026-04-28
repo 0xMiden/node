@@ -54,20 +54,21 @@ impl ProofReplicaClient {
     }
 
     async fn sync(&self) -> anyhow::Result<()> {
+        // Determine which block to start streaming from based on the chain tip.
         let block_from = self.state.chain_tip(Finality::Proven).await.as_u32().saturating_add(1);
-
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for proofs");
 
+        // Connect to the upstream store and create a proof subscription stream.
         let channel = tonic::transport::Channel::from_shared(self.upstream_url.to_string())?
             .connect()
             .await?;
         let mut client = store_replica_client::StoreReplicaClient::new(channel);
-
         let mut stream = client
             .proof_subscription(ProofSubscriptionRequest { block_from })
             .await?
             .into_inner();
 
+        // Process each block event from the stream.
         while let Some(result) = stream.next().await {
             let event = result?;
             let block_num = BlockNumber::from(event.block_num);
