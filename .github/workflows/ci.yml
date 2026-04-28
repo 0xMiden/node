@@ -26,11 +26,25 @@ env:
   # Shared prefix key for the rust cache.
   #
   # This provides a convenient way to evict old or corrupted cache.
-  RUST_CACHE_KEY: rust-cache-2026.02.02
+  RUST_CACHE_PREFIX: rust-cache
+  # The trunk branch this run should warm from.
+  #
+  # Prefer the targeted trunk branch for PRs, then direct trunk refs, and
+  # otherwise default to `next`.
+  RUST_CACHE_BASE: >-
+    ${{ github.base_ref == 'main' && 'main'
+    || github.base_ref == 'next' && 'next'
+    || github.ref == 'refs/heads/main' && 'main'
+    || github.ref == 'refs/heads/next' && 'next'
+    || 'next' }}
   # Shared branch-aware cache namespace for rust-cache.
-  RUST_CACHE_SHARED_KEY: ${{ github.workflow }}-build-${{ github.base_ref || github.ref_name }}
-  # Per-run cache used to share build outputs across jobs within a single workflow run.
-  RUN_CACHE_KEY: ${{ github.workflow }}-run-${{ github.run_id }}
+  #
+  # Pushes save to the persistent trunk cache, while pull requests append the
+  # PR number so they save into an ephemeral PR-specific cache.
+  RUST_CACHE_SUFFIX: >-
+    ${{ github.event_name == 'pull_request'
+    && format('{0}-pr-{1}', env.RUST_CACHE_BASE, github.event.pull_request.number)
+    || env.RUST_CACHE_BASE }}
   # Match rust-cache's compilation mode so restored outputs stay reusable downstream.
   CARGO_INCREMENTAL: 0
   # Reduce cache usage by removing debug information.
@@ -46,7 +60,7 @@ jobs:
   # Conventional builds, lints and tests that re-use a single cache for efficiency
   # ===============================================================================================
 
-  # Normal cargo build that maintains a persistent trunk cache and publishes a
+  # Normal cargo build that saves either the persistent trunk cache or a
   # single per-run cache for downstream jobs to restore immediately.
   build:
     runs-on: ubuntu-24.04
@@ -60,10 +74,10 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ env.RUST_CACHE_SHARED_KEY }}
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
           cache-workspace-crates: true
-          save-if: ${{ github.ref == 'refs/heads/next' || github.ref == 'refs/heads/main' }}
+          save-if: true
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -103,14 +117,6 @@ jobs:
             fi
           done
           echo "Static linkage check passed for all of ${bin_targets[@]}"
-      - name: Save run cache
-        uses: actions/cache/save@v4
-        with:
-          key: ${{ env.RUN_CACHE_KEY }}
-          path: |
-            target
-            ~/.cargo/registry
-            ~/.cargo/git
 
   clippy:
     name: lint - clippy
@@ -120,14 +126,12 @@ jobs:
       - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
-      - name: Restore run cache
-        uses: actions/cache/restore@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.RUN_CACHE_KEY }}
-          path: |
-            target
-            ~/.cargo/registry
-            ~/.cargo/git
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
+          save-if: false
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
@@ -142,14 +146,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.122
-      - name: Restore run cache
-        uses: actions/cache/restore@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.RUN_CACHE_KEY }}
-          path: |
-            target
-            ~/.cargo/registry
-            ~/.cargo/git
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
+          save-if: false
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -166,14 +168,12 @@ jobs:
         uses: ./.github/actions/cleanup-runner
       - name: Rustup
         run: rustup update --no-self-update
-      - name: Restore run cache
-        uses: actions/cache/restore@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.RUN_CACHE_KEY }}
-          path: |
-            target
-            ~/.cargo/registry
-            ~/.cargo/git
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
+          save-if: false
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
@@ -189,14 +189,12 @@ jobs:
       - uses: actions/checkout@v6
       - name: Rustup
         run: rustup update --no-self-update
-      - name: Restore run cache
-        uses: actions/cache/restore@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.RUN_CACHE_KEY }}
-          path: |
-            target
-            ~/.cargo/registry
-            ~/.cargo/git
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
+          save-if: false
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.122
@@ -229,7 +227,7 @@ jobs:
   cleanup-run-cache:
     name: cleanup run cache
     runs-on: ubuntu-24.04
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name == 'pull_request' }}
     needs:
       - build
       - clippy
@@ -240,14 +238,22 @@ jobs:
       actions: write
       contents: read
     steps:
-      - name: Delete run cache
+      - name: Delete run rust caches
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api \
-            --method DELETE \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUN_CACHE_KEY }}"
+          mapfile -t cache_ids < <(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUST_CACHE_SUFFIX }}&ref=${{ github.ref }}" \
+              --jq '.actions_caches[].id'
+          )
+          for cache_id in "${cache_ids[@]}"; do
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/actions/caches/${cache_id}"
+          done
 
   # ===============================================================================================
   # WASM related jobs
