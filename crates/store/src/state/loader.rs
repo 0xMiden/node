@@ -16,7 +16,6 @@ use miden_crypto::merkle::mmr::Mmr;
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::RocksDbStorage;
 use miden_node_utils::clap::RocksDbOptions;
-use miden_protocol::account::StorageMapKey;
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
@@ -367,11 +366,10 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
 pub async fn load_smt_forest(
     db: &mut Db,
     block_num: BlockNumber,
-) -> Result<(AccountStateForest, Vec<(Word, StorageMapKey)>), StateInitializationError> {
+) -> Result<AccountStateForest, StateInitializationError> {
     use miden_protocol::account::delta::AccountDelta;
 
     let mut forest = AccountStateForest::new();
-    let mut storage_map_key_cache_entries = Vec::new();
     let mut cursor = None;
 
     loop {
@@ -395,8 +393,6 @@ pub async fn load_smt_forest(
                 StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
             })?;
 
-            storage_map_key_cache_entries
-                .extend(crate::state::State::storage_map_key_cache_entries_from_deltas([&delta]));
             forest.update_account(block_num, &delta)?;
         }
 
@@ -406,7 +402,7 @@ pub async fn load_smt_forest(
         }
     }
 
-    Ok((forest, storage_map_key_cache_entries))
+    Ok(forest)
 }
 
 // CONSISTENCY VERIFICATION

@@ -224,8 +224,6 @@ impl State {
                     AccountUpdateDetails::Private => None,
                 },
             ));
-        let storage_map_key_cache_entries =
-            State::storage_map_key_cache_entries_from_deltas(account_deltas.iter());
 
         // The DB and in-memory state updates need to be synchronized and are partially
         // overlapping. Namely, the DB transaction only proceeds after this task acquires the
@@ -295,7 +293,6 @@ impl State {
         .await?;
 
         self.forest.write().await.apply_block_updates(block_num, account_deltas)?;
-        self.storage_map_key_cache.put_many(storage_map_key_cache_entries).await;
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 

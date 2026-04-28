@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 
+use lru::LruCache;
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
 use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
@@ -37,6 +39,8 @@ pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
 #[cfg(test)]
 mod tests;
 
+const STORAGE_MAP_KEY_CACHE_CAPACITY: usize = 65_536;
+
 // ERRORS
 // ================================================================================================
 
@@ -68,11 +72,20 @@ pub(crate) struct AccountStateForest {
     /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
     forest: LargeSmtForest<ForestInMemoryBackend>,
+
+    /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
+    storage_map_key_cache: LruCache<Word, StorageMapKey>,
 }
 
 impl AccountStateForest {
     pub(crate) fn new() -> Self {
-        Self { forest: Self::create_forest() }
+        Self {
+            forest: Self::create_forest(),
+            storage_map_key_cache: LruCache::new(
+                NonZeroUsize::new(STORAGE_MAP_KEY_CACHE_CAPACITY)
+                    .expect("storage map key cache capacity must be non-zero"),
+            ),
+        }
     }
 
     fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
@@ -134,6 +147,23 @@ impl AccountStateForest {
                 }
             })
             .collect()
+    }
+
+    fn cache_storage_map_keys_from_delta(&mut self, delta: &AccountDelta) {
+        let raw_keys = delta
+            .storage()
+            .maps()
+            .flat_map(|(_slot_name, map_delta)| map_delta.entries().keys().copied());
+        self.cache_storage_map_keys(raw_keys);
+    }
+
+    pub(crate) fn cache_storage_map_keys(
+        &mut self,
+        raw_keys: impl IntoIterator<Item = StorageMapKey>,
+    ) {
+        for raw_key in raw_keys {
+            self.storage_map_key_cache.put(raw_key.hash().into(), raw_key);
+        }
     }
 
     fn apply_forest_updates(
@@ -339,6 +369,54 @@ impl AccountStateForest {
         )
     }
 
+    /// Returns all storage map entries when the forest and reverse-key cache contain enough data.
+    ///
+    /// Returns `None` when no storage root is tracked for this account/slot/block combination.
+    /// Returns `Ok(None)` when the forest has hashed entries but at least one raw key is missing
+    /// from the reverse-key cache, so the caller should fall back to database reconstruction.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub(crate) fn get_storage_map_details_for_all_entries(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Option<Result<Option<AccountStorageMapDetails>, MerkleError>> {
+        let hashed_entries = match self.get_storage_map_hashed_entries(
+            account_id,
+            &slot_name,
+            block_num,
+            AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
+        )? {
+            Ok(entries) => entries,
+            Err(err) => return Some(Err(err)),
+        };
+
+        if hashed_entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+            return Some(Ok(Some(AccountStorageMapDetails {
+                slot_name,
+                entries: miden_node_proto::domain::account::StorageMapEntries::LimitExceeded,
+            })));
+        }
+
+        let raw_keys = hashed_entries
+            .iter()
+            .map(|(hashed_key, _)| self.storage_map_key_cache.peek(hashed_key).copied())
+            .collect::<Vec<_>>();
+        if raw_keys.iter().any(Option::is_none) {
+            return Some(Ok(None));
+        }
+
+        let mut entries = raw_keys
+            .into_iter()
+            .flatten()
+            .zip(hashed_entries)
+            .map(|(raw_key, (_hashed_key, value))| (raw_key, value))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b));
+
+        Some(Ok(Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries))))
+    }
+
     // PUBLIC INTERFACE
     // --------------------------------------------------------------------------------------------
 
@@ -411,6 +489,8 @@ impl AccountStateForest {
         } else if !delta.storage().is_empty() {
             self.update_account_storage(block_num, account_id, delta.storage());
         }
+
+        self.cache_storage_map_keys_from_delta(delta);
 
         Ok(())
     }

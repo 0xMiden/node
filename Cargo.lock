@@ -3361,6 +3361,7 @@ dependencies = [
  "hex",
  "indexmap",
  "libsqlite3-sys",
+ "lru",
  "miden-agglayer",
  "miden-block-prover",
  "miden-crypto",
