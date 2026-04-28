@@ -146,9 +146,13 @@ make compose-genesis
 A convenience script is provided that bootstraps and starts all components as separate processes:
 
 ```sh
-export AWS_REGION=eu-north-1
-export KMS_KEY_ID=<your-kms-key-id>
 ./scripts/run-node.sh
+```
+
+To avoid genesis and simply restart from a previous run:
+
+```sh
+SKIP_BOOTSTRAP=true scripts/run-node.sh
 ```
 
 Each component can also be started as a standalone process. For example:

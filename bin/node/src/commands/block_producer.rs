@@ -1,26 +1,45 @@
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
 use anyhow::Context;
-use miden_node_block_producer::BlockProducer;
-use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_block_producer::{
+    BlockProducer,
+    DEFAULT_BATCH_INTERVAL,
+    DEFAULT_BLOCK_INTERVAL,
+    DEFAULT_MAX_BATCHES_PER_BLOCK,
+    DEFAULT_MAX_TXS_PER_BATCH,
+};
+use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{ENV_BLOCK_PRODUCER_URL, ENV_STORE_BLOCK_PRODUCER_URL};
-use crate::commands::{BlockProducerConfig, ENV_ENABLE_OTEL, ENV_VALIDATOR_BLOCK_PRODUCER_URL};
+use super::ENV_ENABLE_OTEL;
+
+const ENV_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_URL";
+const ENV_STORE_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_STORE_URL";
+const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_VALIDATOR_URL";
+const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_TXS_PER_BATCH";
+const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_BATCHES_PER_BLOCK";
+const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_BLOCK_PRODUCER_MEMPOOL_TX_CAPACITY";
+const ENV_BATCH_PROVER_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_BATCH_PROVER_URL";
+
+// BLOCK PRODUCER COMMAND
+// ================================================================================================
 
 #[derive(clap::Subcommand)]
 pub enum BlockProducerCommand {
     /// Starts the block-producer component.
     Start {
         /// Url at which to serve the gRPC API.
-        #[arg(env = ENV_BLOCK_PRODUCER_URL)]
+        #[arg(env = ENV_URL)]
         url: Url,
 
         /// The store's block-producer service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_BLOCK_PRODUCER_URL)]
+        #[arg(long = "store.url", env = ENV_STORE_URL)]
         store_url: Url,
 
         /// The validator's service gRPC url.
-        #[arg(long = "validator.url", env = ENV_VALIDATOR_BLOCK_PRODUCER_URL)]
+        #[arg(long = "validator.url", env = ENV_VALIDATOR_URL)]
         validator_url: Url,
 
         #[command(flatten)]
@@ -148,4 +167,61 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("max-txs-per-batch"));
     }
+}
+
+// BLOCK PRODUCER CONFIG
+// ================================================================================================
+
+/// Configuration for the Block Producer component
+#[derive(clap::Args)]
+pub struct BlockProducerConfig {
+    /// Interval at which to produce blocks.
+    #[arg(
+        long = "block.interval",
+        default_value = &duration_to_human_readable_string(DEFAULT_BLOCK_INTERVAL),
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION"
+    )]
+    pub block_interval: Duration,
+
+    /// Interval at which to produce batches.
+    #[arg(
+        long = "batch.interval",
+        default_value = &duration_to_human_readable_string(DEFAULT_BATCH_INTERVAL),
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION"
+    )]
+    pub batch_interval: Duration,
+
+    /// The remote batch prover's gRPC url. If unset, will default to running a prover
+    /// in-process which is expensive.
+    #[arg(long = "batch-prover.url", env = ENV_BATCH_PROVER_URL, value_name = "URL")]
+    pub batch_prover_url: Option<Url>,
+
+    /// The number of transactions per batch.
+    #[arg(
+        long = "max-txs-per-batch",
+        env = ENV_MAX_TXS_PER_BATCH,
+        value_name = "NUM",
+        default_value_t = DEFAULT_MAX_TXS_PER_BATCH
+    )]
+    pub max_txs_per_batch: usize,
+
+    /// Maximum number of batches per block.
+    #[arg(
+        long = "max-batches-per-block",
+        env = ENV_MAX_BATCHES_PER_BLOCK,
+        value_name = "NUM",
+        default_value_t = DEFAULT_MAX_BATCHES_PER_BLOCK
+    )]
+    pub max_batches_per_block: usize,
+
+    /// Maximum number of uncommitted transactions allowed in the mempool.
+    #[arg(
+        long = "mempool.tx-capacity",
+        default_value_t = miden_node_block_producer::DEFAULT_MEMPOOL_TX_CAPACITY,
+        env = ENV_MEMPOOL_TX_CAPACITY,
+        value_name = "NUM"
+    )]
+    mempool_tx_capacity: NonZeroUsize,
 }

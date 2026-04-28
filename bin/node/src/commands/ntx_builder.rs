@@ -8,31 +8,31 @@ use miden_node_utils::grpc::UrlExt;
 use tokio::net::TcpListener;
 use url::Url;
 
-use super::{
-    DEFAULT_NTX_IDLE_TIMEOUT,
-    DEFAULT_NTX_MAX_CYCLES,
-    DEFAULT_NTX_SCRIPT_CACHE_SIZE,
-    ENV_BLOCK_PRODUCER_URL,
-    ENV_ENABLE_OTEL,
-    ENV_NTX_DATA_DIRECTORY,
-    ENV_NTX_MAX_CYCLES,
-    ENV_NTX_PROVER_URL,
-    ENV_NTX_SCRIPT_CACHE_SIZE,
-    ENV_STORE_NTX_BUILDER_URL,
-    ENV_VALIDATOR_URL,
-};
-use crate::commands::ENV_NTX_BUILDER_URL;
+use super::ENV_ENABLE_OTEL;
+use crate::commands::ENV_DATA_DIRECTORY;
+
+const ENV_URL: &str = "MIDEN_NODE_NTX_BUILDER_URL";
+const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
+const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
+const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
+const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
+const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
+const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
+
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 
 #[derive(clap::Subcommand)]
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
         /// Url at which to serve the ntx-builder's gRPC API.
-        #[arg(long = "url", env = ENV_NTX_BUILDER_URL, value_name = "URL")]
+        #[arg(long = "url", env = ENV_URL, value_name = "URL")]
         url: Option<Url>,
 
         /// The store's ntx-builder service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
+        #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
         store_url: Url,
 
         /// The block-producer's gRPC url.
@@ -45,7 +45,7 @@ pub enum NtxBuilderCommand {
 
         /// The remote transaction prover's gRPC url. If unset, will default to running a
         /// prover in-process which is expensive.
-        #[arg(long = "tx-prover.url", env = ENV_NTX_PROVER_URL, value_name = "URL")]
+        #[arg(long = "tx-prover.url", env = ENV_TX_PROVER_URL, value_name = "URL")]
         tx_prover_url: Option<Url>,
 
         /// Number of note scripts to cache locally.
@@ -53,9 +53,9 @@ pub enum NtxBuilderCommand {
         /// Note scripts not in cache must first be retrieved from the store.
         #[arg(
             long = "script-cache-size",
-            env = ENV_NTX_SCRIPT_CACHE_SIZE,
+            env = ENV_SCRIPT_CACHE_SIZE,
             value_name = "NUM",
-            default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
+            default_value_t = DEFAULT_SCRIPT_CACHE_SIZE
         )]
         script_cache_size: NonZeroUsize,
 
@@ -65,7 +65,7 @@ pub enum NtxBuilderCommand {
         /// A deactivated account will reactivate if targeted with new notes.
         #[arg(
             long = "idle-timeout",
-            default_value = &duration_to_human_readable_string(DEFAULT_NTX_IDLE_TIMEOUT),
+            default_value = &duration_to_human_readable_string(DEFAULT_IDLE_TIMEOUT),
             value_parser = humantime::parse_duration,
             value_name = "DURATION"
         )]
@@ -83,14 +83,14 @@ pub enum NtxBuilderCommand {
         /// cycles.
         #[arg(
             long = "max-cycles",
-            env = ENV_NTX_MAX_CYCLES,
-            default_value_t = DEFAULT_NTX_MAX_CYCLES,
+            env = ENV_MAX_CYCLES,
+            default_value_t = DEFAULT_MAX_CYCLES,
             value_name = "NUM",
         )]
         max_tx_cycles: u32,
 
         /// Directory for the ntx-builder's persistent database.
-        #[arg(long = "data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
+        #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
 
         /// Enables the exporting of traces for OpenTelemetry.

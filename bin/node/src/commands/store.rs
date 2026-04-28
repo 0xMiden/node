@@ -11,13 +11,14 @@ use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
-use super::{
-    ENV_DATA_DIRECTORY,
-    ENV_STORE_BLOCK_PRODUCER_URL,
-    ENV_STORE_NTX_BUILDER_URL,
-    ENV_STORE_RPC_URL,
-};
-use crate::commands::{ENV_BLOCK_PROVER_URL, ENV_ENABLE_OTEL, ENV_STORE_UPSTREAM_URL};
+use super::ENV_ENABLE_OTEL;
+use crate::commands::ENV_DATA_DIRECTORY;
+
+const ENV_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
+const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
+const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
+const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
+const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
@@ -39,15 +40,15 @@ pub enum StoreCommand {
     /// and runs the proof scheduler to generate block proofs.
     Start {
         /// Url at which to serve the store's RPC API.
-        #[arg(long = "rpc.url", env = ENV_STORE_RPC_URL, value_name = "URL")]
+        #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
         rpc_url: Url,
 
         /// Url at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.url", env = ENV_STORE_NTX_BUILDER_URL, value_name = "URL")]
+        #[arg(long = "ntx-builder.url", env = ENV_NTX_BUILDER_URL, value_name = "URL")]
         ntx_builder_url: Url,
 
         /// Url at which to serve the store's block producer API.
-        #[arg(long = "block-producer.url", env = ENV_STORE_BLOCK_PRODUCER_URL, value_name = "URL")]
+        #[arg(long = "block-producer.url", env = ENV_BLOCK_PRODUCER_URL, value_name = "URL")]
         block_producer_url: Url,
 
         /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
@@ -87,11 +88,11 @@ pub enum StoreCommand {
     /// `NtxBuilder` services are not started and no proof scheduler runs.
     StartReplica {
         /// Url at which to serve the store's RPC API.
-        #[arg(long = "rpc.url", env = ENV_STORE_RPC_URL, value_name = "URL")]
-        rpc_url: Url,
+        #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
+        url: Url,
 
         /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
-        #[arg(long = "upstream-store.url", env = ENV_STORE_UPSTREAM_URL, value_name = "URL")]
+        #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
         upstream_store_url: Url,
 
         /// Directory in which to store the database and raw block data.
@@ -142,7 +143,7 @@ impl StoreCommand {
                 .await
             },
             StoreCommand::StartReplica {
-                rpc_url,
+                url: rpc_url,
                 upstream_store_url,
                 data_directory,
                 enable_otel: _,

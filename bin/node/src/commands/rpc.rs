@@ -4,25 +4,24 @@ use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::grpc::UrlExt;
 use url::Url;
 
-use super::{
-    ENV_BLOCK_PRODUCER_URL,
-    ENV_NTX_BUILDER_URL,
-    ENV_RPC_URL,
-    ENV_STORE_RPC_URL,
-    ENV_VALIDATOR_URL,
-};
-use crate::commands::ENV_ENABLE_OTEL;
+use super::ENV_ENABLE_OTEL;
+
+const ENV_URL: &str = "MIDEN_NODE_RPC_URL";
+const ENV_STORE_URL: &str = "MIDEN_NODE_RPC_STORE_URL";
+const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_RPC_BLOCK_PRODUCER_URL";
+const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_RPC_VALIDATOR_URL";
+const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_RPC_NTX_BUILDER_URL";
 
 #[derive(clap::Subcommand)]
 pub enum RpcCommand {
     /// Starts the RPC component.
     Start {
         /// Url at which to serve the gRPC API.
-        #[arg(long = "url", env = ENV_RPC_URL, value_name = "URL")]
+        #[arg(long = "url", env = ENV_URL, value_name = "URL")]
         url: Url,
 
         /// The store's RPC service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_RPC_URL, value_name = "URL")]
+        #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
         store_url: Url,
 
         /// The block-producer's gRPC url. If unset, will run the RPC in read-only mode,

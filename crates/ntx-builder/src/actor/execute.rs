@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use miden_node_utils::ErrorReport;
@@ -398,7 +398,7 @@ struct NtxDataStore {
     /// single entry with the storage slot name that was added last. Thus, technically, requests
     /// to the store could be "wrong", but given that two identical maps have identical witnesses
     /// this does not cause issues in practice.
-    storage_slots: Arc<Mutex<BTreeMap<(AccountId, Word), StorageSlotName>>>,
+    storage_slots: Arc<Mutex<HashMap<(AccountId, Word), StorageSlotName>>>,
 }
 
 impl NtxDataStore {
@@ -423,7 +423,7 @@ impl NtxDataStore {
             script_cache,
             db,
             fetched_scripts: Arc::new(Mutex::new(Vec::new())),
-            storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
+            storage_slots: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 
