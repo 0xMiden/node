@@ -39,7 +39,7 @@ pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
 #[cfg(test)]
 mod tests;
 
-const STORAGE_MAP_KEY_CACHE_CAPACITY: usize = 65_536;
+const HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY: usize = 65_536;
 
 // ERRORS
 // ================================================================================================
@@ -67,6 +67,14 @@ pub enum WitnessError {
 // ACCOUNT STATE FOREST
 // ================================================================================================
 
+/// Result of retrieving storage map details for all entries in a storage map.
+#[derive(Debug, PartialEq)]
+pub enum AccountStorageMapResult {
+    NotFound,
+    CannotReconstructKeysFromCache,
+    Details(AccountStorageMapDetails),
+}
+
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct AccountStateForest {
     /// `LargeSmtForest` for efficient account storage reconstruction.
@@ -74,6 +82,9 @@ pub(crate) struct AccountStateForest {
     forest: LargeSmtForest<ForestInMemoryBackend>,
 
     /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
+    ///
+    /// Ideally this would be a mapping from `StorageMapKeyHash` to `StorageMapKey` but
+    /// unfortunately `StorageMapKeyHash` does not implement `Hash`.
     storage_map_key_cache: LruCache<Word, StorageMapKey>,
 }
 
@@ -82,7 +93,7 @@ impl AccountStateForest {
         Self {
             forest: Self::create_forest(),
             storage_map_key_cache: LruCache::new(
-                NonZeroUsize::new(STORAGE_MAP_KEY_CACHE_CAPACITY)
+                NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
             ),
         }
@@ -349,9 +360,9 @@ impl AccountStateForest {
     /// Storage map keys are hashed before insertion, so returned keys are hashed SMT keys rather
     /// than the raw [`StorageMapKey`] values supplied by users.
     ///
+    /// Returns `None` when no storage root is tracked for this account/slot/block combination.
     /// Returns at most `limit` entries.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub(crate) fn get_storage_map_hashed_entries(
+    fn get_storage_map_entries(
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
@@ -371,31 +382,35 @@ impl AccountStateForest {
 
     /// Returns all storage map entries when the forest and reverse-key cache contain enough data.
     ///
-    /// Returns `None` when no storage root is tracked for this account/slot/block combination.
-    /// Returns `Ok(None)` when the forest has hashed entries but at least one raw key is missing
-    /// from the reverse-key cache, so the caller should fall back to database reconstruction.
+    /// Returns `AccountStorageMapResult::NotFound` when no storage root is tracked for this
+    /// account/slot/block combination.
+    /// Returns `AccountStorageMapResult::CannotReconstructKeysFromCache` when the forest has hashed
+    /// entries but at least one raw key is missing from the reverse-key cache, so the caller
+    /// should fall back to database reconstruction.
     #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_details_for_all_entries(
         &self,
         account_id: AccountId,
         slot_name: StorageSlotName,
         block_num: BlockNumber,
-    ) -> Option<Result<Option<AccountStorageMapDetails>, MerkleError>> {
-        let hashed_entries = match self.get_storage_map_hashed_entries(
-            account_id,
-            &slot_name,
-            block_num,
-            AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
-        )? {
-            Ok(entries) => entries,
-            Err(err) => return Some(Err(err)),
+    ) -> Result<AccountStorageMapResult, MerkleError> {
+        let Some(hashed_entries) = self
+            .get_storage_map_entries(
+                account_id,
+                &slot_name,
+                block_num,
+                AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
+            )
+            .transpose()?
+        else {
+            return Ok(AccountStorageMapResult::NotFound);
         };
 
         if hashed_entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
-            return Some(Ok(Some(AccountStorageMapDetails {
+            return Ok(AccountStorageMapResult::Details(AccountStorageMapDetails {
                 slot_name,
                 entries: miden_node_proto::domain::account::StorageMapEntries::LimitExceeded,
-            })));
+            }));
         }
 
         let raw_keys = hashed_entries
@@ -403,7 +418,7 @@ impl AccountStateForest {
             .map(|(hashed_key, _)| self.storage_map_key_cache.peek(hashed_key).copied())
             .collect::<Vec<_>>();
         if raw_keys.iter().any(Option::is_none) {
-            return Some(Ok(None));
+            return Ok(AccountStorageMapResult::CannotReconstructKeysFromCache);
         }
 
         let mut entries = raw_keys
@@ -414,7 +429,9 @@ impl AccountStateForest {
             .collect::<Vec<_>>();
         entries.sort_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b));
 
-        Some(Ok(Some(AccountStorageMapDetails::from_forest_entries(slot_name, entries))))
+        Ok(AccountStorageMapResult::Details(AccountStorageMapDetails::from_forest_entries(
+            slot_name, entries,
+        )))
     }
 
     // PUBLIC INTERFACE

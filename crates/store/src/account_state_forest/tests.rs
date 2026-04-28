@@ -662,34 +662,6 @@ fn storage_map_open_returns_proofs() {
 }
 
 #[test]
-fn storage_map_entries_returns_hashed_keys() {
-    use std::collections::BTreeMap;
-
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
-
-    let mut forest = AccountStateForest::new();
-    let account_id = dummy_account();
-    let slot_name = StorageSlotName::mock(5);
-    let block_num = BlockNumber::GENESIS.child();
-    let raw_key = StorageMapKey::from_index(42);
-    let value = Word::from([42u32, 0, 0, 0]);
-
-    let mut map_delta = StorageMapDelta::default();
-    map_delta.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
-    let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
-    forest.update_account(block_num, &delta).unwrap();
-
-    let entries = forest
-        .get_storage_map_hashed_entries(account_id, &slot_name, block_num, 1)
-        .expect("Should return Some")
-        .expect("Should not error");
-
-    assert_eq!(entries, vec![(raw_key.hash().into(), value)]);
-}
-
-#[test]
 fn storage_map_all_entries_returns_raw_keys_after_update() {
     use std::collections::BTreeMap;
 
@@ -709,15 +681,16 @@ fn storage_map_all_entries_returns_raw_keys_after_update() {
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
-    let details = forest
+    let result = forest
         .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
-        .expect("storage root should exist")
-        .expect("forest lookup should not fail")
-        .expect("raw key should be cached");
+        .expect("forest lookup should not fail");
 
     assert_eq!(
-        details,
-        AccountStorageMapDetails::from_forest_entries(slot_name, vec![(raw_key, value)])
+        result,
+        AccountStorageMapResult::Details(AccountStorageMapDetails::from_forest_entries(
+            slot_name,
+            vec![(raw_key, value)]
+        ))
     );
 }
 

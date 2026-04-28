@@ -38,7 +38,7 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{Instrument, info, instrument};
 
-use crate::account_state_forest::{AccountStateForest, WitnessError};
+use crate::account_state_forest::{AccountStateForest, AccountStorageMapResult, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -705,14 +705,18 @@ impl State {
             .read()
             .instrument(tracing::info_span!("acquire_forest_for_storage_map_entries"))
             .await;
-        forest_guard
+        match forest_guard
             .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
-            .ok_or_else(|| DatabaseError::StorageRootNotFound {
+            .map_err(DatabaseError::MerkleError)?
+        {
+            AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
                 account_id,
                 slot_name: slot_name.to_string(),
                 block_num,
-            })?
-            .map_err(DatabaseError::MerkleError)
+            }),
+            AccountStorageMapResult::Details(details) => Ok(Some(details)),
+            AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
+        }
     }
 
     /// Returns storage map details by reconstructing the storage map from the database.
