@@ -23,22 +23,38 @@ use crate::state::{Finality, State};
 
 pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
+type StoreReplicaClient = store_replica_client::StoreReplicaClient<tonic::transport::Channel>;
+
 // REPLICA SYNC
 // ================================================================================================
 
 /// Shared reconnect-loop scaffolding for replica client types.
 ///
-/// Implementors provide a [`SYNC_KIND`](ReplicaSync::SYNC_KIND) label (used in log messages) and a
-/// [`sync`](ReplicaSync::sync) method that connects to the upstream, streams data, and returns when
-/// the stream ends or an error occurs. The default [`run`](ReplicaSync::run) and
-/// [`spawn`](ReplicaSync::spawn) methods wrap that in an infinite reconnect loop.
+/// Implementors provide [`SYNC_KIND`](ReplicaSync::SYNC_KIND),
+/// [`upstream_url`](ReplicaSync::upstream_url), and [`subscribe`](ReplicaSync::subscribe). The
+/// default [`sync`](ReplicaSync::sync) opens the upstream connection and passes the client to
+/// `subscribe`; [`run`](ReplicaSync::run) and [`spawn`](ReplicaSync::spawn) wrap `sync` in an
+/// infinite reconnect loop.
 #[async_trait]
 pub(crate) trait ReplicaSync: Sized + Send + Sync + 'static {
     /// Short label used in log messages, e.g. `"Block"` or `"Proof"`.
     const SYNC_KIND: &'static str;
 
-    /// Connects to the upstream and processes the stream until it ends or errors.
-    async fn sync(&self) -> anyhow::Result<()>;
+    /// Returns the upstream store URL to connect to.
+    fn upstream_url(&self) -> &Url;
+
+    /// Subscribes to the upstream stream via `client` and processes events until the stream ends
+    /// or an error occurs.
+    async fn subscribe(&self, client: StoreReplicaClient) -> anyhow::Result<()>;
+
+    /// Opens a connection to [`upstream_url`](Self::upstream_url) and calls
+    /// [`subscribe`](Self::subscribe) with the resulting client.
+    async fn sync(&self) -> anyhow::Result<()> {
+        let channel = tonic::transport::Channel::from_shared(self.upstream_url().to_string())?
+            .connect()
+            .await?;
+        self.subscribe(StoreReplicaClient::new(channel)).await
+    }
 
     /// Runs [`sync`](Self::sync) in an infinite loop, sleeping [`RECONNECT_DELAY`] on failure.
     async fn run(self) -> anyhow::Result<()> {
@@ -83,26 +99,26 @@ impl BlockReplicaSync {
 impl ReplicaSync for BlockReplicaSync {
     const SYNC_KIND: &'static str = "Block";
 
-    async fn sync(&self) -> anyhow::Result<()> {
-        // Determine which block to start streaming from based on the chain tip.
+    fn upstream_url(&self) -> &Url {
+        &self.upstream_url
+    }
+
+    async fn subscribe(&self, mut client: StoreReplicaClient) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for blocks");
 
-        // Connect to the upstream store and create a block subscription stream.
-        let channel = tonic::transport::Channel::from_shared(self.upstream_url.to_string())?
-            .connect()
-            .await?;
-        let mut client = store_replica_client::StoreReplicaClient::new(channel);
         let mut stream = client
             .block_subscription(BlockSubscriptionRequest { block_from })
             .await?
             .into_inner();
 
-        // Process each block event from the stream.
         while let Some(result) = stream.next().await {
+            // Deserialize the block.
             let event = result?;
             let block = SignedBlock::read_from_bytes(&event.block)
                 .context("failed to deserialize block from upstream")?;
+
+            // Apply the block to the local state.
             match self.state.apply_block(block, None).await {
                 Ok(()) => {},
                 Err(ApplyBlockError::InvalidBlockError(
@@ -152,25 +168,25 @@ impl ProofReplicaSync {
 impl ReplicaSync for ProofReplicaSync {
     const SYNC_KIND: &'static str = "Proof";
 
-    async fn sync(&self) -> anyhow::Result<()> {
-        // Determine which block to start streaming from based on the chain tip.
+    fn upstream_url(&self) -> &Url {
+        &self.upstream_url
+    }
+
+    async fn subscribe(&self, mut client: StoreReplicaClient) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Proven).await.as_u32().saturating_add(1);
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for proofs");
 
-        // Connect to the upstream store and create a proof subscription stream.
-        let channel = tonic::transport::Channel::from_shared(self.upstream_url.to_string())?
-            .connect()
-            .await?;
-        let mut client = store_replica_client::StoreReplicaClient::new(channel);
         let mut stream = client
             .proof_subscription(ProofSubscriptionRequest { block_from })
             .await?
             .into_inner();
 
-        // Process each block event from the stream.
         while let Some(result) = stream.next().await {
+            // Deserialize the proof.
             let event = result?;
             let block_num = BlockNumber::from(event.block_num);
+
+            // Store the proof.
             self.apply_proof(block_num, event.proof).await?;
         }
 
