@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use miden_node_proto::generated::store::{
     BlockProof,
@@ -9,13 +10,31 @@ use miden_node_proto::generated::store::{
     store_replica_server,
 };
 use miden_protocol::block::BlockNumber;
-use tokio_stream::StreamExt as _;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::{Stream, StreamExt as _};
 use tonic::{Request, Response, Status};
 
 use crate::server::api::StoreApi;
 use crate::state::{BlockNotification, Finality, ProofNotification, State};
+
+// GUARDED STREAM
+// ================================================================================================
+
+/// Wraps a stream and holds a semaphore permit for its lifetime, releasing it on drop.
+struct GuardedStream<S: Stream + Unpin> {
+    inner: S,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl<S: Stream + Unpin> Stream for GuardedStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
 
 // STORE REPLICA API
 // ================================================================================================
@@ -54,15 +73,21 @@ impl store_replica_server::StoreReplica for StoreApi {
         &self,
         request: Request<BlockSubscriptionRequest>,
     ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+        let permit = Arc::clone(&self.block_subscription_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
+
         let from = BlockNumber::from(request.into_inner().block_from);
+
         // chain_tip is async in this branch (acquires the inner RwLock).
         let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         // Subscribe to the live broadcast BEFORE replay to eliminate the gap race.
         let live_rx = self.block_sender.subscribe();
 
-        let stream = build_block_stream(from, chain_tip, Arc::clone(&self.state), live_rx);
-        Ok(Response::new(Box::pin(stream)))
+        let stream =
+            Box::pin(build_block_stream(from, chain_tip, Arc::clone(&self.state), live_rx));
+        Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
     }
 
     /// Streams block proofs to a replica starting from `from_block_number`.
@@ -76,14 +101,19 @@ impl store_replica_server::StoreReplica for StoreApi {
         &self,
         request: Request<ProofSubscriptionRequest>,
     ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
+        let permit = Arc::clone(&self.proof_subscription_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("maximum proof subscriptions reached"))?;
+
         let from = BlockNumber::from(request.into_inner().block_from);
         let proven_tip = self.state.chain_tip(Finality::Proven).await;
 
         // Subscribe to the live broadcast BEFORE replay.
         let live_rx = self.proof_sender.subscribe();
 
-        let stream = build_proof_stream(from, proven_tip, Arc::clone(&self.state), live_rx);
-        Ok(Response::new(Box::pin(stream)))
+        let stream =
+            Box::pin(build_proof_stream(from, proven_tip, Arc::clone(&self.state), live_rx));
+        Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
     }
 }
 

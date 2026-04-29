@@ -208,7 +208,7 @@ impl Store {
         .await;
 
         let state = Arc::new(state);
-        let store_api = api::StoreApi { state, block_sender, proof_sender };
+        let store_api = api::StoreApi::new(state, block_sender, proof_sender);
         let block_producer_api = block_producer::BlockProducerApi {
             inner: store_api.clone(),
             chain_tip_sender,
@@ -249,7 +249,7 @@ impl Store {
             }
         });
 
-        let store_api = api::StoreApi { state, block_sender, proof_sender };
+        let store_api = api::StoreApi::new(state, block_sender, proof_sender);
         let join_set = Self::spawn_replica_grpc_servers(store_api, grpc_options, rpc_listener)?;
 
         Ok(ModeSetup {

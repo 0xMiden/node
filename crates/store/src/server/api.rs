@@ -10,7 +10,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber};
 use miden_protocol::note::Nullifier;
-use tokio::sync::broadcast;
+use tokio::sync::{Semaphore, broadcast};
 use tonic::{Request, Response, Status};
 use tracing::{info, instrument};
 
@@ -21,6 +21,9 @@ use crate::state::{BlockNotification, ProofNotification, State};
 // STORE API
 // ================================================================================================
 
+/// Maximum number of concurrent block or proof subscriptions allowed per sender.
+pub(super) const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;
+
 #[derive(Clone)]
 pub struct StoreApi {
     pub(super) state: Arc<State>,
@@ -30,9 +33,27 @@ pub struct StoreApi {
     /// Broadcast sender for block proof notifications. Replicas call `.subscribe()` to
     /// receive a stream of proofs without polling.
     pub(super) proof_sender: broadcast::Sender<ProofNotification>,
+    /// Limits concurrent block subscriptions to [`MAX_REPLICA_SUBSCRIPTIONS`].
+    pub(super) block_subscription_semaphore: Arc<Semaphore>,
+    /// Limits concurrent proof subscriptions to [`MAX_REPLICA_SUBSCRIPTIONS`].
+    pub(super) proof_subscription_semaphore: Arc<Semaphore>,
 }
 
 impl StoreApi {
+    pub(super) fn new(
+        state: Arc<State>,
+        block_sender: broadcast::Sender<BlockNotification>,
+        proof_sender: broadcast::Sender<ProofNotification>,
+    ) -> Self {
+        Self {
+            state,
+            block_sender,
+            proof_sender,
+            block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
+            proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
+        }
+    }
+
     /// Shared implementation for all `get_block_header_by_number` endpoints.
     pub async fn get_block_header_by_number_inner(
         &self,
