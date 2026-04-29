@@ -546,7 +546,7 @@ impl<B: Backend> AccountStateForest<B> {
 
     /// Retrieves the most recent vault SMT root for an account. If no vault root is found for the
     /// account, returns an empty SMT root.
-    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
+    pub(crate) fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
         let lineage = Self::vault_lineage_id(account_id);
         self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
     }
@@ -763,7 +763,7 @@ impl<B: Backend> AccountStateForest<B> {
     // --------------------------------------------------------------------------------------------
 
     /// Retrieves the most recent storage map SMT root for an account slot.
-    fn get_latest_storage_map_root(
+    pub(crate) fn get_latest_storage_map_root(
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,

@@ -69,6 +69,7 @@ use loader::{
     TreeStorage,
     TreeStorageLoader,
     load_mmr,
+    verify_account_state_forest_consistency,
     verify_tree_consistency,
 };
 
@@ -192,6 +193,7 @@ impl State {
             ACCOUNT_STATE_FOREST_STORAGE_DIR,
         )?;
         let forest = forest_backend.load_account_state_forest(&mut db, latest_block_num).await?;
+        verify_account_state_forest_consistency(&forest, &mut db).await?;
 
         let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 

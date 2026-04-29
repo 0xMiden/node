@@ -18,7 +18,9 @@ use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 use miden_crypto::merkle::smt::{ForestPersistentBackend, PersistentBackendConfig};
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::RocksDbStorage;
+#[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
+use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
@@ -565,4 +567,160 @@ pub async fn verify_tree_consistency(
     }
 
     Ok(())
+}
+
+/// Verifies that the account state forest matches latest public account roots from SQLite.
+///
+/// This check ensures persisted account state forest storage has not diverged from the latest
+/// account states in SQLite. When the forest is rebuilt from the database, it will naturally
+/// match; when loaded from persistent storage, this catches corruption or incomplete shutdown.
+#[instrument(target = COMPONENT, skip_all)]
+pub async fn verify_account_state_forest_consistency(
+    forest: &AccountStateForest<impl Backend>,
+    db: &mut Db,
+) -> Result<(), StateInitializationError> {
+    let mut cursor = None;
+
+    loop {
+        let page = db
+            .select_public_account_state_roots_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor)
+            .await?;
+
+        if page.accounts.is_empty() {
+            break;
+        }
+
+        for account in page.accounts {
+            verify_account_state_forest_record(
+                forest,
+                account.account_id,
+                account.vault_root,
+                &account.storage_header,
+            )?;
+        }
+
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn verify_account_state_forest_record(
+    forest: &AccountStateForest<impl Backend>,
+    account_id: AccountId,
+    vault_root: Word,
+    storage_header: &AccountStorageHeader,
+) -> Result<(), StateInitializationError> {
+    let forest_vault_root = forest.get_latest_vault_root(account_id);
+    if forest_vault_root != vault_root {
+        return Err(StateInitializationError::AccountStateForestStorageDiverged {
+            account_id,
+            slot_name: None,
+            forest_root: forest_vault_root,
+            database_root: vault_root,
+        });
+    }
+
+    for slot in storage_header.slots() {
+        if slot.slot_type() != StorageSlotType::Map {
+            continue;
+        }
+
+        let forest_root = forest.get_latest_storage_map_root(account_id, slot.name());
+        let database_root = slot.value();
+        if forest_root != database_root {
+            return Err(StateInitializationError::AccountStateForestStorageDiverged {
+                account_id,
+                slot_name: Some(slot.name().to_string()),
+                forest_root,
+                database_root,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::account::{
+        AccountId,
+        AccountStorageHeader,
+        StorageSlotHeader,
+        StorageSlotName,
+        StorageSlotType,
+    };
+    use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
+
+    use super::*;
+
+    #[test]
+    fn account_state_forest_consistency_detects_storage_map_root_mismatch() {
+        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
+            .expect("test account ID should be valid");
+        let slot_name =
+            StorageSlotName::new("account::balances").expect("slot name should be valid");
+        let expected_storage_root = Word::from([1, 0, 0, 0u32]);
+        let storage_header = AccountStorageHeader::new(vec![StorageSlotHeader::new(
+            slot_name.clone(),
+            StorageSlotType::Map,
+            expected_storage_root,
+        )])
+        .expect("storage header should be valid");
+        let forest = AccountStateForest::new();
+
+        let error = verify_account_state_forest_record(
+            &forest,
+            account_id,
+            AccountStateForest::empty_smt_root(),
+            &storage_header,
+        )
+        .expect_err("storage map root mismatch should be detected");
+
+        assert_matches::assert_matches!(
+            error,
+            StateInitializationError::AccountStateForestStorageDiverged {
+                account_id: actual_account_id,
+                slot_name: Some(actual_slot_name),
+                forest_root,
+                database_root,
+            } if actual_account_id == account_id
+                && actual_slot_name == slot_name.to_string()
+                && forest_root == AccountStateForest::empty_smt_root()
+                && database_root == expected_storage_root
+        );
+    }
+
+    #[test]
+    fn account_state_forest_consistency_detects_vault_root_mismatch() {
+        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
+            .expect("test account ID should be valid");
+        let expected_vault_root = Word::from([2, 0, 0, 0u32]);
+        let storage_header =
+            AccountStorageHeader::new(Vec::new()).expect("storage header should be valid");
+        let forest = AccountStateForest::new();
+
+        let error = verify_account_state_forest_record(
+            &forest,
+            account_id,
+            expected_vault_root,
+            &storage_header,
+        )
+        .expect_err("vault root mismatch should be detected");
+
+        assert_matches::assert_matches!(
+            error,
+            StateInitializationError::AccountStateForestStorageDiverged {
+                account_id: actual_account_id,
+                slot_name: None,
+                forest_root,
+                database_root,
+            } if actual_account_id == account_id
+                && forest_root == AccountStateForest::empty_smt_root()
+                && database_root == expected_vault_root
+        );
+    }
 }

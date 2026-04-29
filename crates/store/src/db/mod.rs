@@ -35,6 +35,7 @@ pub use crate::db::models::queries::{
     AccountCommitmentsPage,
     NullifiersPage,
     PublicAccountIdsPage,
+    PublicAccountStateRootsPage,
 };
 use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
 use crate::db::models::{Page, queries};
@@ -406,6 +407,19 @@ impl Db {
     ) -> Result<PublicAccountIdsPage> {
         self.transact("read public account IDs paged", move |conn| {
             queries::select_public_account_ids_paged(conn, page_size, after_account_id)
+        })
+        .await
+    }
+
+    /// Returns a page of public account state roots for forest consistency verification.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_public_account_state_roots_paged(
+        &self,
+        page_size: std::num::NonZeroUsize,
+        after_account_id: Option<AccountId>,
+    ) -> Result<PublicAccountStateRootsPage> {
+        self.transact("read public account state roots paged", move |conn| {
+            queries::select_public_account_state_roots_paged(conn, page_size, after_account_id)
         })
         .await
     }

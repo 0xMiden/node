@@ -75,13 +75,6 @@ pub struct AccountStateForestRocksDbOptions {
         value_name = "ACCOUNT_STATE_FOREST__ROCKSDB__CACHE_SIZE"
     )]
     pub cache_size_in_bytes: usize,
-    #[arg(
-        id = "account_state_forest_rocksdb_durability_mode",
-        long = "account_state_forest.rocksdb.durability_mode",
-        value_enum,
-        value_name = "ACCOUNT_STATE_FOREST__ROCKSDB__DURABILITY_MODE"
-    )]
-    pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
 
 impl Default for AccountStateForestRocksDbOptions {
@@ -122,16 +115,8 @@ impl From<NullifierTreeRocksDbOptions> for RocksDbOptions {
 
 impl From<AccountStateForestRocksDbOptions> for RocksDbOptions {
     fn from(value: AccountStateForestRocksDbOptions) -> Self {
-        let AccountStateForestRocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let AccountStateForestRocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
@@ -151,16 +136,8 @@ impl From<RocksDbOptions> for NullifierTreeRocksDbOptions {
 
 impl From<RocksDbOptions> for AccountStateForestRocksDbOptions {
     fn from(value: RocksDbOptions) -> Self {
-        let RocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
@@ -181,13 +158,11 @@ mod tests {
         let options = AccountStateForestRocksDbOptions {
             max_open_fds: 123,
             cache_size_in_bytes: 456,
-            durability_mode: Some(CliRocksDbDurabilityMode::Sync),
         };
 
         let general = RocksDbOptions::from(options.clone());
         assert_eq!(general.max_open_fds, options.max_open_fds);
         assert_eq!(general.cache_size_in_bytes, options.cache_size_in_bytes);
-        assert_eq!(general.durability_mode, options.durability_mode);
 
         let roundtrip = AccountStateForestRocksDbOptions::from(general);
         assert_eq!(roundtrip, options);

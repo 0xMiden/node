@@ -172,7 +172,6 @@ impl StorageOptions {
             let account_state_forest = AccountStateForestRocksDbOptions {
                 max_open_fds: BENCH_ROCKSDB_MAX_OPEN_FDS,
                 cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
-                durability_mode: None,
             };
             Self {
                 account_tree,

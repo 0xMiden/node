@@ -147,6 +147,17 @@ pub enum StateInitializationError {
         tree_root: Word,
         block_root: Word,
     },
+    #[error(
+        "account state forest root ({forest_root:?}) does not match SQLite root \
+         ({database_root:?}) for account {account_id}, slot {slot_name:?}. Delete the account \
+         state forest storage directory and restart the node to rebuild from the database."
+    )]
+    AccountStateForestStorageDiverged {
+        account_id: AccountId,
+        slot_name: Option<String>,
+        forest_root: Word,
+        database_root: Word,
+    },
     #[error("public account {0} is missing details in database")]
     PublicAccountMissingDetails(AccountId),
     #[error("failed to convert account to delta: {0}")]
