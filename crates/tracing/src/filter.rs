@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn dynamic_filter_rejects_field_filters() {
-        let err = DynamicFilter::new("[rpc.get_block{request.id=1}]=debug").unwrap_err();
+        let err = DynamicFilter::new("[rpc::get_block{request.id=1}]=debug").unwrap_err();
 
         assert!(matches!(err, DynamicFilterError::UnsupportedDirective { .. }));
     }
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn dynamic_filter_allows_span_filters() {
-        DynamicFilter::new("[rpc.get_block]=debug").unwrap();
+        DynamicFilter::new("[rpc::get_block]=debug").unwrap();
     }
 
     #[test]
@@ -491,13 +491,13 @@ mod tests {
 
     #[test]
     fn own_target_gate_still_applies_inside_span_filters() {
-        let (layer, _filter) = DynamicFilter::new("[rpc.get_block]=debug").unwrap();
+        let (layer, _filter) = DynamicFilter::new("[rpc::get_block]=debug").unwrap();
         let capture = CaptureLayer::default();
         let captured = capture.captured.clone();
         let subscriber = tracing_subscriber::registry().with(layer).with(capture);
 
         with_default(subscriber, || {
-            let _span = tracing::info_span!(target: "rpc", "rpc.get_block").entered();
+            let _span = tracing::info_span!(target: "rpc", "rpc::get_block").entered();
             tracing::debug!(target: "store::database", "own child");
             tracing::debug!(target: "h2", "dependency child");
         });

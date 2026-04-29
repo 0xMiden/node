@@ -329,6 +329,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_string_level() {
+        let err = match parse_args(quote!(target = store::database, level = "debug"), None) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`level` must be one of"));
+    }
+
+    #[test]
     fn requires_target() {
         let err = match parse_args(quote!("message"), Some(SpanLevel::Info)) {
             Ok(_) => panic!("event args should fail to parse"),

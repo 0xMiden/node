@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
 
 use crate::level::SpanLevel;
-use crate::{metadata, target};
+use crate::{metadata, name, target};
 
 pub(crate) fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr with Punctuated::<Meta, Token![,]>::parse_terminated);
@@ -47,10 +47,11 @@ impl InstrumentArgs {
                             "`name` may only be specified once",
                         ));
                     }
-                    let value = string_literal(&meta.value, "`name`")?;
+                    let value = name::parse(&meta.value)?;
+                    let value_literal = LitStr::new(&value, meta.value.span());
 
-                    name = Some(value.value());
-                    tracing_args.push(quote! { name = #value });
+                    name = Some(value);
+                    tracing_args.push(quote! { name = #value_literal });
                 },
                 Some("level") => {
                     let meta = name_value_arg(arg, "`level`")?;
@@ -129,13 +130,6 @@ fn name_value_arg(arg: Meta, name: &str) -> syn::Result<syn::MetaNameValue> {
             arg,
             format!("{name} must be specified as a name-value argument"),
         )),
-    }
-}
-
-fn string_literal(value: &Expr, name: &str) -> syn::Result<LitStr> {
-    match value {
-        Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => Ok(lit.clone()),
-        _ => Err(syn::Error::new_spanned(value, format!("{name} must be a string literal"))),
     }
 }
 
@@ -243,18 +237,17 @@ mod tests {
 
     #[test]
     fn requires_target() {
-        let err = InstrumentArgs::parse(parse_args(quote!(name = "test"))).unwrap_err();
+        let err = InstrumentArgs::parse(parse_args(quote!(name = test))).unwrap_err();
 
         assert!(err.to_string().contains("`target` is required"));
     }
 
     #[test]
     fn rewrites_allowed_target_to_literal() {
-        let args =
-            InstrumentArgs::parse(parse_args(quote!(target = store::database, name = "test")))
-                .unwrap()
-                .tracing_args
-                .to_string();
+        let args = InstrumentArgs::parse(parse_args(quote!(target = store::database, name = test)))
+            .unwrap()
+            .tracing_args
+            .to_string();
 
         assert!(args.contains("skip_all"));
         assert!(args.contains("target = \"store::database\""));
@@ -265,13 +258,26 @@ mod tests {
     fn parses_level_metadata() {
         let args = InstrumentArgs::parse(parse_args(quote!(
             target = store::database,
-            level = "debug",
-            name = "test"
+            level = debug,
+            name = test
         )))
         .unwrap();
 
         assert_eq!(args.level, crate::level::SpanLevel::Debug);
         assert!(args.tracing_args.to_string().contains("level = \"debug\""));
+    }
+
+    #[test]
+    fn rejects_string_level_and_name() {
+        let level_err =
+            InstrumentArgs::parse(parse_args(quote!(target = store::database, level = "debug")))
+                .unwrap_err();
+        let name_err =
+            InstrumentArgs::parse(parse_args(quote!(target = store::database, name = "test")))
+                .unwrap_err();
+
+        assert!(level_err.to_string().contains("`level` must be one of"));
+        assert!(name_err.to_string().contains("`name` must be a path"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use quote::quote;
-use syn::{Expr, ExprLit, ExprPath, Lit, PathArguments};
+use syn::{Expr, ExprPath, Path, PathArguments};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SpanLevel {
@@ -13,20 +13,7 @@ pub(crate) enum SpanLevel {
 impl SpanLevel {
     pub(crate) fn parse(expr: &Expr) -> syn::Result<Self> {
         match expr {
-            Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => Self::parse_str(&lit.value(), expr),
-            Expr::Path(ExprPath { qself: None, path, .. }) => {
-                let segment = path.segments.last().ok_or_else(|| {
-                    syn::Error::new_spanned(expr, "`level` path must not be empty")
-                })?;
-                if !matches!(segment.arguments, PathArguments::None) {
-                    return Err(syn::Error::new_spanned(
-                        &segment.arguments,
-                        "`level` path segments cannot have generic arguments",
-                    ));
-                }
-
-                Self::parse_str(&segment.ident.to_string(), expr)
-            },
+            Expr::Path(ExprPath { qself: None, path, .. }) => Self::parse_path(path, expr),
             _ => Err(syn::Error::new_spanned(
                 expr,
                 "`level` must be one of: trace, debug, info, warn, error",
@@ -74,8 +61,33 @@ impl SpanLevel {
         }
     }
 
+    fn parse_path(path: &Path, span: impl quote::ToTokens) -> syn::Result<Self> {
+        if path.leading_colon.is_some() {
+            return Err(syn::Error::new_spanned(path, "`level` must be a relative path"));
+        }
+
+        let mut segments = path.segments.iter();
+        let Some(segment) = segments.next() else {
+            return Err(syn::Error::new_spanned(path, "`level` path must not be empty"));
+        };
+        if segments.next().is_some() {
+            return Err(syn::Error::new_spanned(
+                path,
+                "`level` must be one of: trace, debug, info, warn, error",
+            ));
+        }
+        if !matches!(segment.arguments, PathArguments::None) {
+            return Err(syn::Error::new_spanned(
+                &segment.arguments,
+                "`level` path segments cannot have generic arguments",
+            ));
+        }
+
+        Self::parse_str(&segment.ident.to_string(), span)
+    }
+
     fn parse_str(level: &str, span: impl quote::ToTokens) -> syn::Result<Self> {
-        match level.to_ascii_lowercase().as_str() {
+        match level {
             "trace" => Ok(Self::Trace),
             "debug" => Ok(Self::Debug),
             "info" => Ok(Self::Info),
@@ -86,5 +98,38 @@ impl SpanLevel {
                 "`level` must be one of: trace, debug, info, warn, error",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::SpanLevel;
+
+    #[test]
+    fn parses_level_path() {
+        assert_eq!(SpanLevel::parse(&parse_quote!(debug)).unwrap(), SpanLevel::Debug);
+    }
+
+    #[test]
+    fn rejects_level_string() {
+        let err = SpanLevel::parse(&parse_quote!("debug")).unwrap_err();
+
+        assert!(err.to_string().contains("`level` must be one of"));
+    }
+
+    #[test]
+    fn rejects_qualified_level_path() {
+        let err = SpanLevel::parse(&parse_quote!(tracing::Level::DEBUG)).unwrap_err();
+
+        assert!(err.to_string().contains("`level` must be one of"));
+    }
+
+    #[test]
+    fn rejects_uppercase_level_path() {
+        let err = SpanLevel::parse(&parse_quote!(DEBUG)).unwrap_err();
+
+        assert!(err.to_string().contains("`level` must be one of"));
     }
 }

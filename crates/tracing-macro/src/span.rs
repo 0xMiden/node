@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parse_macro_input};
 
 use crate::level::SpanLevel;
-use crate::{metadata, target};
+use crate::{metadata, name, target};
 
 pub(crate) fn trace_span(input: TokenStream) -> TokenStream {
     expand_span(input, "trace_span", SpanLevel::Trace)
@@ -89,20 +89,23 @@ impl Parse for SpanArgs {
 }
 
 fn parse_name(input: ParseStream<'_>) -> syn::Result<LitStr> {
-    if input.peek(LitStr) {
-        return input.parse();
-    }
+    let fork = input.fork();
+    let expr = if fork.peek(Ident) {
+        let name_ident = fork.parse::<Ident>()?;
+        if name_ident == "name" && fork.peek(Token![=]) {
+            input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            input.parse::<Expr>()?
+        } else {
+            input.parse::<Expr>()?
+        }
+    } else {
+        input.parse::<Expr>()?
+    };
+    let span = expr.span();
+    let span_name = name::parse(&expr)?;
 
-    let name_ident = input.parse::<Ident>()?;
-    if name_ident != "name" {
-        return Err(syn::Error::new_spanned(
-            name_ident,
-            "`name` must be specified as a string literal",
-        ));
-    }
-
-    input.parse::<Token![=]>()?;
-    input.parse()
+    Ok(LitStr::new(&span_name, span))
 }
 
 #[cfg(test)]
@@ -114,41 +117,47 @@ mod tests {
 
     #[test]
     fn parses_span_args_with_equals_target() {
-        let args = parse2::<SpanArgs>(quote!(target = store::database, "db.read")).unwrap();
+        let args = parse2::<SpanArgs>(quote!(target = store::database, db::read)).unwrap();
 
         assert_eq!(args.target, "store::database");
-        assert_eq!(args.name.value(), "db.read");
+        assert_eq!(args.name.value(), "db::read");
     }
 
     #[test]
     fn parses_span_args_with_colon_target() {
-        let args =
-            parse2::<SpanArgs>(quote!(target: sequencer::mempool, "mempool.select")).unwrap();
+        let args = parse2::<SpanArgs>(quote!(target: sequencer::mempool, mempool::select)).unwrap();
 
         assert_eq!(args.target, "sequencer::mempool");
-        assert_eq!(args.name.value(), "mempool.select");
+        assert_eq!(args.name.value(), "mempool::select");
     }
 
     #[test]
     fn parses_span_args_with_named_name() {
-        let args = parse2::<SpanArgs>(quote!(target = rpc, name = "rpc.get_block")).unwrap();
+        let args = parse2::<SpanArgs>(quote!(target = rpc, name = rpc::get_block)).unwrap();
 
         assert_eq!(args.target, "rpc");
-        assert_eq!(args.name.value(), "rpc.get_block");
+        assert_eq!(args.name.value(), "rpc::get_block");
     }
 
     #[test]
     fn rejects_fields() {
-        let err = parse_err(quote!(target = store::database, "db.read", block.number = 1));
+        let err = parse_err(quote!(target = store::database, db::read, block.number = 1));
 
         assert!(err.to_string().contains("`fields` is not supported"));
     }
 
     #[test]
-    fn rejects_missing_target() {
-        let err = parse_err(quote!("db.read"));
+    fn rejects_string_name() {
+        let err = parse_err(quote!(target = rpc, "rpc::get_block"));
 
-        assert!(err.to_string().contains("expected identifier"));
+        assert!(err.to_string().contains("`name` must be a path"));
+    }
+
+    #[test]
+    fn rejects_missing_target() {
+        let err = parse_err(quote!(db::read));
+
+        assert!(err.to_string().contains("`target` is required"));
     }
 
     fn parse_err(tokens: proc_macro2::TokenStream) -> syn::Error {

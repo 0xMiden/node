@@ -226,19 +226,19 @@ mod tests {
     }
 
     /// Exercises error status recording for instrumented functions.
-    #[crate::instrument(target = rpc, name = "instrumented_error")]
+    #[crate::instrument(target = rpc, name = instrumented_error)]
     fn instrumented_error(value: u32) -> Result<(), TestError> {
         let _ = value;
         Err(TestError { source: SourceError })
     }
 
-    #[crate::instrument(target = rpc, name = "instrumented_ok")]
+    #[crate::instrument(target = rpc, name = instrumented_ok)]
     fn instrumented_ok(value: u32) -> Result<(), TestError> {
         let _ = value;
         Ok(())
     }
 
-    #[crate::instrument(target = store::database, name = "instrumented_async_error")]
+    #[crate::instrument(target = store::database, name = instrumented_async_error)]
     async fn instrumented_async_error(value: u32) -> Result<(), TestError> {
         let _ = value;
         Err(TestError { source: SourceError })
@@ -246,14 +246,14 @@ mod tests {
 
     #[allow(dead_code)]
     fn unused_manual_span_declaration() {
-        let _span = crate::error_span!(target = rpc, "unused_manual_span");
+        let _span = crate::error_span!(target = rpc, unused_manual_span);
     }
 
     struct InstrumentedMethod;
 
     impl InstrumentedMethod {
         /// Uses the method name as the default span name.
-        #[crate::instrument(target = rpc, level = "debug")]
+        #[crate::instrument(target = rpc, level = debug)]
         fn method_with_default_name(&self) -> Result<(), TestError> {
             Ok(())
         }
@@ -267,7 +267,7 @@ mod tests {
         /// Uses the trait method name as the default span name.
         ///
         /// This also verifies trait impl methods.
-        #[crate::instrument(target = rpc, level = "trace")]
+        #[crate::instrument(target = rpc, level = trace)]
         fn trait_method_with_default_name(&self) -> Result<(), TestError> {
             Ok(())
         }
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn span_macro_creates_recordable_span() {
         let spans = exported_spans(|| {
-            let span = crate::info_span!(target = rpc, "manual_span");
+            let span = crate::info_span!(target = rpc, manual_span);
             span.record_field(&TestField);
             let _guard = span.entered();
         });
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn span_macro_registers_metadata() {
-        let _span = crate::warn_span!(target = store::database, "manual_metadata_span");
+        let _span = crate::warn_span!(target = store::database, manual_metadata_span);
 
         assert_registered_span("store::database", SpanLevel::Warn, "manual_metadata_span");
     }

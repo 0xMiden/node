@@ -1,4 +1,4 @@
-use syn::{Expr, ExprLit, ExprPath, Lit, Path, PathArguments};
+use syn::{Expr, ExprPath, Path, PathArguments};
 
 const ALLOWED_TARGETS: &[&str] = &[
     "rpc",
@@ -28,7 +28,6 @@ pub(crate) fn allowed_targets() -> String {
 pub(crate) fn parse(expr: &Expr) -> syn::Result<String> {
     let target = match expr {
         Expr::Path(ExprPath { qself: None, path, .. }) => parse_path(path)?,
-        Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) => lit.value(),
         _ => {
             return Err(syn::Error::new_spanned(
                 expr,
@@ -91,8 +90,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_allowed_target_string() {
-        assert_eq!(parse(&parse_quote!("sequencer::mempool")).unwrap(), "sequencer::mempool");
+    fn rejects_target_string() {
+        let err = parse(&parse_quote!("sequencer::mempool")).unwrap_err();
+
+        assert!(err.to_string().contains("`target` must be an allowed target path"));
     }
 
     #[test]
