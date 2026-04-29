@@ -1,11 +1,11 @@
 use quote::quote;
 use syn::LitStr;
 
-use crate::level::SpanLevel;
+use crate::level::TelemetryLevel;
 
 pub(crate) fn submit_span_metadata(
     target: &LitStr,
-    level: SpanLevel,
+    level: TelemetryLevel,
     name: &LitStr,
     description: Option<&LitStr>,
 ) -> proc_macro2::TokenStream {

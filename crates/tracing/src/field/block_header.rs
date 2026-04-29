@@ -21,12 +21,20 @@ macro_rules! word_field {
 
 word_field!(BlockCommitment, "block.commitment", "commitment");
 word_field!(BlockSubCommitment, "block.sub_commitment", "sub_commitment");
-word_field!(PreviousBlockCommitment, "block.prev_block_commitment", "prev_block_commitment");
-word_field!(TransactionKernelCommitment, "block.commitments.kernel", "kernel");
-word_field!(NullifierRoot, "block.commitments.nullifier", "nullifier");
-word_field!(AccountRoot, "block.commitments.account", "account");
+word_field!(
+    PreviousBlockCommitment,
+    "block.previous_block_commitment",
+    "previous_block_commitment"
+);
+word_field!(
+    TransactionKernelCommitment,
+    "block.commitments.transaction_kernel",
+    "transaction_kernel"
+);
+word_field!(NullifierRoot, "block.roots.nullifier", "nullifier");
+word_field!(AccountRoot, "block.roots.account", "account");
 word_field!(ChainCommitment, "block.commitments.chain", "chain");
-word_field!(NoteRoot, "block.commitments.note", "note");
+word_field!(NoteRoot, "block.roots.note", "note");
 word_field!(TransactionCommitment, "block.commitments.transaction", "transaction");
 
 pub(crate) struct BlockTimestamp(pub(crate) u32);

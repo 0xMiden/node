@@ -86,7 +86,7 @@ impl Span {
     {
         let mut sink = SpanAttributeSink { span: &self.0 };
         let mut recorder = OpenTelemetryObjectRecorder::new(&mut sink, key_prefix);
-        object.record_otel_fields(&mut recorder);
+        object.record_attributes(&mut recorder);
     }
 
     /// Records an OpenTelemetry event on this span.
@@ -157,7 +157,7 @@ mod tests {
     impl OpenTelemetryObject for NestedObject {
         const DEFAULT_KEY_PREFIX: &'static str = "nested";
 
-        fn record_otel_fields(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
+        fn record_attributes(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
             recorder.record_field(&TestField);
         }
     }
@@ -167,7 +167,7 @@ mod tests {
     impl OpenTelemetryObject for TestObject {
         const DEFAULT_KEY_PREFIX: &'static str = "test";
 
-        fn record_otel_fields(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
+        fn record_attributes(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
             recorder.record_field(&TestField);
             recorder.record_object(&NestedObject);
         }

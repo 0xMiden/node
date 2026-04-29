@@ -4,30 +4,30 @@ use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parse_macro_input};
 
-use crate::level::SpanLevel;
+use crate::level::TelemetryLevel;
 use crate::{metadata, name, target};
 
 pub(crate) fn trace_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "trace_span", SpanLevel::Trace)
+    expand_span(input, "trace_span", TelemetryLevel::Trace)
 }
 
 pub(crate) fn debug_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "debug_span", SpanLevel::Debug)
+    expand_span(input, "debug_span", TelemetryLevel::Debug)
 }
 
 pub(crate) fn info_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "info_span", SpanLevel::Info)
+    expand_span(input, "info_span", TelemetryLevel::Info)
 }
 
 pub(crate) fn warn_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "warn_span", SpanLevel::Warn)
+    expand_span(input, "warn_span", TelemetryLevel::Warn)
 }
 
 pub(crate) fn error_span(input: TokenStream) -> TokenStream {
-    expand_span(input, "error_span", SpanLevel::Error)
+    expand_span(input, "error_span", TelemetryLevel::Error)
 }
 
-fn expand_span(input: TokenStream, macro_name: &str, level: SpanLevel) -> TokenStream {
+fn expand_span(input: TokenStream, macro_name: &str, level: TelemetryLevel) -> TokenStream {
     let args = parse_macro_input!(input as SpanArgs);
     let macro_name = Ident::new(macro_name, proc_macro2::Span::call_site());
     let target = LitStr::new(&args.target, args.target_span);

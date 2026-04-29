@@ -4,7 +4,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
 
-use crate::level::SpanLevel;
+use crate::level::TelemetryLevel;
 use crate::{metadata, name, target};
 
 pub(crate) fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -24,14 +24,14 @@ struct InstrumentArgs {
     tracing_args: proc_macro2::TokenStream,
     target: String,
     name: Option<String>,
-    level: SpanLevel,
+    level: TelemetryLevel,
 }
 
 impl InstrumentArgs {
     fn parse(args: Punctuated<Meta, Token![,]>) -> syn::Result<Self> {
         let mut target = None;
         let mut name = None;
-        let mut level = SpanLevel::Info;
+        let mut level = TelemetryLevel::Info;
         let mut level_seen = false;
         let mut tracing_args = Vec::new();
 
@@ -62,7 +62,7 @@ impl InstrumentArgs {
                         ));
                     }
                     level_seen = true;
-                    level = SpanLevel::parse(&meta.value)?;
+                    level = TelemetryLevel::parse(&meta.value)?;
                     let value = LitStr::new(level.as_str(), meta.value.span());
 
                     tracing_args.push(quote! { level = #value });
@@ -264,7 +264,7 @@ mod tests {
         )))
         .unwrap();
 
-        assert_eq!(args.level, crate::level::SpanLevel::Debug);
+        assert_eq!(args.level, crate::level::TelemetryLevel::Debug);
         assert!(args.tracing_args.to_string().contains("level = \"debug\""));
     }
 

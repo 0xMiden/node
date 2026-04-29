@@ -12,8 +12,8 @@ pub trait OpenTelemetryObject {
     /// The default OpenTelemetry attribute key prefix for this object.
     const DEFAULT_KEY_PREFIX: &'static str;
 
-    /// Records this object's OpenTelemetry fields onto `recorder`.
-    fn record_otel_fields(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>);
+    /// Records this object's OpenTelemetry attributes onto `recorder`.
+    fn record_attributes(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>);
 }
 
 /// Records OpenTelemetry fields and nested objects under a common key prefix.
@@ -49,7 +49,7 @@ impl<'a> OpenTelemetryObjectRecorder<'a> {
     {
         let key_prefix = join_key_parts(self.key_prefix.as_ref(), O::DEFAULT_KEY_PREFIX);
         let mut recorder = OpenTelemetryObjectRecorder::new(self.sink, Cow::Owned(key_prefix));
-        object.record_otel_fields(&mut recorder);
+        object.record_attributes(&mut recorder);
     }
 }
 
@@ -89,7 +89,7 @@ mod tests {
     impl OpenTelemetryObject for NestedObject {
         const DEFAULT_KEY_PREFIX: &'static str = "nested";
 
-        fn record_otel_fields(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
+        fn record_attributes(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
             recorder.record_field(&TestField);
         }
     }
@@ -99,7 +99,7 @@ mod tests {
     impl OpenTelemetryObject for TestObject {
         const DEFAULT_KEY_PREFIX: &'static str = "test";
 
-        fn record_otel_fields(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
+        fn record_attributes(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
             recorder.record_field(&TestField);
             recorder.record_object(&NestedObject);
         }

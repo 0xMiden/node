@@ -52,7 +52,7 @@ impl OpenTelemetryEventRecorder {
     {
         let mut sink = EventAttributeSink { attributes: &mut self.attributes };
         let mut recorder = OpenTelemetryObjectRecorder::new(&mut sink, key_prefix);
-        object.record_otel_fields(&mut recorder);
+        object.record_attributes(&mut recorder);
     }
 
     pub(crate) fn into_attributes(self) -> Vec<KeyValue> {
@@ -114,7 +114,7 @@ mod tests {
     impl OpenTelemetryObject for TestObject {
         const DEFAULT_KEY_PREFIX: &'static str = "object";
 
-        fn record_otel_fields(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
+        fn record_attributes(&self, recorder: &mut OpenTelemetryObjectRecorder<'_>) {
             recorder.record_field(&TestField);
         }
     }

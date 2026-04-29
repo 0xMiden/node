@@ -165,13 +165,13 @@ fn is_level(value: &str) -> bool {
 }
 
 fn is_allowed_target_filter(target: &str) -> bool {
-    is_own_target(target)
+    is_allowed_application_target(target)
         || ALLOWED_TARGETS.iter().any(|allowed| {
             allowed.strip_prefix(target).is_some_and(|suffix| suffix.starts_with("::"))
         })
 }
 
-fn is_own_target(target: &str) -> bool {
+fn is_allowed_application_target(target: &str) -> bool {
     ALLOWED_TARGETS.iter().any(|allowed| {
         target == *allowed
             || target.strip_prefix(allowed).is_some_and(|suffix| suffix.starts_with("::"))
@@ -269,44 +269,46 @@ impl Layer<Registry> for DynamicFilterLayer {
         self.inner.on_layer(subscriber);
     }
 
-    /// Registers callsites for allowed application targets and internal plumbing.
+    /// Registers callsites for allowed application targets and control-plane plumbing.
     ///
-    /// Internal control-plane callsites must remain available even when the user-facing filter is
+    /// Control-plane callsites must remain available even when the user-facing filter is
     /// `off`, otherwise panic capture and similar crate-owned signals could be disabled by the
     /// runtime admin filter.
     fn register_callsite(
         &self,
         metadata: &'static tracing::Metadata<'static>,
     ) -> tracing::subscriber::Interest {
-        if internal::is_internal_target(metadata.target()) {
+        if internal::is_control_plane_target(metadata.target()) {
             tracing::subscriber::Interest::always()
-        } else if is_own_target(metadata.target()) {
+        } else if is_allowed_application_target(metadata.target()) {
             self.inner.register_callsite(metadata)
         } else {
             tracing::subscriber::Interest::never()
         }
     }
 
-    /// Applies the runtime filter to application telemetry while allowing internal plumbing.
+    /// Applies the runtime filter to application telemetry while allowing control-plane plumbing.
     ///
-    /// This layer is the global target gate. Internal control-plane records bypass it so they can
+    /// This layer is the global target gate. Control-plane records bypass it so they can
     /// be consumed by crate-owned layers independently of the user-selected trace verbosity.
     fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, Registry>) -> bool {
-        internal::is_internal_target(metadata.target())
-            || (is_own_target(metadata.target()) && self.inner.enabled(metadata, ctx))
+        internal::is_control_plane_target(metadata.target())
+            || (is_allowed_application_target(metadata.target())
+                && self.inner.enabled(metadata, ctx))
     }
 
     /// Forwards span creation for allowed application targets.
     ///
-    /// Internal fallback spans are enabled by this layer, but the wrapped `EnvFilter` does not need
-    /// to track them because internal routing is handled by the tracing crate's own layers.
+    /// Control-plane fallback spans are enabled by this layer, but the wrapped `EnvFilter` does not
+    /// need to track them because control-plane routing is handled by the tracing crate's own
+    /// layers.
     fn on_new_span(
         &self,
         attrs: &tracing::span::Attributes<'_>,
         id: &tracing::span::Id,
         ctx: Context<'_, Registry>,
     ) {
-        if is_own_target(attrs.metadata().target()) {
+        if is_allowed_application_target(attrs.metadata().target()) {
             self.inner.on_new_span(attrs, id, ctx);
         }
     }
@@ -331,21 +333,22 @@ impl Layer<Registry> for DynamicFilterLayer {
         self.inner.on_follows_from(span, follows, ctx);
     }
 
-    /// Applies event-level filtering while preserving internal control-plane delivery.
+    /// Applies event-level filtering while preserving control-plane delivery.
     ///
-    /// Some filters make decisions after seeing event metadata. Internal events bypass that path so
-    /// operational plumbing cannot be disabled accidentally by a user directive.
+    /// Some filters make decisions after seeing event metadata. Control-plane events bypass that
+    /// path so operational plumbing cannot be disabled accidentally by a user directive.
     fn event_enabled(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) -> bool {
-        internal::is_internal_target(event.metadata().target())
-            || (is_own_target(event.metadata().target()) && self.inner.event_enabled(event, ctx))
+        internal::is_control_plane_target(event.metadata().target())
+            || (is_allowed_application_target(event.metadata().target())
+                && self.inner.event_enabled(event, ctx))
     }
 
     /// Forwards user-facing events to the wrapped reload layer.
     ///
-    /// Internal events are deliberately not forwarded to the user filter layer; they are consumed
-    /// by crate-owned layers and filtered from normal output/export layers.
+    /// Control-plane events are deliberately not forwarded to the user filter layer; they are
+    /// consumed by crate-owned layers and filtered from normal output/export layers.
     fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) {
-        if is_own_target(event.metadata().target()) {
+        if is_allowed_application_target(event.metadata().target()) {
             self.inner.on_event(event, ctx);
         }
     }
@@ -377,7 +380,7 @@ impl Layer<Registry> for DynamicFilterLayer {
 
     /// Avoids a restrictive global level hint.
     ///
-    /// The runtime filter may currently be `off`, but internal control-plane records must still be
+    /// The runtime filter may currently be `off`, but control-plane records must still be
     /// able to emit. Returning `None` asks `tracing` to consult `enabled`/`event_enabled` instead
     /// of globally pruning callsites by a static max-level hint.
     fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
@@ -394,7 +397,7 @@ mod tests {
     use tracing_subscriber::layer::Context;
     use tracing_subscriber::prelude::*;
 
-    use super::{DEFAULT_FILTER, DynamicFilter, DynamicFilterError, is_own_target};
+    use super::{DEFAULT_FILTER, DynamicFilter, DynamicFilterError, is_allowed_application_target};
 
     #[test]
     fn dynamic_filter_tracks_current_value() {
@@ -475,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn own_target_gate_disables_third_party_targets() {
+    fn application_target_gate_disables_third_party_targets() {
         let (layer, _filter) = DynamicFilter::new("debug").unwrap();
         let capture = CaptureLayer::default();
         let captured = capture.captured.clone();
@@ -490,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn own_target_gate_still_applies_inside_span_filters() {
+    fn application_target_gate_still_applies_inside_span_filters() {
         let (layer, _filter) = DynamicFilter::new("[rpc::get_block]=debug").unwrap();
         let capture = CaptureLayer::default();
         let captured = capture.captured.clone();
@@ -506,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_control_plane_target_bypasses_dynamic_filter() {
+    fn control_plane_target_bypasses_dynamic_filter() {
         let (layer, _filter) = DynamicFilter::new("off").unwrap();
         let capture = CaptureLayer::default();
         let captured = capture.captured.clone();
@@ -514,25 +517,25 @@ mod tests {
 
         with_default(subscriber, || {
             tracing::event!(
-                name: "miden_tracing::internal",
-                target: crate::internal::TARGET,
+                name: crate::internal::CONTROL_PLANE_EVENT_NAME,
+                target: crate::internal::CONTROL_PLANE_TARGET,
                 tracing::Level::ERROR,
-                internal.kind = "panic",
+                control_plane.kind = "panic",
                 panic = true,
             );
             tracing::error!(target: "rpc", "filtered");
         });
 
-        assert_eq!(*captured.lock().unwrap(), vec![crate::internal::TARGET]);
+        assert_eq!(*captured.lock().unwrap(), vec![crate::internal::CONTROL_PLANE_TARGET]);
     }
 
     #[test]
-    fn own_target_matches_allowed_targets_and_subtargets() {
-        assert!(is_own_target("rpc"));
-        assert!(is_own_target("store::database"));
-        assert!(is_own_target("store::database::queries"));
-        assert!(!is_own_target("h2"));
-        assert!(!is_own_target("store"));
+    fn allowed_application_target_matches_allowed_targets_and_subtargets() {
+        assert!(is_allowed_application_target("rpc"));
+        assert!(is_allowed_application_target("store::database"));
+        assert!(is_allowed_application_target("store::database::queries"));
+        assert!(!is_allowed_application_target("h2"));
+        assert!(!is_allowed_application_target("store"));
     }
 
     #[derive(Clone, Default)]

@@ -2,7 +2,7 @@ use quote::quote;
 use syn::{Expr, ExprPath, Path, PathArguments};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SpanLevel {
+pub(crate) enum TelemetryLevel {
     Trace,
     Debug,
     Info,
@@ -10,7 +10,7 @@ pub(crate) enum SpanLevel {
     Error,
 }
 
-impl SpanLevel {
+impl TelemetryLevel {
     pub(crate) fn parse(expr: &Expr) -> syn::Result<Self> {
         match expr {
             Expr::Path(ExprPath { qself: None, path, .. }) => Self::parse_path(path, expr),
@@ -105,30 +105,30 @@ impl SpanLevel {
 mod tests {
     use syn::parse_quote;
 
-    use super::SpanLevel;
+    use super::TelemetryLevel;
 
     #[test]
     fn parses_level_path() {
-        assert_eq!(SpanLevel::parse(&parse_quote!(debug)).unwrap(), SpanLevel::Debug);
+        assert_eq!(TelemetryLevel::parse(&parse_quote!(debug)).unwrap(), TelemetryLevel::Debug);
     }
 
     #[test]
     fn rejects_level_string() {
-        let err = SpanLevel::parse(&parse_quote!("debug")).unwrap_err();
+        let err = TelemetryLevel::parse(&parse_quote!("debug")).unwrap_err();
 
         assert!(err.to_string().contains("`level` must be one of"));
     }
 
     #[test]
     fn rejects_qualified_level_path() {
-        let err = SpanLevel::parse(&parse_quote!(tracing::Level::DEBUG)).unwrap_err();
+        let err = TelemetryLevel::parse(&parse_quote!(tracing::Level::DEBUG)).unwrap_err();
 
         assert!(err.to_string().contains("`level` must be one of"));
     }
 
     #[test]
     fn rejects_uppercase_level_path() {
-        let err = SpanLevel::parse(&parse_quote!(DEBUG)).unwrap_err();
+        let err = TelemetryLevel::parse(&parse_quote!(DEBUG)).unwrap_err();
 
         assert!(err.to_string().contains("`level` must be one of"));
     }

@@ -4,7 +4,7 @@ use syn::parse::{Parse, ParseStream, Parser};
 use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parenthesized};
 
-use crate::level::SpanLevel;
+use crate::level::TelemetryLevel;
 use crate::target;
 
 pub(crate) fn event(input: TokenStream) -> TokenStream {
@@ -12,26 +12,26 @@ pub(crate) fn event(input: TokenStream) -> TokenStream {
 }
 
 pub(crate) fn trace(input: TokenStream) -> TokenStream {
-    expand_event(input, Some(SpanLevel::Trace))
+    expand_event(input, Some(TelemetryLevel::Trace))
 }
 
 pub(crate) fn debug(input: TokenStream) -> TokenStream {
-    expand_event(input, Some(SpanLevel::Debug))
+    expand_event(input, Some(TelemetryLevel::Debug))
 }
 
 pub(crate) fn info(input: TokenStream) -> TokenStream {
-    expand_event(input, Some(SpanLevel::Info))
+    expand_event(input, Some(TelemetryLevel::Info))
 }
 
 pub(crate) fn warn(input: TokenStream) -> TokenStream {
-    expand_event(input, Some(SpanLevel::Warn))
+    expand_event(input, Some(TelemetryLevel::Warn))
 }
 
 pub(crate) fn error(input: TokenStream) -> TokenStream {
-    expand_event(input, Some(SpanLevel::Error))
+    expand_event(input, Some(TelemetryLevel::Error))
 }
 
-fn expand_event(input: TokenStream, fixed_level: Option<SpanLevel>) -> TokenStream {
+fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> TokenStream {
     let parser = |input: ParseStream<'_>| EventArgs::parse(input, fixed_level);
     let args = match parser.parse(input) {
         Ok(args) => args,
@@ -73,13 +73,13 @@ fn expand_event(input: TokenStream, fixed_level: Option<SpanLevel>) -> TokenStre
 struct EventArgs {
     target: String,
     target_span: proc_macro2::Span,
-    level: SpanLevel,
+    level: TelemetryLevel,
     records: Vec<EventRecord>,
     message: Option<proc_macro2::TokenStream>,
 }
 
 impl EventArgs {
-    fn parse(input: ParseStream<'_>, fixed_level: Option<SpanLevel>) -> syn::Result<Self> {
+    fn parse(input: ParseStream<'_>, fixed_level: Option<TelemetryLevel>) -> syn::Result<Self> {
         if !input.peek(Ident) {
             return Err(syn::Error::new(
                 input.span(),
@@ -143,7 +143,7 @@ impl EventArgs {
     }
 }
 
-fn parse_level(input: ParseStream<'_>) -> syn::Result<SpanLevel> {
+fn parse_level(input: ParseStream<'_>) -> syn::Result<TelemetryLevel> {
     let level_ident = input.parse::<Ident>()?;
     if level_ident != "level" {
         return Err(syn::Error::new_spanned(level_ident, "`level` is required after `target`"));
@@ -151,7 +151,7 @@ fn parse_level(input: ParseStream<'_>) -> syn::Result<SpanLevel> {
 
     parse_key_separator(input, "`level`")?;
     let level = input.parse::<Expr>()?;
-    SpanLevel::parse(&level)
+    TelemetryLevel::parse(&level)
 }
 
 fn try_parse_record(input: ParseStream<'_>) -> syn::Result<Option<EventRecord>> {
@@ -289,11 +289,11 @@ mod tests {
     use syn::parse::Parser;
 
     use super::{EventArgs, EventRecordKind};
-    use crate::level::SpanLevel;
+    use crate::level::TelemetryLevel;
 
     fn parse_args(
         tokens: proc_macro2::TokenStream,
-        fixed_level: Option<SpanLevel>,
+        fixed_level: Option<TelemetryLevel>,
     ) -> syn::Result<EventArgs> {
         (|input: syn::parse::ParseStream<'_>| EventArgs::parse(input, fixed_level)).parse2(tokens)
     }
@@ -308,12 +308,12 @@ mod tests {
                 "accepted block {}",
                 block_num
             ),
-            Some(SpanLevel::Info),
+            Some(TelemetryLevel::Info),
         )
         .unwrap();
 
         assert_eq!(args.target, "rpc");
-        assert_eq!(args.level, SpanLevel::Info);
+        assert_eq!(args.level, TelemetryLevel::Info);
         assert_eq!(args.records.len(), 2);
         assert!(matches!(args.records[0].kind, EventRecordKind::Field));
         assert!(matches!(args.records[1].kind, EventRecordKind::Object));
@@ -325,7 +325,7 @@ mod tests {
         let args = parse_args(quote!(target = store::database, level = debug), None).unwrap();
 
         assert_eq!(args.target, "store::database");
-        assert_eq!(args.level, SpanLevel::Debug);
+        assert_eq!(args.level, TelemetryLevel::Debug);
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn requires_target() {
-        let err = match parse_args(quote!("message"), Some(SpanLevel::Info)) {
+        let err = match parse_args(quote!("message"), Some(TelemetryLevel::Info)) {
             Ok(_) => panic!("event args should fail to parse"),
             Err(err) => err,
         };
