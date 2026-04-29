@@ -237,17 +237,18 @@ mod tests {
 
     #[test]
     fn requires_target() {
-        let err = InstrumentArgs::parse(parse_args(quote!(name = test))).unwrap_err();
+        let err = InstrumentArgs::parse(parse_args(quote!(name = "test"))).unwrap_err();
 
         assert!(err.to_string().contains("`target` is required"));
     }
 
     #[test]
     fn rewrites_allowed_target_to_literal() {
-        let args = InstrumentArgs::parse(parse_args(quote!(target = store::database, name = test)))
-            .unwrap()
-            .tracing_args
-            .to_string();
+        let args =
+            InstrumentArgs::parse(parse_args(quote!(target = store::database, name = "test")))
+                .unwrap()
+                .tracing_args
+                .to_string();
 
         assert!(args.contains("skip_all"));
         assert!(args.contains("target = \"store::database\""));
@@ -259,7 +260,7 @@ mod tests {
         let args = InstrumentArgs::parse(parse_args(quote!(
             target = store::database,
             level = debug,
-            name = test
+            name = "test"
         )))
         .unwrap();
 
@@ -268,16 +269,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_string_level_and_name() {
+    fn rejects_string_level_and_path_name() {
         let level_err =
             InstrumentArgs::parse(parse_args(quote!(target = store::database, level = "debug")))
                 .unwrap_err();
         let name_err =
-            InstrumentArgs::parse(parse_args(quote!(target = store::database, name = "test")))
+            InstrumentArgs::parse(parse_args(quote!(target = store::database, name = test)))
                 .unwrap_err();
 
         assert!(level_err.to_string().contains("`level` must be one of"));
-        assert!(name_err.to_string().contains("`name` must be a path"));
+        assert!(name_err.to_string().contains("`name` must be a string literal"));
     }
 
     #[test]

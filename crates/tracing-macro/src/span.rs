@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn parses_span_args_with_equals_target() {
-        let args = parse2::<SpanArgs>(quote!(target = store::database, db::read)).unwrap();
+        let args = parse2::<SpanArgs>(quote!(target = store::database, "db::read")).unwrap();
 
         assert_eq!(args.target, "store::database");
         assert_eq!(args.name.value(), "db::read");
@@ -125,7 +125,8 @@ mod tests {
 
     #[test]
     fn parses_span_args_with_colon_target() {
-        let args = parse2::<SpanArgs>(quote!(target: sequencer::mempool, mempool::select)).unwrap();
+        let args =
+            parse2::<SpanArgs>(quote!(target: sequencer::mempool, "mempool::select")).unwrap();
 
         assert_eq!(args.target, "sequencer::mempool");
         assert_eq!(args.name.value(), "mempool::select");
@@ -133,7 +134,7 @@ mod tests {
 
     #[test]
     fn parses_span_args_with_named_name() {
-        let args = parse2::<SpanArgs>(quote!(target = rpc, name = rpc::get_block)).unwrap();
+        let args = parse2::<SpanArgs>(quote!(target = rpc, name = "rpc::get_block")).unwrap();
 
         assert_eq!(args.target, "rpc");
         assert_eq!(args.name.value(), "rpc::get_block");
@@ -141,16 +142,16 @@ mod tests {
 
     #[test]
     fn rejects_fields() {
-        let err = parse_err(quote!(target = store::database, db::read, block.number = 1));
+        let err = parse_err(quote!(target = store::database, "db::read", block.number = 1));
 
         assert!(err.to_string().contains("`fields` is not supported"));
     }
 
     #[test]
-    fn rejects_string_name() {
-        let err = parse_err(quote!(target = rpc, "rpc::get_block"));
+    fn rejects_path_name() {
+        let err = parse_err(quote!(target = rpc, rpc::get_block));
 
-        assert!(err.to_string().contains("`name` must be a path"));
+        assert!(err.to_string().contains("`name` must be a string literal"));
     }
 
     #[test]

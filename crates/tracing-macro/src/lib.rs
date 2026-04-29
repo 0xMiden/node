@@ -18,8 +18,8 @@ mod target;
 ///
 /// - `target = ...`, required. The value must be an allowed path such as `rpc` or
 ///   `store::database`.
-/// - `name = ...`, optional. The value must be a relative path such as `store::get_block_header`.
-///   The path is preserved as the span name. Defaults to the function name.
+/// - `name = ...`, optional. The value must be a static string literal such as
+///   `"store::get_block_header"`. Defaults to the function name.
 /// - `level = ...`, optional. The value must be one of `trace`, `debug`, `info`, `warn`, or
 ///   `error`. Defaults to `info`.
 ///
@@ -33,7 +33,7 @@ mod target;
 /// use miden_node_tracing::{Span, instrument};
 ///
 /// /// Loads a block header from the store database.
-/// #[instrument(target = store::database, name = store::get_block_header, level = debug)]
+/// #[instrument(target = store::database, name = "store::get_block_header", level = debug)]
 /// async fn get_block_header(
 ///     block_num: miden_protocol::block::BlockNumber,
 /// ) -> Result<(), anyhow::Error> {
@@ -218,16 +218,16 @@ pub fn error(input: TokenStream) -> TokenStream {
 
 /// Creates a trace-level Miden span.
 ///
-/// The macro requires an allowed `target` as the first argument and a span-name path as the second
-/// argument. The path is preserved as the span name. Fields are not accepted in the macro
-/// invocation; record fields or objects on the returned `miden_node_tracing::Span` instead.
+/// The macro requires an allowed `target` as the first argument and a span-name string literal as
+/// the second argument. Fields are not accepted in the macro invocation; record fields or objects
+/// on the returned `miden_node_tracing::Span` instead.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// let span = miden_node_tracing::trace_span!(
 ///     target = sequencer::mempool,
-///     mempool::select_transaction,
+///     "mempool::select_transaction",
 /// );
 /// span.record_field(&transaction_id);
 /// let _guard = span.entered();
@@ -239,16 +239,16 @@ pub fn trace_span(input: TokenStream) -> TokenStream {
 
 /// Creates a debug-level Miden span.
 ///
-/// The macro requires an allowed `target` as the first argument and a span-name path as the second
-/// argument. The path is preserved as the span name. Fields are not accepted in the macro
-/// invocation; record fields or objects on the returned `miden_node_tracing::Span` instead.
+/// The macro requires an allowed `target` as the first argument and a span-name string literal as
+/// the second argument. Fields are not accepted in the macro invocation; record fields or objects
+/// on the returned `miden_node_tracing::Span` instead.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// let span = miden_node_tracing::debug_span!(
 ///     target = store::database,
-///     name = store::read_block,
+///     name = "store::read_block",
 /// );
 /// span.record_field(&block_num);
 /// let _guard = span.entered();
@@ -260,16 +260,16 @@ pub fn debug_span(input: TokenStream) -> TokenStream {
 
 /// Creates an info-level Miden span.
 ///
-/// The macro requires an allowed `target` as the first argument and a span-name path as the second
-/// argument. The path is preserved as the span name. Fields are not accepted in the macro
-/// invocation; record fields or objects on the returned `miden_node_tracing::Span` instead.
+/// The macro requires an allowed `target` as the first argument and a span-name string literal as
+/// the second argument. Fields are not accepted in the macro invocation; record fields or objects
+/// on the returned `miden_node_tracing::Span` instead.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// let span = miden_node_tracing::info_span!(
 ///     target = sequencer::block_builder,
-///     block_builder::build_block,
+///     "block_builder::build_block",
 /// );
 /// span.record_object(&header);
 /// let _guard = span.entered();
@@ -281,16 +281,16 @@ pub fn info_span(input: TokenStream) -> TokenStream {
 
 /// Creates a warn-level Miden span.
 ///
-/// The macro requires an allowed `target` as the first argument and a span-name path as the second
-/// argument. The path is preserved as the span name. Fields are not accepted in the macro
-/// invocation; record fields or objects on the returned `miden_node_tracing::Span` instead.
+/// The macro requires an allowed `target` as the first argument and a span-name string literal as
+/// the second argument. Fields are not accepted in the macro invocation; record fields or objects
+/// on the returned `miden_node_tracing::Span` instead.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// let span = miden_node_tracing::warn_span!(
 ///     target = rpc,
-///     rpc::slow_request,
+///     "rpc::slow_request",
 /// );
 /// span.record_field(&block_num);
 /// let _guard = span.entered();
@@ -302,16 +302,16 @@ pub fn warn_span(input: TokenStream) -> TokenStream {
 
 /// Creates an error-level Miden span.
 ///
-/// The macro requires an allowed `target` as the first argument and a span-name path as the second
-/// argument. The path is preserved as the span name. Fields are not accepted in the macro
-/// invocation; record fields or objects on the returned `miden_node_tracing::Span` instead.
+/// The macro requires an allowed `target` as the first argument and a span-name string literal as
+/// the second argument. Fields are not accepted in the macro invocation; record fields or objects
+/// on the returned `miden_node_tracing::Span` instead.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// let span = miden_node_tracing::error_span!(
 ///     target = ntxb::database,
-///     ntxb::database::write_batch,
+///     "ntxb::database::write_batch",
 /// );
 /// span.record_field(&batch_id);
 /// let _guard = span.entered();
