@@ -46,10 +46,13 @@ impl Db {
             .await
             .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
 
-        conn.interact(|conn| <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query))
-            .in_current_span()
-            .await
-            .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
+        let span = tracing::Span::current();
+        conn.interact(move |conn| {
+            let _guard = span.enter();
+            <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query)
+        })
+        .await
+        .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 
     /// Run the query _without_ a transaction
