@@ -120,6 +120,8 @@ pub enum StateInitializationError {
     AccountTreeIoError(String),
     #[error("nullifier tree IO error: {0}")]
     NullifierTreeIoError(String),
+    #[error("account state forest IO error: {0}")]
+    AccountStateForestIoError(String),
     #[error("database error")]
     DatabaseError(#[from] DatabaseError),
     #[error("failed to create nullifier tree")]
