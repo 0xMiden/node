@@ -12,7 +12,6 @@ RUN apt-get update && \
         libsqlite3-dev \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-RUN rustup component add rustfmt
 RUN cargo install cargo-chef
 WORKDIR /app
 
