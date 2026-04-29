@@ -26,6 +26,7 @@ hex                             = { version = "0.4" }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }
 miden-block-prover              = { workspace = true }
+pin-project                     = "1"
 miden-crypto                    = { features = ["concurrent"], workspace = true }
 miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 miden-node-db                   = { workspace = true }

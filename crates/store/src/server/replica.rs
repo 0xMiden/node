@@ -10,6 +10,7 @@ use miden_node_proto::generated::store::{
     store_replica_server,
 };
 use miden_protocol::block::BlockNumber;
+use pin_project::pin_project;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -23,16 +24,18 @@ use crate::state::{BlockNotification, Finality, ProofNotification, State};
 // ================================================================================================
 
 /// Wraps a stream and holds a semaphore permit for its lifetime, releasing it on drop.
-struct GuardedStream<S: Stream + Unpin> {
+#[pin_project]
+struct GuardedStream<S: Stream> {
+    #[pin]
     inner: S,
     _permit: OwnedSemaphorePermit,
 }
 
-impl<S: Stream + Unpin> Stream for GuardedStream<S> {
+impl<S: Stream> Stream for GuardedStream<S> {
     type Item = S::Item;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().inner.poll_next(cx)
     }
 }
 
@@ -85,8 +88,7 @@ impl store_replica_server::StoreReplica for StoreApi {
         // Subscribe to the live broadcast BEFORE replay to eliminate the gap race.
         let live_rx = self.block_sender.subscribe();
 
-        let stream =
-            Box::pin(build_block_stream(from, chain_tip, Arc::clone(&self.state), live_rx));
+        let stream = build_block_stream(from, chain_tip, Arc::clone(&self.state), live_rx);
         Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
     }
 
@@ -111,8 +113,7 @@ impl store_replica_server::StoreReplica for StoreApi {
         // Subscribe to the live broadcast BEFORE replay.
         let live_rx = self.proof_sender.subscribe();
 
-        let stream =
-            Box::pin(build_proof_stream(from, proven_tip, Arc::clone(&self.state), live_rx));
+        let stream = build_proof_stream(from, proven_tip, Arc::clone(&self.state), live_rx);
         Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
     }
 }
