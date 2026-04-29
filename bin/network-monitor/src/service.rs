@@ -9,7 +9,6 @@
 
 use std::time::Duration;
 
-use anyhow::Result;
 use miden_node_proto::clients::{Builder as ClientBuilder, GrpcClient};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -51,7 +50,7 @@ pub trait Service: Send + 'static {
     fn run(
         mut self,
         tx: watch::Sender<ServiceStatus>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send
+    ) -> impl std::future::Future<Output = ()> + Send
     where
         Self: Sized,
     {
@@ -63,7 +62,7 @@ pub trait Service: Send + 'static {
                 let status = self.check().await;
                 if tx.send(status).is_err() {
                     info!("No receivers for {}, shutting down", self.name());
-                    return Ok(());
+                    return;
                 }
             }
         }

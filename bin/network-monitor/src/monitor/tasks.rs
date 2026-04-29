@@ -9,7 +9,7 @@ use miden_node_proto::clients::RemoteProverClient;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
 use tokio::task::{Id, JoinSet};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
@@ -168,17 +168,7 @@ impl Tasks {
     pub fn spawn_service<S: Service>(&mut self, svc: S) -> Receiver<ServiceStatus> {
         let (tx, rx) = watch::channel(svc.initial_status());
         let service_name = svc.name().to_string();
-        let id = self
-            .handles
-            .spawn({
-                let service_name = service_name.clone();
-                async move {
-                    if let Err(e) = svc.run(tx).await {
-                        error!(target: COMPONENT, service = %service_name, err = ?e, "service exited with error");
-                    }
-                }
-            })
-            .id();
+        let id = self.handles.spawn(async move { svc.run(tx).await }).id();
         debug!(target: COMPONENT, service = %service_name, "spawned service");
         self.names.insert(id, service_name);
         rx
