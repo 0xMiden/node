@@ -54,6 +54,26 @@ impl SpanLevel {
         }
     }
 
+    pub(crate) fn tracing_tokens(self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Trace => quote! { ::miden_node_tracing::tracing::Level::TRACE },
+            Self::Debug => quote! { ::miden_node_tracing::tracing::Level::DEBUG },
+            Self::Info => quote! { ::miden_node_tracing::tracing::Level::INFO },
+            Self::Warn => quote! { ::miden_node_tracing::tracing::Level::WARN },
+            Self::Error => quote! { ::miden_node_tracing::tracing::Level::ERROR },
+        }
+    }
+
+    pub(crate) const fn tracing_name(self) -> &'static str {
+        match self {
+            Self::Trace => "TRACE",
+            Self::Debug => "DEBUG",
+            Self::Info => "INFO",
+            Self::Warn => "WARN",
+            Self::Error => "ERROR",
+        }
+    }
+
     fn parse_str(level: &str, span: impl quote::ToTokens) -> syn::Result<Self> {
         match level.to_ascii_lowercase().as_str() {
             "trace" => Ok(Self::Trace),

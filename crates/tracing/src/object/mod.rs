@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use opentelemetry::Key;
 
 use crate::OpenTelemetryField;
+use crate::event::OpenTelemetryAttributeSink;
 
 /// An object that can record a set of OpenTelemetry attributes with a common key prefix.
 pub trait OpenTelemetryObject {
@@ -17,14 +18,17 @@ pub trait OpenTelemetryObject {
 
 /// Records OpenTelemetry fields and nested objects under a common key prefix.
 pub struct OpenTelemetryObjectRecorder<'a> {
-    span: &'a tracing::Span,
+    sink: &'a mut dyn OpenTelemetryAttributeSink,
     key_prefix: Cow<'a, str>,
 }
 
 impl<'a> OpenTelemetryObjectRecorder<'a> {
-    /// Creates a recorder that writes attributes to `span` under `key_prefix`.
-    pub(crate) fn new(span: &'a tracing::Span, key_prefix: impl Into<Cow<'a, str>>) -> Self {
-        Self { span, key_prefix: key_prefix.into() }
+    /// Creates a recorder that writes attributes to `sink` under `key_prefix`.
+    pub(crate) fn new(
+        sink: &'a mut dyn OpenTelemetryAttributeSink,
+        key_prefix: impl Into<Cow<'a, str>>,
+    ) -> Self {
+        Self { sink, key_prefix: key_prefix.into() }
     }
 
     /// Records `field` using this recorder's key prefix and the field's default key suffix.
@@ -32,8 +36,7 @@ impl<'a> OpenTelemetryObjectRecorder<'a> {
     where
         F: OpenTelemetryField + ?Sized,
     {
-        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
-            self.span,
+        self.sink.record_attribute(
             join_key(self.key_prefix.as_ref(), F::DEFAULT_KEY_SUFFIX),
             field.to_otel_value(),
         );
@@ -45,7 +48,7 @@ impl<'a> OpenTelemetryObjectRecorder<'a> {
         O: OpenTelemetryObject + ?Sized,
     {
         let key_prefix = join_key_parts(self.key_prefix.as_ref(), O::DEFAULT_KEY_PREFIX);
-        let mut recorder = OpenTelemetryObjectRecorder::new(self.span, Cow::Owned(key_prefix));
+        let mut recorder = OpenTelemetryObjectRecorder::new(self.sink, Cow::Owned(key_prefix));
         object.record_otel_fields(&mut recorder);
     }
 }
@@ -67,6 +70,7 @@ fn join_key_parts(prefix: &str, suffix: &str) -> String {
 mod tests {
     use super::{OpenTelemetryObject, OpenTelemetryObjectRecorder};
     use crate::OpenTelemetryField;
+    use crate::event::SpanAttributeSink;
     use crate::test_utils::{assert_attribute, exported_span};
 
     struct TestField;
@@ -104,7 +108,8 @@ mod tests {
     #[test]
     fn recorder_records_prefixed_fields_and_nested_objects() {
         let span = exported_span(|span| {
-            let mut recorder = OpenTelemetryObjectRecorder::new(span.as_tracing_span(), "root");
+            let mut sink = SpanAttributeSink { span: span.as_tracing_span() };
+            let mut recorder = OpenTelemetryObjectRecorder::new(&mut sink, "root");
             recorder.record_field(&TestField);
             recorder.record_object(&TestObject);
         });

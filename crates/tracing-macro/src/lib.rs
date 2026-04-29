@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 
+mod event;
 mod instrument;
 mod level;
 mod metadata;
@@ -14,6 +15,42 @@ mod target;
 #[proc_macro_attribute]
 pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     instrument::instrument(attr, item)
+}
+
+/// Records an OpenTelemetry event on the current span with Miden tracing defaults.
+#[proc_macro]
+pub fn event(input: TokenStream) -> TokenStream {
+    event::event(input)
+}
+
+/// Records a trace-level OpenTelemetry event on the current span with Miden tracing defaults.
+#[proc_macro]
+pub fn trace(input: TokenStream) -> TokenStream {
+    event::trace(input)
+}
+
+/// Records a debug-level OpenTelemetry event on the current span with Miden tracing defaults.
+#[proc_macro]
+pub fn debug(input: TokenStream) -> TokenStream {
+    event::debug(input)
+}
+
+/// Records an info-level OpenTelemetry event on the current span with Miden tracing defaults.
+#[proc_macro]
+pub fn info(input: TokenStream) -> TokenStream {
+    event::info(input)
+}
+
+/// Records a warn-level OpenTelemetry event on the current span with Miden tracing defaults.
+#[proc_macro]
+pub fn warn(input: TokenStream) -> TokenStream {
+    event::warn(input)
+}
+
+/// Records an error-level OpenTelemetry event on the current span with Miden tracing defaults.
+#[proc_macro]
+pub fn error(input: TokenStream) -> TokenStream {
+    event::error(input)
 }
 
 /// Creates a trace-level span with Miden tracing defaults.

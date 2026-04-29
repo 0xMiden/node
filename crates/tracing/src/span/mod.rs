@@ -5,6 +5,7 @@ use std::error::Error;
 use opentelemetry::Key;
 use opentelemetry::trace::Status;
 
+use crate::event::{OpenTelemetryEventRecorder, SpanAttributeSink, record_event_on_span};
 use crate::{OpenTelemetryField, OpenTelemetryObject, OpenTelemetryObjectRecorder};
 
 /// A tracing span with Miden OpenTelemetry recording helpers.
@@ -83,8 +84,18 @@ impl Span {
     where
         O: OpenTelemetryObject + ?Sized,
     {
-        let mut recorder = OpenTelemetryObjectRecorder::new(&self.0, key_prefix);
+        let mut sink = SpanAttributeSink { span: &self.0 };
+        let mut recorder = OpenTelemetryObjectRecorder::new(&mut sink, key_prefix);
         object.record_otel_fields(&mut recorder);
+    }
+
+    /// Records an OpenTelemetry event on this span.
+    pub fn record_event(
+        &self,
+        name: impl Into<std::borrow::Cow<'static, str>>,
+        recorder: OpenTelemetryEventRecorder,
+    ) {
+        record_event_on_span(&self.0, name, recorder);
     }
 
     /// Records `error` on this span by setting the span status to error.

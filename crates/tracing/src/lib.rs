@@ -3,6 +3,7 @@
 extern crate self as miden_node_tracing;
 
 mod catalog;
+mod event;
 mod field;
 mod filter;
 mod object;
@@ -12,16 +13,23 @@ mod span;
 mod test_utils;
 
 pub use catalog::{SpanLevel, SpanMetadata, registered_spans};
+pub use event::OpenTelemetryEventRecorder;
 pub use field::OpenTelemetryField;
 pub use filter::{DEFAULT_FILTER, DynamicFilter, DynamicFilterError, DynamicFilterLayer};
 #[doc(hidden)]
 pub use inventory;
 pub use miden_node_tracing_macro::{
+    debug,
     debug_span,
+    error,
     error_span,
+    event,
+    info,
     info_span,
     instrument,
+    trace,
     trace_span,
+    warn,
     warn_span,
 };
 pub use object::{OpenTelemetryObject, OpenTelemetryObjectRecorder};
