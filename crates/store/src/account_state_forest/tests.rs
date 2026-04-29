@@ -714,11 +714,7 @@ fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
-    forest
-        .storage_map_key_cache
-        .lock()
-        .expect("cache mutex should not be poisoned")
-        .clear();
+    forest.clear_storage_map_key_cache();
 
     let result = forest
         .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)

@@ -1,12 +1,11 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
-use std::sync::Mutex;
 
-use lru::LruCache;
 use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::ForestInMemoryBackend;
 use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
 use miden_node_utils::ErrorReport;
+use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
@@ -86,17 +85,17 @@ pub(crate) struct AccountStateForest {
     ///
     /// Ideally this would be a mapping from `StorageMapKeyHash` to `StorageMapKey` but
     /// unfortunately `StorageMapKeyHash` does not implement `Hash`.
-    storage_map_key_cache: Mutex<LruCache<Word, StorageMapKey>>,
+    storage_map_key_cache: LruCache<Word, StorageMapKey>,
 }
 
 impl AccountStateForest {
     pub(crate) fn new() -> Self {
         Self {
             forest: Self::create_forest(),
-            storage_map_key_cache: Mutex::new(LruCache::new(
+            storage_map_key_cache: LruCache::new(
                 NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
-            )),
+            ),
         }
     }
 
@@ -170,11 +169,13 @@ impl AccountStateForest {
     }
 
     pub(crate) fn cache_storage_map_keys(&self, raw_keys: impl IntoIterator<Item = StorageMapKey>) {
-        let mut cache =
-            self.storage_map_key_cache.lock().expect("cache mutex should not be poisoned");
-        for raw_key in raw_keys {
-            cache.put(raw_key.hash().into(), raw_key);
-        }
+        self.storage_map_key_cache
+            .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash().into(), raw_key)));
+    }
+
+    #[cfg(test)]
+    fn clear_storage_map_key_cache(&self) {
+        self.storage_map_key_cache.clear();
     }
 
     fn apply_forest_updates(
@@ -413,14 +414,9 @@ impl AccountStateForest {
             }));
         }
 
-        let raw_keys = {
-            let mut cache =
-                self.storage_map_key_cache.lock().expect("cache mutex should not be poisoned");
-            hashed_entries
-                .iter()
-                .map(|(hashed_key, _)| cache.get(hashed_key).copied())
-                .collect::<Vec<_>>()
-        };
+        let raw_keys = self
+            .storage_map_key_cache
+            .get_many(hashed_entries.iter().map(|(hashed_key, _)| hashed_key));
         if raw_keys.iter().any(Option::is_none) {
             return Ok(AccountStorageMapResult::CannotReconstructKeysFromCache);
         }
