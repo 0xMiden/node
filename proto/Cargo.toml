@@ -19,10 +19,6 @@ internal = []
 [lints]
 workspace = true
 
-[lib]
-doctest = false
-test    = false
-
 [dependencies]
 protox            = { workspace = true }
 tonic-prost-build = { workspace = true }

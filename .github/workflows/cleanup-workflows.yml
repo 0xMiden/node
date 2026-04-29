@@ -128,23 +128,18 @@ jobs:
           gh_workflow_run_page() {
             local id="$1"
             local cursor="$2"
-            local query
-            query=$(cat <<'GRAPHQL'
-          query($workflowId: ID!, $after: String) {
-            node(id: $workflowId) {
-              ... on Workflow {
-                runs(first: 100, after: $after) {
-                  pageInfo { hasNextPage endCursor }
-                  nodes { databaseId }
-                }
-              }
-            }
-          }
-          GRAPHQL
-            )
 
             gh api graphql -F workflowId="$id" -F after="$cursor" \
-              -f query="$query"
+              -f query='query($workflowId: ID!, $after: String) {
+                  node(id: $workflowId) {
+                    ... on Workflow {
+                      runs(first: 100, after: $after) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes { databaseId }
+                      }
+                    }
+                  }
+                }'
           }
 
           # ================================================================================================
@@ -156,28 +151,22 @@ jobs:
           widths_name=30
           widths_count=14
           widths_total=12
-          widths_table=$((widths_index + 3 + widths_name + 3 + widths_count + 3 + widths_total))
+          widths_table=$(( $widths_index + 3 + $widths_name + 3 + $widths_count + 3 + $widths_total ))
 
           # Repeats a character a given number of times.
           repeat_char() {
             local char=$1
             local count=$2
-            for ((i = 0; i < count; i++)); do
-              printf "%s" "$char"
-            done
+            printf "%0.s$char" $(seq 1 $count)
           }
 
           # Prints the given header as `==== <header> ====` to match the table layout.
           print_table_header() {
             local header="$1"
             local header_len=${#header}
-            local left_pad=$(((widths_table - header_len - 2) / 2))
-            local right_pad=$((widths_table - header_len - 2 - left_pad))
-            local left
-            local right
-            left=$(repeat_char "=" "$left_pad")
-            right=$(repeat_char "=" "$right_pad")
-            printf " \n%s %s %s\n" "$left" "$header" "$right"
+            local left_pad=$(( ( $widths_table - header_len - 2) / 2 ))
+            local right_pad=$(( $widths_table - header_len - 2 - left_pad ))
+            printf " \n%s %s %s\n" $(repeat_char = $left_pad) "$header" $(repeat_char = $right_pad)
           }
 
           # Prints |---+---+---+---| with appropriate widths to accomodate the table headers.

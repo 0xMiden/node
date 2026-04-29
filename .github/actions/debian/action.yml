@@ -45,15 +45,17 @@ runs:
         INPUT_GITREF: ${{ inputs.gitref }}
       run: |
         if git show-ref -q --verify "refs/remotes/origin/${INPUT_GITREF}" 2>/dev/null; then
-          sha=$(git show-ref --hash --verify "refs/remotes/origin/${INPUT_GITREF}")
+          ref="refs/remotes/origin/${INPUT_GITREF}"
         elif git show-ref -q --verify "refs/tags/${INPUT_GITREF}" 2>/dev/null; then
-          sha=$(git show-ref --hash --verify "refs/tags/${INPUT_GITREF}")
+          ref="refs/tags/${INPUT_GITREF}"
         elif git rev-parse --verify "${INPUT_GITREF}^{commit}" >/dev/null 2>&1; then
-          sha=$(git rev-parse --verify "${INPUT_GITREF}^{commit}")
+          ref="${INPUT_GITREF}"
         else
           echo "::error::Unknown git reference type"
           exit 1
         fi
+
+        sha=$(git rev-parse --verify "${ref}^{commit}")
         echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
     - name: Create package directories
@@ -145,36 +147,39 @@ runs:
         mv packaging/deb/*.deb .
         rm -rf packaging
 
-    - name: Rename package files
+    - name: Package names
+      id: package-names
       shell: bash
       env:
         INPUT_ARCH: ${{ inputs.arch }}
         INPUT_GITREF: ${{ inputs.gitref }}
         INPUT_PACKAGE: ${{ inputs.package }}
       run: |
-        package="${INPUT_PACKAGE}-${INPUT_GITREF}-${INPUT_ARCH}.deb"
-        mv "${INPUT_PACKAGE}.deb" "${package}"
+        echo "package=${INPUT_PACKAGE}-${INPUT_GITREF}-${INPUT_ARCH}.deb" >> "$GITHUB_OUTPUT"
+
+    - name: Rename package files
+      shell: bash
+      env:
+        INPUT_PACKAGE: ${{ inputs.package }}
+        PACKAGE_FILE: ${{ steps.package-names.outputs.package }}
+      run: |
+        mv "${INPUT_PACKAGE}.deb" "${PACKAGE_FILE}"
 
     - name: shasum packages
       shell: bash
       env:
-        INPUT_ARCH: ${{ inputs.arch }}
-        INPUT_GITREF: ${{ inputs.gitref }}
-        INPUT_PACKAGE: ${{ inputs.package }}
+        PACKAGE_FILE: ${{ steps.package-names.outputs.package }}
       run: |
-        package="${INPUT_PACKAGE}-${INPUT_GITREF}-${INPUT_ARCH}.deb"
-        sha256sum "${package}" > "${package}.checksum"
+        sha256sum "${PACKAGE_FILE}" > "${PACKAGE_FILE}.checksum"
 
     - name: Publish packages
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
-        INPUT_ARCH: ${{ inputs.arch }}
         INPUT_GITREF: ${{ inputs.gitref }}
-        INPUT_PACKAGE: ${{ inputs.package }}
+        PACKAGE_FILE: ${{ steps.package-names.outputs.package }}
       run: |
-        package="${INPUT_PACKAGE}-${INPUT_GITREF}-${INPUT_ARCH}.deb"
         gh release upload "${INPUT_GITREF}" \
-          "${package}" \
-          "${package}.checksum" \
+          "${PACKAGE_FILE}" \
+          "${PACKAGE_FILE}.checksum" \
           --clobber
