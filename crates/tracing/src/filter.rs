@@ -5,6 +5,8 @@ use tracing_subscriber::filter::ParseError;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::{EnvFilter, Layer, Registry, reload};
 
+use crate::internal;
+
 /// Default trace filter used when `RUST_LOG` is not set.
 pub const DEFAULT_FILTER: &str = "info";
 
@@ -269,7 +271,9 @@ impl Layer<Registry> for DynamicFilterLayer {
         &self,
         metadata: &'static tracing::Metadata<'static>,
     ) -> tracing::subscriber::Interest {
-        if is_own_target(metadata.target()) {
+        if internal::is_internal_target(metadata.target()) {
+            tracing::subscriber::Interest::always()
+        } else if is_own_target(metadata.target()) {
             self.inner.register_callsite(metadata)
         } else {
             tracing::subscriber::Interest::never()
@@ -277,7 +281,8 @@ impl Layer<Registry> for DynamicFilterLayer {
     }
 
     fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, Registry>) -> bool {
-        is_own_target(metadata.target()) && self.inner.enabled(metadata, ctx)
+        internal::is_internal_target(metadata.target())
+            || (is_own_target(metadata.target()) && self.inner.enabled(metadata, ctx))
     }
 
     fn on_new_span(
@@ -310,7 +315,8 @@ impl Layer<Registry> for DynamicFilterLayer {
     }
 
     fn event_enabled(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) -> bool {
-        is_own_target(event.metadata().target()) && self.inner.event_enabled(event, ctx)
+        internal::is_internal_target(event.metadata().target())
+            || (is_own_target(event.metadata().target()) && self.inner.event_enabled(event, ctx))
     }
 
     fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) {
@@ -341,7 +347,7 @@ impl Layer<Registry> for DynamicFilterLayer {
     }
 
     fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
-        self.inner.max_level_hint()
+        None
     }
 }
 
@@ -463,6 +469,27 @@ mod tests {
         });
 
         assert_eq!(*captured.lock().unwrap(), vec!["store::database"]);
+    }
+
+    #[test]
+    fn internal_control_plane_target_bypasses_dynamic_filter() {
+        let (layer, _filter) = DynamicFilter::new("off").unwrap();
+        let capture = CaptureLayer::default();
+        let captured = capture.captured.clone();
+        let subscriber = tracing_subscriber::registry().with(layer).with(capture);
+
+        with_default(subscriber, || {
+            tracing::event!(
+                name: "miden_tracing::internal",
+                target: crate::internal::TARGET,
+                tracing::Level::ERROR,
+                internal.kind = "panic",
+                panic = true,
+            );
+            tracing::error!(target: "rpc", "filtered");
+        });
+
+        assert_eq!(*captured.lock().unwrap(), vec![crate::internal::TARGET]);
     }
 
     #[test]

@@ -6,6 +6,8 @@ mod catalog;
 mod event;
 mod field;
 mod filter;
+#[allow(dead_code)]
+mod internal;
 mod object;
 mod span;
 

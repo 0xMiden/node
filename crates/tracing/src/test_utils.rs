@@ -9,7 +9,7 @@ use tracing_subscriber::prelude::*;
 use crate::Span;
 
 #[derive(Clone, Debug, Default)]
-struct TestExporter(Arc<Mutex<Vec<SpanData>>>);
+pub(crate) struct TestExporter(pub(crate) Arc<Mutex<Vec<SpanData>>>);
 
 impl SpanExporter for TestExporter {
     async fn export(&self, mut batch: Vec<SpanData>) -> OTelSdkResult {
