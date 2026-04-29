@@ -15,8 +15,10 @@ version.workspace      = true
 workspace = true
 
 [lib]
+doctest    = false
 proc-macro = true
+test       = false
 
 [dependencies]
-quote = "1.0"
-syn   = { features = ["full"], version = "2.0" }
+quote = { workspace = true }
+syn   = { features = ["full"], workspace = true }

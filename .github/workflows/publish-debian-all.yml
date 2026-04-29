@@ -15,12 +15,13 @@ env:
   version: ${{ inputs.version || github.ref_name }}
 
 permissions:
-  id-token: write
-  contents: write
+  contents: read
 
 jobs:
   publish-node:
     name: Publish Node ${{ matrix.arch }} Debian
+    permissions:
+      contents: write
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -28,9 +29,10 @@ jobs:
       labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Build and Publish Node
@@ -46,6 +48,8 @@ jobs:
 
   publish-prover:
     name: Publish Prover ${{ matrix.arch }} Debian
+    permissions:
+      contents: write
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -53,9 +57,10 @@ jobs:
       labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Build and Publish Prover
         uses: ./.github/actions/debian
         with:
@@ -69,6 +74,8 @@ jobs:
 
   publish-network-monitor:
     name: Publish Network Monitor ${{ matrix.arch }} Debian
+    permissions:
+      contents: write
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -76,9 +83,10 @@ jobs:
       labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Build and Publish Network Monitor
         uses: ./.github/actions/debian
         with:

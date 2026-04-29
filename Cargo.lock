@@ -3076,7 +3076,6 @@ dependencies = [
  "hex",
  "miden-agglayer",
  "miden-node-store",
- "miden-node-utils",
  "miden-protocol",
  "miden-standards",
  "rand 0.9.2",
@@ -3205,18 +3204,15 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
- "miden-node-test-macro",
  "miden-node-utils",
  "miden-node-validator",
  "miden-protocol",
  "miden-remote-prover-client",
  "miden-standards",
- "miden-tx",
  "miden-tx-batch-prover",
  "pretty_assertions",
  "rand 0.9.2",
  "rand_chacha",
- "rstest",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
@@ -3263,7 +3259,6 @@ dependencies = [
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
- "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
@@ -3287,7 +3282,6 @@ name = "miden-node-proto"
 version = "0.15.0"
 dependencies = [
  "anyhow",
- "assert_matches",
  "build-rs",
  "codegen",
  "fs-err",
@@ -3388,10 +3382,8 @@ dependencies = [
  "pretty_assertions",
  "rand 0.9.2",
  "rand_chacha",
- "regex",
  "serde",
  "tempfile",
- "termtree",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -3610,14 +3602,12 @@ dependencies = [
  "build-rs",
  "clap",
  "fs-err",
- "http 1.4.0",
  "humantime",
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-utils",
  "miden-protocol",
- "miden-standards",
  "miden-testing",
  "miden-tx",
  "miden-tx-batch-prover",
@@ -3654,7 +3644,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
- "tonic-web",
  "tonic-web-wasm-client",
 ]
 
@@ -6079,12 +6068,6 @@ dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "termtree"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d1330fe7f7f872cd05165130b10602d667b205fd85be09be2814b115d4ced9"
 
 [[package]]
 name = "textwrap"
