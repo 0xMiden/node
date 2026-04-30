@@ -12,12 +12,11 @@ use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::watch;
-use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, instrument, warn};
 use url::Url;
 
 use crate::COMPONENT;
+use crate::service::Service;
 use crate::status::{ServiceDetails, ServiceStatus};
 
 // CONSTANTS
@@ -74,79 +73,87 @@ pub struct GetMetadataResponse {
 // FAUCET TEST TASK
 // ================================================================================================
 
-/// Runs a task that continuously tests faucet functionality and updates a watch channel.
-///
-/// This function spawns a task that periodically requests proof-of-work challenges from the faucet,
-/// solves them, and submits token requests to verify the faucet is operational.
-///
-/// # Arguments
-///
-/// * `faucet_url` - The URL of the faucet service to test.
-/// * `status_sender` - The sender for the watch channel.
-/// * `test_interval` - The interval at which to test the faucet services.
-///
-/// # Returns
-///
-/// `Ok(())` if the task completes successfully, or an error if the task fails.
-pub async fn run_faucet_test_task(
-    faucet_url: Url,
-    status_sender: watch::Sender<ServiceStatus>,
-    test_interval: Duration,
-    request_timeout: Duration,
-) {
-    let client = Client::builder()
-        .timeout(request_timeout)
-        .build()
-        .expect("Failed to create HTTP client with timeout");
-    let mut success_count = 0u64;
-    let mut failure_count = 0u64;
-    let mut last_tx_id = None;
-    let mut last_error: Option<String>;
-    let mut faucet_metadata = None;
+pub struct FaucetService {
+    url: Url,
+    client: Client,
+    interval: Duration,
+    success_count: u64,
+    failure_count: u64,
+    last_tx_id: Option<String>,
+    faucet_metadata: Option<GetMetadataResponse>,
+}
 
-    let mut interval = tokio::time::interval(test_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+impl FaucetService {
+    pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
+        let client = Client::builder()
+            .timeout(request_timeout)
+            .build()
+            .expect("Failed to create HTTP client with timeout");
+        Self {
+            url,
+            client,
+            interval,
+            success_count: 0,
+            failure_count: 0,
+            last_tx_id: None,
+            faucet_metadata: None,
+        }
+    }
+}
 
-    loop {
-        interval.tick().await;
+impl Service for FaucetService {
+    fn name(&self) -> &'static str {
+        "Faucet"
+    }
 
+    fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    fn initial_status(&self) -> ServiceStatus {
+        ServiceStatus::unknown(
+            self.name(),
+            ServiceDetails::FaucetTest(FaucetTestDetails {
+                url: self.url.to_string(),
+                test_duration_ms: 0,
+                success_count: 0,
+                failure_count: 0,
+                last_tx_id: None,
+                faucet_metadata: None,
+            }),
+        )
+    }
+
+    async fn check(&mut self) -> ServiceStatus {
         let start_time = std::time::Instant::now();
+        let mut last_error: Option<String> = None;
 
-        match perform_faucet_test(&client, &faucet_url).await {
+        match perform_faucet_test(&self.client, &self.url).await {
             Ok((minted_tokens, metadata)) => {
-                success_count += 1;
-                last_tx_id = Some(minted_tokens.tx_id.clone());
-                last_error = None;
-                faucet_metadata = Some(metadata);
+                self.success_count += 1;
+                self.last_tx_id = Some(minted_tokens.tx_id.clone());
+                self.faucet_metadata = Some(metadata);
                 info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
             },
             Err(e) => {
-                failure_count += 1;
+                self.failure_count += 1;
                 last_error = Some(format!("{e:#}"));
                 warn!("Faucet test failed: {}", e);
             },
         }
 
-        let test_duration_ms = start_time.elapsed().as_millis() as u64;
-
         let details = ServiceDetails::FaucetTest(FaucetTestDetails {
-            url: faucet_url.to_string(),
-            test_duration_ms,
-            success_count,
-            failure_count,
-            last_tx_id: last_tx_id.clone(),
-            faucet_metadata: faucet_metadata.clone(),
+            url: self.url.to_string(),
+            test_duration_ms: start_time.elapsed().as_millis() as u64,
+            success_count: self.success_count,
+            failure_count: self.failure_count,
+            last_tx_id: self.last_tx_id.clone(),
+            faucet_metadata: self.faucet_metadata.clone(),
         });
 
-        let status = match &last_error {
-            Some(err) => ServiceStatus::unhealthy("Faucet", err, details),
-            None => ServiceStatus::healthy("Faucet", details),
-        };
-
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for faucet status updates, shutting down");
-            return;
+        match last_error {
+            Some(err) => ServiceStatus::unhealthy(self.name(), err, details),
+            None => ServiceStatus::healthy(self.name(), details),
         }
     }
 }

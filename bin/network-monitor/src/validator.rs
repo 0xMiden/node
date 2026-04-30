@@ -3,81 +3,60 @@
 
 use std::time::Duration;
 
-use miden_node_proto::clients::{Builder as ClientBuilder, ValidatorClient};
-use tokio::sync::watch;
-use tokio::time::MissedTickBehavior;
-use tracing::{info, instrument};
+use miden_node_proto::clients::ValidatorClient;
+use tracing::instrument;
 use url::Url;
 
 use crate::COMPONENT;
+use crate::service::{Service, build_tls_client};
 use crate::status::{ServiceDetails, ServiceStatus, ValidatorStatusDetails};
 
-/// Runs a task that continuously checks validator status and updates a watch channel.
-pub async fn run_validator_status_task(
+pub struct ValidatorService {
     url: Url,
-    name: String,
-    status_sender: watch::Sender<ServiceStatus>,
-    status_check_interval: Duration,
-    request_timeout: Duration,
-) {
-    let mut validator = ClientBuilder::new(url.clone())
-        .with_tls()
-        .expect("TLS is enabled")
-        .with_timeout(request_timeout)
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect_lazy::<ValidatorClient>();
+    client: ValidatorClient,
+    interval: Duration,
+}
 
-    let mut interval = tokio::time::interval(status_check_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+impl ValidatorService {
+    pub fn new(url: Url, interval: Duration, timeout: Duration) -> Self {
+        let client = build_tls_client::<ValidatorClient>(url.clone(), timeout);
+        Self { url, client, interval }
+    }
+}
 
-    loop {
-        interval.tick().await;
+impl Service for ValidatorService {
+    fn name(&self) -> &'static str {
+        "Validator"
+    }
 
-        let status = check_validator_status(&mut validator, &url, name.clone()).await;
+    fn interval(&self) -> Duration {
+        self.interval
+    }
 
-        if status_sender.send(status).is_err() {
-            info!("No receivers for validator status updates, shutting down");
-            return;
+    fn initial_status(&self) -> ServiceStatus {
+        ServiceStatus::unknown(
+            self.name(),
+            ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
+        )
+    }
+
+    #[instrument(target = COMPONENT, name = "check-status.validator", skip_all, ret(level = "info"))]
+    async fn check(&mut self) -> ServiceStatus {
+        match self.client.status(()).await {
+            Ok(response) => {
+                let status = response.into_inner();
+                ServiceStatus::healthy(
+                    self.name(),
+                    ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                        url: self.url.to_string(),
+                        version: status.version,
+                        chain_tip: status.chain_tip,
+                        validated_transactions_count: status.validated_transactions_count,
+                        signed_blocks_count: status.signed_blocks_count,
+                    }),
+                )
+            },
+            Err(e) => ServiceStatus::error(self.name(), e),
         }
     }
-}
-
-/// Checks the status of the validator service via its gRPC Status endpoint.
-#[instrument(
-    target = COMPONENT,
-    name = "check-status.validator",
-    skip_all,
-    ret(level = "info")
-)]
-pub(crate) async fn check_validator_status(
-    validator: &mut ValidatorClient,
-    url: &Url,
-    name: String,
-) -> ServiceStatus {
-    match validator.status(()).await {
-        Ok(response) => {
-            let status = response.into_inner();
-
-            ServiceStatus::healthy(
-                name,
-                ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
-                    url: url.to_string(),
-                    version: status.version,
-                    chain_tip: status.chain_tip,
-                    validated_transactions_count: status.validated_transactions_count,
-                    signed_blocks_count: status.signed_blocks_count,
-                }),
-            )
-        },
-        Err(e) => ServiceStatus::error(name, e),
-    }
-}
-
-pub(crate) fn initial_validator_status() -> ServiceStatus {
-    ServiceStatus::unknown(
-        "Validator",
-        ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
-    )
 }

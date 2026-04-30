@@ -18,6 +18,7 @@ pub mod frontend;
 mod monitor;
 pub mod note_transport;
 pub mod remote_prover;
+pub mod service;
 pub mod service_status;
 pub mod status;
 pub mod validator;
