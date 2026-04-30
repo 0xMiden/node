@@ -1,7 +1,6 @@
 use std::collections::HashSet;
-use std::io::ErrorKind;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+use std::process::Command;
 
 use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
@@ -81,18 +80,15 @@ fn rustfmt_generated(dir: &Path) -> miette::Result<()> {
         return Ok(());
     }
 
-    let status = match Command::new("rustfmt").args(&rs_files).status() {
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            // rustfmt is not installed, skip without an error
-            ExitStatus::default()
-        },
-        Err(e) => return Err(e).into_diagnostic().wrap_err("running rustfmt on generated files"),
-        Ok(status) => status,
-    };
-
-    if !status.success() {
-        miette::bail!("rustfmt failed with status: {status}");
-    }
+    // Just ignore output and exit status. The `rustfmt` binary is part of the Rust toolchain even
+    // if the `rustfmt` component is not installed, and it will print a warning and exit with
+    // status code 1. We don't actually care about formatting in this case, so we can just ignore
+    // the error.
+    let _output = Command::new("rustfmt")
+        .args(&rs_files)
+        .output()
+        .into_diagnostic()
+        .wrap_err("running rustfmt on generated files")?;
 
     Ok(())
 }

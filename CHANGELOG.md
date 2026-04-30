@@ -2,6 +2,7 @@
 
 ## v0.15.0 (TBD)
 
+- Added composite index `idx_transactions_account_block_txid` on `transactions(account_id, block_num, transaction_id)` to speed up `select_transactions_records` queries used by `SyncTransactions` ([#1965](https://github.com/0xMiden/node/issues/1965)).
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 - Network monitor now auto-regenerates accounts after persistent increment failures instead of staying unhealthy indefinitely ([#1942](https://github.com/0xMiden/node/pull/1942)).
 - [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
