@@ -24,11 +24,7 @@ use crate::errors::{
     GetNoteScriptByRootError,
     GetWitnessesError,
 };
-use crate::server::api::{
-    StoreApi,
-    internal_error,
-    invalid_argument,
-};
+use crate::server::api::{StoreApi, internal_error, invalid_argument};
 use crate::state::Finality;
 
 // NTX BUILDER ENDPOINTS
