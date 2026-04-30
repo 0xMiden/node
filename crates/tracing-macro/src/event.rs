@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parenthesized};
 
 use crate::level::TelemetryLevel;
-use crate::{target, user};
+use crate::{metadata, target, user};
 
 pub(crate) fn event(input: TokenStream) -> TokenStream {
     expand_event(input, None)
@@ -40,14 +40,18 @@ fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> Toke
     let target = LitStr::new(&args.target, args.target_span);
     let level = args.level.tracing_tokens();
     let level_name = LitStr::new(args.level.tracing_name(), proc_macro2::Span::call_site());
-    let message = args.message;
+    let message_format = args.message.format;
+    let message = args.message.tokens;
     let event_name = quote! { ::std::format!(#message) };
     let records = args.records.iter().map(EventRecord::record_tokens);
     let mark_user_event =
         args.user.then(|| quote! { __miden_node_tracing_event.__mark_user_facing(); });
+    let submit_metadata =
+        metadata::submit_event_metadata(&target, args.level, &message_format, args.user);
 
     quote! {
         {
+            #submit_metadata
             // Use tracing's filter gate so disabled targets/levels do not pay to construct typed
             // event attributes, then record through our Span helper to keep the public macro
             // contract independent of the internal event representation.
@@ -71,7 +75,7 @@ struct EventArgs {
     target_span: proc_macro2::Span,
     level: TelemetryLevel,
     records: Vec<EventRecord>,
-    message: proc_macro2::TokenStream,
+    message: EventMessage,
     user: bool,
 }
 
@@ -137,7 +141,7 @@ impl EventArgs {
                 }
                 input.parse::<Token![,]>()?;
             } else {
-                let message = input.parse()?;
+                let message = parse_message(input)?;
                 return Ok(Self {
                     target,
                     target_span,
@@ -153,6 +157,27 @@ impl EventArgs {
 
 fn missing_message_error(input: ParseStream<'_>) -> syn::Error {
     syn::Error::new(input.span(), "`message` is required and must follow any event records")
+}
+
+struct EventMessage {
+    format: LitStr,
+    tokens: proc_macro2::TokenStream,
+}
+
+fn parse_message(input: ParseStream<'_>) -> syn::Result<EventMessage> {
+    if !input.peek(LitStr) {
+        return Err(syn::Error::new(input.span(), "`message` must start with a string literal"));
+    }
+
+    let format = input.parse::<LitStr>()?;
+    let rest = if input.is_empty() {
+        quote! {}
+    } else {
+        input.parse::<proc_macro2::TokenStream>()?
+    };
+    let tokens = quote! { #format #rest };
+
+    Ok(EventMessage { format, tokens })
 }
 
 fn parse_level(input: ParseStream<'_>) -> syn::Result<TelemetryLevel> {
@@ -330,7 +355,8 @@ mod tests {
         assert_eq!(args.records.len(), 2);
         assert!(matches!(args.records[0].kind, EventRecordKind::Field));
         assert!(matches!(args.records[1].kind, EventRecordKind::Object));
-        assert!(args.message.to_string().contains("accepted block"));
+        assert_eq!(args.message.format.value(), "accepted block {}");
+        assert!(args.message.tokens.to_string().contains("accepted block"));
         assert!(args.user);
     }
 
@@ -342,7 +368,7 @@ mod tests {
 
         assert_eq!(args.target, "store::database");
         assert_eq!(args.level, TelemetryLevel::Debug);
-        assert!(args.message.to_string().contains("loaded block"));
+        assert_eq!(args.message.format.value(), "loaded block");
         assert!(!args.user);
     }
 
@@ -423,5 +449,15 @@ mod tests {
         };
 
         assert!(err.to_string().contains("`message` is required"));
+    }
+
+    #[test]
+    fn requires_literal_message() {
+        let err = match parse_args(quote!(target = store::database, level = debug, message), None) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`message` must start with a string literal"));
     }
 }

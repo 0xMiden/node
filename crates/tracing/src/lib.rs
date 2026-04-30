@@ -20,7 +20,18 @@ mod user;
 #[cfg(test)]
 mod test_utils;
 
-pub use catalog::{SpanLevel, SpanMetadata, registered_spans};
+// Exposed so admin interfaces can enumerate telemetry declared through the macros without
+// scraping source code or relying on runtime traffic to discover callsites.
+pub use catalog::{
+    EventMetadata,
+    SpanLevel,
+    SpanMetadata,
+    TelemetryMetadata,
+    registered_events,
+    registered_metadata,
+    registered_spans,
+    registered_user_facing_metadata,
+};
 pub use field::OpenTelemetryField;
 pub use filter::{DEFAULT_FILTER, DynamicFilter, DynamicFilterError, DynamicFilterLayer};
 pub use miden_node_tracing_macro::{

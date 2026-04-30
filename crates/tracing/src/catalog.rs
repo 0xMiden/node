@@ -15,18 +15,66 @@ pub struct SpanMetadata {
     pub user: bool,
 }
 
-/// The level used by a span declared through the Miden tracing macros.
+/// Static metadata about an event declared through the Miden tracing macros.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EventMetadata {
+    /// The tracing target used by the event.
+    pub target: &'static str,
+    /// The level used by the event.
+    pub level: SpanLevel,
+    /// The static event message format string.
+    pub message: &'static str,
+    /// Whether this event should be surfaced in user-facing logs.
+    pub user: bool,
+}
+
+/// Static metadata about telemetry declared through the Miden tracing macros.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TelemetryMetadata {
+    /// A span declaration.
+    Span(SpanMetadata),
+    /// An event declaration.
+    Event(EventMetadata),
+}
+
+impl TelemetryMetadata {
+    /// Returns whether this telemetry should be surfaced in user-facing logs.
+    pub const fn user(&self) -> bool {
+        match self {
+            Self::Span(span) => span.user,
+            Self::Event(event) => event.user,
+        }
+    }
+
+    /// Returns the span metadata when this item describes a span.
+    pub const fn as_span(&self) -> Option<&SpanMetadata> {
+        match self {
+            Self::Span(span) => Some(span),
+            Self::Event(_) => None,
+        }
+    }
+
+    /// Returns the event metadata when this item describes an event.
+    pub const fn as_event(&self) -> Option<&EventMetadata> {
+        match self {
+            Self::Span(_) => None,
+            Self::Event(event) => Some(event),
+        }
+    }
+}
+
+/// The level used by telemetry declared through the Miden tracing macros.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SpanLevel {
-    /// Trace-level span.
+    /// Trace-level telemetry.
     Trace,
-    /// Debug-level span.
+    /// Debug-level telemetry.
     Debug,
-    /// Info-level span.
+    /// Info-level telemetry.
     Info,
-    /// Warn-level span.
+    /// Warn-level telemetry.
     Warn,
-    /// Error-level span.
+    /// Error-level telemetry.
     Error,
 }
 
@@ -66,9 +114,24 @@ impl From<SpanLevel> for tracing::Level {
     }
 }
 
-inventory::collect!(SpanMetadata);
+inventory::collect!(TelemetryMetadata);
+
+/// Returns metadata for all spans and events declared through the Miden tracing macros.
+pub fn registered_metadata() -> impl Iterator<Item = &'static TelemetryMetadata> {
+    inventory::iter::<TelemetryMetadata>.into_iter()
+}
 
 /// Returns metadata for all spans declared through the Miden tracing macros in this binary.
 pub fn registered_spans() -> impl Iterator<Item = &'static SpanMetadata> {
-    inventory::iter::<SpanMetadata>.into_iter()
+    registered_metadata().filter_map(TelemetryMetadata::as_span)
+}
+
+/// Returns metadata for all events declared through the Miden tracing macros in this binary.
+pub fn registered_events() -> impl Iterator<Item = &'static EventMetadata> {
+    registered_metadata().filter_map(TelemetryMetadata::as_event)
+}
+
+/// Returns metadata for spans and events marked for user-facing logs.
+pub fn registered_user_facing_metadata() -> impl Iterator<Item = &'static TelemetryMetadata> {
+    registered_metadata().filter(|metadata| metadata.user())
 }

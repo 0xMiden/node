@@ -147,7 +147,9 @@ mod tests {
         OpenTelemetryObject,
         OpenTelemetryObjectRecorder,
         SpanLevel,
+        TelemetryMetadata,
         registered_spans,
+        registered_user_facing_metadata,
     };
 
     struct TestField;
@@ -327,6 +329,7 @@ mod tests {
 
         assert_registered_span("store::database", SpanLevel::Warn, "manual_metadata_span");
         assert_span_user_marker("manual_metadata_span", true);
+        assert_registered_user_span("store::database", SpanLevel::Warn, "manual_metadata_span");
     }
 
     #[test]
@@ -360,6 +363,8 @@ mod tests {
         assert_span_description("unused_manual_span", None);
         assert_span_user_marker("instrumented_user", true);
         assert_span_user_marker("instrumented_error", false);
+        assert_registered_user_span("rpc", SpanLevel::Info, "instrumented_user");
+        assert_no_registered_user_span("instrumented_error");
     }
 
     #[test]
@@ -445,5 +450,26 @@ mod tests {
             .unwrap_or_else(|| panic!("missing registered span {name}"));
 
         assert_eq!(span.user, user);
+    }
+
+    fn assert_registered_user_span(target: &str, level: SpanLevel, name: &str) {
+        assert!(
+            registered_user_facing_metadata().any(|metadata| matches!(
+                metadata,
+                TelemetryMetadata::Span(span)
+                    if span.target == target && span.level == level && span.name == name
+            )),
+            "missing registered user span {target} {level} {name}",
+        );
+    }
+
+    fn assert_no_registered_user_span(name: &str) {
+        assert!(
+            !registered_user_facing_metadata().any(|metadata| matches!(
+                metadata,
+                TelemetryMetadata::Span(span) if span.name == name
+            )),
+            "unexpected registered user span {name}",
+        );
     }
 }

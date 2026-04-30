@@ -23,7 +23,8 @@ mod user;
 ///   `"store::get_block_header"`. Defaults to the function name.
 /// - `level = ...`, optional. The value must be one of `trace`, `debug`, `info`, `warn`, or
 ///   `error`. Defaults to `info`.
-/// - `user`, optional. Marks the span for user-facing logs.
+/// - `user`, optional. Marks the span for user-facing logs and registers it in the user-facing
+///   metadata catalog.
 ///
 /// The function's doc comments are also registered as the span metadata description. Function
 /// arguments are never recorded automatically; record typed fields or objects explicitly inside the
@@ -67,14 +68,15 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Syntax:
 ///
 /// ```text
-/// event!(target = <allowed target>, level = <level>, [user,] [records...], <message>, [format args...])
+/// event!(target = <allowed target>, level = <level>, [user,] [records...], <message literal>, [format args...])
 /// ```
 ///
 /// `target` must be first and `level` must follow it. Records, when present, must appear before the
 /// required message. `field(value)` records an [`OpenTelemetryField`] with its default key, and
 /// `object(value)` records an [`OpenTelemetryObject`] with its default prefix. Use
 /// `field(custom.key = value)` or `object(custom.prefix = value)` to override that key or prefix.
-/// Add `user` before any records to mark the event for user-facing logs.
+/// Add `user` before any records to mark the event for user-facing logs and register its static
+/// message template in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -113,7 +115,8 @@ pub fn event(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = trace`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
-/// Add `user` before any records to mark the event for user-facing logs.
+/// Add `user` before any records to mark the event for user-facing logs and register its static
+/// message template in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -136,7 +139,8 @@ pub fn trace(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = debug`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
-/// Add `user` before any records to mark the event for user-facing logs.
+/// Add `user` before any records to mark the event for user-facing logs and register its static
+/// message template in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -158,7 +162,8 @@ pub fn debug(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = info`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
-/// Add `user` before any records to mark the event for user-facing logs.
+/// Add `user` before any records to mark the event for user-facing logs and register its static
+/// message template in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -182,7 +187,8 @@ pub fn info(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = warn`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
-/// Add `user` before any records to mark the event for user-facing logs.
+/// Add `user` before any records to mark the event for user-facing logs and register its static
+/// message template in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -204,7 +210,8 @@ pub fn warn(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = error`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
-/// Add `user` before any records to mark the event for user-facing logs.
+/// Add `user` before any records to mark the event for user-facing logs and register its static
+/// message template in the user-facing metadata catalog.
 ///
 /// This macro does not record an error status by itself. Prefer [`instrument`] for fallible
 /// operations so returned errors are recorded automatically.
@@ -231,7 +238,7 @@ pub fn error(input: TokenStream) -> TokenStream {
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
 /// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
-/// for user-facing logs.
+/// for user-facing logs and register it in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -253,7 +260,7 @@ pub fn trace_span(input: TokenStream) -> TokenStream {
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
 /// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
-/// for user-facing logs.
+/// for user-facing logs and register it in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -275,7 +282,7 @@ pub fn debug_span(input: TokenStream) -> TokenStream {
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
 /// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
-/// for user-facing logs.
+/// for user-facing logs and register it in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -298,7 +305,7 @@ pub fn info_span(input: TokenStream) -> TokenStream {
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
 /// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
-/// for user-facing logs.
+/// for user-facing logs and register it in the user-facing metadata catalog.
 ///
 /// # Examples
 ///
@@ -320,7 +327,7 @@ pub fn warn_span(input: TokenStream) -> TokenStream {
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
 /// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
-/// for user-facing logs.
+/// for user-facing logs and register it in the user-facing metadata catalog.
 ///
 /// # Examples
 ///

@@ -105,7 +105,15 @@ pub(crate) fn record_event_on_span(
 mod tests {
     use super::OpenTelemetryEventRecorder;
     use crate::test_utils::exported_spans;
-    use crate::{OpenTelemetryField, OpenTelemetryObject, OpenTelemetryObjectRecorder};
+    use crate::{
+        OpenTelemetryField,
+        OpenTelemetryObject,
+        OpenTelemetryObjectRecorder,
+        SpanLevel,
+        TelemetryMetadata,
+        registered_events,
+        registered_user_facing_metadata,
+    };
 
     struct TestField;
 
@@ -160,6 +168,7 @@ mod tests {
                 "recorded {}",
                 "event"
             );
+            crate::info!(target = rpc, "internal event");
         });
         let span = spans
             .iter()
@@ -178,6 +187,41 @@ mod tests {
         assert_attribute(&event.attributes, "field.default", "value");
         assert_attribute(&event.attributes, "custom.field", "value");
         assert_attribute(&event.attributes, "object.field", "value");
+        assert_registered_event("rpc", SpanLevel::Info, "recorded {}", true);
+        assert_registered_event("rpc", SpanLevel::Info, "internal event", false);
+        assert_registered_user_event("rpc", SpanLevel::Info, "recorded {}");
+        assert_no_registered_user_event("internal event");
+    }
+
+    fn assert_registered_event(target: &str, level: SpanLevel, message: &str, user: bool) {
+        assert!(
+            registered_events().any(|event| event.target == target
+                && event.level == level
+                && event.message == message
+                && event.user == user),
+            "missing registered event {target} {level} {message}",
+        );
+    }
+
+    fn assert_registered_user_event(target: &str, level: SpanLevel, message: &str) {
+        assert!(
+            registered_user_facing_metadata().any(|metadata| matches!(
+                metadata,
+                TelemetryMetadata::Event(event)
+                    if event.target == target && event.level == level && event.message == message
+            )),
+            "missing registered user event {target} {level} {message}",
+        );
+    }
+
+    fn assert_no_registered_user_event(message: &str) {
+        assert!(
+            !registered_user_facing_metadata().any(|metadata| matches!(
+                metadata,
+                TelemetryMetadata::Event(event) if event.message == message
+            )),
+            "unexpected registered user event {message}",
+        );
     }
 
     fn assert_attribute(
