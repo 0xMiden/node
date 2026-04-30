@@ -18,12 +18,12 @@ use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountVaultDetails,
     SlotData,
+    StorageMapEntries,
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
-use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
@@ -37,7 +37,7 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{Instrument, info, instrument};
 
-use crate::account_state_forest::{AccountStateForest, WitnessError};
+use crate::account_state_forest::{AccountStateForest, AccountStorageMapResult, WitnessError};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -686,6 +686,68 @@ impl State {
         Ok((block_num, witness))
     }
 
+    /// Returns storage map details from the forest for a specific account and storage slot.
+    ///
+    /// The forest can only be used if all hashed keys in the storage map are known in the
+    /// reverse-key LRU cache. If any hashed key is unknown, the method returns `Ok(None)` to signal
+    /// that the caller should fall back to reconstructing the storage map details from the
+    /// database.
+    #[instrument(target = COMPONENT, skip_all)]
+    async fn get_storage_map_details_from_forest(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<Option<AccountStorageMapDetails>, DatabaseError> {
+        let forest_guard = self
+            .forest
+            .read()
+            .instrument(tracing::info_span!("acquire_forest_for_storage_map_entries"))
+            .await;
+        match forest_guard
+            .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
+            .map_err(DatabaseError::MerkleError)?
+        {
+            AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
+                account_id,
+                slot_name: slot_name.to_string(),
+                block_num,
+            }),
+            AccountStorageMapResult::Details(details) => Ok(Some(details)),
+            AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
+        }
+    }
+
+    /// Returns storage map details by reconstructing the storage map from the database.
+    ///
+    /// This is used as a fallback when the forest cannot be used, which happens when there are
+    /// hashed keys in the storage map that are not known in the reverse-key LRU cache.
+    async fn reconstruct_storage_map_details_from_db(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<AccountStorageMapDetails, DatabaseError> {
+        let details = self
+            .db
+            .reconstruct_storage_map_from_db(
+                account_id,
+                slot_name,
+                block_num,
+                Some(AccountStorageMapDetails::MAX_RETURN_ENTRIES),
+            )
+            .await?;
+
+        if let StorageMapEntries::AllEntries(entries) = &details.entries {
+            self.forest
+                .write()
+                .await
+                .cache_storage_map_keys(entries.iter().map(|(raw_key, _)| *raw_key));
+        }
+
+        Ok(details)
+    }
+
     /// Fetches the account details (code, vault, storage) for a public account at the specified
     /// block.
     ///
@@ -694,7 +756,8 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
+    /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
+    /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
     #[expect(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
@@ -804,22 +867,17 @@ impl State {
             }
         }
 
-        // TODO parallelize the read requests
         for (index, slot_name) in all_entries_requests {
-            let details = self
-                .db
-                .reconstruct_storage_map_from_db(
-                    account_id,
-                    slot_name.clone(),
-                    block_num,
-                    Some(
-                        // TODO unify this with
-                        // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                        // and accumulated the limits
-                        <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                    ),
-                )
-                .await?;
+            let details = match self
+                .get_storage_map_details_from_forest(account_id, slot_name.clone(), block_num)
+                .await?
+            {
+                Some(details) => details,
+                None => {
+                    self.reconstruct_storage_map_details_from_db(account_id, slot_name, block_num)
+                        .await?
+                },
+            };
             storage_map_details_by_index[index] = Some(details);
         }
 
