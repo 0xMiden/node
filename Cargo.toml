@@ -143,4 +143,7 @@ should_panic_without_expect  = "allow" # We don't care about the specific panic 
 
 # Configure `cargo-typos`
 [workspace.metadata.typos]
-files.extend-exclude = ["*.svg"] # Ignore SVG files.
+files.extend-exclude = [
+  "*.min.js", # Minified JS bundles (vendored htmx etc.).
+  "*.svg",    # SVG files.
+]

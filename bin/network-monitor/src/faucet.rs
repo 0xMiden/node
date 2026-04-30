@@ -61,13 +61,13 @@ struct GetTokensResponse {
 /// Response from the faucet's `/get_metadata` endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GetMetadataResponse {
-    version: String,
-    id: String,
-    max_supply: u64,
-    decimals: u8,
-    explorer_url: Option<String>,
-    pow_load_difficulty: u64,
-    base_amount: u64,
+    pub version: String,
+    pub id: String,
+    pub max_supply: u64,
+    pub decimals: u8,
+    pub explorer_url: Option<String>,
+    pub pow_load_difficulty: u64,
+    pub base_amount: u64,
 }
 
 // FAUCET TEST TASK
