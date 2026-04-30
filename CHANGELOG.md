@@ -12,6 +12,13 @@
 - Refactored the validator gRPC API implementation to use the new per-method trait implementations ([#1959](https://github.com/0xMiden/node/pull/1959)).
 - Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, extended `GetLimits` test coverage, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
 
+## v0.14.10 (2026-05-29)
+
+- Optimize `GetAccount` implementation to serve vault assets from `AccountStateForest` ([#1981](https://github.com/0xMiden/node/pull/1981)).
+- Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982)).
+- Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
+- Fixed occasional mempool panic during transaction submission, causing the lock to be held for longer than expected ([#1984](https://github.com/0xMiden/node/pull/1984)).
+
 ## v0.14.9 (2026-04-21)
 
 - Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).

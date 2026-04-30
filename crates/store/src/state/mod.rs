@@ -771,11 +771,17 @@ impl State {
             Some(commitment) if commitment == account_header.vault_root() => {
                 AccountVaultDetails::empty()
             },
-            Some(_) => {
-                let vault_assets =
-                    self.db.select_account_vault_at_block(account_id, block_num).await?;
-                AccountVaultDetails::from_assets(vault_assets)
-            },
+            Some(_) => self
+                .forest
+                .read()
+                .instrument(tracing::info_span!("acquire_forest_for_vault"))
+                .await
+                .get_vault_details(account_id, block_num)
+                .map_err(|err| {
+                    DatabaseError::DataCorrupted(format!(
+                        "failed to reconstruct vault for account {account_id} at block {block_num}: {err}"
+                    ))
+                })?,
             None => AccountVaultDetails::empty(),
         };
 
@@ -802,8 +808,11 @@ impl State {
         let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
 
         if !map_keys_requests.is_empty() {
-            let forest_guard =
-                self.forest.read().instrument(tracing::info_span!("acquire_forest")).await;
+            let forest_guard = self
+                .forest
+                .read()
+                .instrument(tracing::info_span!("acquire_forest_for_storage_map"))
+                .await;
             for (index, slot_name, keys) in map_keys_requests {
                 let details = forest_guard
                     .get_storage_map_details_for_keys(
