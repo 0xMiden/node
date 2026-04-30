@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::num::{NonZero, TryFromIntError};
 
 use miden_crypto::merkle::smt::SmtProof;
+use miden_node_proto::decode::{read_account_id, read_block_range, read_root};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
@@ -27,9 +28,6 @@ use crate::server::api::{
     StoreApi,
     internal_error,
     invalid_argument,
-    read_account_id,
-    read_block_range,
-    read_root,
 };
 use crate::state::Finality;
 

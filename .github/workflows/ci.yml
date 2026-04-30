@@ -1,6 +1,6 @@
 # Continuous integration jobs.
 #
-# These get run on every pull-request, with github cache updated on push into `next`.
+# These get run on every pull-request.
 name: CI
 
 permissions:
@@ -26,7 +26,30 @@ env:
   # Shared prefix key for the rust cache.
   #
   # This provides a convenient way to evict old or corrupted cache.
-  RUST_CACHE_KEY: rust-cache-2026.02.02
+  RUST_CACHE_PREFIX: rust-cache
+  # Shared branch-aware cache namespace for rust-cache.
+  #
+  # Pushes save to the persistent trunk cache, while pull requests append the
+  # PR number so they save into an ephemeral PR-specific cache.
+  #
+  # The format is <main | next> with an optional `-pr-<PR>` for pull requests.
+  # We default to next if no suitable is found.
+  RUST_CACHE_SUFFIX: >-
+    ${{
+      format(
+        '{0}{1}',
+        github.base_ref == 'main' && 'main'
+        || github.base_ref == 'next' && 'next'
+        || github.ref == 'refs/heads/main' && 'main'
+        || github.ref == 'refs/heads/next' && 'next'
+        || 'next',
+        github.event_name == 'pull_request'
+        && format('-pr-{0}', github.event.pull_request.number)
+        || ''
+      )
+    }}
+  # Match rust-cache's compilation mode so restored outputs stay reusable downstream.
+  CARGO_INCREMENTAL: 0
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
 
@@ -40,7 +63,8 @@ jobs:
   # Conventional builds, lints and tests that re-use a single cache for efficiency
   # ===============================================================================================
 
-  # Normal cargo build that populates a cache for all subsequent jobs to re-use.
+  # Normal cargo build that saves either the persistent trunk cache or a
+  # single per-run cache for downstream jobs to restore immediately.
   build:
     runs-on: ubuntu-24.04
     steps:
@@ -53,9 +77,10 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
-          save-if: ${{ github.ref == 'refs/heads/next' }}
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
+          save-if: true
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -106,8 +131,9 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
           save-if: false
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
@@ -125,8 +151,9 @@ jobs:
           tool: nextest@0.9.122
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
           save-if: false
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
@@ -146,8 +173,9 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
           save-if: false
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
@@ -166,8 +194,9 @@ jobs:
         run: rustup update --no-self-update
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ github.workflow }}-build
-          prefix-key: ${{ env.RUST_CACHE_KEY }}
+          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
+          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
+          cache-workspace-crates: true
           save-if: false
       - uses: taiki-e/install-action@v2
         with:
@@ -181,12 +210,12 @@ jobs:
           cargo run --bin miden-node-stress-test seed-store \
             --data-directory ${{ env.DATA_DIR }} \
             --num-accounts 500 --public-accounts-percentage 50
-  # TODO re-introduce
+      # TODO re-introduce
       # - name: Benchmark state sync
-        # run: |
-          # cargo run --bin miden-node-stress-test benchmark-store \
-            # --data-directory ${{ env.DATA_DIR }} \
-            # --iterations 10 --concurrency 1 sync-state
+      # run: |
+      # cargo run --bin miden-node-stress-test benchmark-store \
+      # --data-directory ${{ env.DATA_DIR }} \
+      # --iterations 10 --concurrency 1 sync-state
       - name: Benchmark notes sync
         run: |
           cargo run --bin miden-node-stress-test benchmark-store \
@@ -197,6 +226,40 @@ jobs:
           cargo run --bin miden-node-stress-test benchmark-store \
             --data-directory ${{ env.DATA_DIR }} \
             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
+
+  cleanup-run-cache:
+    name: cleanup run cache
+    runs-on: ubuntu-24.04
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs:
+      - build
+      - clippy
+      - tests
+      - doc
+      - stress-test
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete PR rust cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t cache_entries < <(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUST_CACHE_PREFIX }}&ref=${{ github.ref }}" \
+              --jq '.actions_caches[] | @json'
+          )
+          for cache_entry in "${cache_entries[@]}"; do
+            cache_id="$(jq -r '.id' <<< "${cache_entry}")"
+            cache_key="$(jq -r '.key' <<< "${cache_entry}")"
+            echo "Deleting rust cache key=${cache_key}"
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/actions/caches/${cache_id}"
+          done
 
   # ===============================================================================================
   # WASM related jobs
@@ -210,19 +273,19 @@ jobs:
     name: wasm targets
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v6
-    - name: Rustup
-      run: rustup update --no-self-update
-    - name: cargo build
-      run: |
-        cargo build --locked -p miden-remote-prover-client \
-          --target wasm32-unknown-unknown --no-default-features \
-          --features batch-prover,block-prover,tx-prover # no-std compatible build
-    - name: clippy
-      run: |
-        cargo clippy --locked -p miden-remote-prover-client \
-          --target wasm32-unknown-unknown --no-default-features \
-          --features batch-prover,block-prover,tx-prover -- -D warnings
+      - uses: actions/checkout@v6
+      - name: Rustup
+        run: rustup update --no-self-update
+      - name: cargo build
+        run: |
+          cargo build --locked -p miden-remote-prover-client \
+            --target wasm32-unknown-unknown --no-default-features \
+            --features batch-prover,block-prover,tx-prover # no-std compatible build
+      - name: clippy
+        run: |
+          cargo clippy --locked -p miden-remote-prover-client \
+            --target wasm32-unknown-unknown --no-default-features \
+            --features batch-prover,block-prover,tx-prover -- -D warnings
 
   # ===============================================================================================
   # Jobs that don't require caching to be efficient

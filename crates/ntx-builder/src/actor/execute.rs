@@ -568,7 +568,7 @@ impl DataStore for NtxDataStore {
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
             // 1. In-memory LRU cache.
-            if let Some(cached_script) = self.script_cache.get(&script_root).await {
+            if let Some(cached_script) = self.script_cache.get(&script_root) {
                 return Ok(Some(cached_script));
             }
 
@@ -576,7 +576,7 @@ impl DataStore for NtxDataStore {
             if let Some(script) = self.db.lookup_note_script(script_root).await.map_err(|err| {
                 DataStoreError::other_with_source("failed to look up note script in local DB", err)
             })? {
-                self.script_cache.put(script_root, script.clone()).await;
+                self.script_cache.put(script_root, script.clone());
                 return Ok(Some(script));
             }
 
@@ -592,7 +592,7 @@ impl DataStore for NtxDataStore {
             if let Some(script) = maybe_script {
                 // Collect for later persistence by the coordinator.
                 self.fetched_scripts.lock().await.push((script_root, script.clone()));
-                self.script_cache.put(script_root, script.clone()).await;
+                self.script_cache.put(script_root, script.clone());
                 Ok(Some(script))
             } else {
                 Ok(None)

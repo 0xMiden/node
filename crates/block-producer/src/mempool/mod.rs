@@ -174,7 +174,7 @@ pub struct Mempool {
     /// committed it is appended here, and the oldest block's state is pruned.
     committed_blocks: VecDeque<SelectedBlock>,
 
-    chain_tip: BlockNumber,
+    committed_chain_tip: BlockNumber,
 
     config: MempoolConfig,
     subscription: subscription::SubscriptionProvider,
@@ -192,7 +192,7 @@ impl Mempool {
     fn new(chain_tip: BlockNumber, config: MempoolConfig) -> Mempool {
         Self {
             config,
-            chain_tip,
+            committed_chain_tip: chain_tip,
             subscription: SubscriptionProvider::new(chain_tip),
             transactions: graph::TransactionGraph::default(),
             batches: graph::BatchGraph::default(),
@@ -203,9 +203,11 @@ impl Mempool {
 
     /// Returns the current chain tip height as seen by the mempool.
     ///
-    /// This reflects the latest committed block that the block producer is aware of.
+    /// This includes the block currently being built, if any.
     pub fn chain_tip(&self) -> BlockNumber {
-        self.chain_tip
+        self.pending_block
+            .as_ref()
+            .map_or(self.committed_chain_tip, |pending| pending.block_number)
     }
 
     // TRANSACTION & BATCH LIFECYCLE
@@ -246,7 +248,7 @@ impl Mempool {
         self.subscription.transaction_added(&tx);
         self.inject_telemetry();
 
-        Ok(self.chain_tip)
+        Ok(self.committed_chain_tip)
     }
 
     #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
@@ -283,7 +285,7 @@ impl Mempool {
         }
         self.inject_telemetry();
 
-        Ok(self.chain_tip)
+        Ok(self.committed_chain_tip)
     }
 
     /// Returns a set of transactions for the next batch.
@@ -364,7 +366,7 @@ impl Mempool {
             self.pending_block.as_ref().unwrap().block_number
         );
 
-        let block_number = self.chain_tip.child();
+        let block_number = self.chain_tip().child();
         let batches = self.batches.select_block(self.config.block_budget);
         let block = SelectedBlock { block_number, batches };
         self.pending_block = Some(block.clone());
@@ -389,7 +391,7 @@ impl Mempool {
     /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
     pub fn commit_block(&mut self, block_header: BlockHeader) {
-        assert_eq!(self.chain_tip.child(), block_header.block_num());
+        assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
             .pending_block
             .take_if(|pending| pending.block_number == block_header.block_num())
@@ -402,7 +404,7 @@ impl Mempool {
             .map(miden_protocol::transaction::TransactionHeader::id)
             .collect();
 
-        self.chain_tip = self.chain_tip.child();
+        self.committed_chain_tip = self.committed_chain_tip.child();
         self.subscription.block_committed(block_header, tx_ids);
 
         self.committed_blocks.push_back(block);
@@ -542,18 +544,18 @@ impl Mempool {
     /// Transactions from batches are requeued. Expired transactions and their descendants are then
     /// reverted as well.
     fn revert_expired(&mut self) -> HashSet<TransactionId> {
-        let batches = self.batches.revert_expired(self.chain_tip);
+        let batches = self.batches.revert_expired(self.chain_tip());
         for batch in batches {
             self.transactions.requeue_transactions(&batch);
         }
-        self.transactions.revert_expired(self.chain_tip)
+        self.transactions.revert_expired(self.chain_tip())
     }
 
     /// Rejects authentication heights that fall outside the overlap guaranteed by the locally
     /// retained state.
     ///
-    /// The acceptable window is `[chain_tip - state_retention + 1, chain_tip]`; values below this
-    /// range are rejected as stale because the mempool no longer tracks the intermediate history.
+    /// If our oldest local block is at `N`, then we allow `N-1` and newer since this means we're
+    /// covering the full blockchain.
     ///
     /// # Panics
     ///
@@ -565,9 +567,11 @@ impl Mempool {
         authentication_height: BlockNumber,
     ) -> Result<(), MempoolSubmissionError> {
         let limit = self
-            .chain_tip
-            .checked_sub(self.committed_blocks.len() as u32)
-            .expect("number of committed blocks cannot exceed the chain tip");
+            .committed_blocks
+            .front()
+            .map_or(self.chain_tip(), |block| block.block_number)
+            .parent()
+            .unwrap_or_default();
 
         if authentication_height < limit {
             return Err(MempoolSubmissionError::StaleInputs {
@@ -577,16 +581,16 @@ impl Mempool {
         }
 
         assert!(
-            authentication_height <= self.chain_tip,
+            authentication_height <= self.chain_tip(),
             "Authentication height {authentication_height} exceeded the chain tip {}",
-            self.chain_tip
+            self.chain_tip()
         );
 
         Ok(())
     }
 
     fn expiration_check(&self, expired_at: BlockNumber) -> Result<(), MempoolSubmissionError> {
-        let limit = self.chain_tip + self.config.expiration_slack;
+        let limit = self.chain_tip() + self.config.expiration_slack;
         if expired_at <= limit {
             return Err(MempoolSubmissionError::Expired { expired_at, limit });
         }
