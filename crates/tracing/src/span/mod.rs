@@ -34,6 +34,19 @@ impl Span {
         &self.0
     }
 
+    /// Marks this span as appropriate for user-facing logs.
+    ///
+    /// This exists for the Miden span and instrument macros. User-log support is opt-in so
+    /// high-volume internal tracing spans do not leak into local stdout output.
+    #[doc(hidden)]
+    pub fn __mark_user_facing(&self) {
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
+            &self.0,
+            crate::user::ATTRIBUTE_KEY,
+            true,
+        );
+    }
+
     /// Enters this span for the current scope.
     pub fn enter(&self) -> tracing::span::Entered<'_> {
         self.0.enter()
@@ -234,6 +247,11 @@ mod tests {
         Ok(())
     }
 
+    #[crate::instrument(target = rpc, name = "instrumented_user", user)]
+    fn instrumented_user() -> Result<(), TestError> {
+        Ok(())
+    }
+
     #[crate::instrument(target = store::database, name = "instrumented_async_error")]
     async fn instrumented_async_error(value: u32) -> Result<(), TestError> {
         let _ = value;
@@ -305,9 +323,10 @@ mod tests {
 
     #[test]
     fn span_macro_registers_metadata() {
-        let _span = crate::warn_span!(target = store::database, "manual_metadata_span");
+        let _span = crate::warn_span!(target = store::database, "manual_metadata_span", user);
 
         assert_registered_span("store::database", SpanLevel::Warn, "manual_metadata_span");
+        assert_span_user_marker("manual_metadata_span", true);
     }
 
     #[test]
@@ -315,8 +334,10 @@ mod tests {
         let method = InstrumentedMethod;
         method.method_with_default_name().unwrap();
         method.trait_method_with_default_name().unwrap();
+        instrumented_user().unwrap();
 
         assert_registered_span("rpc", SpanLevel::Info, "instrumented_error");
+        assert_registered_span("rpc", SpanLevel::Info, "instrumented_user");
         assert_registered_span("store::database", SpanLevel::Info, "instrumented_async_error");
         assert_registered_span("rpc", SpanLevel::Debug, "method_with_default_name");
         assert_registered_span("rpc", SpanLevel::Trace, "trait_method_with_default_name");
@@ -337,6 +358,8 @@ mod tests {
             ),
         );
         assert_span_description("unused_manual_span", None);
+        assert_span_user_marker("instrumented_user", true);
+        assert_span_user_marker("instrumented_error", false);
     }
 
     #[test]
@@ -371,6 +394,25 @@ mod tests {
         assert!(span.events.events.is_empty());
     }
 
+    #[test]
+    fn span_macro_marks_user_facing_span() {
+        let spans = exported_spans(|| {
+            let span = crate::info_span!(target = rpc, "manual_user_span", user);
+            let _guard = span.entered();
+        });
+        let span = exported_span_by_name(&spans, "manual_user_span");
+
+        assert_attribute(span, crate::user::ATTRIBUTE_KEY, true);
+    }
+
+    #[test]
+    fn instrument_macro_marks_user_facing_span() {
+        let spans = exported_spans(|| instrumented_user().unwrap());
+        let span = exported_span_by_name(&spans, "instrumented_user");
+
+        assert_attribute(span, crate::user::ATTRIBUTE_KEY, true);
+    }
+
     fn exported_span_by_name<'a>(
         spans: &'a [opentelemetry_sdk::trace::SpanData],
         name: &str,
@@ -395,5 +437,13 @@ mod tests {
             .unwrap_or_else(|| panic!("missing registered span {name}"));
 
         assert_eq!(span.description, description);
+    }
+
+    fn assert_span_user_marker(name: &str, user: bool) {
+        let span = registered_spans()
+            .find(|span| span.name == name)
+            .unwrap_or_else(|| panic!("missing registered span {name}"));
+
+        assert_eq!(span.user, user);
     }
 }

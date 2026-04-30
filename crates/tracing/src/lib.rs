@@ -15,6 +15,7 @@ mod filter;
 mod internal;
 mod object;
 mod span;
+mod user;
 
 #[cfg(test)]
 mod test_utils;

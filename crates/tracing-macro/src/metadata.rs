@@ -8,6 +8,7 @@ pub(crate) fn submit_span_metadata(
     level: TelemetryLevel,
     name: &LitStr,
     description: Option<&LitStr>,
+    user: bool,
 ) -> proc_macro2::TokenStream {
     let level = level.metadata_tokens();
     let description = match description {
@@ -22,6 +23,7 @@ pub(crate) fn submit_span_metadata(
                 level: #level,
                 name: #name,
                 description: #description,
+                user: #user,
             }
         }
     }

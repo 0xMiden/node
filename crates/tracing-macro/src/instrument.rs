@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
 
 use crate::level::TelemetryLevel;
-use crate::{metadata, name, target};
+use crate::{metadata, name, target, user};
 
 pub(crate) fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr with Punctuated::<Meta, Token![,]>::parse_terminated);
@@ -25,6 +25,7 @@ struct InstrumentArgs {
     target: String,
     name: Option<String>,
     level: TelemetryLevel,
+    user: bool,
 }
 
 impl InstrumentArgs {
@@ -33,6 +34,7 @@ impl InstrumentArgs {
         let mut name = None;
         let mut level = TelemetryLevel::Info;
         let mut level_seen = false;
+        let mut user_seen = false;
         let mut tracing_args = Vec::new();
 
         for arg in args {
@@ -82,6 +84,16 @@ impl InstrumentArgs {
                     target = Some(value);
                     tracing_args.push(quote! { target = #value_literal });
                 },
+                Some("user") => {
+                    if user_seen {
+                        return Err(syn::Error::new_spanned(
+                            arg,
+                            "`user` may only be specified once",
+                        ));
+                    }
+                    user::parse_meta_marker(arg)?;
+                    user_seen = true;
+                },
                 Some("skip_all") => {
                     Err(syn::Error::new_spanned(arg, "`skip_all` is always applied by this macro"))?
                 },
@@ -99,7 +111,7 @@ impl InstrumentArgs {
                 ))?,
                 Some(_) => Err(syn::Error::new_spanned(
                     arg,
-                    "unsupported instrument argument; only `name`, `target`, and `level` are supported",
+                    "unsupported instrument argument; only `name`, `target`, `level`, and `user` are supported",
                 ))?,
                 None => Err(syn::Error::new_spanned(arg, "unsupported instrument argument"))?,
             }
@@ -119,6 +131,7 @@ impl InstrumentArgs {
             target,
             name,
             level,
+            user: user_seen,
         })
     }
 }
@@ -153,11 +166,20 @@ fn expand_instrument(
     };
     let level = instrument_args.level;
     let tracing_args = instrument_args.tracing_args;
-    let submit_metadata =
-        metadata::submit_span_metadata(&target, level, &name, description.as_ref());
+    let submit_metadata = metadata::submit_span_metadata(
+        &target,
+        level,
+        &name,
+        description.as_ref(),
+        instrument_args.user,
+    );
+    let mark_user_span = instrument_args
+        .user
+        .then(|| quote! { ::miden_node_tracing::Span::current().__mark_user_facing(); });
     let body = if sig.asyncness.is_some() {
         quote! {{
             #submit_metadata
+            #mark_user_span
             let __miden_node_tracing_result = (async #block).await;
             if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
                 __miden_node_tracing_result
@@ -169,6 +191,7 @@ fn expand_instrument(
     } else {
         quote! {{
             #submit_metadata
+            #mark_user_span
             let __miden_node_tracing_result = (|| #block)();
             if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
                 __miden_node_tracing_result
@@ -266,6 +289,24 @@ mod tests {
 
         assert_eq!(args.level, crate::level::TelemetryLevel::Debug);
         assert!(args.tracing_args.to_string().contains("level = \"debug\""));
+    }
+
+    #[test]
+    fn parses_user_marker() {
+        let args =
+            InstrumentArgs::parse(parse_args(quote!(target = rpc, name = "test", user))).unwrap();
+
+        assert!(args.user);
+        assert!(!args.tracing_args.to_string().contains("user"));
+    }
+
+    #[test]
+    fn rejects_user_value() {
+        let err =
+            InstrumentArgs::parse(parse_args(quote!(target = rpc, name = "test", user = true)))
+                .unwrap_err();
+
+        assert!(err.to_string().contains("`user` is a bare marker"));
     }
 
     #[test]

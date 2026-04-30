@@ -7,6 +7,7 @@ mod metadata;
 mod name;
 mod span;
 mod target;
+mod user;
 
 /// Instruments a function with Miden tracing defaults.
 ///
@@ -22,6 +23,7 @@ mod target;
 ///   `"store::get_block_header"`. Defaults to the function name.
 /// - `level = ...`, optional. The value must be one of `trace`, `debug`, `info`, `warn`, or
 ///   `error`. Defaults to `info`.
+/// - `user`, optional. Marks the span for user-facing logs.
 ///
 /// The function's doc comments are also registered as the span metadata description. Function
 /// arguments are never recorded automatically; record typed fields or objects explicitly inside the
@@ -65,13 +67,14 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Syntax:
 ///
 /// ```text
-/// event!(target = <allowed target>, level = <level>, [records...], <message>, [format args...])
+/// event!(target = <allowed target>, level = <level>, [user,] [records...], <message>, [format args...])
 /// ```
 ///
 /// `target` must be first and `level` must follow it. Records, when present, must appear before the
 /// required message. `field(value)` records an [`OpenTelemetryField`] with its default key, and
 /// `object(value)` records an [`OpenTelemetryObject`] with its default prefix. Use
 /// `field(custom.key = value)` or `object(custom.prefix = value)` to override that key or prefix.
+/// Add `user` before any records to mark the event for user-facing logs.
 ///
 /// # Examples
 ///
@@ -81,6 +84,7 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// event!(
 ///     target = sequencer::block_builder,
 ///     level = info,
+///     user,
 ///     field(block_num),
 ///     object(block = header),
 ///     "built block {}",
@@ -92,6 +96,7 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// miden_node_tracing::event!(
 ///     target = rpc,
 ///     level = warn,
+///     user,
 ///     field(request.block_number = block_num),
 ///     "request used an old block number",
 /// );
@@ -108,12 +113,14 @@ pub fn event(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = trace`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
+/// Add `user` before any records to mark the event for user-facing logs.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// miden_node_tracing::trace!(
 ///     target = sequencer::mempool,
+///     user,
 ///     field(transaction_id),
 ///     "selected transaction from mempool",
 /// );
@@ -129,6 +136,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = debug`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
+/// Add `user` before any records to mark the event for user-facing logs.
 ///
 /// # Examples
 ///
@@ -150,12 +158,14 @@ pub fn debug(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = info`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
+/// Add `user` before any records to mark the event for user-facing logs.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// miden_node_tracing::info!(
 ///     target = sequencer::block_builder,
+///     user,
 ///     field(block_num),
 ///     object(header),
 ///     "accepted block",
@@ -172,6 +182,7 @@ pub fn info(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = warn`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
+/// Add `user` before any records to mark the event for user-facing logs.
 ///
 /// # Examples
 ///
@@ -193,6 +204,7 @@ pub fn warn(input: TokenStream) -> TokenStream {
 ///
 /// This is shorthand for [`event!`] with `level = error`. `target` is required and must be first.
 /// Typed `field(...)` and `object(...)` records may be supplied before the required message.
+/// Add `user` before any records to mark the event for user-facing logs.
 ///
 /// This macro does not record an error status by itself. Prefer [`instrument`] for fallible
 /// operations so returned errors are recorded automatically.
@@ -218,7 +230,8 @@ pub fn error(input: TokenStream) -> TokenStream {
 ///
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
-/// on the returned `miden_node_tracing::Span` instead.
+/// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
+/// for user-facing logs.
 ///
 /// # Examples
 ///
@@ -239,7 +252,8 @@ pub fn trace_span(input: TokenStream) -> TokenStream {
 ///
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
-/// on the returned `miden_node_tracing::Span` instead.
+/// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
+/// for user-facing logs.
 ///
 /// # Examples
 ///
@@ -260,7 +274,8 @@ pub fn debug_span(input: TokenStream) -> TokenStream {
 ///
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
-/// on the returned `miden_node_tracing::Span` instead.
+/// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
+/// for user-facing logs.
 ///
 /// # Examples
 ///
@@ -268,6 +283,7 @@ pub fn debug_span(input: TokenStream) -> TokenStream {
 /// let span = miden_node_tracing::info_span!(
 ///     target = sequencer::block_builder,
 ///     "block_builder::build_block",
+///     user,
 /// );
 /// span.record_object(&header);
 /// let _guard = span.entered();
@@ -281,7 +297,8 @@ pub fn info_span(input: TokenStream) -> TokenStream {
 ///
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
-/// on the returned `miden_node_tracing::Span` instead.
+/// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
+/// for user-facing logs.
 ///
 /// # Examples
 ///
@@ -302,7 +319,8 @@ pub fn warn_span(input: TokenStream) -> TokenStream {
 ///
 /// The macro requires an allowed `target` as the first argument and a span-name string literal as
 /// the second argument. Fields are not accepted in the macro invocation; record fields or objects
-/// on the returned `miden_node_tracing::Span` instead.
+/// on the returned `miden_node_tracing::Span` instead. Add `user` after the name to mark the span
+/// for user-facing logs.
 ///
 /// # Examples
 ///

@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parse_macro_input};
 
 use crate::level::TelemetryLevel;
-use crate::{metadata, name, target};
+use crate::{metadata, name, target, user};
 
 pub(crate) fn trace_span(input: TokenStream) -> TokenStream {
     expand_span(input, "trace_span", TelemetryLevel::Trace)
@@ -32,14 +32,18 @@ fn expand_span(input: TokenStream, macro_name: &str, level: TelemetryLevel) -> T
     let macro_name = Ident::new(macro_name, proc_macro2::Span::call_site());
     let target = LitStr::new(&args.target, args.target_span);
     let name = args.name;
-    let submit_metadata = metadata::submit_span_metadata(&target, level, &name, None);
+    let submit_metadata = metadata::submit_span_metadata(&target, level, &name, None, args.user);
+    let mark_user_span =
+        args.user.then(|| quote! { __miden_node_tracing_span.__mark_user_facing(); });
 
     quote! {
         {
             #submit_metadata
-            ::miden_node_tracing::Span::__from_tracing_span(
+            let __miden_node_tracing_span = ::miden_node_tracing::Span::__from_tracing_span(
                 ::miden_node_tracing::__private::tracing::#macro_name!(target: #target, #name)
-            )
+            );
+            #mark_user_span
+            __miden_node_tracing_span
         }
     }
     .into()
@@ -49,6 +53,7 @@ struct SpanArgs {
     target: String,
     target_span: proc_macro2::Span,
     name: LitStr,
+    user: bool,
 }
 
 impl Parse for SpanArgs {
@@ -75,6 +80,12 @@ impl Parse for SpanArgs {
 
         input.parse::<Token![,]>()?;
         let name = parse_name(input)?;
+        let user = if input.is_empty() {
+            false
+        } else {
+            input.parse::<Token![,]>()?;
+            user::try_parse_marker(input)?
+        };
 
         if !input.is_empty() {
             let rest = input.parse::<proc_macro2::TokenStream>()?;
@@ -84,7 +95,7 @@ impl Parse for SpanArgs {
             ));
         }
 
-        Ok(Self { target, target_span, name })
+        Ok(Self { target, target_span, name, user })
     }
 }
 
@@ -138,6 +149,21 @@ mod tests {
 
         assert_eq!(args.target, "rpc");
         assert_eq!(args.name.value(), "rpc::get_block");
+    }
+
+    #[test]
+    fn parses_user_marker() {
+        let args =
+            parse2::<SpanArgs>(quote!(target = rpc, "rpc::submit_transaction", user)).unwrap();
+
+        assert!(args.user);
+    }
+
+    #[test]
+    fn rejects_user_value() {
+        let err = parse_err(quote!(target = rpc, "rpc::submit_transaction", user = true));
+
+        assert!(err.to_string().contains("`user` is a bare marker"));
     }
 
     #[test]

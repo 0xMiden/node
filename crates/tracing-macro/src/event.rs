@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitStr, Token, parenthesized};
 
 use crate::level::TelemetryLevel;
-use crate::target;
+use crate::{target, user};
 
 pub(crate) fn event(input: TokenStream) -> TokenStream {
     expand_event(input, None)
@@ -43,6 +43,8 @@ fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> Toke
     let message = args.message;
     let event_name = quote! { ::std::format!(#message) };
     let records = args.records.iter().map(EventRecord::record_tokens);
+    let mark_user_event =
+        args.user.then(|| quote! { __miden_node_tracing_event.__mark_user_facing(); });
 
     quote! {
         {
@@ -54,6 +56,7 @@ fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> Toke
                     ::miden_node_tracing::__private::OpenTelemetryEventRecorder::new();
                 __miden_node_tracing_event.record_attribute("level", #level_name);
                 __miden_node_tracing_event.record_attribute("target", #target);
+                #mark_user_event
                 #(#records)*
                 ::miden_node_tracing::Span::current()
                     .__record_event(#event_name, __miden_node_tracing_event);
@@ -69,6 +72,7 @@ struct EventArgs {
     level: TelemetryLevel,
     records: Vec<EventRecord>,
     message: proc_macro2::TokenStream,
+    user: bool,
 }
 
 impl EventArgs {
@@ -106,9 +110,24 @@ impl EventArgs {
         let mut records = Vec::new();
 
         input.parse::<Token![,]>()?;
+        let user = user::try_parse_marker(input)?;
+        if user {
+            if input.is_empty() {
+                return Err(missing_message_error(input));
+            }
+            input.parse::<Token![,]>()?;
+        }
+
         loop {
             if input.is_empty() {
                 return Err(missing_message_error(input));
+            }
+
+            if user::try_parse_marker(input)? {
+                return Err(syn::Error::new(
+                    input.span(),
+                    "`user` must appear before event records and may only be specified once",
+                ));
             }
 
             if let Some(record) = try_parse_record(input)? {
@@ -125,6 +144,7 @@ impl EventArgs {
                     level,
                     records,
                     message,
+                    user,
                 });
             }
         }
@@ -295,6 +315,7 @@ mod tests {
         let args = parse_args(
             quote!(
                 target = rpc,
+                user,
                 field(block_num),
                 object(block = header),
                 "accepted block {}",
@@ -310,6 +331,7 @@ mod tests {
         assert!(matches!(args.records[0].kind, EventRecordKind::Field));
         assert!(matches!(args.records[1].kind, EventRecordKind::Object));
         assert!(args.message.to_string().contains("accepted block"));
+        assert!(args.user);
     }
 
     #[test]
@@ -321,6 +343,7 @@ mod tests {
         assert_eq!(args.target, "store::database");
         assert_eq!(args.level, TelemetryLevel::Debug);
         assert!(args.message.to_string().contains("loaded block"));
+        assert!(!args.user);
     }
 
     #[test]
@@ -341,6 +364,32 @@ mod tests {
         };
 
         assert!(err.to_string().contains("`target` is required"));
+    }
+
+    #[test]
+    fn rejects_user_value() {
+        let err = match parse_args(
+            quote!(target = rpc, user = true, "accepted block"),
+            Some(TelemetryLevel::Info),
+        ) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`user` is a bare marker"));
+    }
+
+    #[test]
+    fn rejects_user_after_records() {
+        let err = match parse_args(
+            quote!(target = rpc, field(block_num), user, "accepted block"),
+            Some(TelemetryLevel::Info),
+        ) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`user` must appear before event records"));
     }
 
     #[test]

@@ -21,6 +21,15 @@ impl OpenTelemetryEventRecorder {
         self.attributes.push(KeyValue::new(key, value));
     }
 
+    /// Marks this event as appropriate for user-facing logs.
+    ///
+    /// This exists for the Miden event macros. The public marker is the macro-level `user`
+    /// argument; this method keeps the concrete OpenTelemetry attribute name centralized here.
+    #[doc(hidden)]
+    pub fn __mark_user_facing(&mut self) {
+        self.record_attribute(crate::user::ATTRIBUTE_KEY, true);
+    }
+
     /// Records `field` using its default key.
     pub fn record_field<F>(&mut self, field: &F)
     where
@@ -143,6 +152,7 @@ mod tests {
 
             crate::info!(
                 target = rpc,
+                user,
                 field(TestField),
                 field(custom.field = TestField),
                 object(TestObject),
@@ -164,6 +174,7 @@ mod tests {
 
         assert_attribute(&event.attributes, "level", "INFO");
         assert_attribute(&event.attributes, "target", "rpc");
+        assert_attribute(&event.attributes, crate::user::ATTRIBUTE_KEY, true);
         assert_attribute(&event.attributes, "field.default", "value");
         assert_attribute(&event.attributes, "custom.field", "value");
         assert_attribute(&event.attributes, "object.field", "value");
