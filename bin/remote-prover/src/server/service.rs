@@ -1,7 +1,6 @@
 use std::num::NonZeroUsize;
 
-use miden_node_tracing::Span as MidenSpan;
-use miden_node_utils::tracing::OpenTelemetrySpanExt as _;
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
 use tracing::instrument;
 
@@ -61,7 +60,7 @@ impl proto::api_server::Api for ProverService {
             return Err(tonic::Status::invalid_argument("unknown proof_type value"));
         }
         let proof_kind = ProofKind::from(request.proof_type());
-        MidenSpan::current().record_field(&proof_kind);
+        tracing::Span::current().set_attribute("request.kind", proof_kind);
 
         // Reject unsupported proof types early so they don't clog the queue.
         if !self.is_supported(proof_kind) {

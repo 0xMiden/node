@@ -548,12 +548,17 @@ impl Db {
 
             // XXX FIXME TODO free floating mutex MUST NOT exist
             // it doesn't bind it properly to the data locked!
-            if allow_acquire.send(()).is_err() {
-                tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
+            {
+                let _span = tracing::info_span!(target: COMPONENT, "acquire_write_lock").entered();
+                if allow_acquire.send(()).is_err() {
+                    tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
+                }
             }
 
             models::queries::prune_history(conn, signed_block.header().block_num())?;
 
+            let _span =
+                tracing::info_span!(target: COMPONENT, "acquire_done_lock").entered();
             acquire_done.blocking_recv()?;
 
             Ok(())

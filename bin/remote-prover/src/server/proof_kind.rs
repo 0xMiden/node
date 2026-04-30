@@ -33,12 +33,3 @@ impl miden_node_utils::tracing::ToValue for ProofKind {
         self.to_string().into()
     }
 }
-
-impl miden_node_tracing::OpenTelemetryField for ProofKind {
-    const DEFAULT_KEY: &'static str = "request.kind";
-    const DEFAULT_KEY_SUFFIX: &'static str = "kind";
-
-    fn to_otel_value(&self) -> opentelemetry::Value {
-        self.to_string().into()
-    }
-}
