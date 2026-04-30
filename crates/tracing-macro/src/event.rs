@@ -40,18 +40,8 @@ fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> Toke
     let target = LitStr::new(&args.target, args.target_span);
     let level = args.level.tracing_tokens();
     let level_name = LitStr::new(args.level.tracing_name(), proc_macro2::Span::call_site());
-    let event_name = args
-        .message
-        .map(|message| quote! { ::std::format!(#message) })
-        .unwrap_or_else(|| {
-            quote! {
-                ::std::format!(
-                    "event {}:{}",
-                    ::core::file!(),
-                    ::core::line!(),
-                )
-            }
-        });
+    let message = args.message;
+    let event_name = quote! { ::std::format!(#message) };
     let records = args.records.iter().map(EventRecord::record_tokens);
 
     quote! {
@@ -78,7 +68,7 @@ struct EventArgs {
     target_span: proc_macro2::Span,
     level: TelemetryLevel,
     records: Vec<EventRecord>,
-    message: Option<proc_macro2::TokenStream>,
+    message: proc_macro2::TokenStream,
 }
 
 impl EventArgs {
@@ -109,41 +99,40 @@ impl EventArgs {
             parse_level(input)?
         };
 
-        let mut records = Vec::new();
-        let mut message = None;
-
         if input.is_empty() {
-            return Ok(Self {
-                target,
-                target_span,
-                level,
-                records,
-                message,
-            });
+            return Err(missing_message_error(input));
         }
 
+        let mut records = Vec::new();
+
         input.parse::<Token![,]>()?;
-        while !input.is_empty() {
+        loop {
+            if input.is_empty() {
+                return Err(missing_message_error(input));
+            }
+
             if let Some(record) = try_parse_record(input)? {
                 records.push(record);
                 if input.is_empty() {
-                    break;
+                    return Err(missing_message_error(input));
                 }
                 input.parse::<Token![,]>()?;
             } else {
-                message = Some(input.parse()?);
-                break;
+                let message = input.parse()?;
+                return Ok(Self {
+                    target,
+                    target_span,
+                    level,
+                    records,
+                    message,
+                });
             }
         }
-
-        Ok(Self {
-            target,
-            target_span,
-            level,
-            records,
-            message,
-        })
     }
+}
+
+fn missing_message_error(input: ParseStream<'_>) -> syn::Error {
+    syn::Error::new(input.span(), "`message` is required and must follow any event records")
 }
 
 fn parse_level(input: ParseStream<'_>) -> syn::Result<TelemetryLevel> {
@@ -320,15 +309,18 @@ mod tests {
         assert_eq!(args.records.len(), 2);
         assert!(matches!(args.records[0].kind, EventRecordKind::Field));
         assert!(matches!(args.records[1].kind, EventRecordKind::Object));
-        assert!(args.message.is_some());
+        assert!(args.message.to_string().contains("accepted block"));
     }
 
     #[test]
     fn parses_event_macro_level() {
-        let args = parse_args(quote!(target = store::database, level = debug), None).unwrap();
+        let args =
+            parse_args(quote!(target = store::database, level = debug, "loaded block"), None)
+                .unwrap();
 
         assert_eq!(args.target, "store::database");
         assert_eq!(args.level, TelemetryLevel::Debug);
+        assert!(args.message.to_string().contains("loaded block"));
     }
 
     #[test]
@@ -349,5 +341,38 @@ mod tests {
         };
 
         assert!(err.to_string().contains("`target` is required"));
+    }
+
+    #[test]
+    fn requires_message_for_fixed_level_event() {
+        let err = match parse_args(quote!(target = rpc), Some(TelemetryLevel::Info)) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`message` is required"));
+    }
+
+    #[test]
+    fn requires_message_after_records() {
+        let err = match parse_args(
+            quote!(target = sequencer::block_builder, field(block_num)),
+            Some(TelemetryLevel::Info),
+        ) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`message` is required"));
+    }
+
+    #[test]
+    fn requires_message_for_explicit_level_event() {
+        let err = match parse_args(quote!(target = store::database, level = debug), None) {
+            Ok(_) => panic!("event args should fail to parse"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("`message` is required"));
     }
 }

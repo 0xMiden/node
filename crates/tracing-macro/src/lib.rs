@@ -65,11 +65,11 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Syntax:
 ///
 /// ```text
-/// event!(target = <allowed target>, level = <level>, [records...], [message...])
+/// event!(target = <allowed target>, level = <level>, [records...], <message>, [format args...])
 /// ```
 ///
 /// `target` must be first and `level` must follow it. Records, when present, must appear before the
-/// message. `field(value)` records an [`OpenTelemetryField`] with its default key, and
+/// required message. `field(value)` records an [`OpenTelemetryField`] with its default key, and
 /// `object(value)` records an [`OpenTelemetryObject`] with its default prefix. Use
 /// `field(custom.key = value)` or `object(custom.prefix = value)` to override that key or prefix.
 ///
@@ -107,7 +107,7 @@ pub fn event(input: TokenStream) -> TokenStream {
 /// Records a trace-level event on the current Miden span.
 ///
 /// This is shorthand for [`event!`] with `level = trace`. `target` is required and must be first.
-/// Typed `field(...)` and `object(...)` records may be supplied before the message.
+/// Typed `field(...)` and `object(...)` records may be supplied before the required message.
 ///
 /// # Examples
 ///
@@ -128,7 +128,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 /// Records a debug-level event on the current Miden span.
 ///
 /// This is shorthand for [`event!`] with `level = debug`. `target` is required and must be first.
-/// Typed `field(...)` and `object(...)` records may be supplied before the message.
+/// Typed `field(...)` and `object(...)` records may be supplied before the required message.
 ///
 /// # Examples
 ///
@@ -149,7 +149,7 @@ pub fn debug(input: TokenStream) -> TokenStream {
 /// Records an info-level event on the current Miden span.
 ///
 /// This is shorthand for [`event!`] with `level = info`. `target` is required and must be first.
-/// Typed `field(...)` and `object(...)` records may be supplied before the message.
+/// Typed `field(...)` and `object(...)` records may be supplied before the required message.
 ///
 /// # Examples
 ///
@@ -171,7 +171,7 @@ pub fn info(input: TokenStream) -> TokenStream {
 /// Records a warn-level event on the current Miden span.
 ///
 /// This is shorthand for [`event!`] with `level = warn`. `target` is required and must be first.
-/// Typed `field(...)` and `object(...)` records may be supplied before the message.
+/// Typed `field(...)` and `object(...)` records may be supplied before the required message.
 ///
 /// # Examples
 ///
@@ -192,7 +192,7 @@ pub fn warn(input: TokenStream) -> TokenStream {
 /// Records an error-level event on the current Miden span.
 ///
 /// This is shorthand for [`event!`] with `level = error`. `target` is required and must be first.
-/// Typed `field(...)` and `object(...)` records may be supplied before the message.
+/// Typed `field(...)` and `object(...)` records may be supplied before the required message.
 ///
 /// This macro does not record an error status by itself. Prefer [`instrument`] for fallible
 /// operations so returned errors are recorded automatically.
