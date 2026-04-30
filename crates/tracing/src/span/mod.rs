@@ -47,6 +47,16 @@ impl Span {
         );
     }
 
+    /// Records the target and level attributes that all Miden span macros expose.
+    ///
+    /// OpenTelemetry stores the span name separately, but target and level are tracing concepts.
+    /// Recording them as attributes keeps exported spans and events filterable in the same way.
+    #[doc(hidden)]
+    pub fn __record_metadata(&self, target: &'static str, level: &'static str) {
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(&self.0, "target", target);
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(&self.0, "level", level);
+    }
+
     /// Enters this span for the current scope.
     pub fn enter(&self) -> tracing::span::Entered<'_> {
         self.0.enter()
@@ -355,6 +365,18 @@ mod tests {
     }
 
     #[test]
+    fn span_macro_records_target_and_level_attributes() {
+        let spans = exported_spans(|| {
+            let span = crate::warn_span!(store::database, "manual_attribute_span");
+            let _guard = span.entered();
+        });
+        let span = exported_span_by_name(&spans, "manual_attribute_span");
+
+        assert_attribute(span, "target", "store::database");
+        assert_attribute(span, "level", "WARN");
+    }
+
+    #[test]
     fn span_macro_registers_metadata() {
         let _span = crate::warn_span!(store::database, "manual_metadata_span", user);
 
@@ -410,6 +432,8 @@ mod tests {
             }
         );
         assert!(!span.attributes.iter().any(|attribute| attribute.key.as_str() == "value"));
+        assert_attribute(span, "target", "rpc");
+        assert_attribute(span, "level", "INFO");
         assert!(!span.attributes.iter().any(|attribute| attribute.key.as_str() == "error.type"));
         assert!(span.events.events.is_empty());
     }

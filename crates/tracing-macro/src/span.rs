@@ -32,6 +32,7 @@ fn expand_span(input: TokenStream, macro_name: &str, level: TelemetryLevel) -> T
     let macro_name = Ident::new(macro_name, proc_macro2::Span::call_site());
     let target = LitStr::new(&args.target, args.target_span);
     let name = args.name;
+    let level_name = LitStr::new(level.tracing_name(), proc_macro2::Span::call_site());
     let submit_metadata = metadata::submit_span_metadata(&target, level, &name, None, args.user);
     let mark_user_span =
         args.user.then(|| quote! { __miden_node_tracing_span.__mark_user_facing(); });
@@ -42,6 +43,7 @@ fn expand_span(input: TokenStream, macro_name: &str, level: TelemetryLevel) -> T
             let __miden_node_tracing_span = ::miden_node_tracing::Span::__from_tracing_span(
                 ::miden_node_tracing::__private::tracing::#macro_name!(target: #target, #name)
             );
+            __miden_node_tracing_span.__record_metadata(#target, #level_name);
             #mark_user_span
             __miden_node_tracing_span
         }

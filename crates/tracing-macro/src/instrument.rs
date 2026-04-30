@@ -130,6 +130,7 @@ fn expand_instrument(
     let target = LitStr::new(&instrument_args.target, proc_macro2::Span::call_site());
     let name = LitStr::new(&instrument_args.name, sig.ident.span());
     let level = instrument_args.level;
+    let level_name = LitStr::new(level.tracing_name(), proc_macro2::Span::call_site());
     let tracing_args = instrument_args.tracing_args;
     let submit_metadata = metadata::submit_span_metadata(
         &target,
@@ -144,6 +145,7 @@ fn expand_instrument(
     let body = if sig.asyncness.is_some() {
         quote! {{
             #submit_metadata
+            ::miden_node_tracing::Span::current().__record_metadata(#target, #level_name);
             #mark_user_span
             let __miden_node_tracing_result = (async #block).await;
             if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
@@ -156,6 +158,7 @@ fn expand_instrument(
     } else {
         quote! {{
             #submit_metadata
+            ::miden_node_tracing::Span::current().__record_metadata(#target, #level_name);
             #mark_user_span
             let __miden_node_tracing_result = (|| #block)();
             if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
