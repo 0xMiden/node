@@ -148,8 +148,8 @@ pub enum StateInitializationError {
         block_root: Word,
     },
     #[error(
-        "account state forest root ({forest_root:?}) does not match SQLite root \
-         ({database_root:?}) for account {account_id}, slot {slot_name:?}. Delete the account \
+        "account state forest root ({forest_root}) does not match SQLite root \
+         ({database_root}) for account {account_id}, slot {slot_name:?}. Delete the account \
          state forest storage directory and restart the node to rebuild from the database."
     )]
     AccountStateForestStorageDiverged {
