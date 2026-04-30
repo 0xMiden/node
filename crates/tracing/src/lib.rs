@@ -8,6 +8,7 @@ mod catalog;
 mod event;
 mod field;
 mod filter;
+mod install;
 #[expect(
     dead_code,
     reason = "control-plane filters are wired in once subscriber/exporter setup is added"
@@ -15,7 +16,6 @@ mod filter;
 mod internal;
 mod object;
 mod span;
-#[expect(dead_code, reason = "wired into subscriber setup once this crate owns that path")]
 mod stdout;
 mod user;
 
@@ -36,7 +36,8 @@ pub use catalog::{
 };
 pub use event::Event;
 pub use field::OpenTelemetryField;
-pub use filter::{DEFAULT_FILTER, DynamicFilter, DynamicFilterError, DynamicFilterLayer};
+pub use filter::{DEFAULT_FILTER, FilterError};
+pub use install::{DEFAULT_USER_LOG_FILTER, InstallError, TracingConfig, TracingHandle, install};
 pub use miden_node_tracing_macro::{
     debug,
     debug_span,
