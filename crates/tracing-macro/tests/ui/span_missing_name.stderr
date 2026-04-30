@@ -1,0 +1,7 @@
+error: `name` is required and must be a string literal
+ --> tests/ui/span_missing_name.rs:4:17
+  |
+4 |     let _span = info_span!(rpc);
+  |                 ^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `info_span` (in Nightly builds, run with -Z macro-backtrace for more info)

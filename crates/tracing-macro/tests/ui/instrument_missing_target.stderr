@@ -1,0 +1,18 @@
+error: `target` must be an allowed target path; expected one of:
+         - rpc
+         - validator::database
+         - store::database
+         - store::forest
+         - store::grpc::server::rpc
+         - store::grpc::server::ntx
+         - store::grpc::server::sequencer
+         - sequencer::batch_builder
+         - sequencer::block_builder
+         - sequencer::mempool
+         - ntxb::coordinator
+         - ntxb::actor
+         - ntxb::database
+ --> tests/ui/instrument_missing_target.rs:3:14
+  |
+3 | #[instrument(name = "missing_target", level = info)]
+  |              ^^^^^^^^^^^^^^^^^^^^^^^

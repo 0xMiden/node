@@ -37,6 +37,7 @@ pub use event::Event;
 pub use exporter::{
     DEFAULT_OTEL_FILTER,
     DEFAULT_USER_LOG_FILTER,
+    ExportError,
     InstallError,
     TracingConfig,
     TracingHandle,

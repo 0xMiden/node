@@ -1,0 +1,5 @@
+error: built-in level event macros only support optional `user` followed by required `justification = "..."`; do not pass a level to `trace!`, `debug!`, `info!`, `warn!`, or `error!`
+ --> tests/ui/fixed_event_rejects_level.rs:7:9
+  |
+7 |         info,
+  |         ^^^^

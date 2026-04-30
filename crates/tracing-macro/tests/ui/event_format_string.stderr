@@ -1,0 +1,5 @@
+error: `message` must start with a string literal
+ --> tests/ui/event_format_string.rs:7:9
+  |
+7 |         message,
+  |         ^^^^^^^

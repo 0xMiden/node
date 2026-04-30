@@ -1,0 +1,7 @@
+error: event macros require `justification = "..."`; events are discouraged in favor of spans, so explain why this point-in-time event is appropriate
+ --> tests/ui/event_missing_justification.rs:4:18
+  |
+4 |     let _event = event!(rpc, "missing justification", info);
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `event` (in Nightly builds, run with -Z macro-backtrace for more info)
