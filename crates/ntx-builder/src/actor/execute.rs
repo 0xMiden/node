@@ -43,7 +43,6 @@ use miden_tx::{
     MastForestStore,
     NoteCheckerError,
     NoteConsumptionChecker,
-    NoteConsumptionInfo,
     TransactionExecutor,
     TransactionExecutorError,
     TransactionMastStore,
@@ -270,18 +269,21 @@ impl NtxContext {
         ))
         .await
         {
-            Ok(NoteConsumptionInfo { successful, failed, .. }) => {
+            Ok(consumption_info) => {
+                let (successful, failed) = consumption_info.into_parts();
                 for failed_note in &failed {
                     tracing::info!(
-                        note.id = %failed_note.note.id(),
-                        nullifier = %failed_note.note.nullifier(),
-                        err = %failed_note.error.as_report(),
+                        note.id = %failed_note.note().id(),
+                        nullifier = %failed_note.note().nullifier(),
+                        err = %failed_note.error().as_report(),
                         "note failed consumability check",
                     );
                 }
 
                 // Map successful notes to input notes.
-                let successful = InputNotes::from_unauthenticated_notes(successful)
+                let successful_notes =
+                    successful.into_iter().map(|s| s.note().clone()).collect::<Vec<_>>();
+                let successful = InputNotes::from_unauthenticated_notes(successful_notes)
                     .map_err(NtxError::InputNotes)?;
 
                 // If none are successful, abort.

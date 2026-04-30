@@ -528,14 +528,15 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
     failed
         .into_iter()
         .map(|f| {
-            let error_msg = f.error.as_report();
+            let error_msg = f.error().as_report();
             tracing::info!(
-                note.id = %f.note.id(),
-                nullifier = %f.note.nullifier(),
+                note.id = %f.note().id(),
+                nullifier = %f.note().nullifier(),
                 err = %error_msg,
                 "note failed: consumability check",
             );
-            (f.note.nullifier(), Arc::new(f.error) as NoteError)
+            let error: NoteError = Arc::new(std::io::Error::other(error_msg));
+            (f.note().nullifier(), error)
         })
         .collect()
 }
