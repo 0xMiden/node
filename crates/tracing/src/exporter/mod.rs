@@ -53,7 +53,7 @@ impl TracingConfig {
 pub struct TracingHandle {
     otel_filter: DynamicFilter,
     user_log_filter: DynamicFilter,
-    _guard: TracingGuard,
+    guard: TracingGuard,
 }
 
 impl TracingHandle {
@@ -79,7 +79,7 @@ impl TracingHandle {
 
     /// Flushes pending spans from both installed exporters.
     pub fn force_flush(&self) -> Result<(), ExportError> {
-        self._guard.force_flush()
+        self.guard.force_flush()
     }
 
     /// Flushes and shuts down both installed exporters.
@@ -87,7 +87,7 @@ impl TracingHandle {
     /// Dropping the handle also shuts exporters down, but this method lets callers surface shutdown
     /// errors during controlled application termination.
     pub fn shutdown(mut self) -> Result<(), ExportError> {
-        self._guard.shutdown()
+        self.guard.shutdown()
     }
 }
 
@@ -189,7 +189,7 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
     Ok(TracingHandle {
         otel_filter,
         user_log_filter,
-        _guard: TracingGuard {
+        guard: TracingGuard {
             otel_provider: Some(otel_provider),
             user_log_provider: Some(user_log_provider),
         },
@@ -306,7 +306,7 @@ mod tests {
         let handle = super::TracingHandle {
             otel_filter,
             user_log_filter,
-            _guard: super::TracingGuard {
+            guard: super::TracingGuard {
                 otel_provider: Some(opentelemetry_sdk::trace::SdkTracerProvider::builder().build()),
                 user_log_provider: Some(
                     opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),
@@ -332,7 +332,7 @@ mod tests {
         let handle = super::TracingHandle {
             otel_filter,
             user_log_filter,
-            _guard: super::TracingGuard {
+            guard: super::TracingGuard {
                 otel_provider: Some(opentelemetry_sdk::trace::SdkTracerProvider::builder().build()),
                 user_log_provider: Some(
                     opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),

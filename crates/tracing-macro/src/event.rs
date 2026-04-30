@@ -259,6 +259,16 @@ mod tests {
         (|input: syn::parse::ParseStream<'_>| EventArgs::parse(input, fixed_level)).parse2(tokens)
     }
 
+    fn parse_err(
+        tokens: proc_macro2::TokenStream,
+        fixed_level: Option<TelemetryLevel>,
+    ) -> syn::Error {
+        let Err(err) = parse_args(tokens, fixed_level) else {
+            panic!("event args should fail to parse");
+        };
+        err
+    }
+
     #[test]
     fn parses_level_event_args() {
         let args = parse_args(
@@ -289,91 +299,65 @@ mod tests {
 
     #[test]
     fn rejects_string_level() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(store::database, "loaded block", "debug", justification = "invalid level"),
             None,
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("`level` must be one of"));
     }
 
     #[test]
     fn requires_target() {
-        let err = match parse_args(quote!(), Some(TelemetryLevel::Info)) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(), Some(TelemetryLevel::Info));
 
         assert!(err.to_string().contains("`target` is required"));
     }
 
     #[test]
     fn rejects_user_value() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(rpc, "accepted block", user = true, justification = "records a user milestone"),
             Some(TelemetryLevel::Info),
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("`user` is a bare marker"));
     }
 
     #[test]
     fn rejects_level_argument_for_fixed_level_event() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(rpc, "accepted block", info, justification = "invalid level"),
             Some(TelemetryLevel::Info),
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("do not pass a level"));
     }
 
     #[test]
     fn rejects_extra_argument_for_explicit_level_event() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(rpc, "accepted block", info, debug, justification = "extra argument"),
             None,
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("only optional `user`"));
     }
 
     #[test]
     fn rejects_duplicate_user_after_target() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(rpc, "accepted block", user, user, justification = "duplicate user"),
             Some(TelemetryLevel::Info),
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("`user` may only be specified once"));
     }
 
     #[test]
     fn rejects_field_and_object_records() {
-        let field_err = match parse_args(quote!(rpc, field(block_num)), Some(TelemetryLevel::Info))
-        {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
-        let object_err =
-            match parse_args(quote!(rpc, object(block = header)), Some(TelemetryLevel::Info)) {
-                Ok(_) => panic!("event args should fail to parse"),
-                Err(err) => err,
-            };
+        let field_err = parse_err(quote!(rpc, field(block_num)), Some(TelemetryLevel::Info));
+        let object_err = parse_err(quote!(rpc, object(block = header)), Some(TelemetryLevel::Info));
 
         assert!(
             field_err
@@ -389,100 +373,72 @@ mod tests {
 
     #[test]
     fn requires_justification_for_fixed_level_event() {
-        let err = match parse_args(quote!(rpc, "accepted block"), Some(TelemetryLevel::Info)) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(rpc, "accepted block"), Some(TelemetryLevel::Info));
 
         assert!(err.to_string().contains("events are discouraged in favor of spans"));
     }
 
     #[test]
     fn requires_justification_after_user_marker() {
-        let err = match parse_args(quote!(rpc, "accepted block", user), Some(TelemetryLevel::Info))
-        {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(rpc, "accepted block", user), Some(TelemetryLevel::Info));
 
         assert!(err.to_string().contains("events are discouraged in favor of spans"));
     }
 
     #[test]
     fn rejects_empty_justification() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(rpc, "accepted block", justification = "   "),
             Some(TelemetryLevel::Info),
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("`justification` must not be empty"));
     }
 
     #[test]
     fn rejects_non_literal_justification() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(rpc, "accepted block", justification = REASON),
             Some(TelemetryLevel::Info),
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("`justification` must be a non-empty string literal"));
     }
 
     #[test]
     fn requires_message_for_fixed_level_event() {
-        let err = match parse_args(quote!(rpc), Some(TelemetryLevel::Info)) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(rpc), Some(TelemetryLevel::Info));
 
         assert!(err.to_string().contains("`message` is required"));
     }
 
     #[test]
     fn requires_message_after_user() {
-        let err = match parse_args(quote!(sequencer::block_builder), Some(TelemetryLevel::Info)) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(sequencer::block_builder), Some(TelemetryLevel::Info));
 
         assert!(err.to_string().contains("`message` is required"));
     }
 
     #[test]
     fn requires_message_for_explicit_level_event() {
-        let err = match parse_args(quote!(store::database, "loaded block"), None) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(store::database, "loaded block"), None);
 
         assert!(err.to_string().contains("`level` is required"));
     }
 
     #[test]
     fn requires_literal_message() {
-        let err = match parse_args(quote!(store::database, message, debug), None) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        let err = parse_err(quote!(store::database, message, debug), None);
 
         assert!(err.to_string().contains("`message` must start with a string literal"));
     }
 
     #[test]
     fn rejects_format_arguments() {
-        let err = match parse_args(
+        let err = parse_err(
             quote!(store::database, "loaded block {}", block_num, justification = "format args"),
             Some(TelemetryLevel::Info),
-        ) {
-            Ok(_) => panic!("event args should fail to parse"),
-            Err(err) => err,
-        };
+        );
 
         assert!(err.to_string().contains("only support optional `user`"));
     }

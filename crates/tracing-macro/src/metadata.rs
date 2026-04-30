@@ -11,9 +11,10 @@ pub(crate) fn submit_span_metadata(
     user: bool,
 ) -> proc_macro2::TokenStream {
     let level = level.metadata_tokens();
-    let description = match description {
-        Some(description) => quote! { ::core::option::Option::Some(#description) },
-        None => quote! { ::core::option::Option::None },
+    let description = if let Some(description) = description {
+        quote! { ::core::option::Option::Some(#description) }
+    } else {
+        quote! { ::core::option::Option::None }
     };
     quote! {
         ::miden_node_tracing::__private::inventory::submit! {

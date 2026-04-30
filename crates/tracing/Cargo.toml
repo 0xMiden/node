@@ -17,13 +17,13 @@ workspace = true
 [dependencies]
 inventory                = { workspace = true }
 miden-node-tracing-macro = { workspace = true }
-miden-protocol        = { workspace = true }
-opentelemetry         = { workspace = true }
-opentelemetry-otlp    = { workspace = true }
-opentelemetry_sdk     = { workspace = true }
-tracing               = { workspace = true }
-tracing-opentelemetry = { workspace = true }
-tracing-subscriber    = { workspace = true }
+miden-protocol           = { workspace = true }
+opentelemetry            = { workspace = true }
+opentelemetry-otlp       = { workspace = true }
+opentelemetry_sdk        = { workspace = true }
+tracing                  = { workspace = true }
+tracing-opentelemetry    = { workspace = true }
+tracing-subscriber       = { workspace = true }
 
 [dev-dependencies]
 miden-protocol = { features = ["testing"], workspace = true }

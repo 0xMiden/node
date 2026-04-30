@@ -353,8 +353,7 @@ impl ControlPlaneEventFields {
             Status::Error {
                 description: self
                     .panic_message
-                    .map(|message| format!("panic: {message}"))
-                    .unwrap_or_else(|| "panic".to_owned())
+                    .map_or_else(|| "panic".to_owned(), |message| format!("panic: {message}"))
                     .into(),
             },
         );

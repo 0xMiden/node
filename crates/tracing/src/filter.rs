@@ -169,7 +169,7 @@ fn directive_target(directive: &str) -> Option<&str> {
         return None;
     }
 
-    let target_end = directive.find(|ch| matches!(ch, '=' | '[')).unwrap_or(directive.len());
+    let target_end = directive.find(['=', '[']).unwrap_or(directive.len());
     let target = &directive[..target_end];
 
     if is_level(target) { None } else { Some(target) }

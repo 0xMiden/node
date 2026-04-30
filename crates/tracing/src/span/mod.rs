@@ -301,7 +301,7 @@ mod tests {
         Err(TestError { source: SourceError })
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "this test only verifies macro inventory registration")]
     fn unused_manual_span_declaration() {
         let _span = crate::error_span!(rpc, "unused_manual_span");
     }
