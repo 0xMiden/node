@@ -272,7 +272,7 @@ impl BlockProducerRpcServer {
                 interval.tick().await;
 
                 let (chain_tip, unbatched_transactions, proposed_batches, proven_batches) = {
-                    let mempool = mempool.lock().await;
+                    let mempool = mempool.lock();
                     (
                         mempool.chain_tip(),
                         mempool.unbatched_transactions_count() as u64,
@@ -336,7 +336,7 @@ impl BlockProducerRpcServer {
             .map(Arc::new)
             .map_err(MempoolSubmissionError::StateConflict)?;
 
-        self.mempool.lock().await.lock().await.add_transaction(tx).map(Into::into)
+        self.mempool.lock().await.lock().add_transaction(tx).map(Into::into)
     }
 
     #[instrument(
@@ -374,7 +374,7 @@ impl BlockProducerRpcServer {
             txs.push(tx);
         }
 
-        self.mempool.lock().await.lock().await.add_user_batch(&txs).map(Into::into)
+        self.mempool.lock().await.lock().add_user_batch(&txs).map(Into::into)
     }
 }
 
@@ -422,7 +422,7 @@ impl api_server::Api for BlockProducerRpcServer {
         &self,
         _request: tonic::Request<()>,
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
-        let subscription = self.mempool.lock().await.lock().await.subscribe();
+        let subscription = self.mempool.lock().await.lock().subscribe();
         let subscription = ReceiverStream::new(subscription);
 
         Ok(tonic::Response::new(MempoolEventSubscription { inner: subscription }))

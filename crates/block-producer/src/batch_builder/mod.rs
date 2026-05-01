@@ -191,7 +191,7 @@ impl BatchJob {
 
     #[instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
     async fn select_batch(&self) -> Option<SelectedBatch> {
-        self.mempool.lock().await.select_batch()
+        self.mempool.lock().select_batch()
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
@@ -283,12 +283,12 @@ impl BatchJob {
 
     #[instrument(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
     async fn commit_batch(&self, batch: Arc<ProvenBatch>) {
-        self.mempool.lock().await.commit_batch(batch);
+        self.mempool.lock().commit_batch(batch);
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
     async fn rollback_batch(&self, batch_id: BatchId) {
-        self.mempool.lock().await.rollback_batch(batch_id);
+        self.mempool.lock().rollback_batch(batch_id);
     }
 }
 

@@ -52,7 +52,7 @@
 //! transactions even if the store and block producer momentarily disagree on the chain tip.
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_utils::ErrorReport;
@@ -60,7 +60,7 @@ use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use subscription::SubscriptionProvider;
-use tokio::sync::{Mutex, MutexGuard, mpsc};
+use tokio::sync::mpsc;
 use tracing::instrument;
 
 use crate::block_builder::SelectedBlock;
@@ -69,9 +69,7 @@ use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::budget::BudgetStatus;
 use crate::{
-    COMPONENT,
-    DEFAULT_MEMPOOL_TX_CAPACITY,
-    SERVER_MEMPOOL_EXPIRATION_SLACK,
+    COMPONENT, DEFAULT_MEMPOOL_TX_CAPACITY, SERVER_MEMPOOL_EXPIRATION_SLACK,
     SERVER_MEMPOOL_STATE_RETENTION,
 };
 
@@ -147,13 +145,16 @@ impl Default for MempoolConfig {
 // ================================================================================================
 
 impl SharedMempool {
-    /// Acquires an asynchronous lock on the underlying [`Mempool`].
+    /// Acquires a poisonable lock on the underlying [`Mempool`].
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
     #[instrument(target = COMPONENT, name = "mempool.lock", skip_all)]
-    pub async fn lock(&self) -> MutexGuard<'_, Mempool> {
-        self.0.lock().await
+    pub fn lock(&self) -> MutexGuard<'_, Mempool> {
+        self.0.lock().unwrap_or_else(|err| {
+            tracing::error!(message = %err, "Mempool lock poisoned");
+            panic!("mempool lock poisoned after a previous panic: {err}");
+        })
     }
 }
 

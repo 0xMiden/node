@@ -1,3 +1,4 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use miden_protocol::Word;
@@ -121,6 +122,22 @@ fn failed_batch_transactions_are_requeued() {
         .increment_failure_count(failed_batch.transactions().iter().map(|tx| tx.id()));
 
     assert_eq!(uut, reference);
+}
+
+#[test]
+#[should_panic(expected = "mempool lock poisoned after a previous panic")]
+fn shared_mempool_lock_is_poisoned_after_panic() {
+    let shared = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
+    let poisoned = shared.clone();
+
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _guard = poisoned.lock();
+        panic!("force mempool corruption");
+    }));
+
+    assert!(result.is_err(), "expected panic while holding mempool lock");
+
+    let _guard = shared.lock();
 }
 
 // BLOCK COMMITTED TESTS

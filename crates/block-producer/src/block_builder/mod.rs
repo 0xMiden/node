@@ -128,7 +128,7 @@ impl BlockBuilder {
 
     #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
     async fn select_block(mempool: &SharedMempool) -> SelectedBlock {
-        mempool.lock().await.select_block()
+        mempool.lock().select_block()
     }
 
     /// Fetches block inputs from the store for the [`SelectedBlock`].
@@ -266,14 +266,14 @@ impl BlockBuilder {
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
         let (header, ..) = signed_block.into_parts();
-        mempool.lock().await.commit_block(header);
+        mempool.lock().commit_block(header);
 
         Ok(())
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
     async fn rollback_block(&self, mempool: &SharedMempool, block: BlockNumber) {
-        mempool.lock().await.rollback_block(block);
+        mempool.lock().rollback_block(block);
     }
 }
 
