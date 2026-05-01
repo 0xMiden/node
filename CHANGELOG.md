@@ -3,6 +3,7 @@
 ## v0.15.0 (TBD)
 
 - Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).
+- Made the block producer abort immediately after a poisoned mempool lock is observed, preventing recovery after mempool corruption ([#2029](https://github.com/0xMiden/node/pull/2029)).
 - Added composite index `idx_transactions_account_block_txid` on `transactions(account_id, block_num, transaction_id)` to speed up `select_transactions_records` queries used by `SyncTransactions` ([#1965](https://github.com/0xMiden/node/issues/1965)).
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 - Network monitor now auto-regenerates accounts after persistent increment failures instead of staying unhealthy indefinitely ([#1942](https://github.com/0xMiden/node/pull/1942)).

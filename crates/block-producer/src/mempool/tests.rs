@@ -1,4 +1,6 @@
 use std::env;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::panic::AssertUnwindSafe;
 use std::process::Command;
 use std::sync::Arc;
@@ -7,9 +9,6 @@ use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use pretty_assertions::assert_eq;
 use serial_test::serial;
-
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
 
 use super::*;
 use crate::mempool::graph::TransactionGraph;
