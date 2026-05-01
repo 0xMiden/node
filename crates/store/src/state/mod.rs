@@ -154,7 +154,7 @@ impl State {
         );
 
         let database_filepath = data_directory.database_path();
-        let mut db = Db::load(database_filepath.clone())
+        let mut db = Db::load(database_filepath.clone(), storage_options.sqlite_pool_size)
             .await
             .map_err(StateInitializationError::DatabaseLoadError)?;
 

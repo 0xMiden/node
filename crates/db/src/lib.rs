@@ -2,6 +2,7 @@ mod conv;
 mod errors;
 mod manager;
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 pub use conv::{DatabaseTypeConversionError, SqlTypeConvert};
@@ -22,8 +23,18 @@ pub struct Db {
 impl Db {
     /// Creates a new database instance with the provided connection pool.
     pub fn new(database_filepath: &Path) -> Result<Self, DatabaseError> {
+        Self::new_with_pool_size(database_filepath, NonZeroUsize::new(16).expect("non-zero"))
+    }
+
+    /// Creates a new database instance with a configurable SQLite connection pool size.
+    pub fn new_with_pool_size(
+        database_filepath: &Path,
+        sqlite_pool_size: NonZeroUsize,
+    ) -> Result<Self, DatabaseError> {
         let manager = ConnectionManager::new(database_filepath.to_str().unwrap());
-        let pool = deadpool_diesel::Pool::builder(manager).max_size(16).build()?;
+        let pool = deadpool_diesel::Pool::builder(manager)
+            .max_size(sqlite_pool_size.get())
+            .build()?;
         Ok(Self { pool })
     }
 

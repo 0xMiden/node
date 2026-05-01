@@ -1,6 +1,6 @@
 //! Public module for share clap pieces to reduce duplication
 
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::time::Duration;
 
 #[cfg(feature = "rocksdb")]
@@ -14,6 +14,7 @@ const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_mins(30);
 const DEFAULT_REPLENISH_N_PER_SECOND_PER_IP: NonZeroU64 = NonZeroU64::new(16).unwrap();
 const DEFAULT_BURST_SIZE: NonZeroU32 = NonZeroU32::new(128).unwrap();
 const DEFAULT_MAX_CONCURRENT_CONNECTIONS: u64 = 1_000;
+const DEFAULT_SQLITE_POOL_SIZE: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 
 // Formats a Duration into a human-readable string for display in clap help text
 // and yields a &'static str by _leaking_ the string deliberately.
@@ -141,8 +142,17 @@ impl GrpcOptionsExternal {
 /// Collection of per usage storage backend configurations.
 ///
 /// Note: Currently only contains `rocksdb` related configuration.
-#[derive(clap::Args, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct StorageOptions {
+    /// Maximum number of SQLite connections in the async pool.
+    #[arg(
+        long = "sqlite.pool_size",
+        env = "MIDEN_NODE_SQLITE_POOL_SIZE",
+        default_value_t = DEFAULT_SQLITE_POOL_SIZE,
+        value_name = "NUM"
+    )]
+    pub sqlite_pool_size: NonZeroUsize,
+
     #[cfg(feature = "rocksdb")]
     #[clap(flatten)]
     pub account_tree: AccountTreeRocksDbOptions,
@@ -174,6 +184,7 @@ impl StorageOptions {
                 cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
             };
             Self {
+                sqlite_pool_size: DEFAULT_SQLITE_POOL_SIZE,
                 account_tree,
                 nullifier_tree,
                 account_state_forest,
@@ -181,5 +192,23 @@ impl StorageOptions {
         }
         #[cfg(not(feature = "rocksdb"))]
         Self::default()
+    }
+}
+
+impl Default for StorageOptions {
+    fn default() -> Self {
+        #[cfg(feature = "rocksdb")]
+        {
+            Self {
+                sqlite_pool_size: DEFAULT_SQLITE_POOL_SIZE,
+                account_tree: AccountTreeRocksDbOptions::default(),
+                nullifier_tree: NullifierTreeRocksDbOptions::default(),
+                account_state_forest: AccountStateForestRocksDbOptions::default(),
+            }
+        }
+        #[cfg(not(feature = "rocksdb"))]
+        {
+            Self { sqlite_pool_size: DEFAULT_SQLITE_POOL_SIZE }
+        }
     }
 }
