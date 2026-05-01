@@ -50,7 +50,7 @@ jobs:
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
@@ -105,7 +105,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
@@ -123,7 +123,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: nextest@0.9.122
@@ -147,7 +147,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
@@ -169,7 +169,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
@@ -220,7 +220,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - name: cargo build
         run: |
           cargo build --locked -p miden-remote-prover-client \
@@ -257,9 +257,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Rustup +nightly
-        run: |
-          rustup update --no-self-update nightly
-          rustup +nightly component add rustfmt
+        run: rustup toolchain install --no-self-update nightly --component rustfmt
       - name: Fmt
         run: make format-check
 
