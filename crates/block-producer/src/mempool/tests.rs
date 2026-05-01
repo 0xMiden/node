@@ -1,10 +1,15 @@
+use std::env;
 use std::panic::AssertUnwindSafe;
+use std::process::Command;
 use std::sync::Arc;
 
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use pretty_assertions::assert_eq;
 use serial_test::serial;
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 use super::*;
 use crate::mempool::graph::TransactionGraph;
@@ -13,6 +18,8 @@ use crate::test_utils::batch::TransactionBatchConstructor;
 
 mod add_transaction;
 mod add_user_batch;
+
+const POISONED_LOCK_ABORT_HELPER_ENV: &str = "MIDEN_NODE_BLOCK_PRODUCER_POISONED_LOCK_ABORT";
 
 impl Mempool {
     /// Returns an empty [`Mempool`] and a perfect clone intended for use as the Unit Under Test and
@@ -125,8 +132,36 @@ fn failed_batch_transactions_are_requeued() {
 }
 
 #[test]
-#[should_panic(expected = "mempool lock poisoned after a previous panic")]
-fn shared_mempool_lock_is_poisoned_after_panic() {
+fn shared_mempool_lock_aborts_after_poisoning() {
+    let output = Command::new(env::current_exe().expect("test binary path should be available"))
+        .arg("--exact")
+        .arg("mempool::tests::shared_mempool_lock_aborts_after_poisoning_helper")
+        .env(POISONED_LOCK_ABORT_HELPER_ENV, "1")
+        .output()
+        .expect("helper process should execute");
+
+    assert!(
+        !output.status.success(),
+        "expected helper to abort after poisoned lock access, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    #[cfg(unix)]
+    assert!(
+        output.status.signal().is_some(),
+        "expected helper to terminate via signal, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn shared_mempool_lock_aborts_after_poisoning_helper() {
+    if env::var_os(POISONED_LOCK_ABORT_HELPER_ENV).is_none() {
+        return;
+    }
+
     let shared = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
     let poisoned = shared.clone();
 

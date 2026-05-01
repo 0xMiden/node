@@ -153,7 +153,7 @@ impl SharedMempool {
     pub fn lock(&self) -> MutexGuard<'_, Mempool> {
         self.0.lock().unwrap_or_else(|err| {
             tracing::error!(message = %err, "Mempool lock poisoned");
-            panic!("mempool lock poisoned after a previous panic: {err}");
+            std::process::abort();
         })
     }
 }
