@@ -16,6 +16,7 @@ pub struct Event {
     span: Option<Span>,
     name: Option<Cow<'static, str>>,
     recorder: RefCell<Option<OpenTelemetryEventRecorder>>,
+    user_log_emitter: Option<fn(&str, &[KeyValue])>,
 }
 
 impl Event {
@@ -29,11 +30,13 @@ impl Event {
         span: Span,
         name: impl Into<Cow<'static, str>>,
         recorder: OpenTelemetryEventRecorder,
+        user_log_emitter: Option<fn(&str, &[KeyValue])>,
     ) -> Self {
         Self {
             span: Some(span),
             name: Some(name.into()),
             recorder: RefCell::new(Some(recorder)),
+            user_log_emitter,
         }
     }
 
@@ -48,6 +51,7 @@ impl Event {
             span: None,
             name: None,
             recorder: RefCell::new(None),
+            user_log_emitter: None,
         }
     }
 
@@ -128,8 +132,12 @@ impl Event {
         let Some(recorder) = self.recorder.get_mut().take() else {
             return;
         };
+        let attributes = recorder.into_attributes();
 
-        span.__record_event(name, recorder);
+        span.__record_event(name.clone(), attributes.clone());
+        if let Some(emit_user_log) = self.user_log_emitter.take() {
+            emit_user_log(&name, &attributes);
+        }
     }
 }
 
@@ -247,9 +255,23 @@ impl OpenTelemetryAttributeSink for EventAttributeSink<'_> {
 pub(crate) fn record_event_on_span(
     span: &tracing::Span,
     name: impl Into<Cow<'static, str>>,
-    recorder: OpenTelemetryEventRecorder,
+    attributes: Vec<KeyValue>,
 ) {
-    tracing_opentelemetry::OpenTelemetrySpanExt::add_event(span, name, recorder.into_attributes());
+    tracing_opentelemetry::OpenTelemetrySpanExt::add_event(span, name, attributes);
+}
+
+#[doc(hidden)]
+pub fn format_user_attributes(attributes: &[KeyValue]) -> String {
+    let mut rendered = String::new();
+
+    for attribute in attributes {
+        let Some(key) = attribute.key.as_str().strip_prefix(crate::user::FIELD_PREFIX) else {
+            continue;
+        };
+        rendered.push_str(&crate::user::format_field(key, &attribute.value.as_str()));
+    }
+
+    rendered
 }
 
 #[cfg(test)]

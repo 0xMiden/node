@@ -7,17 +7,22 @@
 
 use std::cell::RefCell;
 use std::fmt;
+use std::future::Future;
 use std::panic::PanicHookInfo;
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
 use opentelemetry::trace::Status;
 use opentelemetry::{Key, Value};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, Filter};
+use tracing_subscriber::registry::LookupSpan;
 
 /// Target used for tracing events that carry control-plane signals.
 pub(crate) const CONTROL_PLANE_TARGET: &str = "miden_tracing::control_plane";
 
+const TRACING_PANIC_TARGET: &str = "tracing_panic";
 const SPANLESS_PANIC_SPAN_NAME: &str = "spanless_panic";
 
 thread_local! {
@@ -25,33 +30,17 @@ thread_local! {
     // Crate-owned emitters set this before dispatching so the layer can still mutate the
     // intended OpenTelemetry span through the public `tracing-opentelemetry` extension API.
     static SELECTED_SPAN: RefCell<Option<tracing::Span>> = const { RefCell::new(None) };
+    static ACTIVE_SPANS: RefCell<Vec<tracing::Span>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Field names used by control-plane events.
 pub(crate) mod field {
-    /// Control-plane event kind.
-    pub const CONTROL_PLANE_KIND: &str = "control_plane.kind";
-    /// Boolean marker for panic control-plane events.
-    pub const PANIC: &str = "panic";
-    /// Panic message.
-    pub const PANIC_MESSAGE: &str = "panic.message";
-    /// Source file reported by the panic hook.
-    pub const PANIC_LOCATION_FILE: &str = "panic.location.file";
-    /// Source line reported by the panic hook.
-    pub const PANIC_LOCATION_LINE: &str = "panic.location.line";
-    /// Source column reported by the panic hook.
-    pub const PANIC_LOCATION_COLUMN: &str = "panic.location.column";
-    /// Current thread name when the panic hook ran.
-    pub const PANIC_THREAD_NAME: &str = "panic.thread.name";
-    /// Forced backtrace captured by the panic hook.
-    pub const PANIC_BACKTRACE: &str = "panic.backtrace";
+    /// Panic payload reported by `tracing-panic`.
+    pub const PANIC_PAYLOAD: &str = "panic.payload";
 }
 
-/// Control-plane event kinds.
-pub(crate) mod kind {
-    /// Panic event kind.
-    pub const PANIC: &str = "panic";
-}
+/// Field marker used for tracing events emitted only for local user-facing stdout.
+pub(crate) const USER_LOG_EVENT: &str = "miden.user.log";
 
 /// Layer which consumes control-plane events.
 ///
@@ -86,13 +75,139 @@ where
     }
 }
 
+/// Layer which tracks entered spans for panic fallback routing.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ActiveSpanLayer;
+
+impl<S> Layer<S> for ActiveSpanLayer
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+{
+    fn on_enter(&self, _id: &tracing::span::Id, _ctx: Context<'_, S>) {
+        push_active_span(tracing::Span::current());
+    }
+
+    fn on_exit(&self, id: &tracing::span::Id, _ctx: Context<'_, S>) {
+        pop_active_span(id);
+    }
+}
+
+/// Layer which tracks only entered spans that are explicitly marked for user-facing output.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UserFacingActiveSpanLayer;
+
+impl<S> Layer<S> for UserFacingActiveSpanLayer
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+{
+    fn on_new_span(
+        &self,
+        _attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        span.extensions_mut().insert(UserFacingActiveSpanState::default());
+    }
+
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        let mut visitor = UserFacingMarkerVisitor::default();
+        values.record(&mut visitor);
+        if !visitor.user {
+            return;
+        }
+
+        let mut extensions = span.extensions_mut();
+        let Some(state) = extensions.get_mut::<UserFacingActiveSpanState>() else {
+            return;
+        };
+        state.user = true;
+        if tracing::Span::current().id().as_ref() != Some(id) {
+            return;
+        }
+        while state.pushed_count < state.entered_count {
+            if !push_active_span(tracing::Span::current()) {
+                break;
+            }
+            state.pushed_count += 1;
+        }
+    }
+
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        let mut extensions = span.extensions_mut();
+        let Some(state) = extensions.get_mut::<UserFacingActiveSpanState>() else {
+            return;
+        };
+        state.entered_count += 1;
+        if state.user && push_active_span(tracing::Span::current()) {
+            state.pushed_count += 1;
+        }
+    }
+
+    fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        let mut extensions = span.extensions_mut();
+        let Some(state) = extensions.get_mut::<UserFacingActiveSpanState>() else {
+            return;
+        };
+        state.entered_count = state.entered_count.saturating_sub(1);
+        if state.pushed_count > 0 {
+            state.pushed_count -= 1;
+            pop_active_span(id);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct UserFacingActiveSpanState {
+    user: bool,
+    entered_count: usize,
+    pushed_count: usize,
+}
+
+#[derive(Debug, Default)]
+struct UserFacingMarkerVisitor {
+    user: bool,
+}
+
+impl Visit for UserFacingMarkerVisitor {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        if field.name() == crate::user::ATTRIBUTE_KEY && value {
+            self.user = true;
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == crate::user::ATTRIBUTE_KEY && format!("{value:?}") == "true" {
+            self.user = true;
+        }
+    }
+}
+
 /// Per-layer filter which hides raw control-plane events from normal output/export layers.
 ///
 /// This rejects events on the reserved control-plane target. Other records on the control-plane
 /// target, such as the `spanless_panic` fallback span, remain visible to the wrapped layer.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct IgnoreControlPlaneEvents;
 
+#[cfg(test)]
 impl<S> Filter<S> for IgnoreControlPlaneEvents {
     /// Returns `false` for raw control-plane events.
     ///
@@ -204,6 +319,36 @@ where
         }
     }
 
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_new_span(attrs, id, ctx);
+    }
+
+    fn on_record(
+        &self,
+        span: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_record(span, values, ctx);
+    }
+
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_enter(id, ctx);
+    }
+
+    fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_exit(id, ctx);
+    }
+
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_close(id, ctx);
+    }
+
     /// Applies the same routing rule once `tracing` has constructed an event.
     ///
     /// This mirrors [`Self::enabled`] because some filters make an additional event-level decision
@@ -235,9 +380,105 @@ pub(crate) fn with_control_plane_events<F>(filter: F) -> WithControlPlaneEvents<
     WithControlPlaneEvents::new(filter)
 }
 
+/// Per-layer filter which hides synthetic user-facing stdout events from normal trace export.
+#[derive(Clone, Debug)]
+pub(crate) struct WithoutUserLogEvents<F> {
+    inner: F,
+}
+
+impl<F> WithoutUserLogEvents<F> {
+    pub(crate) fn new(inner: F) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S, F> Filter<S> for WithoutUserLogEvents<F>
+where
+    F: Filter<S>,
+{
+    fn callsite_enabled(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        self.inner.callsite_enabled(metadata)
+    }
+
+    fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: &Context<'_, S>) -> bool {
+        self.inner.enabled(metadata, ctx)
+    }
+
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_new_span(attrs, id, ctx);
+    }
+
+    fn on_record(
+        &self,
+        span: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_record(span, values, ctx);
+    }
+
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_enter(id, ctx);
+    }
+
+    fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_exit(id, ctx);
+    }
+
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_close(id, ctx);
+    }
+
+    fn event_enabled(&self, event: &tracing::Event<'_>, ctx: &Context<'_, S>) -> bool {
+        !is_user_log_event(event) && self.inner.event_enabled(event, ctx)
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        self.inner.max_level_hint()
+    }
+}
+
+pub(crate) fn without_user_log_events<F>(filter: F) -> WithoutUserLogEvents<F> {
+    WithoutUserLogEvents::new(filter)
+}
+
+fn is_user_log_event(event: &tracing::Event<'_>) -> bool {
+    let mut visitor = UserLogEventVisitor::default();
+    event.record(&mut visitor);
+    visitor.is_user_log_event
+}
+
+#[derive(Default)]
+struct UserLogEventVisitor {
+    is_user_log_event: bool,
+}
+
+impl Visit for UserLogEventVisitor {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        if field.name() == USER_LOG_EVENT && value {
+            self.is_user_log_event = true;
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == USER_LOG_EVENT && format!("{value:?}") == "true" {
+            self.is_user_log_event = true;
+        }
+    }
+}
+
 /// Returns `true` if `metadata` describes a control-plane event.
 pub(crate) fn is_control_plane_event(metadata: &tracing::Metadata<'_>) -> bool {
-    metadata.is_event() && is_control_plane_target(metadata.target())
+    metadata.is_event()
+        && (is_control_plane_target(metadata.target()) || metadata.target() == TRACING_PANIC_TARGET)
 }
 
 /// Returns `true` when `target` is reserved for this crate's control-plane telemetry.
@@ -253,81 +494,185 @@ pub(crate) fn is_control_plane_target(target: &str) -> bool {
 /// If no tracing span is currently active, this creates a short-lived `spanless_panic` fallback
 /// span so OpenTelemetry exporters still have a span to attach the panic attributes to.
 pub(crate) fn emit_panic(info: &PanicHookInfo<'_>) {
-    if tracing::Span::current().is_disabled() {
-        // A disabled current span means there is no OpenTelemetry span for the layer to mutate.
-        // Create a short fallback span so the panic is still exported somewhere useful.
-        let span = tracing::error_span!(target: CONTROL_PLANE_TARGET, SPANLESS_PANIC_SPAN_NAME);
-        let _guard = span.enter();
-        let _selected_span = SelectedSpanGuard::new(span.clone());
-        emit_panic_event(info);
+    let current = tracing::Span::current();
+    if let Some(span) = exportable_or_active_span(&current) {
+        let _selected_span = SelectedSpanGuard::new(span);
+        tracing_panic::panic_hook(info);
+        return;
+    }
+
+    // No exportable span is active. Create a short fallback span so the panic is still exported
+    // somewhere useful.
+    let span = tracing::error_span!(target: CONTROL_PLANE_TARGET, SPANLESS_PANIC_SPAN_NAME);
+    let _guard = span.enter();
+    let _selected_span = SelectedSpanGuard::new(span.clone());
+    tracing_panic::panic_hook(info);
+}
+
+fn exportable_or_active_span(current: &tracing::Span) -> Option<tracing::Span> {
+    if is_control_plane_span(current) {
+        Some(current.clone())
     } else {
-        let _selected_span = SelectedSpanGuard::new(tracing::Span::current());
-        emit_panic_event(info);
+        active_span()
     }
 }
 
-/// Dispatches the reserved panic control-plane event.
-///
-/// The event is the synchronization point between the panic hook and the control-plane layer.
-/// Normal output/export layers should filter this event out and observe only the translated span
-/// attributes/status.
-fn emit_panic_event(info: &PanicHookInfo<'_>) {
-    let message = panic_message(info);
-    // Panics should be rare, and the call site may not have enabled process-wide backtraces. Force
-    // a capture here so exported panic telemetry is actionable by default.
-    let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-    let thread = std::thread::current();
-    let thread_name = thread.name().unwrap_or("<unnamed>");
-    let location = info.location();
-    let file = location.map_or("<unknown>", std::panic::Location::file);
-    let line = location.map_or(0, std::panic::Location::line);
-    let column = location.map_or(0, std::panic::Location::column);
+fn is_control_plane_span(span: &tracing::Span) -> bool {
+    !span.is_disabled()
+        && span
+            .metadata()
+            .is_some_and(|metadata| is_control_plane_target(metadata.target()))
+}
 
-    tracing::event!(
-        target: CONTROL_PLANE_TARGET,
-        tracing::Level::ERROR,
-        control_plane.kind = kind::PANIC,
-        panic = true,
-        panic.message = %message,
-        panic.location.file = file,
-        panic.location.line = line,
-        panic.location.column = column,
-        panic.thread.name = thread_name,
-        panic.backtrace = %backtrace,
-        "panic"
+fn is_exportable_span(span: &tracing::Span) -> bool {
+    if span.is_disabled() {
+        return false;
+    }
+
+    span.metadata().is_some_and(|metadata| is_exportable_target(metadata.target()))
+}
+
+fn is_exportable_target(target: &str) -> bool {
+    is_control_plane_target(target)
+        || miden_node_tracing_targets::is_allowed_application_target(target)
+}
+
+/// Guard returned when a Miden span becomes the active enabled span on this thread.
+#[derive(Debug)]
+pub struct ActiveSpanGuard {
+    span: Option<tracing::Span>,
+}
+
+impl ActiveSpanGuard {
+    pub(crate) fn none() -> Self {
+        Self { span: None }
+    }
+}
+
+impl Drop for ActiveSpanGuard {
+    fn drop(&mut self) {
+        let Some(span) = self.span.take() else {
+            return;
+        };
+        if let Some(id) = span.id() {
+            pop_active_span(&id);
+        }
+    }
+}
+
+/// Tracks an enabled span as a panic fallback parent while it is entered.
+pub(crate) fn enter_span(span: &tracing::Span) -> ActiveSpanGuard {
+    if !is_exportable_span(span) || span.id().is_none() {
+        return ActiveSpanGuard::none();
+    }
+    if duplicate_active_span(span) {
+        ActiveSpanGuard { span: Some(span.clone()) }
+    } else {
+        ActiveSpanGuard::none()
+    }
+}
+
+/// Tracks the current span when code is running inside an upstream `#[instrument]` span.
+pub fn enter_current_span() -> ActiveSpanGuard {
+    enter_span(&tracing::Span::current())
+}
+
+/// Tracks the current span as active only while `future` is being polled.
+pub fn track_current_span<F>(future: F) -> ActiveSpanFuture<F> {
+    ActiveSpanFuture { span: tracing::Span::current(), future }
+}
+
+/// Future wrapper which exposes an enabled span to panic fallback routing during each poll.
+#[derive(Debug)]
+pub struct ActiveSpanFuture<F> {
+    span: tracing::Span,
+    future: F,
+}
+
+impl<F> Future for ActiveSpanFuture<F>
+where
+    F: Future,
+{
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        // SAFETY: `future` is pinned in place by `self`; this projection never moves it.
+        let this = unsafe { self.get_unchecked_mut() };
+        let _active_span = enter_span(&this.span);
+        // SAFETY: see the projection note above.
+        unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx)
+    }
+}
+
+fn active_span() -> Option<tracing::Span> {
+    ACTIVE_SPANS.with(|active_spans| {
+        active_spans
+            .borrow()
+            .iter()
+            .rev()
+            .find(|span| is_exportable_span(span))
+            .cloned()
+    })
+}
+
+fn push_active_span(span: tracing::Span) -> bool {
+    if !is_exportable_span(&span) {
+        return false;
+    }
+
+    ACTIVE_SPANS.with(|active_spans| {
+        let mut active_spans = active_spans.borrow_mut();
+        active_spans.push(span);
+        true
+    })
+}
+
+fn duplicate_active_span(span: &tracing::Span) -> bool {
+    let Some(id) = span.id() else {
+        return false;
+    };
+
+    ACTIVE_SPANS.with(|active_spans| {
+        let mut active_spans = active_spans.borrow_mut();
+        if active_spans.iter().any(|active_span| active_span.id().as_ref() == Some(&id)) {
+            active_spans.push(span.clone());
+            true
+        } else {
+            false
+        }
+    })
+}
+
+fn pop_active_span(id: &tracing::span::Id) {
+    ACTIVE_SPANS.with(|active_spans| {
+        let mut active_spans = active_spans.borrow_mut();
+        if let Some(index) = active_spans
+            .iter()
+            .rposition(|active_span| active_span.id().as_ref() == Some(id))
+        {
+            active_spans.remove(index);
+        }
+    });
+}
+
+/// Mirrors a user-facing span attribute into a predeclared tracing field for local output.
+pub(crate) fn record_user_field_bridge(span: &tracing::Span, key: &Key, value: &Value) {
+    span.record(
+        crate::user::FIELD_BRIDGE_KEY,
+        tracing::field::display(crate::user::format_field(key.as_str(), &value.as_str())),
     );
-}
-
-/// Extracts a stable panic message from the panic payload.
-///
-/// Rust panic payloads are arbitrary `Any` values. String payloads are the common case; other
-/// payloads are represented with a fixed message so tracing never tries to format an unknown type
-/// from the panic hook.
-fn panic_message(info: &PanicHookInfo<'_>) -> String {
-    if let Some(message) = info.payload().downcast_ref::<&'static str>() {
-        (*message).to_owned()
-    } else if let Some(message) = info.payload().downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "panic payload is not a string".to_owned()
-    }
 }
 
 #[derive(Default)]
 struct ControlPlaneEventFields {
-    kind: Option<String>,
     is_panic: bool,
-    panic_message: Option<String>,
+    panic_payload: Option<String>,
     panic_attributes: Vec<(Key, Value)>,
 }
 
 impl ControlPlaneEventFields {
-    /// Returns `true` when the recorded control-plane event describes a panic.
-    ///
-    /// Both the explicit kind and boolean marker are accepted so the control-plane schema remains
-    /// easy to match in layers while still being extensible for future event kinds.
     fn is_panic(&self) -> bool {
-        self.is_panic || self.kind.as_deref() == Some(kind::PANIC)
+        self.is_panic
     }
 
     /// Writes the parsed panic fields to the span selected by the emitter.
@@ -348,24 +693,19 @@ impl ControlPlaneEventFields {
             tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(&span, key, value);
         }
 
+        let description = self
+            .panic_payload
+            .map_or_else(|| "panic".to_owned(), |payload| format!("panic: {payload}"));
+        span.record("miden.error", tracing::field::display(&description));
         tracing_opentelemetry::OpenTelemetrySpanExt::set_status(
             &span,
-            Status::Error {
-                description: self
-                    .panic_message
-                    .map_or_else(|| "panic".to_owned(), |message| format!("panic: {message}"))
-                    .into(),
-            },
+            Status::Error { description: description.into() },
         );
     }
 
     /// Records a boolean event field relevant to control-plane panic handling.
     fn record_bool(&mut self, field: &Field, value: bool) {
-        let name = field.name();
-        if name == field::PANIC && value {
-            self.is_panic = true;
-        }
-        self.record_panic_attribute(name, value.into());
+        self.record_panic_attribute(field.name(), value.into());
     }
 
     /// Records a signed integer event field relevant to control-plane panic handling.
@@ -388,16 +728,12 @@ impl ControlPlaneEventFields {
 
     /// Records a string event field relevant to control-plane panic handling.
     ///
-    /// The control-plane kind routes the event and is not copied as a panic attribute;
-    /// `panic.message` is retained separately so it can also become the span status description.
+    /// `panic.payload` is retained separately so it can also become the span status description.
     fn record_str(&mut self, field: &Field, value: &str) {
         let name = field.name();
-        if name == field::CONTROL_PLANE_KIND {
-            self.kind = Some(value.to_owned());
-            return;
-        }
-        if name == field::PANIC_MESSAGE {
-            self.panic_message = Some(value.to_owned());
+        if name == field::PANIC_PAYLOAD {
+            self.is_panic = true;
+            self.panic_payload = Some(value.to_owned());
         }
         self.record_panic_attribute(name, value.to_owned().into());
     }
@@ -408,25 +744,36 @@ impl ControlPlaneEventFields {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         let value = format!("{value:?}");
         let name = field.name();
-        if name == field::CONTROL_PLANE_KIND {
-            self.kind = Some(value);
+        if name == field::PANIC_PAYLOAD {
+            self.is_panic = true;
+            let value = clean_panic_payload_debug(&value);
+            self.panic_payload = Some(value.clone());
+            self.record_panic_attribute(name, value.into());
             return;
-        }
-        if name == field::PANIC_MESSAGE {
-            self.panic_message = Some(value.clone());
         }
         self.record_panic_attribute(name, value.into());
     }
 
     /// Stores a field as a panic span attribute when its key belongs to the panic schema.
-    ///
-    /// Control-plane fields such as `control_plane.kind` are intentionally ignored here; they
-    /// route the control-plane event but are not part of the user-facing panic telemetry.
     fn record_panic_attribute(&mut self, name: &'static str, value: Value) {
-        if name == field::PANIC || name.starts_with("panic.") {
+        if name.starts_with("panic.") {
+            self.is_panic = true;
             self.panic_attributes.push((Key::from_static_str(name), value));
         }
     }
+}
+
+fn clean_panic_payload_debug(value: &str) -> String {
+    if value == "None" {
+        return "panic payload is not a string".to_owned();
+    }
+
+    value
+        .strip_prefix("Some(")
+        .and_then(|value| value.strip_suffix(')'))
+        .and_then(|value| value.strip_prefix('"').and_then(|value| value.strip_suffix('"')))
+        .unwrap_or(value)
+        .to_owned()
 }
 
 impl Visit for ControlPlaneEventFields {
@@ -499,19 +846,33 @@ fn selected_span() -> Option<tracing::Span> {
 
 #[cfg(test)]
 mod tests {
+    use std::future::{Future, pending};
+    use std::pin::pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
+
     use opentelemetry::Value;
     use opentelemetry::trace::Status;
     use opentelemetry_sdk::trace::SpanData;
+    use tracing::field::{Field, Visit};
     use tracing::subscriber::with_default;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::Context;
     use tracing_subscriber::prelude::*;
 
     use super::{
+        ActiveSpanLayer,
         CONTROL_PLANE_TARGET,
         ControlPlaneEventFields,
         ControlPlaneEventLayer,
         IgnoreControlPlaneEvents,
         OnlyControlPlaneEvents,
         SelectedSpanGuard,
+        TRACING_PANIC_TARGET,
+        active_span,
+        enter_span,
+        exportable_or_active_span,
+        track_current_span,
     };
     use crate::test_utils::{TestExporter, assert_attribute};
 
@@ -523,20 +884,17 @@ mod tests {
             let _selected_span = SelectedSpanGuard::new(span.clone());
 
             tracing::event!(
-                target: CONTROL_PLANE_TARGET,
+                target: TRACING_PANIC_TARGET,
                 tracing::Level::ERROR,
-                control_plane.kind = "panic",
-                panic = true,
-                panic.message = "test panic",
-                panic.location.line = 42_u64,
-                "panic"
+                panic.payload = "test panic",
+                panic.location = "src/lib.rs:42:7",
+                "A panic occurred"
             );
         });
         let span = span_by_name(&spans, "panic_parent");
 
-        assert_attribute(span, "panic", true);
-        assert_attribute(span, "panic.message", "test panic");
-        assert_attribute(span, "panic.location.line", 42_i64);
+        assert_attribute(span, "panic.payload", "test panic");
+        assert_attribute(span, "panic.location", "src/lib.rs:42:7");
         assert_eq!(span.status, Status::Error { description: "panic: test panic".into() });
         assert!(
             span.events.events.is_empty(),
@@ -546,27 +904,243 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_event_filter_rejects_reserved_target_events() {
+    fn control_plane_layer_bridges_panic_status_to_tracing_error_field() {
+        #[derive(Clone, Default)]
+        struct ErrorRecordLayer {
+            error: Arc<Mutex<Option<String>>>,
+        }
+
+        impl<S> Layer<S> for ErrorRecordLayer
+        where
+            S: tracing::Subscriber,
+        {
+            fn on_record(
+                &self,
+                _span: &tracing::span::Id,
+                values: &tracing::span::Record<'_>,
+                _ctx: Context<'_, S>,
+            ) {
+                let mut visitor = ErrorFieldVisitor::default();
+                values.record(&mut visitor);
+                if let Some(error) = visitor.error {
+                    *self.error.lock().expect("error field lock poisoned") = Some(error);
+                }
+            }
+        }
+
+        #[derive(Default)]
+        struct ErrorFieldVisitor {
+            error: Option<String>,
+        }
+
+        impl Visit for ErrorFieldVisitor {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                if field.name() == "miden.error" {
+                    self.error = Some(value.to_owned());
+                }
+            }
+
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "miden.error" {
+                    self.error = Some(format!("{value:?}").trim_matches('"').to_owned());
+                }
+            }
+        }
+
+        let error_layer = ErrorRecordLayer::default();
+        let captured = error_layer.error.clone();
+        let subscriber = tracing_subscriber::registry()
+            .with(ControlPlaneEventLayer.with_filter(OnlyControlPlaneEvents))
+            .with(error_layer);
+
+        with_default(subscriber, || {
+            let span = tracing::info_span!(
+                target: "rpc",
+                "panic_parent",
+                miden.error = tracing::field::Empty
+            );
+            let _guard = span.enter();
+            let _selected_span = SelectedSpanGuard::new(span.clone());
+
+            tracing::event!(
+                target: TRACING_PANIC_TARGET,
+                tracing::Level::ERROR,
+                panic.payload = "panic visible to stdout",
+                "A panic occurred"
+            );
+        });
+
+        assert_eq!(
+            captured.lock().expect("error field lock poisoned").as_deref(),
+            Some("panic: panic visible to stdout")
+        );
+    }
+
+    #[test]
+    fn control_plane_event_filter_rejects_tracing_panic_events() {
         let spans = exported_spans_with_control_plane_layer(|| {
             let span = tracing::error_span!(target: CONTROL_PLANE_TARGET, "spanless_panic");
             let _guard = span.enter();
             let _selected_span = SelectedSpanGuard::new(span.clone());
             tracing::event!(
-                target: CONTROL_PLANE_TARGET,
+                target: TRACING_PANIC_TARGET,
                 tracing::Level::ERROR,
-                control_plane.kind = "panic",
-                panic = true,
-                panic.message = "test panic",
-                "panic"
+                panic.payload = Some("test panic"),
+                "A panic occurred"
             );
         });
         let span = span_by_name(&spans, "spanless_panic");
 
-        assert_attribute(span, "panic.message", "test panic");
+        assert_attribute(span, "panic.payload", "test panic");
+        assert_eq!(span.status, Status::Error { description: "panic: test panic".into() });
         assert!(span.events.events.is_empty());
     }
 
+    #[test]
+    fn control_plane_layer_records_panic_on_active_parent_when_child_span_is_disabled() {
+        let spans = exported_spans_with_filter("info", || {
+            let root = tracing::info_span!(target: "rpc", "panic_root");
+            let _root_guard = root.enter();
+            let _active_root = enter_span(&root);
+
+            let disabled_child = tracing::debug_span!(target: "rpc", "disabled_child");
+            let _disabled_guard = disabled_child.enter();
+            let selected = active_span().unwrap_or_else(tracing::Span::current);
+            let _selected_span = SelectedSpanGuard::new(selected);
+
+            tracing::event!(
+                target: TRACING_PANIC_TARGET,
+                tracing::Level::ERROR,
+                panic.payload = "panic in disabled child",
+                "A panic occurred"
+            );
+        });
+        let span = span_by_name(&spans, "panic_root");
+
+        assert_attribute(span, "panic.payload", "panic in disabled child");
+        assert_eq!(
+            span.status,
+            Status::Error {
+                description: "panic: panic in disabled child".into(),
+            }
+        );
+        assert!(spans.iter().all(|span| span.name != "disabled_child"));
+        assert!(spans.iter().all(|span| span.name != "spanless_panic"));
+    }
+
+    #[test]
+    fn active_span_future_tracks_span_only_during_poll() {
+        let root = tracing::info_span!(target: "rpc", "async_panic_root");
+        let future = {
+            let _guard = root.enter();
+            track_current_span(pending::<()>())
+        };
+
+        assert!(active_span().is_none());
+
+        let mut future = pin!(future);
+        let waker = noop_waker();
+        let mut cx = TaskContext::from_waker(&waker);
+        assert!(matches!(future.as_mut().poll(&mut cx), Poll::Pending));
+        assert!(active_span().is_none());
+    }
+
+    #[test]
+    fn active_span_layer_tracks_public_entered_span() {
+        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
+
+        with_default(subscriber, || {
+            let root = tracing::info_span!(target: "rpc", "layer_tracked_root");
+            let expected_id = root.id();
+
+            {
+                let _guard = root.enter();
+                let active_id = active_span().and_then(|span| span.id());
+                assert_eq!(active_id, expected_id);
+            }
+
+            assert!(active_span().is_none());
+        });
+    }
+
+    #[test]
+    fn explicit_active_span_guard_does_not_pop_layer_tracked_span() {
+        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
+
+        with_default(subscriber, || {
+            let root = tracing::info_span!(target: "rpc", "layer_and_macro_tracked_root");
+            let expected_id = root.id();
+            let _span_guard = root.enter();
+
+            {
+                let _macro_guard = enter_span(&root);
+            }
+
+            let active_id = active_span().and_then(|span| span.id());
+            assert_eq!(active_id, expected_id);
+        });
+
+        assert!(active_span().is_none());
+    }
+
+    #[test]
+    fn active_span_selection_ignores_third_party_current_span() {
+        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
+
+        with_default(subscriber, || {
+            let third_party = tracing::info_span!(target: "tokio::runtime", "third_party_root");
+            let _third_party_guard = third_party.enter();
+
+            assert!(active_span().is_none());
+            assert!(exportable_or_active_span(&tracing::Span::current()).is_none());
+        });
+
+        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
+
+        with_default(subscriber, || {
+            let root = tracing::info_span!(target: "rpc", "exported_root");
+            let expected_id = root.id();
+            let _root_guard = root.enter();
+
+            let third_party = tracing::info_span!(target: "tokio::runtime", "third_party_child");
+            let _third_party_guard = third_party.enter();
+
+            let active_id = active_span().and_then(|span| span.id());
+            let selected_id =
+                exportable_or_active_span(&tracing::Span::current()).and_then(|span| span.id());
+            assert_eq!(active_id, expected_id);
+            assert_eq!(selected_id, expected_id);
+        });
+    }
+
+    #[test]
+    fn active_span_layer_keeps_outer_enter_active_when_same_span_is_reentered() {
+        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
+
+        with_default(subscriber, || {
+            let root = tracing::info_span!(target: "rpc", "nested_layer_tracked_root");
+            let expected_id = root.id();
+            let outer = root.enter();
+
+            {
+                let _inner = root.enter();
+                let active_id = active_span().and_then(|span| span.id());
+                assert_eq!(active_id, expected_id);
+            }
+
+            let active_id = active_span().and_then(|span| span.id());
+            assert_eq!(active_id, expected_id);
+
+            drop(outer);
+            assert!(active_span().is_none());
+        });
+    }
+
     fn exported_spans_with_control_plane_layer(record: impl FnOnce()) -> Vec<SpanData> {
+        exported_spans_with_filter("trace", record)
+    }
+
+    fn exported_spans_with_filter(filter: &str, record: impl FnOnce()) -> Vec<SpanData> {
         let exporter = TestExporter::default();
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
@@ -576,6 +1150,8 @@ mod tests {
             "miden-node-tracing-control-plane-test",
         );
         let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(filter))
+            .with(ActiveSpanLayer)
             .with(ControlPlaneEventLayer.with_filter(OnlyControlPlaneEvents))
             .with(
                 tracing_opentelemetry::layer()
@@ -595,6 +1171,24 @@ mod tests {
             .iter()
             .find(|span| span.name == name)
             .unwrap_or_else(|| panic!("missing span {name}; spans: {spans:?}"))
+    }
+
+    fn noop_waker() -> Waker {
+        unsafe fn clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        unsafe fn wake(_: *const ()) {}
+        unsafe fn wake_by_ref(_: *const ()) {}
+        unsafe fn drop(_: *const ()) {}
+
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+        fn noop_raw_waker() -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+
+        // SAFETY: the vtable functions do not dereference the null data pointer.
+        unsafe { Waker::from_raw(noop_raw_waker()) }
     }
 
     #[test]

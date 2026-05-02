@@ -2,7 +2,21 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, ExprLit, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
+use syn::{
+    Attribute,
+    Expr,
+    ExprLit,
+    Ident,
+    ItemFn,
+    Lit,
+    LitStr,
+    Meta,
+    ReturnType,
+    Token,
+    Type,
+    TypePath,
+    parse_macro_input,
+};
 
 use crate::level::TelemetryLevel;
 use crate::{metadata, name, target, user};
@@ -26,6 +40,7 @@ struct InstrumentArgs {
     name: String,
     level: TelemetryLevel,
     user: bool,
+    record_errors: bool,
 }
 
 impl InstrumentArgs {
@@ -52,21 +67,33 @@ impl InstrumentArgs {
         let level_literal = LitStr::new(level.as_str(), level_expr.span());
         let target_literal = LitStr::new(&target, target_span);
 
-        let user = parse_optional_user(input)?;
+        let options = parse_options(input)?;
 
         Ok(Self {
             tracing_args: quote! {
                 skip_all,
                 target = #target_literal,
                 name = #name_literal,
-                level = #level_literal
+                level = #level_literal,
+                fields(
+                    miden.user.fields = ::miden_node_tracing::__private::tracing::field::Empty,
+                    miden.user = ::miden_node_tracing::__private::tracing::field::Empty,
+                    miden.error = ::miden_node_tracing::__private::tracing::field::Empty
+                )
             },
             target,
             name,
             level,
-            user,
+            user: options.user,
+            record_errors: options.record_errors,
         })
     }
+}
+
+#[derive(Debug, Default)]
+struct InstrumentOptions {
+    user: bool,
+    record_errors: bool,
 }
 
 fn parse_comma(input: ParseStream<'_>, missing_message: &str) -> syn::Result<()> {
@@ -82,39 +109,37 @@ fn parse_comma(input: ParseStream<'_>, missing_message: &str) -> syn::Result<()>
     Ok(())
 }
 
-fn parse_optional_user(input: ParseStream<'_>) -> syn::Result<bool> {
-    if input.is_empty() {
-        return Ok(false);
+fn parse_options(input: ParseStream<'_>) -> syn::Result<InstrumentOptions> {
+    let mut options = InstrumentOptions::default();
+
+    while !input.is_empty() {
+        input.parse::<Token![,]>()?;
+        if input.is_empty() {
+            break;
+        }
+
+        if user::try_parse_marker(input)? {
+            if options.user {
+                return Err(syn::Error::new(input.span(), "`user` may only be specified once"));
+            }
+            options.user = true;
+            continue;
+        }
+
+        let ident = input.parse::<Ident>()?;
+        if ident != "err" {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "only optional `user` and `err` markers are supported after `level`",
+            ));
+        }
+        if options.record_errors {
+            return Err(syn::Error::new_spanned(ident, "`err` may only be specified once"));
+        }
+        options.record_errors = true;
     }
 
-    input.parse::<Token![,]>()?;
-    if input.is_empty() {
-        return Ok(false);
-    }
-
-    let user = user::try_parse_marker(input)?;
-    if !user {
-        let rest = input.parse::<proc_macro2::TokenStream>()?;
-        return Err(syn::Error::new_spanned(
-            rest,
-            "only optional `user` is supported after `level`",
-        ));
-    }
-
-    if input.is_empty() {
-        return Ok(true);
-    }
-
-    input.parse::<Token![,]>()?;
-    if input.is_empty() {
-        return Ok(true);
-    }
-
-    let rest = input.parse::<proc_macro2::TokenStream>()?;
-    Err(syn::Error::new_spanned(
-        rest,
-        "`user` may only be specified once and must be the final argument",
-    ))
+    Ok(options)
 }
 
 fn expand_instrument(
@@ -124,6 +149,7 @@ fn expand_instrument(
     let attrs = function.attrs;
     let vis = function.vis;
     let sig = function.sig;
+    let records_returned_errors = instrument_args.record_errors || returns_result(&sig.output);
     let block = function.block;
     let description =
         doc_description(&attrs).map(|description| LitStr::new(&description, sig.ident.span()));
@@ -142,30 +168,35 @@ fn expand_instrument(
     let mark_user_span = instrument_args
         .user
         .then(|| quote! { ::miden_node_tracing::Span::current().__mark_user_facing(); });
+    let record_error = records_returned_errors.then(|| {
+        quote! {
+            if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
+                __miden_node_tracing_result
+            {
+                ::miden_node_tracing::Span::current().__record_error(__miden_node_tracing_error);
+            }
+        }
+    });
     let body = if sig.asyncness.is_some() {
         quote! {{
             #submit_metadata
             ::miden_node_tracing::Span::current().__record_metadata(#target, #level_name);
             #mark_user_span
-            let __miden_node_tracing_result = (async #block).await;
-            if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
-                __miden_node_tracing_result
-            {
-                ::miden_node_tracing::Span::current().__record_error(__miden_node_tracing_error);
-            }
+            let __miden_node_tracing_result =
+                ::miden_node_tracing::__private::track_current_span(async #block).await;
+            #record_error
             __miden_node_tracing_result
         }}
     } else {
         quote! {{
             #submit_metadata
+            let __miden_node_tracing_active_span =
+                ::miden_node_tracing::__private::enter_current_span();
             ::miden_node_tracing::Span::current().__record_metadata(#target, #level_name);
             #mark_user_span
             let __miden_node_tracing_result = (|| #block)();
-            if let ::core::result::Result::Err(ref __miden_node_tracing_error) =
-                __miden_node_tracing_result
-            {
-                ::miden_node_tracing::Span::current().__record_error(__miden_node_tracing_error);
-            }
+            #record_error
+            drop(__miden_node_tracing_active_span);
             __miden_node_tracing_result
         }}
     };
@@ -175,6 +206,17 @@ fn expand_instrument(
         #[::miden_node_tracing::__private::tracing::instrument(#tracing_args)]
         #vis #sig #body
     }
+}
+
+fn returns_result(output: &ReturnType) -> bool {
+    let ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    let Type::Path(TypePath { qself: None, path }) = ty.as_ref() else {
+        return false;
+    };
+
+    path.segments.last().is_some_and(|segment| segment.ident == "Result")
 }
 
 fn doc_description(attrs: &[Attribute]) -> Option<String> {
@@ -267,7 +309,22 @@ mod tests {
         let args = parse_args(quote!(rpc, "test", info, user)).unwrap();
 
         assert!(args.user);
-        assert!(!args.tracing_args.to_string().contains("user"));
+        assert!(args.tracing_args.to_string().contains("miden"));
+    }
+
+    #[test]
+    fn parses_err_marker() {
+        let args = parse_args(quote!(rpc, "test", info, err)).unwrap();
+
+        assert!(args.record_errors);
+    }
+
+    #[test]
+    fn parses_user_and_err_markers() {
+        let args = parse_args(quote!(rpc, "test", info, err, user)).unwrap();
+
+        assert!(args.user);
+        assert!(args.record_errors);
     }
 
     #[test]
@@ -275,6 +332,13 @@ mod tests {
         let err = parse_args(quote!(rpc, "test", info, user = true)).unwrap_err();
 
         assert!(err.to_string().contains("`user` is a bare marker"));
+    }
+
+    #[test]
+    fn rejects_duplicate_err_marker() {
+        let err = parse_args(quote!(rpc, "test", info, err, err)).unwrap_err();
+
+        assert!(err.to_string().contains("`err` may only be specified once"));
     }
 
     #[test]

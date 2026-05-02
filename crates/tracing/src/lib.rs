@@ -9,10 +9,6 @@ mod event;
 mod exporter;
 mod field;
 mod filter;
-#[expect(
-    dead_code,
-    reason = "control-plane filters are wired in once subscriber/exporter setup is added"
-)]
 mod internal;
 mod object;
 mod span;
@@ -94,4 +90,11 @@ pub mod __private {
     /// This type is implementation detail rather than caller API, but generated event macro
     /// code must be able to construct it from downstream crates.
     pub use crate::event::OpenTelemetryEventRecorder;
+    /// Formats user-facing OpenTelemetry attributes for tracing-side stdout events.
+    pub use crate::event::format_user_attributes;
+    /// Tracks the current upstream `tracing::instrument` span for panic fallback routing.
+    pub use crate::internal::enter_current_span;
+    /// Tracks the current upstream `tracing::instrument` span only while an async future is
+    /// polled.
+    pub use crate::internal::track_current_span;
 }

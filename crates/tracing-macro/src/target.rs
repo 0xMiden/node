@@ -1,28 +1,7 @@
 use syn::{Expr, ExprPath, Path, PathArguments};
 
-const ALLOWED_TARGETS: &[&str] = &[
-    "rpc",
-    "validator::database",
-    "store::database",
-    "store::forest",
-    "store::grpc::server::rpc",
-    "store::grpc::server::ntx",
-    "store::grpc::server::sequencer",
-    "sequencer::batch_builder",
-    "sequencer::block_builder",
-    "sequencer::mempool",
-    "ntxb::coordinator",
-    "ntxb::actor",
-    "ntxb::database",
-];
-
 pub(crate) fn allowed_targets() -> String {
-    let mut targets = String::new();
-    for target in ALLOWED_TARGETS {
-        targets.push_str("\n  - ");
-        targets.push_str(target);
-    }
-    targets
+    miden_node_tracing_targets::allowed_targets_list()
 }
 
 pub(crate) fn parse(expr: &Expr) -> syn::Result<String> {
@@ -39,7 +18,7 @@ pub(crate) fn parse(expr: &Expr) -> syn::Result<String> {
         },
     };
 
-    if ALLOWED_TARGETS.contains(&target.as_str()) {
+    if miden_node_tracing_targets::parse_allowed_target(&target).is_ok() {
         Ok(target)
     } else {
         Err(syn::Error::new_spanned(

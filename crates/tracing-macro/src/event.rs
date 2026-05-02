@@ -48,6 +48,25 @@ fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> Toke
     let event_name = quote! { #message };
     let mark_user_event =
         args.user.then(|| quote! { __miden_node_tracing_event.__mark_user_facing(); });
+    let emit_user_log_event = if args.user {
+        quote! {
+            Some(|__miden_node_tracing_name, __miden_node_tracing_attributes| {
+                let __miden_node_tracing_fields =
+                    ::miden_node_tracing::__private::format_user_attributes(
+                        __miden_node_tracing_attributes
+                    );
+                ::miden_node_tracing::__private::tracing::event!(
+                    target: #target,
+                    #level,
+                    miden.user.log = true,
+                    message = %__miden_node_tracing_name,
+                    miden.user.fields = %__miden_node_tracing_fields,
+                );
+            })
+        }
+    } else {
+        quote! { None }
+    };
     let submit_metadata = metadata::submit_event_metadata(&target, args.level, &message, args.user);
 
     quote! {
@@ -66,6 +85,7 @@ fn expand_event(input: TokenStream, fixed_level: Option<TelemetryLevel>) -> Toke
                     ::miden_node_tracing::Span::current(),
                     #event_name,
                     __miden_node_tracing_event,
+                    #emit_user_log_event
                 )
             } else {
                 ::miden_node_tracing::Event::__disabled()

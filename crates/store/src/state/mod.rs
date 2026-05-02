@@ -138,6 +138,9 @@ impl State {
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     ) -> Result<Self, StateInitializationError> {
+        #[cfg(not(feature = "rocksdb"))]
+        let _ = &storage_options;
+
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -154,18 +157,22 @@ impl State {
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
 
-        let account_storage = TreeStorage::create(
-            data_path,
-            &storage_options.account_tree.into(),
-            ACCOUNT_TREE_STORAGE_DIR,
-        )?;
+        #[cfg(feature = "rocksdb")]
+        let account_storage = {
+            let config = storage_options.account_tree.into();
+            TreeStorage::create(data_path, &config, ACCOUNT_TREE_STORAGE_DIR)?
+        };
+        #[cfg(not(feature = "rocksdb"))]
+        let account_storage = TreeStorage::create(data_path, &(), ACCOUNT_TREE_STORAGE_DIR)?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage = TreeStorage::create(
-            data_path,
-            &storage_options.nullifier_tree.into(),
-            NULLIFIER_TREE_STORAGE_DIR,
-        )?;
+        #[cfg(feature = "rocksdb")]
+        let nullifier_storage = {
+            let config = storage_options.nullifier_tree.into();
+            TreeStorage::create(data_path, &config, NULLIFIER_TREE_STORAGE_DIR)?
+        };
+        #[cfg(not(feature = "rocksdb"))]
+        let nullifier_storage = TreeStorage::create(data_path, &(), NULLIFIER_TREE_STORAGE_DIR)?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         // Verify that tree roots match the expected roots from the database.

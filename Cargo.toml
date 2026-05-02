@@ -18,6 +18,7 @@ members = [
   "crates/test-macro",
   "crates/tracing",
   "crates/tracing-macro",
+  "crates/tracing-targets",
   "crates/utils",
   "crates/validator",
   "proto",
@@ -50,6 +51,7 @@ miden-node-store                = { path = "crates/store", version = "0.14" }
 miden-node-test-macro           = { path = "crates/test-macro" }
 miden-node-tracing              = { path = "crates/tracing", version = "0.14" }
 miden-node-tracing-macro        = { path = "crates/tracing-macro", version = "0.14" }
+miden-node-tracing-targets      = { path = "crates/tracing-targets", version = "0.14" }
 miden-node-utils                = { path = "crates/utils", version = "0.14" }
 miden-node-validator            = { path = "crates/validator", version = "0.14" }
 miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.14" }
@@ -104,6 +106,7 @@ rand_chacha           = { default-features = false, version = "0.9" }
 reqwest               = { version = "0.13" }
 rstest                = { version = "0.26" }
 serde                 = { features = ["derive"], version = "1" }
+strum                 = { features = ["derive"], version = "0.27" }
 tempfile              = { version = "3.12" }
 thiserror             = { default-features = false, version = "2.0" }
 tokio                 = { features = ["rt-multi-thread"], version = "1.46" }
@@ -118,7 +121,9 @@ tonic-reflection      = { version = "0.14" }
 tower                 = { version = "0.5" }
 tower-http            = { features = ["cors", "trace"], version = "0.6" }
 tracing               = { version = "0.1" }
+tracing-error         = { version = "0.2" }
 tracing-opentelemetry = { version = "0.32" }
+tracing-panic         = { version = "0.1" }
 tracing-subscriber    = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 url                   = { features = ["serde"], version = "2.5" }
 

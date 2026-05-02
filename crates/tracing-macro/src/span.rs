@@ -41,7 +41,13 @@ fn expand_span(input: TokenStream, macro_name: &str, level: TelemetryLevel) -> T
         {
             #submit_metadata
             let __miden_node_tracing_span = ::miden_node_tracing::Span::__from_tracing_span(
-                ::miden_node_tracing::__private::tracing::#macro_name!(target: #target, #name)
+                ::miden_node_tracing::__private::tracing::#macro_name!(
+                    target: #target,
+                    #name,
+                    miden.user.fields = ::miden_node_tracing::__private::tracing::field::Empty,
+                    miden.user = ::miden_node_tracing::__private::tracing::field::Empty,
+                    miden.error = ::miden_node_tracing::__private::tracing::field::Empty
+                )
             );
             __miden_node_tracing_span.__record_metadata(#target, #level_name);
             #mark_user_span

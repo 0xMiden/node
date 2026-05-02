@@ -53,6 +53,9 @@ impl TracingConfig {
 pub struct TracingHandle {
     otel_filter: DynamicFilter,
     user_log_filter: DynamicFilter,
+    error_layer_filter: DynamicFilter,
+    active_span_filter: DynamicFilter,
+    user_active_span_filter: DynamicFilter,
     guard: TracingGuard,
 }
 
@@ -64,7 +67,8 @@ impl TracingHandle {
 
     /// Replaces the OTLP/gRPC trace exporter filter.
     pub fn set_otel_filter(&self, filter: impl Into<String>) -> Result<(), FilterError> {
-        self.otel_filter.set(filter)
+        self.otel_filter.set(filter)?;
+        self.reload_plumbing_filters()
     }
 
     /// Returns the current user-facing stdout exporter filter.
@@ -74,7 +78,8 @@ impl TracingHandle {
 
     /// Replaces the user-facing stdout exporter filter.
     pub fn set_user_filter(&self, filter: impl Into<String>) -> Result<(), FilterError> {
-        self.user_log_filter.set(filter)
+        self.user_log_filter.set(filter)?;
+        self.reload_plumbing_filters()
     }
 
     /// Flushes pending spans from both installed exporters.
@@ -89,6 +94,13 @@ impl TracingHandle {
     pub fn shutdown(mut self) -> Result<(), ExportError> {
         self.guard.shutdown()
     }
+
+    fn reload_plumbing_filters(&self) -> Result<(), FilterError> {
+        self.error_layer_filter
+            .set(combined_filter(&self.otel_filter.get()?, &self.user_log_filter.get()?))?;
+        self.active_span_filter.set(self.otel_filter.get()?)?;
+        self.user_active_span_filter.set(self.user_log_filter.get()?)
+    }
 }
 
 impl std::fmt::Debug for TracingHandle {
@@ -101,16 +113,12 @@ impl std::fmt::Debug for TracingHandle {
 #[derive(Debug)]
 pub(crate) struct TracingGuard {
     otel_provider: Option<SdkTracerProvider>,
-    user_log_provider: Option<SdkTracerProvider>,
 }
 
 impl TracingGuard {
     fn force_flush(&self) -> Result<(), ExportError> {
         if let Some(provider) = &self.otel_provider {
             provider.force_flush().map_err(ExportError::OtelFlush)?;
-        }
-        if let Some(provider) = &self.user_log_provider {
-            provider.force_flush().map_err(ExportError::UserLogFlush)?;
         }
         Ok(())
     }
@@ -123,14 +131,6 @@ impl TracingGuard {
                 result = Err(ExportError::OtelShutdown(error));
             }
         }
-        if let Some(provider) = self.user_log_provider.take() {
-            if let Err(error) = provider.shutdown() {
-                if result.is_ok() {
-                    result = Err(ExportError::UserLogShutdown(error));
-                }
-            }
-        }
-
         result
     }
 }
@@ -160,25 +160,40 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
         service_name,
     } = config;
     let (otel_filter_layer, otel_filter) =
-        DynamicFilter::new(initial_otel_filter).map_err(InstallError::OtelFilter)?;
+        DynamicFilter::new(initial_otel_filter.clone()).map_err(InstallError::OtelFilter)?;
     let (user_log_filter_layer, user_log_filter) =
-        DynamicFilter::new(initial_user_log_filter).map_err(InstallError::UserLogFilter)?;
+        DynamicFilter::new(initial_user_log_filter.clone()).map_err(InstallError::UserLogFilter)?;
+    let plumbing_filter = combined_filter(&initial_otel_filter, &initial_user_log_filter);
+    let (error_layer_filter_layer, error_layer_filter) =
+        DynamicFilter::new(plumbing_filter).map_err(InstallError::PlumbingFilter)?;
+    let (active_span_filter_layer, active_span_filter) =
+        DynamicFilter::new(initial_otel_filter).map_err(InstallError::PlumbingFilter)?;
+    let (user_active_span_filter_layer, user_active_span_filter) =
+        DynamicFilter::new(initial_user_log_filter).map_err(InstallError::PlumbingFilter)?;
 
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
     let otel_provider = otel::grpc_trace_provider(otel_endpoint, service_name)?;
-    let user_log_provider = stdout::trace_provider();
-
     let trace_layer = tracing_opentelemetry::layer()
         .with_tracer(otel_provider.tracer("miden-node-tracing-otlp"))
-        .with_filter(internal::with_control_plane_events(otel_filter_layer));
-    let user_log_layer = tracing_opentelemetry::layer()
-        .with_tracer(user_log_provider.tracer("miden-node-tracing-user-stdout"))
-        .with_filter(internal::with_control_plane_events(user_log_filter_layer));
+        .with_filter(internal::without_user_log_events(internal::with_control_plane_events(
+            otel_filter_layer,
+        )));
+    let user_log_layer =
+        stdout::layer().with_filter(internal::with_control_plane_events(user_log_filter_layer));
     let control_plane_layer =
         internal::ControlPlaneEventLayer.with_filter(internal::OnlyControlPlaneEvents);
+    let error_layer = tracing_error::ErrorLayer::default()
+        .with_filter(internal::with_control_plane_events(error_layer_filter_layer));
+    let active_span_layer = internal::ActiveSpanLayer
+        .with_filter(internal::with_control_plane_events(active_span_filter_layer));
+    let user_active_span_layer = internal::UserFacingActiveSpanLayer
+        .with_filter(internal::with_control_plane_events(user_active_span_filter_layer));
 
     let subscriber = tracing_subscriber::registry()
+        .with(error_layer)
+        .with(active_span_layer)
+        .with(user_active_span_layer)
         .with(control_plane_layer)
         .with(trace_layer)
         .with(user_log_layer);
@@ -189,11 +204,15 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
     Ok(TracingHandle {
         otel_filter,
         user_log_filter,
-        guard: TracingGuard {
-            otel_provider: Some(otel_provider),
-            user_log_provider: Some(user_log_provider),
-        },
+        error_layer_filter,
+        active_span_filter,
+        user_active_span_filter,
+        guard: TracingGuard { otel_provider: Some(otel_provider) },
     })
+}
+
+fn combined_filter(first: &str, second: &str) -> String {
+    format!("{first},{second}")
 }
 
 /// Error returned while flushing or shutting down installed exporters.
@@ -201,25 +220,15 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
 pub enum ExportError {
     /// The OTLP/gRPC exporter failed to flush.
     OtelFlush(OTelSdkError),
-    /// The user-facing stdout exporter failed to flush.
-    UserLogFlush(OTelSdkError),
     /// The OTLP/gRPC exporter failed to shut down.
     OtelShutdown(OTelSdkError),
-    /// The user-facing stdout exporter failed to shut down.
-    UserLogShutdown(OTelSdkError),
 }
 
 impl std::fmt::Display for ExportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OtelFlush(error) => write!(f, "failed to flush OTLP exporter: {error}"),
-            Self::UserLogFlush(error) => {
-                write!(f, "failed to flush user-facing stdout exporter: {error}")
-            },
             Self::OtelShutdown(error) => write!(f, "failed to shut down OTLP exporter: {error}"),
-            Self::UserLogShutdown(error) => {
-                write!(f, "failed to shut down user-facing stdout exporter: {error}")
-            },
         }
     }
 }
@@ -227,10 +236,7 @@ impl std::fmt::Display for ExportError {
 impl std::error::Error for ExportError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::OtelFlush(error)
-            | Self::UserLogFlush(error)
-            | Self::OtelShutdown(error)
-            | Self::UserLogShutdown(error) => Some(error),
+            Self::OtelFlush(error) | Self::OtelShutdown(error) => Some(error),
         }
     }
 }
@@ -242,6 +248,8 @@ pub enum InstallError {
     OtelFilter(FilterError),
     /// The initial user-facing stdout filter was invalid.
     UserLogFilter(FilterError),
+    /// The internal plumbing filter derived from exporter filters was invalid.
+    PlumbingFilter(FilterError),
     /// The OTLP/gRPC exporter could not be constructed.
     OtlpExporter(opentelemetry_otlp::ExporterBuildError),
     /// A global tracing subscriber was already installed.
@@ -253,6 +261,7 @@ impl std::fmt::Display for InstallError {
         match self {
             Self::OtelFilter(error) => write!(f, "invalid OTLP trace filter: {error}"),
             Self::UserLogFilter(error) => write!(f, "invalid user-facing stdout filter: {error}"),
+            Self::PlumbingFilter(error) => write!(f, "invalid tracing plumbing filter: {error}"),
             Self::OtlpExporter(error) => write!(f, "failed to build OTLP/gRPC exporter: {error}"),
             Self::SetGlobalDefault(error) => {
                 write!(f, "failed to install global tracing subscriber: {error}")
@@ -264,7 +273,9 @@ impl std::fmt::Display for InstallError {
 impl std::error::Error for InstallError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::OtelFilter(error) | Self::UserLogFilter(error) => Some(error),
+            Self::OtelFilter(error) | Self::UserLogFilter(error) | Self::PlumbingFilter(error) => {
+                Some(error)
+            },
             Self::OtlpExporter(error) => Some(error),
             Self::SetGlobalDefault(error) => Some(error),
         }
@@ -273,6 +284,9 @@ impl std::error::Error for InstallError {
 
 #[cfg(test)]
 mod tests {
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::prelude::*;
+
     use super::{DEFAULT_OTEL_FILTER, DEFAULT_USER_LOG_FILTER, TracingConfig};
 
     #[test]
@@ -301,19 +315,29 @@ mod tests {
 
     #[test]
     fn tracing_handle_exposes_filter_accessors() {
-        let (trace_layer, otel_filter) = crate::filter::DynamicFilter::new("info").unwrap();
-        let (user_layer, user_log_filter) = crate::filter::DynamicFilter::new("off").unwrap();
+        let (trace_layer, otel_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("info").unwrap();
+        let (user_layer, user_log_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("off").unwrap();
+        let (error_layer, error_layer_filter) =
+            crate::filter::DynamicFilter::new::<Registry>(super::combined_filter("info", "off"))
+                .unwrap();
+        let (active_layer, active_span_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("info").unwrap();
+        let (user_active_layer, user_active_span_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("off").unwrap();
         let handle = super::TracingHandle {
             otel_filter,
             user_log_filter,
+            error_layer_filter,
+            active_span_filter,
+            user_active_span_filter,
             guard: super::TracingGuard {
                 otel_provider: Some(opentelemetry_sdk::trace::SdkTracerProvider::builder().build()),
-                user_log_provider: Some(
-                    opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),
-                ),
             },
         };
-        let _keep_layers_alive = (trace_layer, user_layer);
+        let _keep_layers_alive =
+            (trace_layer, user_layer, error_layer, active_layer, user_active_layer);
 
         assert_eq!(handle.get_otel_filter().unwrap(), "info");
         assert_eq!(handle.get_user_filter().unwrap(), "off");
@@ -323,23 +347,72 @@ mod tests {
 
         assert_eq!(handle.get_otel_filter().unwrap(), "rpc=debug");
         assert_eq!(handle.get_user_filter().unwrap(), "warn");
+        assert_eq!(handle.error_layer_filter.get().unwrap(), "rpc=debug,warn");
+        assert_eq!(handle.active_span_filter.get().unwrap(), "rpc=debug");
+        assert_eq!(handle.user_active_span_filter.get().unwrap(), "warn");
+    }
+
+    #[test]
+    fn plumbing_layers_do_not_enable_miden_callsites_when_exporters_are_off() {
+        let (error_layer_filter, _error_filter) =
+            crate::filter::DynamicFilter::new(super::combined_filter("off", "off")).unwrap();
+        let (active_span_filter, _active_filter) =
+            crate::filter::DynamicFilter::new(super::combined_filter("off", "off")).unwrap();
+        let (user_active_span_filter, _user_active_filter) =
+            crate::filter::DynamicFilter::new("off").unwrap();
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_error::ErrorLayer::default()
+                    .with_filter(crate::internal::with_control_plane_events(error_layer_filter)),
+            )
+            .with(
+                crate::internal::ActiveSpanLayer
+                    .with_filter(crate::internal::with_control_plane_events(active_span_filter)),
+            )
+            .with(
+                crate::internal::UserFacingActiveSpanLayer.with_filter(
+                    crate::internal::with_control_plane_events(user_active_span_filter),
+                ),
+            )
+            .with(
+                crate::internal::ControlPlaneEventLayer
+                    .with_filter(crate::internal::OnlyControlPlaneEvents),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(!tracing::enabled!(target: "rpc", tracing::Level::INFO));
+            assert!(tracing::enabled!(
+                target: crate::internal::CONTROL_PLANE_TARGET,
+                tracing::Level::ERROR
+            ));
+        });
     }
 
     #[test]
     fn tracing_handle_can_flush_and_shutdown_exporters() {
-        let (trace_layer, otel_filter) = crate::filter::DynamicFilter::new("info").unwrap();
-        let (user_layer, user_log_filter) = crate::filter::DynamicFilter::new("off").unwrap();
+        let (trace_layer, otel_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("info").unwrap();
+        let (user_layer, user_log_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("off").unwrap();
+        let (error_layer, error_layer_filter) =
+            crate::filter::DynamicFilter::new::<Registry>(super::combined_filter("info", "off"))
+                .unwrap();
+        let (active_layer, active_span_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("info").unwrap();
+        let (user_active_layer, user_active_span_filter) =
+            crate::filter::DynamicFilter::new::<Registry>("off").unwrap();
         let handle = super::TracingHandle {
             otel_filter,
             user_log_filter,
+            error_layer_filter,
+            active_span_filter,
+            user_active_span_filter,
             guard: super::TracingGuard {
                 otel_provider: Some(opentelemetry_sdk::trace::SdkTracerProvider::builder().build()),
-                user_log_provider: Some(
-                    opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),
-                ),
             },
         };
-        let _keep_layers_alive = (trace_layer, user_layer);
+        let _keep_layers_alive =
+            (trace_layer, user_layer, error_layer, active_layer, user_active_layer);
 
         handle.force_flush().unwrap();
         handle.shutdown().unwrap();

@@ -3434,12 +3434,15 @@ version = "0.14.10"
 dependencies = [
  "inventory",
  "miden-node-tracing-macro",
+ "miden-node-tracing-targets",
  "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "tracing",
+ "tracing-error",
  "tracing-opentelemetry",
+ "tracing-panic",
  "tracing-subscriber",
 ]
 
@@ -3447,10 +3450,18 @@ dependencies = [
 name = "miden-node-tracing-macro"
 version = "0.14.10"
 dependencies = [
+ "miden-node-tracing-targets",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
  "trybuild",
+]
+
+[[package]]
+name = "miden-node-tracing-targets"
+version = "0.14.10"
+dependencies = [
+ "strum",
 ]
 
 [[package]]
@@ -5954,6 +5965,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6631,6 +6663,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-error"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b1581020d7a273442f5b45074a6a57d5757ad0a47dac0e9f0bd57b81936f3db"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-forest"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6668,6 +6710,16 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "web-time",
+]
+
+[[package]]
+name = "tracing-panic"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bf1298a179837099f9309243af3b554e840f7f67f65e9f55294913299bd4cc5"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

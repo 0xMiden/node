@@ -58,6 +58,13 @@ impl Drop for OtelGuard {
 /// Returns an [`OtelGuard`] if open-telemetry is enabled, otherwise `None`. When this guard is
 /// dropped, the tracer provider is shutdown.
 pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
+    if tracing::dispatcher::has_been_set() {
+        if otel.is_enabled() {
+            anyhow::bail!("tracing is already initialized; cannot install OpenTelemetry exporter");
+        }
+        return Ok(None);
+    }
+
     if otel.is_enabled() {
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     }

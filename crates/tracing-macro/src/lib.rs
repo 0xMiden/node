@@ -13,7 +13,7 @@ mod user;
 ///
 /// This is a restricted wrapper around [`tracing::instrument`]. It always applies `skip_all`,
 /// requires a target from the Miden target allowlist, rejects `fields`, `skip`, `skip_all`, and
-/// `err`, and records returned errors on the current span.
+/// records returned errors on the current span.
 ///
 /// Supported arguments:
 ///
@@ -22,6 +22,12 @@ mod user;
 /// - level, required. The value must be one of `trace`, `debug`, `info`, `warn`, or `error`.
 /// - `user`, optional. Marks the span for user-facing logs and registers it in the user-facing
 ///   metadata catalog.
+/// - `err`, optional. Forces returned-error recording for return types that are aliases around
+///   `Result`, such as `type StoreResult<T> = Result<T, StoreError>`.
+///
+/// Returned errors are recorded automatically when the return type is written directly as
+/// `Result<_, _>`. Rust procedural macros cannot resolve type aliases, so aliased result types
+/// must use the explicit `err` marker.
 ///
 /// The function's doc comments are also registered as the span metadata description. Function
 /// arguments are never recorded automatically; record typed fields or objects explicitly inside the
@@ -33,10 +39,10 @@ mod user;
 /// use miden_node_tracing::{Span, instrument};
 ///
 /// /// Loads a block header from the store database.
-/// #[instrument(store::database, "store::get_block_header", debug)]
+/// #[instrument(store::database, "store::get_block_header", debug, err)]
 /// async fn get_block_header(
 ///     block_num: miden_protocol::block::BlockNumber,
-/// ) -> Result<(), anyhow::Error> {
+/// ) -> StoreResult<()> {
 ///     Span::current().record_field(&block_num);
 ///
 ///     // Returning `Err` records the error on the current span.

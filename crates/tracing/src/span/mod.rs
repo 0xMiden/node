@@ -2,10 +2,10 @@ mod error;
 
 use std::error::Error;
 
-use opentelemetry::Key;
 use opentelemetry::trace::Status;
+use opentelemetry::{Key, KeyValue};
 
-use crate::event::{OpenTelemetryEventRecorder, SpanAttributeSink, record_event_on_span};
+use crate::event::{SpanAttributeSink, record_event_on_span};
 use crate::{OpenTelemetryField, OpenTelemetryObject, OpenTelemetryObjectRecorder};
 
 /// A tracing span with Miden OpenTelemetry recording helpers.
@@ -40,6 +40,7 @@ impl Span {
     /// high-volume internal tracing spans do not leak into local stdout output.
     #[doc(hidden)]
     pub fn __mark_user_facing(&self) {
+        self.0.record(crate::user::ATTRIBUTE_KEY, true);
         tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
             &self.0,
             crate::user::ATTRIBUTE_KEY,
@@ -88,11 +89,9 @@ impl Span {
     where
         F: OpenTelemetryField + ?Sized,
     {
-        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
-            &self.0,
-            key,
-            field.to_otel_value(),
-        );
+        let key: Key = key.into();
+        let value = field.to_otel_value();
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(&self.0, key, value);
     }
 
     /// Records `field` as both an OpenTelemetry attribute and a user-facing log field.
@@ -112,7 +111,10 @@ impl Span {
     where
         F: OpenTelemetryField + ?Sized,
     {
-        self.record_field_as(field, crate::user::field_key(key));
+        let key = crate::user::field_key(key);
+        let value = field.to_otel_value();
+        crate::internal::record_user_field_bridge(&self.0, &key, &value);
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(&self.0, key, value);
     }
 
     /// Records `object` using its default key prefix.
@@ -141,9 +143,9 @@ impl Span {
     pub fn __record_event(
         &self,
         name: impl Into<std::borrow::Cow<'static, str>>,
-        recorder: OpenTelemetryEventRecorder,
+        attributes: Vec<KeyValue>,
     ) {
-        record_event_on_span(&self.0, name, recorder);
+        record_event_on_span(&self.0, name, attributes);
     }
 
     /// Records `error` on this span by setting the span status to error.
@@ -154,11 +156,21 @@ impl Span {
     where
         E: Error + ?Sized,
     {
+        let report = error::error_report(error);
+        self.0.record("miden.error", tracing::field::display(&report));
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
+            &self.0,
+            "error.report",
+            report.clone(),
+        );
+        tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
+            &self.0,
+            "error.span_trace",
+            tracing_error::SpanTrace::capture().to_string(),
+        );
         tracing_opentelemetry::OpenTelemetrySpanExt::set_status(
             &self.0,
-            Status::Error {
-                description: error::error_report(error).into(),
-            },
+            Status::Error { description: report.into() },
         );
     }
 }
@@ -284,10 +296,22 @@ mod tests {
         Err(TestError { source: SourceError })
     }
 
+    type TestResult<T> = Result<T, TestError>;
+
+    #[crate::instrument(rpc, "instrumented_alias_error", info, err)]
+    fn instrumented_alias_error() -> TestResult<()> {
+        Err(TestError { source: SourceError })
+    }
+
     #[crate::instrument(rpc, "instrumented_ok", info)]
     fn instrumented_ok(value: u32) -> Result<(), TestError> {
         let _ = value;
         Ok(())
+    }
+
+    #[crate::instrument(rpc, "instrumented_infallible", info)]
+    fn instrumented_infallible() -> u32 {
+        42
     }
 
     #[crate::instrument(rpc, "instrumented_user", info, user)]
@@ -298,6 +322,17 @@ mod tests {
     #[crate::instrument(store::database, "instrumented_async_error", info)]
     async fn instrumented_async_error(value: u32) -> Result<(), TestError> {
         let _ = value;
+        Err(TestError { source: SourceError })
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        target = "rpc",
+        name = "native_instrumented_error",
+        level = "info",
+        err
+    )]
+    fn native_instrumented_error() -> Result<(), TestError> {
         Err(TestError { source: SourceError })
     }
 
@@ -353,6 +388,28 @@ mod tests {
     }
 
     #[test]
+    fn instrument_macro_supports_infallible_functions() {
+        let spans = exported_spans(|| {
+            assert_eq!(instrumented_infallible(), 42);
+        });
+        let span = exported_span_by_name(&spans, "instrumented_infallible");
+
+        assert_eq!(span.status, Status::Unset);
+    }
+
+    #[test]
+    fn native_instrument_err_uses_top_level_error_and_emits_an_event() {
+        let spans = exported_spans(|| {
+            assert!(native_instrumented_error().is_err());
+        });
+        let span = exported_span_by_name(&spans, "native_instrumented_error");
+
+        assert_eq!(span.status, Status::Error { description: "parent error".into() });
+        assert_eq!(span.events.events.len(), 1);
+        assert_eq!(span.events.events[0].name, "exception");
+    }
+
+    #[test]
     fn span_macro_creates_recordable_span() {
         let spans = exported_spans(|| {
             let span = crate::info_span!(rpc, "manual_span");
@@ -393,6 +450,7 @@ mod tests {
         instrumented_user().unwrap();
 
         assert_registered_span("rpc", SpanLevel::Info, "instrumented_error");
+        assert_registered_span("rpc", SpanLevel::Info, "instrumented_alias_error");
         assert_registered_span("rpc", SpanLevel::Info, "instrumented_user");
         assert_registered_span("store::database", SpanLevel::Info, "instrumented_async_error");
         assert_registered_span("rpc", SpanLevel::Debug, "instrumented_method");
@@ -435,6 +493,23 @@ mod tests {
         assert_attribute(span, "target", "rpc");
         assert_attribute(span, "level", "INFO");
         assert!(!span.attributes.iter().any(|attribute| attribute.key.as_str() == "error.type"));
+        assert!(span.events.events.is_empty());
+    }
+
+    #[test]
+    fn instrument_macro_records_alias_returned_errors_with_err_marker() {
+        let spans = exported_spans(|| {
+            let result = instrumented_alias_error();
+            assert!(result.is_err());
+        });
+        let span = exported_span_by_name(&spans, "instrumented_alias_error");
+
+        assert_eq!(
+            span.status,
+            Status::Error {
+                description: "parent error\ncaused by: source error".into(),
+            }
+        );
         assert!(span.events.events.is_empty());
     }
 

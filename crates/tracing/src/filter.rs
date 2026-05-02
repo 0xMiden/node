@@ -1,47 +1,52 @@
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
+use miden_node_tracing_targets::{allowed_targets_list, is_allowed_application_target};
 use tracing_subscriber::filter::ParseError;
 use tracing_subscriber::layer::{Context, Filter};
-use tracing_subscriber::{EnvFilter, Layer, Registry};
+use tracing_subscriber::{EnvFilter, Layer, Registry, reload};
 
 use crate::internal;
 
 /// Default filter used when callers do not provide an initial exporter filter.
 pub(crate) const DEFAULT_FILTER: &str = "info";
 
-const ALLOWED_TARGETS: &[&str] = &[
-    "rpc",
-    "validator::database",
-    "store::database",
-    "store::forest",
-    "store::grpc::server::rpc",
-    "store::grpc::server::ntx",
-    "store::grpc::server::sequencer",
-    "sequencer::batch_builder",
-    "sequencer::block_builder",
-    "sequencer::mempool",
-    "ntxb::coordinator",
-    "ntxb::actor",
-    "ntxb::database",
-];
-
 /// A dynamic tracing filter layer which only enables Miden targets.
-#[derive(Debug)]
-pub(crate) struct DynamicFilterLayer {
-    inner: Arc<RwLock<EnvFilter>>,
-}
+pub(crate) type DynamicFilterLayer<S> = reload::Layer<ApplicationFilter, S>;
 
 /// Handle for reading and replacing a dynamic tracing filter at runtime.
-#[derive(Debug)]
 pub(crate) struct DynamicFilter {
-    inner: Arc<RwLock<EnvFilter>>,
+    handle: Box<dyn ReloadApplicationFilter + Send + Sync>,
     current: Arc<RwLock<String>>,
+}
+
+impl std::fmt::Debug for DynamicFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicFilter").finish_non_exhaustive()
+    }
+}
+
+/// Filter applied to Miden application targets before delegating to `EnvFilter`.
+#[derive(Debug)]
+pub(crate) struct ApplicationFilter {
+    inner: EnvFilter,
+}
+
+impl ApplicationFilter {
+    fn new(filter: &str) -> Result<Self, FilterError> {
+        let inner = EnvFilter::from_str(filter)
+            .map_err(|source| FilterError::Parse { filter: filter.to_owned(), source })?;
+        validate_filter(filter)?;
+
+        Ok(Self { inner })
+    }
 }
 
 impl DynamicFilter {
     /// Creates a dynamic filter initialized from `filter`.
-    pub fn new(filter: impl Into<String>) -> Result<(DynamicFilterLayer, Self), FilterError> {
+    pub fn new<S: 'static>(
+        filter: impl Into<String>,
+    ) -> Result<(DynamicFilterLayer<S>, Self), FilterError> {
         new(filter)
     }
 
@@ -58,23 +63,12 @@ impl DynamicFilter {
     /// The current filter string is updated only after `filter` parses successfully.
     pub fn set(&self, filter: impl Into<String>) -> Result<(), FilterError> {
         let filter = filter.into();
-        let env_filter = parse_filter(&filter)?;
+        let application_filter = ApplicationFilter::new(&filter)?;
 
-        self.set_inner(env_filter);
+        self.handle.reload(application_filter).map_err(FilterError::Reload)?;
         self.set_current(filter);
 
         Ok(())
-    }
-
-    fn set_inner(&self, filter: EnvFilter) {
-        let mut current = match self.inner.write() {
-            Ok(current) => current,
-            Err(poisoned) => {
-                self.inner.clear_poison();
-                poisoned.into_inner()
-            },
-        };
-        *current = filter;
     }
 
     fn set_current(&self, filter: String) {
@@ -92,55 +86,44 @@ impl DynamicFilter {
 impl Clone for DynamicFilter {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            handle: self.handle.clone_box(),
             current: self.current.clone(),
         }
     }
 }
 
-impl DynamicFilterLayer {
-    fn with_inner<T>(&self, read: impl FnOnce(&EnvFilter) -> T) -> T {
-        match self.inner.read() {
-            Ok(filter) => read(&filter),
-            Err(poisoned) => {
-                self.inner.clear_poison();
-                let filter = poisoned.into_inner();
-                read(&filter)
-            },
-        }
+trait ReloadApplicationFilter {
+    fn reload(&self, filter: ApplicationFilter) -> Result<(), reload::Error>;
+    fn clone_box(&self) -> Box<dyn ReloadApplicationFilter + Send + Sync>;
+}
+
+impl<S> ReloadApplicationFilter for reload::Handle<ApplicationFilter, S>
+where
+    S: 'static,
+{
+    fn reload(&self, filter: ApplicationFilter) -> Result<(), reload::Error> {
+        reload::Handle::reload(self, filter)
     }
 
-    fn with_inner_mut<T>(&self, write: impl FnOnce(&mut EnvFilter) -> T) -> T {
-        match self.inner.write() {
-            Ok(mut filter) => write(&mut filter),
-            Err(poisoned) => {
-                self.inner.clear_poison();
-                let mut filter = poisoned.into_inner();
-                write(&mut filter)
-            },
-        }
+    fn clone_box(&self) -> Box<dyn ReloadApplicationFilter + Send + Sync> {
+        Box::new(self.clone())
     }
 }
 
-fn new(filter: impl Into<String>) -> Result<(DynamicFilterLayer, DynamicFilter), FilterError> {
+fn new<S: 'static>(
+    filter: impl Into<String>,
+) -> Result<(DynamicFilterLayer<S>, DynamicFilter), FilterError> {
     let filter = filter.into();
-    let env_filter = parse_filter(&filter)?;
-    let inner = Arc::new(RwLock::new(env_filter));
+    let application_filter = ApplicationFilter::new(&filter)?;
+    let (layer, handle) = reload::Layer::new(application_filter);
 
     Ok((
-        DynamicFilterLayer { inner: inner.clone() },
+        layer,
         DynamicFilter {
-            inner,
+            handle: Box::new(handle),
             current: Arc::new(RwLock::new(filter)),
         },
     ))
-}
-
-fn parse_filter(filter: &str) -> Result<EnvFilter, FilterError> {
-    let env_filter = EnvFilter::from_str(filter)
-        .map_err(|source| FilterError::Parse { filter: filter.to_owned(), source })?;
-    validate_filter(filter)?;
-    Ok(env_filter)
 }
 
 fn validate_filter(filter: &str) -> Result<(), FilterError> {
@@ -156,7 +139,7 @@ fn validate_filter(filter: &str) -> Result<(), FilterError> {
             continue;
         };
 
-        if !is_allowed_target_filter(target) {
+        if !miden_node_tracing_targets::is_allowed_target_filter(target) {
             return Err(FilterError::UnsupportedTarget(target.to_owned()));
         }
     }
@@ -177,29 +160,6 @@ fn directive_target(directive: &str) -> Option<&str> {
 
 fn is_level(value: &str) -> bool {
     matches!(value, "off" | "error" | "warn" | "info" | "debug" | "trace")
-}
-
-fn is_allowed_target_filter(target: &str) -> bool {
-    is_allowed_application_target(target)
-        || ALLOWED_TARGETS.iter().any(|allowed| {
-            allowed.strip_prefix(target).is_some_and(|suffix| suffix.starts_with("::"))
-        })
-}
-
-fn is_allowed_application_target(target: &str) -> bool {
-    ALLOWED_TARGETS.iter().any(|allowed| {
-        target == *allowed
-            || target.strip_prefix(allowed).is_some_and(|suffix| suffix.starts_with("::"))
-    })
-}
-
-fn allowed_targets() -> String {
-    let mut targets = String::new();
-    for target in ALLOWED_TARGETS {
-        targets.push_str("\n  - ");
-        targets.push_str(target);
-    }
-    targets
 }
 
 /// Error returned while creating, reading, or updating an exporter filter.
@@ -223,6 +183,8 @@ pub enum FilterError {
     },
     /// The stored current filter value is no longer readable.
     StatePoisoned,
+    /// The installed reload layer could not be updated.
+    Reload(reload::Error),
 }
 
 impl std::fmt::Display for FilterError {
@@ -235,7 +197,7 @@ impl std::fmt::Display for FilterError {
                 write!(
                     f,
                     "unsupported tracing target `{target}`; expected one of:{}",
-                    allowed_targets()
+                    allowed_targets_list()
                 )
             },
             Self::UnsupportedDirective { directive, reason } => {
@@ -244,6 +206,7 @@ impl std::fmt::Display for FilterError {
             Self::StatePoisoned => {
                 f.write_str("tracing filter state is poisoned; set the filter again to clear it")
             },
+            Self::Reload(error) => write!(f, "failed to reload tracing filter: {error}"),
         }
     }
 }
@@ -252,6 +215,7 @@ impl std::error::Error for FilterError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Parse { source, .. } => Some(source),
+            Self::Reload(source) => Some(source),
             Self::UnsupportedTarget(_)
             | Self::UnsupportedDirective { .. }
             | Self::StatePoisoned => None,
@@ -259,15 +223,15 @@ impl std::error::Error for FilterError {
     }
 }
 
-impl Layer<Registry> for DynamicFilterLayer {
+impl Layer<Registry> for ApplicationFilter {
     /// Forwards dispatch registration to the wrapped filter.
     fn on_register_dispatch(&self, subscriber: &tracing::Dispatch) {
-        self.with_inner(|inner| Layer::<Registry>::on_register_dispatch(inner, subscriber));
+        Layer::<Registry>::on_register_dispatch(&self.inner, subscriber);
     }
 
     /// Forwards layer installation to the wrapped filter.
     fn on_layer(&mut self, subscriber: &mut Registry) {
-        self.with_inner_mut(|inner| Layer::<Registry>::on_layer(inner, subscriber));
+        Layer::<Registry>::on_layer(&mut self.inner, subscriber);
     }
 
     /// Registers callsites for allowed application targets and control-plane plumbing.
@@ -282,7 +246,7 @@ impl Layer<Registry> for DynamicFilterLayer {
         if internal::is_control_plane_target(metadata.target()) {
             tracing::subscriber::Interest::always()
         } else if is_allowed_application_target(metadata.target()) {
-            self.with_inner(|inner| Layer::<Registry>::register_callsite(inner, metadata))
+            Layer::<Registry>::register_callsite(&self.inner, metadata)
         } else {
             tracing::subscriber::Interest::never()
         }
@@ -295,7 +259,7 @@ impl Layer<Registry> for DynamicFilterLayer {
     fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, Registry>) -> bool {
         internal::is_control_plane_target(metadata.target())
             || (is_allowed_application_target(metadata.target())
-                && self.with_inner(|inner| Layer::<Registry>::enabled(inner, metadata, ctx)))
+                && Layer::<Registry>::enabled(&self.inner, metadata, ctx))
     }
 
     /// Forwards span creation for allowed application targets.
@@ -310,7 +274,7 @@ impl Layer<Registry> for DynamicFilterLayer {
         ctx: Context<'_, Registry>,
     ) {
         if is_allowed_application_target(attrs.metadata().target()) {
-            self.with_inner(|inner| Layer::<Registry>::on_new_span(inner, attrs, id, ctx));
+            Layer::<Registry>::on_new_span(&self.inner, attrs, id, ctx);
         }
     }
 
@@ -321,7 +285,7 @@ impl Layer<Registry> for DynamicFilterLayer {
         values: &tracing::span::Record<'_>,
         ctx: Context<'_, Registry>,
     ) {
-        self.with_inner(|inner| Layer::<Registry>::on_record(inner, span, values, ctx));
+        Layer::<Registry>::on_record(&self.inner, span, values, ctx);
     }
 
     /// Forwards causal span relationships to the wrapped filter.
@@ -331,7 +295,7 @@ impl Layer<Registry> for DynamicFilterLayer {
         follows: &tracing::span::Id,
         ctx: Context<'_, Registry>,
     ) {
-        self.with_inner(|inner| Layer::<Registry>::on_follows_from(inner, span, follows, ctx));
+        Layer::<Registry>::on_follows_from(&self.inner, span, follows, ctx);
     }
 
     /// Applies event-level filtering while preserving control-plane delivery.
@@ -341,7 +305,7 @@ impl Layer<Registry> for DynamicFilterLayer {
     fn event_enabled(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) -> bool {
         internal::is_control_plane_target(event.metadata().target())
             || (is_allowed_application_target(event.metadata().target())
-                && self.with_inner(|inner| Layer::<Registry>::event_enabled(inner, event, ctx)))
+                && Layer::<Registry>::event_enabled(&self.inner, event, ctx))
     }
 
     /// Forwards user-facing events to the wrapped filter.
@@ -350,23 +314,23 @@ impl Layer<Registry> for DynamicFilterLayer {
     /// consumed by crate-owned layers and filtered from normal output/export layers.
     fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) {
         if is_allowed_application_target(event.metadata().target()) {
-            self.with_inner(|inner| Layer::<Registry>::on_event(inner, event, ctx));
+            Layer::<Registry>::on_event(&self.inner, event, ctx);
         }
     }
 
     /// Forwards span enter notifications to the wrapped filter.
     fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, Registry>) {
-        self.with_inner(|inner| Layer::<Registry>::on_enter(inner, id, ctx));
+        Layer::<Registry>::on_enter(&self.inner, id, ctx);
     }
 
     /// Forwards span exit notifications to the wrapped filter.
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, Registry>) {
-        self.with_inner(|inner| Layer::<Registry>::on_exit(inner, id, ctx));
+        Layer::<Registry>::on_exit(&self.inner, id, ctx);
     }
 
     /// Forwards span close notifications to the wrapped filter.
     fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, Registry>) {
-        self.with_inner(|inner| Layer::<Registry>::on_close(inner, id, ctx));
+        Layer::<Registry>::on_close(&self.inner, id, ctx);
     }
 
     /// Forwards span id changes to the wrapped filter.
@@ -376,7 +340,7 @@ impl Layer<Registry> for DynamicFilterLayer {
         new: &tracing::span::Id,
         ctx: Context<'_, Registry>,
     ) {
-        self.with_inner(|inner| Layer::<Registry>::on_id_change(inner, old, new, ctx));
+        Layer::<Registry>::on_id_change(&self.inner, old, new, ctx);
     }
 
     /// Avoids a restrictive global level hint.
@@ -389,7 +353,7 @@ impl Layer<Registry> for DynamicFilterLayer {
     }
 }
 
-impl<S> Filter<S> for DynamicFilterLayer
+impl<S> Filter<S> for ApplicationFilter
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
@@ -402,7 +366,7 @@ where
         metadata: &'static tracing::Metadata<'static>,
     ) -> tracing::subscriber::Interest {
         if is_allowed_application_target(metadata.target()) {
-            self.with_inner(|inner| Filter::<S>::callsite_enabled(inner, metadata))
+            Filter::<S>::callsite_enabled(&self.inner, metadata)
         } else {
             tracing::subscriber::Interest::never()
         }
@@ -411,7 +375,7 @@ where
     /// Applies the filter only to Miden application targets.
     fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: &Context<'_, S>) -> bool {
         is_allowed_application_target(metadata.target())
-            && self.with_inner(|inner| Filter::<S>::enabled(inner, metadata, ctx))
+            && Filter::<S>::enabled(&self.inner, metadata, ctx)
     }
 
     /// Forwards span creation so span-name filters such as `[rpc::get_block]=debug` work.
@@ -422,7 +386,7 @@ where
         ctx: Context<'_, S>,
     ) {
         if is_allowed_application_target(attrs.metadata().target()) {
-            self.with_inner(|inner| Filter::<S>::on_new_span(inner, attrs, id, ctx));
+            Filter::<S>::on_new_span(&self.inner, attrs, id, ctx);
         }
     }
 
@@ -433,28 +397,28 @@ where
         values: &tracing::span::Record<'_>,
         ctx: Context<'_, S>,
     ) {
-        self.with_inner(|inner| Filter::<S>::on_record(inner, span, values, ctx));
+        Filter::<S>::on_record(&self.inner, span, values, ctx);
     }
 
     /// Forwards span enter notifications for filters that need span stack context.
     fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
-        self.with_inner(|inner| Filter::<S>::on_enter(inner, id, ctx));
+        Filter::<S>::on_enter(&self.inner, id, ctx);
     }
 
     /// Forwards span exit notifications for filters that need span stack context.
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
-        self.with_inner(|inner| Filter::<S>::on_exit(inner, id, ctx));
+        Filter::<S>::on_exit(&self.inner, id, ctx);
     }
 
     /// Forwards span close notifications so filter state is cleaned up.
     fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
-        self.with_inner(|inner| Filter::<S>::on_close(inner, id, ctx));
+        Filter::<S>::on_close(&self.inner, id, ctx);
     }
 
     /// Applies event-level filtering while preserving the application target gate.
     fn event_enabled(&self, event: &tracing::Event<'_>, ctx: &Context<'_, S>) -> bool {
         is_allowed_application_target(event.metadata().target())
-            && self.with_inner(|inner| Filter::<S>::event_enabled(inner, event, ctx))
+            && Filter::<S>::event_enabled(&self.inner, event, ctx)
     }
 }
 
@@ -463,15 +427,21 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use tracing::subscriber::with_default;
-    use tracing_subscriber::Layer;
     use tracing_subscriber::layer::Context;
     use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{Layer, Registry};
 
     use super::{DEFAULT_FILTER, DynamicFilter, FilterError, is_allowed_application_target};
 
+    fn new_registry_filter(
+        filter: &str,
+    ) -> Result<(super::DynamicFilterLayer<Registry>, DynamicFilter), FilterError> {
+        DynamicFilter::new::<Registry>(filter)
+    }
+
     #[test]
     fn dynamic_filter_tracks_current_value() {
-        let (_layer, filter) = DynamicFilter::new("info").unwrap();
+        let (_layer, filter) = new_registry_filter("info").unwrap();
 
         assert_eq!(filter.get().unwrap(), "info");
         filter.set("store=debug").unwrap();
@@ -480,7 +450,7 @@ mod tests {
 
     #[test]
     fn dynamic_filter_preserves_current_value_when_parse_fails() {
-        let (_layer, filter) = DynamicFilter::new("info").unwrap();
+        let (_layer, filter) = new_registry_filter("info").unwrap();
 
         assert!(filter.set(",!").is_err());
         assert_eq!(filter.get().unwrap(), "info");
@@ -488,7 +458,7 @@ mod tests {
 
     #[test]
     fn dynamic_filter_set_recovers_poisoned_current_value() {
-        let (_layer, filter) = DynamicFilter::new("info").unwrap();
+        let (_layer, filter) = new_registry_filter("info").unwrap();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _current = filter.current.write().unwrap();
             panic!("poison current filter value");
@@ -511,33 +481,34 @@ mod tests {
 
     #[test]
     fn dynamic_filter_default_parses() {
-        let (_layer, filter) = DynamicFilter::new(DEFAULT_FILTER).unwrap();
+        let (_layer, filter) = new_registry_filter(DEFAULT_FILTER).unwrap();
 
         assert_eq!(filter.get().unwrap(), DEFAULT_FILTER);
     }
 
     #[test]
     fn dynamic_filter_rejects_third_party_targets() {
-        let err = DynamicFilter::new("axum::rejection=trace").unwrap_err();
+        let err = DynamicFilter::new::<Registry>("axum::rejection=trace").unwrap_err();
 
         assert!(matches!(err, FilterError::UnsupportedTarget(_)));
     }
 
     #[test]
     fn dynamic_filter_rejects_field_filters() {
-        let err = DynamicFilter::new("[rpc::get_block{request.id=1}]=debug").unwrap_err();
+        let err =
+            DynamicFilter::new::<Registry>("[rpc::get_block{request.id=1}]=debug").unwrap_err();
 
         assert!(matches!(err, FilterError::UnsupportedDirective { .. }));
     }
 
     #[test]
     fn dynamic_filter_allows_target_namespaces() {
-        DynamicFilter::new("store=debug,store::grpc::server=trace").unwrap();
+        new_registry_filter("store=debug,store::grpc::server=trace").unwrap();
     }
 
     #[test]
     fn dynamic_filter_allows_span_filters() {
-        DynamicFilter::new("[rpc::get_block]=debug").unwrap();
+        new_registry_filter("[rpc::get_block]=debug").unwrap();
     }
 
     #[test]
@@ -579,6 +550,23 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_filter_wrapper_preserves_span_filters() {
+        let (filter, _handle) = DynamicFilter::new("[rpc::get_block]=debug").unwrap();
+        let capture = CaptureLayer::default();
+        let captured = capture.captured.clone();
+        let subscriber = tracing_subscriber::registry()
+            .with(capture.with_filter(crate::internal::with_control_plane_events(filter)));
+
+        with_default(subscriber, || {
+            let _span = tracing::info_span!(target: "rpc", "rpc::get_block").entered();
+            tracing::debug!(target: "store::database", "own child");
+            tracing::debug!(target: "h2", "dependency child");
+        });
+
+        assert_eq!(*captured.lock().unwrap(), vec!["store::database"]);
+    }
+
+    #[test]
     fn control_plane_target_bypasses_dynamic_filter() {
         let (layer, _filter) = DynamicFilter::new("off").unwrap();
         let capture = CaptureLayer::default();
@@ -596,6 +584,43 @@ mod tests {
         });
 
         assert_eq!(*captured.lock().unwrap(), vec![crate::internal::CONTROL_PLANE_TARGET]);
+    }
+
+    #[test]
+    fn dynamic_filter_set_enables_previously_disabled_callsites() {
+        let (layer, filter) = DynamicFilter::new("info").unwrap();
+        let capture = CaptureLayer::default();
+        let captured = capture.captured.clone();
+        let subscriber = tracing_subscriber::registry().with(layer).with(capture);
+
+        with_default(subscriber, || {
+            debug_rpc_callsite();
+            filter.set("rpc=debug").unwrap();
+            debug_rpc_callsite();
+        });
+
+        assert_eq!(*captured.lock().unwrap(), vec!["rpc"]);
+    }
+
+    #[test]
+    fn tracing_subscriber_reload_enables_previously_disabled_callsites() {
+        let (layer, handle) =
+            tracing_subscriber::reload::Layer::new(tracing_subscriber::EnvFilter::new("info"));
+        let capture = CaptureLayer::default();
+        let captured = capture.captured.clone();
+        let subscriber = tracing_subscriber::registry().with(layer).with(capture);
+
+        with_default(subscriber, || {
+            debug_rpc_callsite();
+            handle.reload(tracing_subscriber::EnvFilter::new("rpc=debug")).unwrap();
+            debug_rpc_callsite();
+        });
+
+        assert_eq!(*captured.lock().unwrap(), vec!["rpc"]);
+    }
+
+    fn debug_rpc_callsite() {
+        tracing::debug!(target: "rpc", "runtime enabled");
     }
 
     #[test]

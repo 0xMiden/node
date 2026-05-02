@@ -1,0 +1,18 @@
+[package]
+authors.workspace      = true
+description            = "Shared tracing target taxonomy for Miden node"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["miden", "node", "tracing"]
+license.workspace      = true
+name                   = "miden-node-tracing-targets"
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+strum = { workspace = true }
