@@ -8,67 +8,37 @@ use super::control_plane::{is_control_plane_event, is_control_plane_target};
 /// Field marker used for tracing events emitted only for local user-facing stdout.
 pub(crate) const USER_LOG_EVENT: &str = "miden.user.log";
 
-/// Per-layer filter which hides raw control-plane events from normal output/export layers.
-///
-/// This rejects events on the reserved control-plane target. Other records on the control-plane
-/// target, such as the `spanless_panic` fallback span, remain visible to the wrapped layer.
-#[cfg(test)]
+/// Per-layer filter which lets the control-plane layer read span scope and control-plane events.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct IgnoreControlPlaneEvents;
+pub(crate) struct ControlPlaneScope;
 
-#[cfg(test)]
-impl<S> Filter<S> for IgnoreControlPlaneEvents {
-    /// Returns `false` for raw control-plane events.
+impl<S> Filter<S> for ControlPlaneScope {
+    /// Returns `true` for spans that may appear in a control-plane event scope and for raw
+    /// control-plane events.
     ///
-    /// This filter is intended for normal output/export layers. It suppresses the control-plane
-    /// event itself while still allowing other records on the control-plane target, such as
-    /// fallback spans, to reach the wrapped layer.
+    /// This lets `ControlPlaneEventLayer` choose the panic parent with
+    /// `Context::event_scope` without treating ordinary application events as input.
     fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: &Context<'_, S>) -> bool {
-        !is_control_plane_event(metadata)
+        metadata.is_span() || is_control_plane_event(metadata)
     }
 
-    /// Enables callsite caching for the static control-plane event decision.
+    /// Enables span scope tracking and control-plane event delivery.
     ///
-    /// The reserved target and metadata kind are compile-time metadata, so the decision does not
-    /// need per-event context.
+    /// Ordinary application events return `never`, so this layer does not keep them enabled when
+    /// the exporters are off.
     fn callsite_enabled(
         &self,
         metadata: &'static tracing::Metadata<'static>,
     ) -> tracing::subscriber::Interest {
-        if is_control_plane_event(metadata) {
-            tracing::subscriber::Interest::never()
-        } else {
-            tracing::subscriber::Interest::always()
-        }
-    }
-}
-
-/// Per-layer filter which enables only control-plane events.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct OnlyControlPlaneEvents;
-
-impl<S> Filter<S> for OnlyControlPlaneEvents {
-    /// Returns `true` only for raw control-plane events.
-    ///
-    /// This is paired with `ControlPlaneEventLayer` so that the control-plane layer does not keep
-    /// ordinary application spans/events enabled by itself.
-    fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: &Context<'_, S>) -> bool {
-        is_control_plane_event(metadata)
-    }
-
-    /// Enables callsite caching for the static control-plane event decision.
-    ///
-    /// Returning `never` for all other callsites keeps the control-plane layer out of the hot path
-    /// for regular application telemetry.
-    fn callsite_enabled(
-        &self,
-        metadata: &'static tracing::Metadata<'static>,
-    ) -> tracing::subscriber::Interest {
-        if is_control_plane_event(metadata) {
+        if metadata.is_span() || is_control_plane_event(metadata) {
             tracing::subscriber::Interest::always()
         } else {
             tracing::subscriber::Interest::never()
         }
+    }
+
+    fn event_enabled(&self, event: &tracing::Event<'_>, _ctx: &Context<'_, S>) -> bool {
+        is_control_plane_event(event.metadata())
     }
 }
 
@@ -80,16 +50,6 @@ impl<S> Filter<S> for OnlyControlPlaneEvents {
 #[derive(Clone, Debug)]
 pub(crate) struct WithControlPlaneEvents<F> {
     inner: F,
-}
-
-impl<F> WithControlPlaneEvents<F> {
-    /// Creates a filter wrapper around `inner`.
-    ///
-    /// The wrapper preserves the caller's runtime filter for normal telemetry, but reserves a path
-    /// for crate-owned control-plane fallback records.
-    pub(crate) fn new(inner: F) -> Self {
-        Self { inner }
-    }
 }
 
 impl<S, F> Filter<S> for WithControlPlaneEvents<F>
@@ -186,19 +146,13 @@ where
 /// Subscriber/exporter construction should use this around user-controlled filters for layers that
 /// should see fallback control-plane spans but not raw control-plane events.
 pub(crate) fn with_control_plane_events<F>(filter: F) -> WithControlPlaneEvents<F> {
-    WithControlPlaneEvents::new(filter)
+    WithControlPlaneEvents { inner: filter }
 }
 
 /// Per-layer filter which hides synthetic user-facing stdout events from normal trace export.
 #[derive(Clone, Debug)]
 pub(crate) struct WithoutUserLogEvents<F> {
     inner: F,
-}
-
-impl<F> WithoutUserLogEvents<F> {
-    pub(crate) fn new(inner: F) -> Self {
-        Self { inner }
-    }
 }
 
 impl<S, F> Filter<S> for WithoutUserLogEvents<F>
@@ -256,7 +210,7 @@ where
 }
 
 pub(crate) fn without_user_log_events<F>(filter: F) -> WithoutUserLogEvents<F> {
-    WithoutUserLogEvents::new(filter)
+    WithoutUserLogEvents { inner: filter }
 }
 
 fn is_user_log_event(event: &tracing::Event<'_>) -> bool {

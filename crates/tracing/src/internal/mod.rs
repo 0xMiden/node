@@ -10,14 +10,10 @@ mod filters;
 mod panic;
 mod user_bridge;
 
-pub(crate) use active_span::{ActiveSpanLayer, UserFacingActiveSpanLayer};
+pub(crate) use active_span::ActiveSpanLayer;
 pub use active_span::{enter_current_span, track_current_span};
 pub(crate) use control_plane::ControlPlaneEventLayer;
-pub(crate) use filters::{
-    OnlyControlPlaneEvents,
-    with_control_plane_events,
-    without_user_log_events,
-};
+pub(crate) use filters::{ControlPlaneScope, with_control_plane_events, without_user_log_events};
 pub(crate) use panic::emit_panic;
 pub(crate) use user_bridge::record_user_field_bridge;
 
@@ -29,16 +25,7 @@ use self::active_span::enter_span;
 pub(crate) use self::control_plane::CONTROL_PLANE_TARGET;
 pub(crate) use self::control_plane::is_control_plane_target;
 #[cfg(test)]
-use self::control_plane::{
-    ControlPlaneEventFields,
-    SelectedSpanGuard,
-    TRACING_PANIC_TARGET,
-    u64_to_i64,
-};
-#[cfg(test)]
-use self::filters::IgnoreControlPlaneEvents;
-#[cfg(test)]
-use self::panic::exportable_or_active_span;
+use self::control_plane::{ControlPlaneEventFields, TRACING_PANIC_TARGET, u64_to_i64};
 
 #[cfg(test)]
 mod tests {
@@ -53,7 +40,7 @@ mod tests {
     use tracing::field::{Field, Visit};
     use tracing::subscriber::with_default;
     use tracing_subscriber::Layer;
-    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::layer::{Context, Filter};
     use tracing_subscriber::prelude::*;
 
     use super::{
@@ -61,23 +48,76 @@ mod tests {
         CONTROL_PLANE_TARGET,
         ControlPlaneEventFields,
         ControlPlaneEventLayer,
-        IgnoreControlPlaneEvents,
-        OnlyControlPlaneEvents,
-        SelectedSpanGuard,
+        ControlPlaneScope,
         TRACING_PANIC_TARGET,
         active_span,
         enter_span,
-        exportable_or_active_span,
         track_current_span,
     };
     use crate::test_utils::{TestExporter, assert_attribute};
 
+    #[derive(Clone, Copy, Debug, Default)]
+    struct IgnoreControlPlaneEvents;
+
+    impl<S> Filter<S> for IgnoreControlPlaneEvents {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: &Context<'_, S>) -> bool {
+            !is_raw_control_plane_event(metadata)
+        }
+
+        fn callsite_enabled(
+            &self,
+            metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            if is_raw_control_plane_event(metadata) {
+                tracing::subscriber::Interest::never()
+            } else {
+                tracing::subscriber::Interest::always()
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    struct InfoWithoutControlPlaneEvents;
+
+    impl<S> Filter<S> for InfoWithoutControlPlaneEvents {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: &Context<'_, S>) -> bool {
+            is_info_or_higher(metadata) && !is_raw_control_plane_event(metadata)
+        }
+
+        fn callsite_enabled(
+            &self,
+            metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            if is_info_or_higher(metadata) && !is_raw_control_plane_event(metadata) {
+                tracing::subscriber::Interest::always()
+            } else {
+                tracing::subscriber::Interest::never()
+            }
+        }
+
+        fn event_enabled(&self, event: &tracing::Event<'_>, ctx: &Context<'_, S>) -> bool {
+            self.enabled(event.metadata(), ctx)
+        }
+    }
+
+    fn is_info_or_higher(metadata: &tracing::Metadata<'_>) -> bool {
+        matches!(
+            *metadata.level(),
+            tracing::Level::ERROR | tracing::Level::WARN | tracing::Level::INFO
+        )
+    }
+
+    fn is_raw_control_plane_event(metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.is_event()
+            && (metadata.target() == CONTROL_PLANE_TARGET
+                || metadata.target() == TRACING_PANIC_TARGET)
+    }
+
     #[test]
     fn control_plane_layer_records_panic_fields_on_current_span() {
         let spans = exported_spans_with_control_plane_layer(|| {
-            let span = tracing::info_span!("panic_parent");
+            let span = tracing::info_span!(target: "rpc", "panic_parent");
             let _guard = span.enter();
-            let _selected_span = SelectedSpanGuard::new(span.clone());
 
             tracing::event!(
                 target: TRACING_PANIC_TARGET,
@@ -92,6 +132,35 @@ mod tests {
         assert_attribute(span, "panic.payload", "test panic");
         assert_attribute(span, "panic.location", "src/lib.rs:42:7");
         assert_eq!(span.status, Status::Error { description: "panic: test panic".into() });
+        assert!(
+            span.events.events.is_empty(),
+            "raw control-plane events must not be exported: {:?}",
+            span.events.events
+        );
+    }
+
+    #[test]
+    fn control_plane_layer_selects_panic_span_from_event_scope() {
+        let spans = exported_spans_with_control_plane_layer(|| {
+            let span = tracing::info_span!(target: "rpc", "event_scope_panic_parent");
+            let _guard = span.enter();
+
+            tracing::event!(
+                target: TRACING_PANIC_TARGET,
+                tracing::Level::ERROR,
+                panic.payload = "event scope panic",
+                "A panic occurred"
+            );
+        });
+        let span = span_by_name(&spans, "event_scope_panic_parent");
+
+        assert_attribute(span, "panic.payload", "event scope panic");
+        assert_eq!(
+            span.status,
+            Status::Error {
+                description: "panic: event scope panic".into()
+            }
+        );
         assert!(
             span.events.events.is_empty(),
             "raw control-plane events must not be exported: {:?}",
@@ -146,7 +215,8 @@ mod tests {
         let error_layer = ErrorRecordLayer::default();
         let captured = error_layer.error.clone();
         let subscriber = tracing_subscriber::registry()
-            .with(ControlPlaneEventLayer.with_filter(OnlyControlPlaneEvents))
+            .with(ActiveSpanLayer)
+            .with(ControlPlaneEventLayer.with_filter(ControlPlaneScope))
             .with(error_layer);
 
         with_default(subscriber, || {
@@ -156,7 +226,6 @@ mod tests {
                 miden.error = tracing::field::Empty
             );
             let _guard = span.enter();
-            let _selected_span = SelectedSpanGuard::new(span.clone());
 
             tracing::event!(
                 target: TRACING_PANIC_TARGET,
@@ -177,7 +246,6 @@ mod tests {
         let spans = exported_spans_with_control_plane_layer(|| {
             let span = tracing::error_span!(target: CONTROL_PLANE_TARGET, "spanless_panic");
             let _guard = span.enter();
-            let _selected_span = SelectedSpanGuard::new(span.clone());
             tracing::event!(
                 target: TRACING_PANIC_TARGET,
                 tracing::Level::ERROR,
@@ -197,12 +265,9 @@ mod tests {
         let spans = exported_spans_with_filter("info", || {
             let root = tracing::info_span!(target: "rpc", "panic_root");
             let _root_guard = root.enter();
-            let _active_root = enter_span(&root);
 
             let disabled_child = tracing::debug_span!(target: "rpc", "disabled_child");
             let _disabled_guard = disabled_child.enter();
-            let selected = active_span().unwrap_or_else(tracing::Span::current);
-            let _selected_span = SelectedSpanGuard::new(selected);
 
             tracing::event!(
                 target: TRACING_PANIC_TARGET,
@@ -221,6 +286,35 @@ mod tests {
             }
         );
         assert!(spans.iter().all(|span| span.name != "disabled_child"));
+        assert!(spans.iter().all(|span| span.name != "spanless_panic"));
+    }
+
+    #[test]
+    fn control_plane_layer_skips_scope_child_filtered_from_exporters() {
+        let spans = exported_spans_with_per_layer_info_filters(|| {
+            let root = tracing::info_span!(target: "rpc", "per_layer_filtered_root");
+            let _root_guard = root.enter();
+
+            let filtered_child = tracing::debug_span!(target: "rpc", "per_layer_filtered_child");
+            let _filtered_guard = filtered_child.enter();
+
+            tracing::event!(
+                target: TRACING_PANIC_TARGET,
+                tracing::Level::ERROR,
+                panic.payload = "panic in per-layer filtered child",
+                "A panic occurred"
+            );
+        });
+        let span = span_by_name(&spans, "per_layer_filtered_root");
+
+        assert_attribute(span, "panic.payload", "panic in per-layer filtered child");
+        assert_eq!(
+            span.status,
+            Status::Error {
+                description: "panic: panic in per-layer filtered child".into(),
+            }
+        );
+        assert!(spans.iter().all(|span| span.name != "per_layer_filtered_child"));
         assert!(spans.iter().all(|span| span.name != "spanless_panic"));
     }
 
@@ -281,32 +375,29 @@ mod tests {
 
     #[test]
     fn active_span_selection_ignores_third_party_current_span() {
-        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
-
-        with_default(subscriber, || {
-            let third_party = tracing::info_span!(target: "tokio::runtime", "third_party_root");
-            let _third_party_guard = third_party.enter();
-
-            assert!(active_span().is_none());
-            assert!(exportable_or_active_span(&tracing::Span::current()).is_none());
-        });
-
-        let subscriber = tracing_subscriber::registry().with(ActiveSpanLayer);
-
-        with_default(subscriber, || {
+        let spans = exported_spans_with_filter("info", || {
             let root = tracing::info_span!(target: "rpc", "exported_root");
-            let expected_id = root.id();
             let _root_guard = root.enter();
 
             let third_party = tracing::info_span!(target: "tokio::runtime", "third_party_child");
             let _third_party_guard = third_party.enter();
 
-            let active_id = active_span().and_then(|span| span.id());
-            let selected_id =
-                exportable_or_active_span(&tracing::Span::current()).and_then(|span| span.id());
-            assert_eq!(active_id, expected_id);
-            assert_eq!(selected_id, expected_id);
+            tracing::event!(
+                target: TRACING_PANIC_TARGET,
+                tracing::Level::ERROR,
+                panic.payload = "third-party child panic",
+                "A panic occurred"
+            );
         });
+        let root = span_by_name(&spans, "exported_root");
+
+        assert_attribute(root, "panic.payload", "third-party child panic");
+        assert_eq!(
+            root.status,
+            Status::Error {
+                description: "panic: third-party child panic".into(),
+            }
+        );
     }
 
     #[test]
@@ -348,11 +439,36 @@ mod tests {
         let subscriber = tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::new(filter))
             .with(ActiveSpanLayer)
-            .with(ControlPlaneEventLayer.with_filter(OnlyControlPlaneEvents))
+            .with(ControlPlaneEventLayer.with_filter(ControlPlaneScope))
             .with(
                 tracing_opentelemetry::layer()
                     .with_tracer(tracer)
                     .with_filter(IgnoreControlPlaneEvents),
+            );
+
+        with_default(subscriber, record);
+
+        drop(provider);
+        let spans = exporter.0.lock().expect("span exporter lock poisoned");
+        spans.clone()
+    }
+
+    fn exported_spans_with_per_layer_info_filters(record: impl FnOnce()) -> Vec<SpanData> {
+        let exporter = TestExporter::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = opentelemetry::trace::TracerProvider::tracer(
+            &provider,
+            "miden-node-tracing-control-plane-test",
+        );
+        let subscriber = tracing_subscriber::registry()
+            .with(ActiveSpanLayer.with_filter(InfoWithoutControlPlaneEvents))
+            .with(ControlPlaneEventLayer.with_filter(ControlPlaneScope))
+            .with(
+                tracing_opentelemetry::layer()
+                    .with_tracer(tracer)
+                    .with_filter(InfoWithoutControlPlaneEvents),
             );
 
         with_default(subscriber, record);

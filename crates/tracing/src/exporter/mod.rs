@@ -55,7 +55,6 @@ pub struct TracingHandle {
     user_log_filter: DynamicFilter,
     error_layer_filter: DynamicFilter,
     active_span_filter: DynamicFilter,
-    user_active_span_filter: DynamicFilter,
     guard: TracingGuard,
 }
 
@@ -96,10 +95,10 @@ impl TracingHandle {
     }
 
     fn reload_plumbing_filters(&self) -> Result<(), FilterError> {
-        self.error_layer_filter
-            .set(combined_filter(&self.otel_filter.get()?, &self.user_log_filter.get()?))?;
-        self.active_span_filter.set(self.otel_filter.get()?)?;
-        self.user_active_span_filter.set(self.user_log_filter.get()?)
+        let plumbing_filter =
+            combined_filter(&self.otel_filter.get()?, &self.user_log_filter.get()?);
+        self.error_layer_filter.set(plumbing_filter.clone())?;
+        self.active_span_filter.set(plumbing_filter)
     }
 }
 
@@ -165,11 +164,9 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
         DynamicFilter::new(initial_user_log_filter.clone()).map_err(InstallError::UserLogFilter)?;
     let plumbing_filter = combined_filter(&initial_otel_filter, &initial_user_log_filter);
     let (error_layer_filter_layer, error_layer_filter) =
-        DynamicFilter::new(plumbing_filter).map_err(InstallError::PlumbingFilter)?;
+        DynamicFilter::new(plumbing_filter.clone()).map_err(InstallError::PlumbingFilter)?;
     let (active_span_filter_layer, active_span_filter) =
-        DynamicFilter::new(initial_otel_filter).map_err(InstallError::PlumbingFilter)?;
-    let (user_active_span_filter_layer, user_active_span_filter) =
-        DynamicFilter::new(initial_user_log_filter).map_err(InstallError::PlumbingFilter)?;
+        DynamicFilter::new(plumbing_filter).map_err(InstallError::PlumbingFilter)?;
 
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
@@ -182,18 +179,15 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
     let user_log_layer =
         stdout::layer().with_filter(internal::with_control_plane_events(user_log_filter_layer));
     let control_plane_layer =
-        internal::ControlPlaneEventLayer.with_filter(internal::OnlyControlPlaneEvents);
+        internal::ControlPlaneEventLayer.with_filter(internal::ControlPlaneScope);
     let error_layer = tracing_error::ErrorLayer::default()
         .with_filter(internal::with_control_plane_events(error_layer_filter_layer));
     let active_span_layer = internal::ActiveSpanLayer
         .with_filter(internal::with_control_plane_events(active_span_filter_layer));
-    let user_active_span_layer = internal::UserFacingActiveSpanLayer
-        .with_filter(internal::with_control_plane_events(user_active_span_filter_layer));
 
     let subscriber = tracing_subscriber::registry()
         .with(error_layer)
         .with(active_span_layer)
-        .with(user_active_span_layer)
         .with(control_plane_layer)
         .with(trace_layer)
         .with(user_log_layer);
@@ -206,7 +200,6 @@ pub fn install(config: TracingConfig) -> Result<TracingHandle, InstallError> {
         user_log_filter,
         error_layer_filter,
         active_span_filter,
-        user_active_span_filter,
         guard: TracingGuard { otel_provider: Some(otel_provider) },
     })
 }
@@ -323,21 +316,18 @@ mod tests {
             crate::filter::DynamicFilter::new::<Registry>(super::combined_filter("info", "off"))
                 .unwrap();
         let (active_layer, active_span_filter) =
-            crate::filter::DynamicFilter::new::<Registry>("info").unwrap();
-        let (user_active_layer, user_active_span_filter) =
-            crate::filter::DynamicFilter::new::<Registry>("off").unwrap();
+            crate::filter::DynamicFilter::new::<Registry>(super::combined_filter("info", "off"))
+                .unwrap();
         let handle = super::TracingHandle {
             otel_filter,
             user_log_filter,
             error_layer_filter,
             active_span_filter,
-            user_active_span_filter,
             guard: super::TracingGuard {
                 otel_provider: Some(opentelemetry_sdk::trace::SdkTracerProvider::builder().build()),
             },
         };
-        let _keep_layers_alive =
-            (trace_layer, user_layer, error_layer, active_layer, user_active_layer);
+        let _keep_layers_alive = (trace_layer, user_layer, error_layer, active_layer);
 
         assert_eq!(handle.get_otel_filter().unwrap(), "info");
         assert_eq!(handle.get_user_filter().unwrap(), "off");
@@ -348,8 +338,7 @@ mod tests {
         assert_eq!(handle.get_otel_filter().unwrap(), "rpc=debug");
         assert_eq!(handle.get_user_filter().unwrap(), "warn");
         assert_eq!(handle.error_layer_filter.get().unwrap(), "rpc=debug,warn");
-        assert_eq!(handle.active_span_filter.get().unwrap(), "rpc=debug");
-        assert_eq!(handle.user_active_span_filter.get().unwrap(), "warn");
+        assert_eq!(handle.active_span_filter.get().unwrap(), "rpc=debug,warn");
     }
 
     #[test]
@@ -358,8 +347,6 @@ mod tests {
             crate::filter::DynamicFilter::new(super::combined_filter("off", "off")).unwrap();
         let (active_span_filter, _active_filter) =
             crate::filter::DynamicFilter::new(super::combined_filter("off", "off")).unwrap();
-        let (user_active_span_filter, _user_active_filter) =
-            crate::filter::DynamicFilter::new("off").unwrap();
         let subscriber = tracing_subscriber::registry()
             .with(
                 tracing_error::ErrorLayer::default()
@@ -370,13 +357,8 @@ mod tests {
                     .with_filter(crate::internal::with_control_plane_events(active_span_filter)),
             )
             .with(
-                crate::internal::UserFacingActiveSpanLayer.with_filter(
-                    crate::internal::with_control_plane_events(user_active_span_filter),
-                ),
-            )
-            .with(
                 crate::internal::ControlPlaneEventLayer
-                    .with_filter(crate::internal::OnlyControlPlaneEvents),
+                    .with_filter(crate::internal::ControlPlaneScope),
             );
 
         tracing::subscriber::with_default(subscriber, || {
@@ -398,21 +380,18 @@ mod tests {
             crate::filter::DynamicFilter::new::<Registry>(super::combined_filter("info", "off"))
                 .unwrap();
         let (active_layer, active_span_filter) =
-            crate::filter::DynamicFilter::new::<Registry>("info").unwrap();
-        let (user_active_layer, user_active_span_filter) =
-            crate::filter::DynamicFilter::new::<Registry>("off").unwrap();
+            crate::filter::DynamicFilter::new::<Registry>(super::combined_filter("info", "off"))
+                .unwrap();
         let handle = super::TracingHandle {
             otel_filter,
             user_log_filter,
             error_layer_filter,
             active_span_filter,
-            user_active_span_filter,
             guard: super::TracingGuard {
                 otel_provider: Some(opentelemetry_sdk::trace::SdkTracerProvider::builder().build()),
             },
         };
-        let _keep_layers_alive =
-            (trace_layer, user_layer, error_layer, active_layer, user_active_layer);
+        let _keep_layers_alive = (trace_layer, user_layer, error_layer, active_layer);
 
         handle.force_flush().unwrap();
         handle.shutdown().unwrap();
