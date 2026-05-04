@@ -571,9 +571,9 @@ pub async fn verify_tree_consistency(
 
 /// Verifies that the account state forest matches latest public account roots from SQLite.
 ///
-/// This check ensures persisted account state forest storage has not diverged from the latest
-/// account states in SQLite. When the forest is rebuilt from the database, it will naturally
-/// match; when loaded from persistent storage, this catches corruption or incomplete shutdown.
+/// This check ensures persisted account state forest has not diverged from the latest
+/// account states in SQLite. When the forest is rebuilt from SQLite, it will naturally
+/// match; when loaded from RocksDB, this catches corruption or incomplete shutdown.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn verify_account_state_forest_consistency(
     forest: &AccountStateForest<impl Backend>,
