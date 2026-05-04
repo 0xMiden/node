@@ -837,18 +837,11 @@ fn notes() {
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
-    let res =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag(conn, &[], block_range.clone()).unwrap();
     assert!(res.is_empty());
 
-    let res = queries::select_notes_since_block_by_tag_and_sender(
-        conn,
-        &[],
-        &[1, 2, 3],
-        block_range.clone(),
-    )
-    .unwrap();
+    let res =
+        queries::select_notes_since_block_by_tag(conn, &[1, 2, 3], block_range.clone()).unwrap();
     assert!(res.is_empty());
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
@@ -880,21 +873,16 @@ fn notes() {
     queries::insert_notes(conn, &[(note.clone(), None)]).unwrap();
 
     // test empty tags
-    let res =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[], block_range.clone())
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag(conn, &[], block_range.clone()).unwrap();
     assert!(res.is_empty());
 
     let block_range_1 = 2.into()..=2.into();
     // test no updates
-    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range_1)
-        .unwrap();
+    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range_1).unwrap();
     assert!(res.is_empty());
 
     // test match
-    let res =
-        queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range.clone())
-            .unwrap();
+    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range.clone()).unwrap();
     assert_eq!(res, vec![note.clone().into()]);
 
     let block_num_2 = note.block_num + 1;
@@ -915,16 +903,15 @@ fn notes() {
 
     let block_range = 0.into()..=2.into();
 
-    // only first note is returned
-    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-        .unwrap();
+    // only the first matching block is returned; `get_note_sync_multi` loops this inside a single
+    // database transaction when multiple blocks are requested.
+    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range).unwrap();
     assert_eq!(res, vec![note.clone().into()]);
 
     let block_range = 2.into()..=2.into();
 
-    // only the second note is returned
-    let res = queries::select_notes_since_block_by_tag_and_sender(conn, &[], &[tag], block_range)
-        .unwrap();
+    // only the second note is returned when range is restricted to block 2
+    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range).unwrap();
     assert_eq!(res, vec![note2.clone().into()]);
 
     // test query notes by id
@@ -942,9 +929,8 @@ fn notes() {
     assert_eq!(note_1.details, None);
 }
 
-/// Creates notes across 3 blocks with different tags, then iterates
-/// `select_notes_since_block_by_tag_and_sender` advancing the cursor each time,
-/// verifying that each call returns the next block's notes.
+/// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies
+/// all 3 blocks' notes are returned in a single query, ordered by block number.
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn note_sync_across_multiple_blocks() {
@@ -994,30 +980,92 @@ fn note_sync_across_multiple_blocks() {
     // Use block_end + 1 as the MMR forest, same as State::sync_notes.
     let mmr_forest = Forest::new(4);
 
-    // Iterate get_note_sync with advancing cursor, same as State::sync_notes.
-    let mut collected_block_nums = Vec::new();
-    let mut current_from = BlockNumber::GENESIS;
-    let block_end = BlockNumber::from(3);
+    // A single call to get_note_sync_multi should return all 3 blocks.
+    let block_range = BlockNumber::GENESIS..=BlockNumber::from(3);
+    let updates = queries::get_note_sync_multi(
+        conn,
+        &[tag],
+        block_range,
+        miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES,
+    )
+    .unwrap();
 
-    loop {
-        let range = current_from..=block_end;
-        let Some(update) = queries::get_note_sync(conn, &[tag], range).unwrap() else {
-            break;
-        };
+    let collected_block_nums: Vec<BlockNumber> =
+        updates.iter().map(|u| u.block_header.block_num()).collect();
 
+    assert_eq!(
+        collected_block_nums,
+        vec![BlockNumber::from(1), BlockNumber::from(2), BlockNumber::from(3)],
+        "should return all 3 blocks with matching notes in a single query"
+    );
+
+    for update in &updates {
         let block_num = update.block_header.block_num();
         assert!(
             mmr.open_at(block_num.as_usize(), mmr_forest).is_ok(),
             "should be able to open MMR proof for block {block_num}"
         );
-        collected_block_nums.push(block_num);
-        current_from = block_num + 1;
+        assert_eq!(update.notes.len(), 1, "each block should have exactly one note");
     }
+}
+
+/// Tests that multi-block note sync stops before over-fetching past the response payload budget.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn note_sync_multi_respects_payload_limit() {
+    let mut conn = create_db();
+    let conn = &mut conn;
+
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let tag = 43u32;
+    let note_index = BlockNoteIndex::new(0, 0).unwrap();
+
+    for block_num_raw in 1..=3u32 {
+        let block_num = BlockNumber::from(block_num_raw);
+        create_block(conn, block_num);
+        queries::upsert_accounts(
+            conn,
+            &[mock_block_account_update(sender, block_num_raw.into())],
+            block_num,
+        )
+        .unwrap();
+
+        let new_note = create_note(sender);
+        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
+        let values = [(note_index, new_note.id(), &note_metadata)];
+        let notes_db = BlockNoteTree::with_entries(values).unwrap();
+        let inclusion_path = notes_db.open(note_index);
+
+        let note = NoteRecord {
+            block_num,
+            note_index,
+            note_id: new_note.id().as_word(),
+            note_commitment: new_note.commitment(),
+            metadata: note_metadata,
+            details: Some(NoteDetails::from(&new_note)),
+            inclusion_path,
+        };
+        queries::insert_scripts(conn, [&note]).unwrap();
+        queries::insert_notes(conn, &[(note, None)]).unwrap();
+    }
+
+    let one_block_budget =
+        queries::NOTE_SYNC_BLOCK_OVERHEAD_BYTES + queries::NOTE_SYNC_RECORD_BYTES;
+    let updates = queries::get_note_sync_multi(
+        conn,
+        &[tag],
+        BlockNumber::GENESIS..=BlockNumber::from(3),
+        one_block_budget,
+    )
+    .unwrap();
+
+    let collected_block_nums: Vec<BlockNumber> =
+        updates.iter().map(|u| u.block_header.block_num()).collect();
 
     assert_eq!(
         collected_block_nums,
-        vec![BlockNumber::from(1), BlockNumber::from(2), BlockNumber::from(3)],
-        "should iterate through all 3 blocks with matching notes"
+        vec![BlockNumber::from(1)],
+        "the first block is always included, but the second block would exceed the payload cap",
     );
 }
 
@@ -1053,10 +1101,16 @@ fn note_sync_no_matching_tags() {
     queries::insert_scripts(conn, [&note]).unwrap();
     queries::insert_notes(conn, &[(note, None)]).unwrap();
 
-    // Query with a different tag — should return None.
+    // Query with a different tag should return empty vec.
     let range = BlockNumber::GENESIS..=BlockNumber::from(1);
-    let result = queries::get_note_sync(conn, &[999], range).unwrap();
-    assert!(result.is_none());
+    let result = queries::get_note_sync_multi(
+        conn,
+        &[999],
+        range,
+        miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES,
+    )
+    .unwrap();
+    assert!(result.is_empty());
 }
 
 fn insert_account_delta(

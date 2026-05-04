@@ -26,7 +26,6 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteCommitmentLimit,
     QueryParamNoteTagLimit,
@@ -64,6 +63,17 @@ use crate::db::models::{serialize_vec, vec_raw_try_into};
 use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, Page, schema};
 use crate::errors::NoteSyncError;
 
+/// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
+///
+/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
+pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1600;
+
+/// Estimated byte size of a single [`NoteSyncRecord`].
+///
+/// Note ID (~38 bytes) + index + metadata (~26 bytes) + sparse merkle path with 16 siblings
+/// (~608 bytes).
+pub(crate) const NOTE_SYNC_RECORD_BYTES: usize = 700;
+
 // NETWORK NOTE TYPE
 // ================================================================================================
 
@@ -83,31 +93,23 @@ impl From<NetworkNoteType> for i32 {
     }
 }
 
-/// Select notes matching the tags and account IDs search criteria within a block range.
+/// Select notes matching the given tags within a block range.
 ///
 /// # Parameters
-/// * `account_ids`: List of account IDs to filter by
-///     - Limit: 0 <= size <= 1000
 /// * `note_tags`: List of note tags to filter by
 ///     - Limit: 0 <= count <= 1000
 /// * `block_range`: Range of blocks to search (inclusive)
 ///
 /// # Returns
 ///
-/// All matching notes from the first block within the range containing a matching note.
-/// A note is considered a match if it has any of the given tags, or if its sender is one of the
-/// given account IDs. If no matching notes are found at all, then an empty vector is returned.
-///
-/// # Note
-///
-/// This method returns notes from a single block. To fetch all notes up to the chain tip,
-/// multiple requests are necessary.
+/// All matching notes from the first block within the range containing a matching note. If no
+/// matching notes are found at all, then an empty vector is returned.
 ///
 /// # Raw SQL
 ///
 /// ```sql
 /// SELECT
-///     block_num,
+///     committed_at,
 ///     batch_index,
 ///     note_index,
 ///     note_id,
@@ -119,45 +121,36 @@ impl From<NetworkNoteType> for i32 {
 /// FROM
 ///     notes
 /// WHERE
-///     -- find the next block which contains at least one note with a matching tag or sender
-///     block_num = (
+///     committed_at = (
 ///         SELECT
-///             block_num
+///             committed_at
 ///         FROM
 ///             notes
 ///         WHERE
-///             (tag IN (?1) OR sender IN (?2)) AND
-///             block_num >= ?3 AND
-///             block_num <= ?4
+///             tag IN (?1) AND
+///             committed_at >= ?2 AND
+///             committed_at <= ?3
 ///         ORDER BY
-///             block_num ASC
+///             committed_at ASC
 ///         LIMIT 1
 ///     ) AND
-///     -- filter the block's notes and return only the ones matching the requested tags or senders
-///     (tag IN (?1) OR sender IN (?2))
+///     tag IN (?1)
+/// ORDER BY
+///     committed_at ASC, batch_index ASC, note_index ASC
 /// ```
-pub(crate) fn select_notes_since_block_by_tag_and_sender(
+pub(crate) fn select_notes_since_block_by_tag(
     conn: &mut SqliteConnection,
-    account_ids: &[AccountId],
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
-    QueryParamAccountIdLimit::check(account_ids.len())?;
     QueryParamNoteTagLimit::check(note_tags.len())?;
-    let desired_note_tags = Vec::from_iter(note_tags.iter().map(|tag| *tag as i32));
-    let desired_senders = serialize_vec(account_ids.iter());
-
+    let desired_note_tags: Vec<i32> = note_tags.iter().map(|tag| *tag as i32).collect();
     let start_block_num = block_range.start().to_raw_sql();
     let end_block_num = block_range.end().to_raw_sql();
 
-    // find block_num: select notes since block by tag and sender
     let Some(desired_block_num): Option<i64> =
         SelectDsl::select(schema::notes::table, schema::notes::committed_at)
-            .filter(
-                schema::notes::tag
-                    .eq_any(&desired_note_tags[..])
-                    .or(schema::notes::sender.eq_any(&desired_senders[..])),
-            )
+            .filter(schema::notes::tag.eq_any(&desired_note_tags))
             .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
@@ -169,21 +162,15 @@ pub(crate) fn select_notes_since_block_by_tag_and_sender(
     };
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
-            // find the next block which contains at least one note with a matching tag or sender
-            .filter(schema::notes::committed_at.eq(
-                &desired_block_num
-            ))
-            // filter the block's notes and return only the ones matching the requested tags or senders
-            .filter(
-                schema::notes::tag
-                .eq_any(&desired_note_tags)
-                .or(
-                    schema::notes::sender
-                    .eq_any(&desired_senders)
-                )
-            )
-            .get_results::<NoteSyncRecordRawRow>(conn)
-            .map_err(DatabaseError::from)?;
+        .filter(schema::notes::committed_at.eq(desired_block_num))
+        .filter(schema::notes::tag.eq_any(&desired_note_tags))
+        .order_by((
+            schema::notes::committed_at.asc(),
+            schema::notes::batch_index.asc(),
+            schema::notes::note_index.asc(),
+        ))
+        .get_results::<NoteSyncRecordRawRow>(conn)
+        .map_err(DatabaseError::from)?;
 
     vec_raw_try_into(notes)
 }
@@ -566,24 +553,41 @@ pub(crate) fn select_unconsumed_network_notes_by_account_id(
     Ok((notes, page))
 }
 
-/// Loads the data necessary for a note sync.
-pub(crate) fn get_note_sync(
+/// Loads the data necessary for a note sync across all matching blocks in the given range.
+///
+/// Returns one [`NoteSyncUpdate`] per block that contains at least one note matching the
+/// requested tags, ordered by block number ascending.
+pub(crate) fn get_note_sync_multi(
     conn: &mut SqliteConnection,
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
-    QueryParamNoteTagLimit::check(note_tags.len()).map_err(DatabaseError::from)?;
+    max_response_payload_bytes: usize,
+) -> Result<Vec<NoteSyncUpdate>, NoteSyncError> {
+    let mut current_from = *block_range.start();
+    let block_end = *block_range.end();
+    let mut updates = Vec::new();
+    let mut accumulated_size = 0usize;
 
-    let notes = select_notes_since_block_by_tag_and_sender(conn, &[], note_tags, block_range)?;
+    loop {
+        let notes = select_notes_since_block_by_tag(conn, note_tags, current_from..=block_end)?;
 
-    if notes.is_empty() {
-        return Ok(None);
+        let Some(block_num) = notes.first().map(|note| note.block_num) else {
+            break;
+        };
+
+        accumulated_size += NOTE_SYNC_BLOCK_OVERHEAD_BYTES + notes.len() * NOTE_SYNC_RECORD_BYTES;
+
+        if !updates.is_empty() && accumulated_size > max_response_payload_bytes {
+            break;
+        }
+
+        let block_header = select_block_header_by_block_num(conn, Some(block_num))?
+            .ok_or(NoteSyncError::EmptyBlockHeadersTable)?;
+        updates.push(NoteSyncUpdate { notes, block_header });
+        current_from = block_num + 1;
     }
 
-    let block_header =
-        select_block_header_by_block_num(conn, notes.first().map(|note| note.block_num))?
-            .ok_or(NoteSyncError::EmptyBlockHeadersTable)?;
-    Ok(Some(NoteSyncUpdate { notes, block_header }))
+    Ok(updates)
 }
 
 #[derive(Debug, Clone, PartialEq, Selectable, Queryable, QueryableByName)]

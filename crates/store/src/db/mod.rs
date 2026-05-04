@@ -483,13 +483,13 @@ impl Db {
     }
 
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn get_note_sync(
+    pub async fn get_note_sync_multi(
         &self,
         block_range: RangeInclusive<BlockNumber>,
         note_tags: Arc<[u32]>,
-    ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
+    ) -> Result<Vec<NoteSyncUpdate>, NoteSyncError> {
         self.transact("notes sync task", move |conn| {
-            queries::get_note_sync(conn, &note_tags, block_range)
+            queries::get_note_sync_multi(conn, &note_tags, block_range, MAX_RESPONSE_PAYLOAD_BYTES)
         })
         .await
     }
