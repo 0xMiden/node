@@ -3,6 +3,18 @@
 ## v0.14.11 (TBD)
 
 - Implement persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
+## v0.15.0 (TBD)
+
+- Removed the `analyze_table_sizes` background task from the store (it held read locks long enough to block concurrent writers for 30s+) and replaced it with a lightweight filesystem-based disk usage monitor that reports sizes via OTel span attributes every 5 minutes ([#2028](https://github.com/0xMiden/node/pull/2028)).
+- Added composite index `idx_transactions_account_block_txid` on `transactions(account_id, block_num, transaction_id)` to speed up `select_transactions_records` queries used by `SyncTransactions` ([#1965](https://github.com/0xMiden/node/issues/1965)).
+- [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- Network monitor now auto-regenerates accounts after persistent increment failures instead of staying unhealthy indefinitely ([#1942](https://github.com/0xMiden/node/pull/1942)).
+- [BREAKING] Renamed `GetNoteError` endpoint to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`) instead of only error information. Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
+- Extended `ValidatorStatus` proto response with `chain_tip`, `validated_transactions_count`, and `signed_blocks_count`; added Validator card to the network monitor dashboard ([#1900](https://github.com/0xMiden/node/pull/1900)).
+- Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
+- [BREAKING] Network monitor `/status` endpoint now emits a single `RemoteProverStatus` entry per remote prover that bundles status, workers, and test results, instead of separate entries ([#1980](https://github.com/0xMiden/node/pull/1980)).
+- Refactored the validator gRPC API implementation to use the new per-method trait implementations ([#1959](https://github.com/0xMiden/node/pull/1959)).
+- Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, extended `GetLimits` test coverage, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
 
 ## v0.14.10 (2026-05-29)
 

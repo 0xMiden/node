@@ -937,11 +937,6 @@ impl State {
         self.inner.read().await.latest_block_num()
     }
 
-    /// Emits metrics for each database table's size.
-    pub async fn analyze_table_sizes(&self) -> Result<(), DatabaseError> {
-        self.db.analyze_table_sizes().await
-    }
-
     /// Returns the network notes for an account that are unconsumed by a specified block number,
     /// along with the next pagination token.
     pub async fn get_unconsumed_network_notes_for_account(
