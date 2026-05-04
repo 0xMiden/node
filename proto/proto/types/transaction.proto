@@ -20,7 +20,7 @@ message ProvenTransaction {
   optional bytes transaction_inputs = 2;
 }
 
-message TransactionBatch {
+message ProvenTransactionBatch {
   // The batch proof.
   //
   // Encoded using [miden_protocol::batch::ProvenBatch::to_bytes].
