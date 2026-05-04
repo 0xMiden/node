@@ -73,8 +73,8 @@ use loader::{
     verify_tree_consistency,
 };
 
-mod notifications;
-pub use notifications::{BlockCache, BlockNotification, ProofCache, ProofNotification};
+mod replica;
+pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 
 mod apply_block;
 mod apply_proof;
