@@ -85,6 +85,7 @@ fn rustfmt_generated(dir: &Path) -> miette::Result<()> {
     // status code 1. We don't actually care about formatting in this case, so we can just ignore
     // the error.
     let _output = Command::new("rustfmt")
+        .args(["--edition", "2024"])
         .args(&rs_files)
         .output()
         .into_diagnostic()
