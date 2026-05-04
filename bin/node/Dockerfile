@@ -31,7 +31,7 @@ RUN cargo build --release --locked --bin miden-node
 FROM debian:bookworm-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
-    apt-get install -y --no-install-recommends sqlite3 \
+    apt-get install -y --no-install-recommends sqlite3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS runtime
@@ -51,5 +51,5 @@ LABEL org.opencontainers.image.created=$CREATED \
 
 # Expose RPC port
 EXPOSE 57291
-# Miden node does not spawn sub-processes, so it can be used as the PID1
-CMD miden-node
+# Miden node does not spawn sub-processes, so it can be used as the PID1.
+CMD ["miden-node"]

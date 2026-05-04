@@ -10,46 +10,24 @@ inputs:
   arch:
     required: true
     description: Machine architecture to build packages for.
-    type: choice
-    options:
-      - amd64
-      - arm64
   crate:
     required: true
     description: Name of binary crate being packaged.
-    type: choice
-    options:
-      - miden-node
-      - miden-remote-prover
   crate_dir:
     required: true
     description: Name of crate being packaged.
-    type: choice
-    options:
-      - miden-node
-      - miden-remote-prover
   package:
     required: true
     description: The Debian package name.
-    type: choice
-    options:
-      - miden-node
-      - miden-prover
-      - miden-prover-proxy
   packaging_dir:
     required: true
     description: Name of packaging directory.
-    type: choice
-    options:
-      - node
-      - prover
-      - prover-proxy
 
 runs:
   using: "composite"
   steps:
     - name: Rust cache
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         # Only update the cache on push onto the next branch. This strikes a nice balance between
         # cache hits and cache evictions (github has a 10GB cache limit).
@@ -63,47 +41,61 @@ runs:
     - name: Identify target git SHA
       id: git-sha
       shell: bash
+      env:
+        INPUT_GITREF: ${{ inputs.gitref }}
       run: |
-        if git show-ref -q --verify "refs/remotes/origin/${{ inputs.gitref }}" 2>/dev/null; then
-          echo "sha=$(git show-ref --hash --verify 'refs/remotes/origin/${{ inputs.gitref }}')" >> $GITHUB_OUTPUT
-        elif git show-ref -q --verify "refs/tags/${{ inputs.gitref }}" 2>/dev/null; then
-          echo "sha=$(git show-ref --hash --verify 'refs/tags/${{ inputs.gitref }}')" >> $GITHUB_OUTPUT
-        elif git rev-parse --verify "${{ inputs.gitref }}^{commit}" >/dev/null 2>&1; then
-          echo "sha=$(git rev-parse --verify '${{ inputs.gitref }}^{commit}')" >> $GITHUB_OUTPUT
+        if git show-ref -q --verify "refs/remotes/origin/${INPUT_GITREF}" 2>/dev/null; then
+          ref="refs/remotes/origin/${INPUT_GITREF}"
+        elif git show-ref -q --verify "refs/tags/${INPUT_GITREF}" 2>/dev/null; then
+          ref="refs/tags/${INPUT_GITREF}"
+        elif git rev-parse --verify "${INPUT_GITREF}^{commit}" >/dev/null 2>&1; then
+          ref="${INPUT_GITREF}"
         else
           echo "::error::Unknown git reference type"
           exit 1
         fi
 
+        sha=$(git rev-parse --verify "${ref}^{commit}")
+        echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
     - name: Create package directories
       shell: bash
+      env:
+        INPUT_PACKAGE: ${{ inputs.package }}
       run: |
-        pkg=${{ inputs.package }}
+        pkg="${INPUT_PACKAGE}"
         mkdir -p \
-          packaging/deb/$pkg/DEBIAN \
-          packaging/deb/$pkg/usr/bin \
-          packaging/deb/$pkg/lib/systemd/system \
-          packaging/deb/$pkg/opt/$pkg \
-        done
+          "packaging/deb/${pkg}/DEBIAN" \
+          "packaging/deb/${pkg}/usr/bin" \
+          "packaging/deb/${pkg}/lib/systemd/system" \
+          "packaging/deb/${pkg}/opt/${pkg}"
 
     - name: Copy package install scripts
       shell: bash
+      env:
+        INPUT_CRATE_DIR: ${{ inputs.crate_dir }}
+        INPUT_PACKAGE: ${{ inputs.package }}
+        INPUT_PACKAGING_DIR: ${{ inputs.packaging_dir }}
+        TARGET_SHA: ${{ steps.git-sha.outputs.sha }}
       run: |
-        pkg=${{ inputs.package }}
-        pkg_dir=${{ inputs.packaging_dir }}
-        crate=${{ inputs.crate_dir }}
-        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/postinst > packaging/deb/$pkg/DEBIAN/postinst
-        git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/postrm   > packaging/deb/$pkg/DEBIAN/postrm
-        for service_file in $(ls packaging/$pkg_dir/*.service | sed "s/.*miden/miden/g"); do
-          svc=$(echo $service_file | sed "s/.service//g")
-          git show ${{ steps.git-sha.outputs.sha }}:packaging/$pkg_dir/$service_file > packaging/deb/$pkg/lib/systemd/system/$service_file
-          git show ${{ steps.git-sha.outputs.sha }}:bin/$crate/.env                  > packaging/deb/$pkg/lib/systemd/system/$svc.env
-        done
-        chmod 0775 packaging/deb/$pkg/DEBIAN/postinst
-        chmod 0775 packaging/deb/$pkg/DEBIAN/postrm
+        pkg="${INPUT_PACKAGE}"
+        pkg_dir="${INPUT_PACKAGING_DIR}"
+        crate="${INPUT_CRATE_DIR}"
+        git show "${TARGET_SHA}:packaging/${pkg_dir}/postinst" > "packaging/deb/${pkg}/DEBIAN/postinst"
+        git show "${TARGET_SHA}:packaging/${pkg_dir}/postrm"   > "packaging/deb/${pkg}/DEBIAN/postrm"
+        while IFS= read -r service_file; do
+          service_file="${service_file##*/}"
+          svc="${service_file%.service}"
+          git show "${TARGET_SHA}:packaging/${pkg_dir}/${service_file}" > "packaging/deb/${pkg}/lib/systemd/system/${service_file}"
+          git show "${TARGET_SHA}:bin/${crate}/.env"                    > "packaging/deb/${pkg}/lib/systemd/system/${svc}.env"
+        done < <(find "packaging/${pkg_dir}" -maxdepth 1 -name '*.service' -print)
+        chmod 0775 "packaging/deb/${pkg}/DEBIAN/postinst"
+        chmod 0775 "packaging/deb/${pkg}/DEBIAN/postrm"
 
     - name: Create control files
       shell: bash
+      env:
+        INPUT_PACKAGE: ${{ inputs.package }}
       run: |
         # Map the architecture to the format required by Debian.
         # i.e. arm64 and amd64 instead of aarch64 and x86_64.
@@ -111,8 +103,8 @@ runs:
         # Control file's version field must be x.y.z format so strip the rest.
         version=$(git describe --tags --abbrev=0 | sed 's/[^0-9.]//g' )
 
-        pkg=${{ inputs.package }}
-        cat > packaging/deb/$pkg/DEBIAN/control << EOF
+        pkg="${INPUT_PACKAGE}"
+        cat > "packaging/deb/${pkg}/DEBIAN/control" << EOF
         Package: $pkg
         Version: $version
         Section: base
@@ -128,47 +120,66 @@ runs:
     - name: Build binaries
       shell: bash
       env:
-        repo-url: ${{ github.server_url }}/${{ github.repository }}
+        INPUT_CRATE: ${{ inputs.crate }}
+        REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        TARGET_SHA: ${{ steps.git-sha.outputs.sha }}
       run: |
-        cargo install ${{ inputs.crate }} --root . --locked --git ${{ env.repo-url }} --rev ${{ steps.git-sha.outputs.sha }}
+        cargo install "${INPUT_CRATE}" --root . --locked --git "${REPO_URL}" --rev "${TARGET_SHA}"
 
     - name: Copy binary files
       shell: bash
+      env:
+        INPUT_CRATE: ${{ inputs.crate }}
+        INPUT_PACKAGE: ${{ inputs.package }}
       run: |
-        pkg=${{ inputs.package }}
-        bin=${{ inputs.crate }}
-        cp -p ./bin/$bin   packaging/deb/$pkg/usr/bin/
+        pkg="${INPUT_PACKAGE}"
+        bin="${INPUT_CRATE}"
+        cp -p "./bin/${bin}" "packaging/deb/${pkg}/usr/bin/"
 
     - name: Build packages
       shell: bash
+      env:
+        INPUT_PACKAGE: ${{ inputs.package }}
       run: |
-        dpkg-deb --build --root-owner-group packaging/deb/${{ inputs.package }}
+        dpkg-deb --build --root-owner-group "packaging/deb/${INPUT_PACKAGE}"
 
         # Save the .deb files, delete the rest.
         mv packaging/deb/*.deb .
         rm -rf packaging
 
     - name: Package names
+      id: package-names
       shell: bash
+      env:
+        INPUT_ARCH: ${{ inputs.arch }}
+        INPUT_GITREF: ${{ inputs.gitref }}
+        INPUT_PACKAGE: ${{ inputs.package }}
       run: |
-        echo "package=${{ inputs.package }}-${{ inputs.gitref }}-${{ inputs.arch }}.deb" >> $GITHUB_ENV
+        echo "package=${INPUT_PACKAGE}-${INPUT_GITREF}-${INPUT_ARCH}.deb" >> "$GITHUB_OUTPUT"
 
     - name: Rename package files
       shell: bash
+      env:
+        INPUT_PACKAGE: ${{ inputs.package }}
+        PACKAGE_FILE: ${{ steps.package-names.outputs.package }}
       run: |
-        mv ${{ inputs.package}}.deb ${{ env.package }}
+        mv "${INPUT_PACKAGE}.deb" "${PACKAGE_FILE}"
 
     - name: shasum packages
       shell: bash
+      env:
+        PACKAGE_FILE: ${{ steps.package-names.outputs.package }}
       run: |
-        sha256sum ${{ env.package }} > ${{ env.package }}.checksum
+        sha256sum "${PACKAGE_FILE}" > "${PACKAGE_FILE}.checksum"
 
     - name: Publish packages
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
+        INPUT_GITREF: ${{ inputs.gitref }}
+        PACKAGE_FILE: ${{ steps.package-names.outputs.package }}
       run: |
-        gh release upload ${{ inputs.gitref }} \
-          ${{ env.package }} \
-          ${{ env.package }}.checksum \
+        gh release upload "${INPUT_GITREF}" \
+          "${PACKAGE_FILE}" \
+          "${PACKAGE_FILE}.checksum" \
           --clobber

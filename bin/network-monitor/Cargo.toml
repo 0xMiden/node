@@ -18,7 +18,7 @@ workspace = true
 anyhow           = { workspace = true }
 axum             = { version = "0.8" }
 clap             = { features = ["env"], workspace = true }
-hex              = { version = "0.4" }
+hex              = { workspace = true }
 humantime        = { workspace = true }
 maud             = { features = ["axum"], version = "0.27" }
 miden-node-proto = { workspace = true }
@@ -30,7 +30,7 @@ miden-tx         = { features = ["concurrent", "std"], workspace = true }
 rand             = { workspace = true }
 rand_chacha      = { workspace = true }
 reqwest          = { features = ["json", "query"], workspace = true }
-serde            = { features = ["derive"], version = "1.0" }
+serde            = { workspace = true }
 serde_json       = { version = "1.0" }
 sha2             = { version = "0.10" }
 time             = { features = ["formatting", "macros"], version = "0.3" }

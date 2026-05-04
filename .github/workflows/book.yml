@@ -11,16 +11,13 @@ name: book
 on:
   workflow_dispatch:
   pull_request:
-    path: ["docs/internal/**"]
+    paths: ["docs/internal/**"]
   push:
     branches: [next]
-    path: ["docs/internal/**"]
+    paths: ["docs/internal/**"]
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
@@ -34,13 +31,18 @@ jobs:
   # The documentation is uploaded as a github artifact IFF it is required for deployment i.e. on push into next.
   build:
     name: Build documentation
+    permissions:
+      contents: read
+      pages: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       # Installation from source takes a fair while, so we install the binaries directly instead.
       - name: Install mdbook and plugins
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: mdbook@0.4, mdbook-linkcheck@0.7, mdbook-alerts@0.8, mdbook-katex@0.9
 
@@ -51,11 +53,11 @@ jobs:
       - name: Setup Pages
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' }}
         id: pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Upload book artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' }}
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           # We specify multiple [output] sections in our book.toml which causes mdbook to create separate folders for each. This moves the generated `html` into its own `html` subdirectory.
           path: ./docs/internal/book/html
@@ -63,6 +65,10 @@ jobs:
   # Deployment job only runs on push to next.
   deploy:
     name: Deploy documentation
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -72,4 +78,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
