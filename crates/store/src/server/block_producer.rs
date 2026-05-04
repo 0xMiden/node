@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_node_proto::decode::GrpcDecodeExt;
+use miden_node_proto::decode::{GrpcDecodeExt, read_account_id, read_account_ids};
 use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::store::block_producer_server;
@@ -21,8 +21,6 @@ use crate::errors::ApplyBlockError;
 use crate::server::api::{
     StoreApi,
     conversion_error_to_status,
-    read_account_id,
-    read_account_ids,
     read_block_numbers,
     validate_note_commitments,
     validate_nullifiers,
@@ -153,7 +151,7 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
     ) -> Result<Response<proto::store::BlockInputs>, Status> {
         let request = request.into_inner();
 
-        let account_ids = read_account_ids::<Status>(&request.account_ids)?;
+        let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
         let nullifiers = validate_nullifiers(&request.nullifiers)
             .map_err(|err| conversion_error_to_status(&err))?;
         let unauthenticated_note_commitments =

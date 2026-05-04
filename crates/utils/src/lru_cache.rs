@@ -1,9 +1,8 @@
 use std::hash::Hash;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use lru::LruCache as InnerCache;
-use tokio::sync::{Mutex, MutexGuard};
 use tracing::instrument;
 
 /// A newtype wrapper around an LRU cache. Ensures that the cache lock is not held across
@@ -22,18 +21,21 @@ where
     }
 
     /// Retrieves a value from the cache.
-    pub async fn get(&self, key: &K) -> Option<V> {
-        self.lock().await.get(key).cloned()
+    pub fn get(&self, key: &K) -> Option<V> {
+        self.lock().get(key).cloned()
     }
 
     /// Puts a value into the cache.
-    pub async fn put(&self, key: K, value: V) {
-        self.lock().await.put(key, value);
+    pub fn put(&self, key: K, value: V) {
+        self.lock().put(key, value);
     }
 
     #[instrument(name = "lru.lock", skip_all)]
-    async fn lock(&self) -> MutexGuard<'_, InnerCache<K, V>> {
-        self.0.lock().await
+    fn lock(&self) -> MutexGuard<'_, InnerCache<K, V>> {
+        // SAFETY: The mutex is only held for the duration of the get/put operation
+        // where panics are possible only if we're running out of memory, in which
+        // case the entire process is likely to be unstable anyway.
+        self.0.lock().expect("LRU cache mutex poisoned")
     }
 }
 
@@ -50,41 +52,41 @@ mod tests {
     #[tokio::test]
     async fn get_returns_none_on_empty_cache() {
         let c = cache(4);
-        assert_eq!(c.get(&1).await, None);
+        assert_eq!(c.get(&1), None);
     }
 
     #[tokio::test]
     async fn get_returns_inserted_value() {
         let c = cache(4);
-        c.put(1, "a").await;
-        assert_eq!(c.get(&1).await, Some("a"));
+        c.put(1, "a");
+        assert_eq!(c.get(&1), Some("a"));
     }
 
     #[tokio::test]
     async fn evicts_least_recently_used_when_full() {
         let c = cache(2);
-        c.put(1, "a").await;
-        c.put(2, "b").await;
-        c.get(&1).await; // 1 is now most recently used
-        c.put(3, "c").await; // evicts 2 (least recently used)
-        assert_eq!(c.get(&1).await, Some("a"));
-        assert_eq!(c.get(&2).await, None);
-        assert_eq!(c.get(&3).await, Some("c"));
+        c.put(1, "a");
+        c.put(2, "b");
+        c.get(&1); // 1 is now most recently used
+        c.put(3, "c"); // evicts 2 (least recently used)
+        assert_eq!(c.get(&1), Some("a"));
+        assert_eq!(c.get(&2), None);
+        assert_eq!(c.get(&3), Some("c"));
     }
 
     #[tokio::test]
     async fn put_overwrites_existing_value() {
         let c = cache(4);
-        c.put(1, "a").await;
-        c.put(1, "b").await;
-        assert_eq!(c.get(&1).await, Some("b"));
+        c.put(1, "a");
+        c.put(1, "b");
+        assert_eq!(c.get(&1), Some("b"));
     }
 
     #[tokio::test]
     async fn clone_shares_state() {
         let c1 = cache(4);
         let c2 = c1.clone();
-        c1.put(1, "a").await;
-        assert_eq!(c2.get(&1).await, Some("a"));
+        c1.put(1, "a");
+        assert_eq!(c2.get(&1), Some("a"));
     }
 }

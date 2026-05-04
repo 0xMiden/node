@@ -42,16 +42,16 @@ jobs:
 
   # Normal cargo build that populates a cache for all subsequent jobs to re-use.
   build:
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@v6
-      - name: Cleanup large tools for build space
-        uses: ./.github/actions/cleanup-runner
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
@@ -94,17 +94,19 @@ jobs:
               exit 3
             fi
           done
-          echo "Static linkage check passed for all of ${bin_targets[@]}"
+          printf "Static linkage check passed for all of %s\n" "${bin_targets[*]}"
 
   clippy:
     name: lint - clippy
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     needs: [build]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
@@ -113,17 +115,19 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
   tests:
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     needs: [build]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: nextest@0.9.122
-      - uses: Swatinem/rust-cache@v2
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
@@ -137,14 +141,14 @@ jobs:
 
   doc:
     needs: [build]
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@v6
-      - name: Cleanup large tools for build space
-        uses: ./.github/actions/cleanup-runner
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
@@ -156,20 +160,22 @@ jobs:
   stress-test:
     name: stress test
     needs: [build]
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 20
     env:
       DATA_DIR: /tmp/store
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup
         run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: ${{ github.workflow }}-build
           prefix-key: ${{ env.RUST_CACHE_KEY }}
           save-if: false
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -208,21 +214,23 @@ jobs:
   # quick so we don't need a separate cache here.
   client-wasm:
     name: wasm targets
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-    - uses: actions/checkout@v6
-    - name: Rustup
-      run: rustup update --no-self-update
-    - name: cargo build
-      run: |
-        cargo build --locked -p miden-remote-prover-client \
-          --target wasm32-unknown-unknown --no-default-features \
-          --features batch-prover,block-prover,tx-prover # no-std compatible build
-    - name: clippy
-      run: |
-        cargo clippy --locked -p miden-remote-prover-client \
-          --target wasm32-unknown-unknown --no-default-features \
-          --features batch-prover,block-prover,tx-prover -- -D warnings
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Rustup
+        run: rustup update --no-self-update
+      - name: cargo build
+        run: |
+          cargo build --locked -p miden-remote-prover-client \
+            --target wasm32-unknown-unknown --no-default-features \
+            --features batch-prover,block-prover,tx-prover # no-std compatible build
+      - name: clippy
+        run: |
+          cargo clippy --locked -p miden-remote-prover-client \
+            --target wasm32-unknown-unknown --no-default-features \
+            --features batch-prover,block-prover,tx-prover -- -D warnings
 
   # ===============================================================================================
   # Jobs that don't require caching to be efficient
@@ -233,8 +241,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: typos@1.42.0
       - run: make typos-check
@@ -243,7 +253,9 @@ jobs:
     name: lint - rustfmt
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup +nightly
         run: |
           rustup update --no-self-update nightly
@@ -256,8 +268,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -267,16 +281,41 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
+
+  workspace-inheritance:
+    name: lint - workspace inheritance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-binstall
+      - name: Install workspace inheritance checker
+        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.2.0
+      - name: Check workspace inheritance
+        run: cargo workspace-inheritance-check --promotion-threshold 2 --promotion-failure
 
   unused_deps:
     name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - name: machete
-        uses: bnjbvr/cargo-machete@main
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-shear@1.11.2
+      - name: Check for unused dependencies
+        run: make shear

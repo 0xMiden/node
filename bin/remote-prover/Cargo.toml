@@ -16,9 +16,8 @@ workspace = true
 
 [dependencies]
 anyhow                 = { workspace = true }
-async-trait            = { version = "0.1" }
+async-trait            = { workspace = true }
 clap                   = { features = ["env"], workspace = true }
-http                   = { workspace = true }
 humantime              = { workspace = true }
 miden-block-prover     = { workspace = true }
 miden-node-proto       = { workspace = true }
@@ -27,36 +26,34 @@ miden-node-utils       = { workspace = true }
 miden-protocol         = { features = ["std"], workspace = true }
 miden-tx               = { features = ["concurrent", "std"], workspace = true }
 miden-tx-batch-prover  = { features = ["std"], workspace = true }
-opentelemetry          = { version = "0.31" }
+opentelemetry          = { workspace = true }
 prost                  = { default-features = false, features = ["derive"], workspace = true }
 tokio                  = { features = ["full"], workspace = true }
-tokio-stream           = { features = ["net"], version = "0.1" }
-tonic                  = { default-features = false, features = ["codegen", "router", "transport"], version = "0.14" }
-tonic-health           = { version = "0.14" }
+tokio-stream           = { features = ["net"], workspace = true }
+tonic                  = { default-features = false, features = ["codegen", "router", "transport"], workspace = true }
+tonic-health           = { workspace = true }
 tonic-prost            = { workspace = true }
 tonic-reflection       = { workspace = true }
-tonic-web              = { version = "0.14" }
+tonic-web              = { workspace = true }
 tower-http             = { features = ["trace"], workspace = true }
 tracing                = { workspace = true }
 
 [dev-dependencies]
-assert_matches  = { workspace = true }
-miden-protocol  = { features = ["testing"], workspace = true }
-miden-standards = { features = ["testing"], workspace = true }
-miden-testing   = { workspace = true }
-miden-tx        = { features = ["concurrent", "testing"], workspace = true }
-serial_test     = { version = "3" }
+assert_matches = { workspace = true }
+miden-protocol = { features = ["testing"], workspace = true }
+miden-testing  = { workspace = true }
+miden-tx       = { features = ["concurrent", "testing"], workspace = true }
+serial_test    = { workspace = true }
 
 [build-dependencies]
 build-rs               = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
-miette                 = { features = ["fancy"], version = "7.5" }
+miette                 = { features = ["fancy"], workspace = true }
 tonic-prost-build      = { workspace = true }
 
-[package.metadata.cargo-machete]
+[package.metadata.cargo-shear]
 ignored = [
-  "http",
   "prost",
   "tonic-prost", # used in generated OUT_DIR code
 ]

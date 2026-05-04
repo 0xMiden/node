@@ -40,6 +40,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::{self, Runtime};
 use tokio::task;
+use tokio::time::sleep;
 use url::Url;
 
 use crate::Rpc;
@@ -68,7 +69,11 @@ fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
 ///
 /// This uses `ExecutionProof::new_dummy()` and is intended for tests that
 /// need to test validation logic.
-fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransaction {
+fn build_test_proven_tx(
+    account: &Account,
+    delta: &AccountDelta,
+    genesis: Word,
+) -> ProvenTransaction {
     let account_id = AccountId::dummy(
         [0; 15],
         AccountIdVersion::Version0,
@@ -90,7 +95,7 @@ fn build_test_proven_tx(account: &Account, delta: &AccountDelta) -> ProvenTransa
         Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
         Vec::<miden_protocol::transaction::OutputNote>::new(),
         0.into(),
-        Word::default(),
+        genesis,
         test_fee(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
@@ -226,7 +231,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
     let (store_runtime, data_directory, _genesis, store_addr) = start_store(store_listener).await;
 
     // Test: send request against RPC api and should succeed
-    let response = send_request(&mut rpc_client).await;
+    let response = send_request_until_success(&mut rpc_client).await;
     assert!(response.unwrap().into_inner().block_header.is_some());
 
     // Test: shutdown the store and should fail
@@ -236,7 +241,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
 
     // Test: restart the store and request should succeed
     let store_runtime = restart_store(store_addr, data_directory.path()).await;
-    let response = send_request(&mut rpc_client).await;
+    let response = send_request_until_success(&mut rpc_client).await;
     assert_eq!(response.unwrap().into_inner().block_header.unwrap().block_num, 0);
 
     // Shutdown the store before data_directory is dropped to allow RocksDB to flush properly
@@ -307,7 +312,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 
     // Build a valid proven transaction
     let (account, account_delta) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_delta);
+    let tx = build_test_proven_tx(&account, &account_delta, genesis);
 
     // Create an incorrect delta commitment from a different account
     let (other_account, _) = build_test_account([1; 32]);
@@ -341,10 +346,55 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 }
 
 #[tokio::test]
+async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
+    // Start the RPC.
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, _data_directory, genesis, _store_addr) = start_store(store_listener).await;
+
+    // Wait for the store to be ready before sending requests.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Override the client so that the ACCEPT header is not set.
+    let mut rpc_client =
+        miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())
+            .without_tls()
+            .with_timeout(Duration::from_secs(5))
+            .without_metadata_version()
+            .with_metadata_genesis(genesis.to_hex())
+            .without_otel_context_injection()
+            .connect_lazy::<miden_node_proto::clients::RpcClient>();
+
+    // Build a valid proven transaction but with the incorrect hash (empty).
+    let invalid = Word::empty();
+    let (account, account_delta) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_delta, invalid);
+
+    let request = proto::transaction::ProvenTransaction {
+        transaction: tx.to_bytes(),
+        transaction_inputs: None,
+    };
+
+    let response = rpc_client.submit_proven_transaction(request).await;
+
+    // Assert that the server rejected our request.
+    assert!(response.is_err());
+
+    // Rejection should be from invalid reference block.
+    let err = response.as_ref().unwrap_err().message();
+    assert!(
+        err.contains("does not match the chain's commitment of"),
+        "expected error message to contain reference block error but got: {err}"
+    );
+
+    // Shutdown to avoid runtime drop error.
+    shutdown_store(store_runtime).await;
+}
+
+#[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
     // Start the RPC.
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let (store_runtime, _data_directory, genesis, _store_addr) = start_store(store_listener).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -357,7 +407,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
     let (account, account_delta) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_delta);
+    let tx = build_test_proven_tx(&account, &account_delta, genesis);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx.to_bytes(),
@@ -391,6 +441,24 @@ async fn send_request(
         include_mmr_proof: None,
     };
     rpc_client.get_block_header_by_number(request).await
+}
+
+async fn send_request_until_success(
+    rpc_client: &mut RpcClient,
+) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+
+        match send_request(rpc_client).await {
+            Ok(response) => return Ok(response),
+            Err(err) if attempts < 30 => {
+                sleep(Duration::from_millis(200)).await;
+                tracing::warn!(%attempts, %err, "RPC request failed, retrying");
+            },
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
