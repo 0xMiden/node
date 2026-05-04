@@ -9,6 +9,7 @@ use miden_node_proto::generated::store::{
     SignedBlock,
     store_replica_server,
 };
+use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
 use pin_project::pin_project;
 use tokio::sync::{OwnedSemaphorePermit, mpsc, watch};
@@ -226,8 +227,10 @@ async fn fetch_block(
     state
         .load_block(block_num)
         .await
-        .map_err(|e| Status::internal(format!("failed to load block {}: {e}", block_num.as_u32())))?
-        .ok_or_else(|| Status::not_found(format!("block {} not found", block_num.as_u32())))
+        .map_err(|e| {
+            Status::internal(format!("failed to load block {block_num}: {}", e.as_report()))
+        })?
+        .ok_or_else(|| Status::not_found(format!("block {block_num} not found")))
 }
 
 /// Returns the raw proof bytes for `block_num`, checking the cache before falling back to disk.
@@ -243,9 +246,10 @@ async fn fetch_proof(
         .load_proof(block_num)
         .await
         .map_err(|e| {
-            Status::internal(format!("failed to load proof for block {}: {e}", block_num.as_u32()))
+            Status::internal(format!(
+                "failed to load proof for block {block_num}: {}",
+                e.as_report()
+            ))
         })?
-        .ok_or_else(|| {
-            Status::not_found(format!("proof for block {} not found", block_num.as_u32()))
-        })
+        .ok_or_else(|| Status::not_found(format!("proof for block {block_num} not found")))
 }
