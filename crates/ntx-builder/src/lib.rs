@@ -6,7 +6,7 @@ use std::time::Duration;
 use actor::AccountActorContext;
 use anyhow::Context;
 use builder::MempoolEventStream;
-use chain_state::ChainState;
+use chain_state::SharedChainState;
 use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
 use db::Db;
@@ -14,7 +14,7 @@ use futures::TryStreamExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use url::Url;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
@@ -290,7 +290,7 @@ impl NtxBuilderConfig {
             .await
             .context("failed to upsert chain state")?;
 
-        let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
+        let chain_state = Arc::new(SharedChainState::new(chain_tip_header, chain_mmr));
 
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
@@ -298,7 +298,7 @@ impl NtxBuilderConfig {
             block_producer: block_producer.clone(),
             validator,
             prover,
-            chain_state: chain_state.clone(),
+            chain_state: Arc::clone(&chain_state),
             store: store.clone(),
             script_cache,
             max_notes_per_tx: self.max_notes_per_tx,
