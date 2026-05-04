@@ -1,4 +1,3 @@
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miden_node_utils::fifo_cache::FifoCache;
@@ -66,13 +65,3 @@ pub type BlockCache = FifoCache<BlockNumber, BlockNotification>;
 
 /// FIFO cache of recent block proofs for replica subscriptions.
 pub type ProofCache = FifoCache<BlockNumber, ProofNotification>;
-
-/// Creates a new [`BlockCache`] with the given capacity.
-pub fn new_block_cache(capacity: NonZeroUsize) -> BlockCache {
-    FifoCache::new(capacity)
-}
-
-/// Creates a new [`ProofCache`] with the given capacity.
-pub fn new_proof_cache(capacity: NonZeroUsize) -> ProofCache {
-    FifoCache::new(capacity)
-}

@@ -74,14 +74,7 @@ use loader::{
 };
 
 mod notifications;
-pub use notifications::{
-    BlockCache,
-    BlockNotification,
-    ProofCache,
-    ProofNotification,
-    new_block_cache,
-    new_proof_cache,
-};
+pub use notifications::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 
 mod apply_block;
 mod apply_proof;
@@ -252,8 +245,8 @@ impl State {
                 termination_ask,
                 proven_tip: proven_tip.clone(),
                 committed_tip_tx,
-                block_cache: new_block_cache(BLOCK_CACHE_CAPACITY),
-                proof_cache: new_proof_cache(PROOF_CACHE_CAPACITY),
+                block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),
+                proof_cache: ProofCache::new(PROOF_CACHE_CAPACITY),
             },
             proven_tip,
         ))
