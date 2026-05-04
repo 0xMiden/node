@@ -2993,6 +2993,7 @@ dependencies = [
  "rand_core 0.9.5",
  "rand_hc",
  "rayon",
+ "rocksdb",
  "serde",
  "sha2",
  "sha3",
