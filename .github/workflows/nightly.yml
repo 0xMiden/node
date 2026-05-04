@@ -50,7 +50,7 @@ jobs:
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Install rust
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - name: Install cargo-hack
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
