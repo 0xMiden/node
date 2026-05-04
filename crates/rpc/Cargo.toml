@@ -14,9 +14,12 @@ version.workspace      = true
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 anyhow                 = { workspace = true }
-futures                = { version = "0.3" }
+futures                = { workspace = true }
 http                   = { workspace = true }
 mediatype              = { version = "0.21" }
 miden-node-proto       = { workspace = true }
@@ -31,7 +34,7 @@ tokio                  = { features = ["macros", "net", "rt-multi-thread"], work
 tokio-stream           = { features = ["net"], workspace = true }
 tonic                  = { default-features = true, features = ["tls-native-roots", "tls-ring"], workspace = true }
 tonic-reflection       = { workspace = true }
-tonic-web              = { version = "0.14" }
+tonic-web              = { workspace = true }
 tower                  = { workspace = true }
 tower-http             = { features = ["trace"], workspace = true }
 tracing                = { workspace = true }
