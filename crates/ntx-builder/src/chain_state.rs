@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use miden_protocol::block::BlockHeader;
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::transaction::PartialBlockchain;
 
@@ -45,5 +45,59 @@ impl ChainState {
     /// tuple.
     pub fn into_parts(self) -> (BlockHeader, Arc<PartialBlockchain>) {
         (self.chain_tip_header, self.chain_mmr)
+    }
+
+    /// Updates the chain tip and prunes old blocks from the MMR.
+    fn update_chain_tip(&mut self, tip: BlockHeader, max_block_count: usize) {
+        // Skip blocks already reflected in the chain state. A `BlockCommitted` event may arrive
+        // for a block whose state was already loaded from the store during startup: the mempool
+        // subscription is established first and then the chain tip is fetched, so any block
+        // committed in that window produces an event for state we have already ingested.
+        if tip.block_num() <= self.chain_tip_header.block_num() {
+            tracing::debug!(
+                event_block = %tip.block_num(),
+                current_tip = %self.chain_tip_header.block_num(),
+                "skipping BlockCommitted event for block already in chain state",
+            );
+            return;
+        }
+
+        // Update MMR which lags by one block.
+        let mmr_tip = self.chain_tip_header.clone();
+        Arc::make_mut(&mut self.chain_mmr).add_block(&mmr_tip, true);
+
+        // Set the new tip.
+        self.chain_tip_header = tip;
+
+        // Keep MMR pruned.
+        let pruned_block_height =
+            (self.chain_mmr.chain_length().as_usize().saturating_sub(max_block_count)) as u32;
+        Arc::make_mut(&mut self.chain_mmr).prune_to(..pruned_block_height.into());
+    }
+}
+
+/// A thread-safe wrapper around [`ChainState`] that can be shared across multiple actors.
+///
+/// The API guarantees that the lock cannot be held across await points.
+pub struct SharedChainState(RwLock<ChainState>);
+
+impl SharedChainState {
+    pub fn new(chain_tip_header: BlockHeader, chain_mmr: PartialMmr) -> Self {
+        Self(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)))
+    }
+
+    pub(crate) fn chain_tip_block_number(&self) -> BlockNumber {
+        self.0.read().expect("chain state lock poisoned").chain_tip_header.block_num()
+    }
+
+    pub(crate) fn update_chain_tip(&self, tip: BlockHeader, max_block_count: usize) {
+        self.0
+            .write()
+            .expect("chain state lock poisoned")
+            .update_chain_tip(tip, max_block_count);
+    }
+
+    pub(crate) fn get_cloned(&self) -> ChainState {
+        self.0.read().expect("chain state lock poisoned").clone()
     }
 }
