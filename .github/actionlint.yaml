@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - Linux-ARM64-Runner
+    - warp-ubuntu-latest-x64-8x

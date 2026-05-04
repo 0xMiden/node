@@ -35,9 +35,9 @@ format-check: ## Runs Format using nightly toolchain but only in check mode
 	cargo +nightly fmt --all --check
 
 
-.PHONY: machete
-machete: ## Runs machete to find unused dependencies
-	cargo machete
+.PHONY: shear
+shear: ## Runs cargo-shear to find unused or misplaced dependencies
+	cargo shear
 
 
 .PHONY: toml
@@ -59,7 +59,7 @@ workspace-check: ## Runs a check that all packages have `lints.workspace = true`
 
 
 .PHONY: lint
-lint: typos-check format fix clippy toml machete ## Runs all linting tasks at once (Clippy, fixing, formatting, machete)
+lint: typos-check format fix clippy toml shear ## Runs all linting tasks at once (Clippy, fixing, formatting, cargo-shear)
 
 # --- docs ----------------------------------------------------------------------------------------
 
@@ -155,7 +155,7 @@ check-tools: ## Checks if development tools are installed
 	@command -v typos         >/dev/null 2>&1 && echo "[OK] typos is installed"         || echo "[MISSING] typos        (make install-tools)"
 	@command -v cargo nextest >/dev/null 2>&1 && echo "[OK] cargo-nextest is installed" || echo "[MISSING] cargo-nextest(make install-tools)"
 	@command -v taplo         >/dev/null 2>&1 && echo "[OK] taplo is installed"         || echo "[MISSING] taplo        (make install-tools)"
-	@command -v cargo-machete >/dev/null 2>&1 && echo "[OK] cargo-machete is installed" || echo "[MISSING] cargo-machete (make install-tools)"
+	@command -v cargo-shear >/dev/null 2>&1 && echo "[OK] cargo-shear is installed" || echo "[MISSING] cargo-shear is not installed (run: make install-tools)"
 	@command -v npm >/dev/null 2>&1 && echo "[OK] npm is installed" || echo "[MISSING] npm is not installed (run: make install-tools)"
 
 .PHONY: install-tools
@@ -166,7 +166,7 @@ install-tools: ## Installs tools required by the Makefile
 	cargo install typos-cli --locked
 	cargo install cargo-nextest --locked
 	cargo install taplo-cli --locked
-	cargo install cargo-machete --locked
+	cargo install cargo-shear --version 1.11.2 --locked
 	@if ! command -v node >/dev/null 2>&1; then \
 		echo "Node.js not found. Please install Node.js from https://nodejs.org/ or using your package manager"; \
 		echo "On macOS: brew install node"; \

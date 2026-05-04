@@ -38,6 +38,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::{self, Runtime};
 use tokio::task;
+use tokio::time::sleep;
 use url::Url;
 
 use crate::Rpc;
@@ -228,7 +229,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
     let (store_runtime, data_directory, _genesis, store_addr) = start_store(store_listener).await;
 
     // Test: send request against RPC api and should succeed
-    let response = send_request(&mut rpc_client).await;
+    let response = send_request_until_success(&mut rpc_client).await;
     assert!(response.unwrap().into_inner().block_header.is_some());
 
     // Test: shutdown the store and should fail
@@ -238,7 +239,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
 
     // Test: restart the store and request should succeed
     let store_runtime = restart_store(store_addr, data_directory.path()).await;
-    let response = send_request(&mut rpc_client).await;
+    let response = send_request_until_success(&mut rpc_client).await;
     assert_eq!(response.unwrap().into_inner().block_header.unwrap().block_num, 0);
 
     // Shutdown the store before data_directory is dropped to allow RocksDB to flush properly
@@ -438,6 +439,24 @@ async fn send_request(
         include_mmr_proof: None,
     };
     rpc_client.get_block_header_by_number(request).await
+}
+
+async fn send_request_until_success(
+    rpc_client: &mut RpcClient,
+) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+
+        match send_request(rpc_client).await {
+            Ok(response) => return Ok(response),
+            Err(err) if attempts < 30 => {
+                sleep(Duration::from_millis(200)).await;
+                tracing::warn!(%attempts, %err, "RPC request failed, retrying");
+            },
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {

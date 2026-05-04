@@ -14,14 +14,17 @@ version.workspace      = true
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 anyhow                          = { workspace = true }
-deadpool                        = { default-features = false, features = ["managed", "rt_tokio_1"], version = "0.12" }
-deadpool-diesel                 = { features = ["sqlite"], version = "0.6" }
-diesel                          = { features = ["numeric", "sqlite"], version = "2.3" }
-diesel_migrations               = { features = ["sqlite"], version = "2.3" }
+deadpool                        = { features = ["managed", "rt_tokio_1"], workspace = true }
+deadpool-diesel                 = { features = ["sqlite"], workspace = true }
+diesel                          = { features = ["numeric", "sqlite"], workspace = true }
+diesel_migrations               = { features = ["sqlite"], workspace = true }
 fs-err                          = { workspace = true }
-hex                             = { version = "0.4" }
+hex                             = { workspace = true }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }
 miden-block-prover              = { workspace = true }
@@ -38,7 +41,7 @@ miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
 rand              = { workspace = true }
 rand_chacha       = { workspace = true }
-serde             = { features = ["derive"], version = "1" }
+serde             = { workspace = true }
 thiserror         = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
 tokio-stream      = { features = ["net"], workspace = true }
@@ -66,13 +69,11 @@ miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = 
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
-regex                 = { version = "1.11" }
 tempfile              = { workspace = true }
-termtree              = "1.0"
 
 [features]
 default = ["rocksdb"]
-rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-node-utils/rocksdb"]
+rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-crypto/persistent-forest", "miden-node-utils/rocksdb"]
 
 [[bench]]
 harness           = false

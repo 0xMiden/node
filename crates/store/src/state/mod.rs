@@ -37,7 +37,12 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{Instrument, info, instrument};
 
-use crate::account_state_forest::{AccountStateForest, AccountStorageMapResult, WitnessError};
+use crate::account_state_forest::{
+    AccountStateForest,
+    AccountStateForestBackend,
+    AccountStorageMapResult,
+    WitnessError,
+};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -57,12 +62,14 @@ use crate::{COMPONENT, DataDirectory};
 mod loader;
 
 use loader::{
+    ACCOUNT_STATE_FOREST_STORAGE_DIR,
     ACCOUNT_TREE_STORAGE_DIR,
+    AccountForestLoader,
     NULLIFIER_TREE_STORAGE_DIR,
-    StorageLoader,
     TreeStorage,
+    TreeStorageLoader,
     load_mmr,
-    load_smt_forest,
+    verify_account_state_forest_consistency,
     verify_tree_consistency,
 };
 
@@ -117,7 +124,7 @@ pub struct State {
     inner: RwLock<InnerState<TreeStorage>>,
 
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
-    forest: RwLock<AccountStateForest>,
+    forest: RwLock<AccountStateForest<AccountStateForestBackend>>,
 
     /// To allow readers to access the tree data while an update in being performed, and prevent
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
@@ -154,18 +161,23 @@ impl State {
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
 
-        let account_storage = TreeStorage::create(
-            data_path,
-            &storage_options.account_tree.into(),
-            ACCOUNT_TREE_STORAGE_DIR,
-        )?;
+        #[cfg(feature = "rocksdb")]
+        let (account_storage_config, nullifier_storage_config, forest_storage_config) = (
+            storage_options.account_tree.into(),
+            storage_options.nullifier_tree.into(),
+            storage_options.account_state_forest.into(),
+        );
+        #[cfg(not(feature = "rocksdb"))]
+        let (account_storage_config, nullifier_storage_config, forest_storage_config) = {
+            let _ = &storage_options;
+            ((), (), ())
+        };
+        let account_storage =
+            TreeStorage::create(data_path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage = TreeStorage::create(
-            data_path,
-            &storage_options.nullifier_tree.into(),
-            NULLIFIER_TREE_STORAGE_DIR,
-        )?;
+        let nullifier_storage =
+            TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         // Verify that tree roots match the expected roots from the database.
@@ -175,7 +187,13 @@ impl State {
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
 
-        let forest = load_smt_forest(&mut db, latest_block_num).await?;
+        let forest_backend = AccountStateForestBackend::create(
+            data_path,
+            &forest_storage_config,
+            ACCOUNT_STATE_FOREST_STORAGE_DIR,
+        )?;
+        let forest = forest_backend.load_account_state_forest(&mut db, latest_block_num).await?;
+        verify_account_state_forest_consistency(&forest, &mut db).await?;
 
         let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 

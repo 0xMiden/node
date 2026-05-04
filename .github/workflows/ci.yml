@@ -1,6 +1,6 @@
 # Continuous integration jobs.
 #
-# These get run on every pull-request.
+# These get run on every pull-request, with Warp caches updated on push into `main` or `next`.
 name: CI
 
 permissions:
@@ -23,33 +23,12 @@ on:
       - "docs/**"
 
 env:
-  # Shared prefix key for the rust cache.
+  # Shared prefix key for the Rust caches.
   #
-  # This provides a convenient way to evict old or corrupted cache.
-  RUST_CACHE_PREFIX: rust-cache
-  # Shared branch-aware cache namespace for rust-cache.
-  #
-  # Pushes save to the persistent trunk cache, while pull requests append the
-  # PR number so they save into an ephemeral PR-specific cache.
-  #
-  # The format is <main | next> with an optional `-pr-<PR>` for pull requests.
-  # We default to next if no suitable is found.
-  RUST_CACHE_SUFFIX: >-
-    ${{
-      format(
-        '{0}{1}',
-        github.base_ref == 'main' && 'main'
-        || github.base_ref == 'next' && 'next'
-        || github.ref == 'refs/heads/main' && 'main'
-        || github.ref == 'refs/heads/next' && 'next'
-        || 'next',
-        github.event_name == 'pull_request'
-        && format('-pr-{0}', github.event.pull_request.number)
-        || ''
-      )
-    }}
-  # Match rust-cache's compilation mode so restored outputs stay reusable downstream.
-  CARGO_INCREMENTAL: 0
+  # Cache is trunk specific (next|main).
+  CACHE_PREFIX: rust-cache-${{ github.base_ref || github.ref_name }}
+  # Only trusted branch pushes should update caches; PRs restore from the target branch cache.
+  SAVE_CACHE: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next') }}
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
 
@@ -60,27 +39,25 @@ concurrency:
 
 jobs:
   # ===============================================================================================
-  # Conventional builds, lints and tests that re-use a single cache for efficiency
+  # Conventional builds, lints and tests
   # ===============================================================================================
 
-  # Normal cargo build that saves either the persistent trunk cache or a
-  # single per-run cache for downstream jobs to restore immediately.
+  # Normal cargo build that verifies the workspace compiles.
   build:
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@v6
-      - name: Cleanup large tools for build space
-        uses: ./.github/actions/cleanup-runner
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Rustup
-        run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
-          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
-          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
-          cache-workspace-crates: true
-          save-if: true
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -119,42 +96,42 @@ jobs:
               exit 3
             fi
           done
-          echo "Static linkage check passed for all of ${bin_targets[@]}"
+          printf "Static linkage check passed for all of %s\n" "${bin_targets[*]}"
 
   clippy:
     name: lint - clippy
-    runs-on: ubuntu-24.04
-    needs: [build]
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@v6
-      - name: Rustup
-        run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
-          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
-          cache-workspace-crates: true
-          save-if: false
+          persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
   tests:
-    runs-on: ubuntu-24.04
-    needs: [build]
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
-      - uses: taiki-e/install-action@v2
+        run: rustup toolchain install --no-self-update
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: nextest@0.9.122
-      - uses: Swatinem/rust-cache@v2
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
-          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
-          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
-          cache-workspace-crates: true
-          save-if: false
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -163,42 +140,40 @@ jobs:
         run: cargo test --doc --workspace --all-features
 
   doc:
-    needs: [build]
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@v6
-      - name: Cleanup large tools for build space
-        uses: ./.github/actions/cleanup-runner
-      - name: Rustup
-        run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
-          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
-          cache-workspace-crates: true
-          save-if: false
+          persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
   # Ensure the stress-test still functions by running some cheap benchmarks.
   stress-test:
     name: stress test
-    needs: [build]
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 20
     env:
       DATA_DIR: /tmp/store
     steps:
-      - uses: actions/checkout@v6
-      - name: Rustup
-        run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          shared-key: ${{ env.RUST_CACHE_SUFFIX }}
-          prefix-key: ${{ env.RUST_CACHE_PREFIX }}
-          cache-workspace-crates: true
-          save-if: false
-      - uses: taiki-e/install-action@v2
+          persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -210,12 +185,12 @@ jobs:
           cargo run --bin miden-node-stress-test seed-store \
             --data-directory ${{ env.DATA_DIR }} \
             --num-accounts 500 --public-accounts-percentage 50
-      # TODO re-introduce
+  # TODO re-introduce
       # - name: Benchmark state sync
-      # run: |
-      # cargo run --bin miden-node-stress-test benchmark-store \
-      # --data-directory ${{ env.DATA_DIR }} \
-      # --iterations 10 --concurrency 1 sync-state
+        # run: |
+          # cargo run --bin miden-node-stress-test benchmark-store \
+            # --data-directory ${{ env.DATA_DIR }} \
+            # --iterations 10 --concurrency 1 sync-state
       - name: Benchmark notes sync
         run: |
           cargo run --bin miden-node-stress-test benchmark-store \
@@ -227,55 +202,27 @@ jobs:
             --data-directory ${{ env.DATA_DIR }} \
             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
-  cleanup-run-cache:
-    name: cleanup run cache
-    runs-on: ubuntu-24.04
-    if: ${{ always() && github.event_name == 'pull_request' }}
-    needs:
-      - build
-      - clippy
-      - tests
-      - doc
-      - stress-test
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Delete PR rust cache
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mapfile -t cache_entries < <(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/${{ github.repository }}/actions/caches?key=${{ env.RUST_CACHE_PREFIX }}&ref=${{ github.ref }}" \
-              --jq '.actions_caches[] | @json'
-          )
-          for cache_entry in "${cache_entries[@]}"; do
-            cache_id="$(jq -r '.id' <<< "${cache_entry}")"
-            cache_key="$(jq -r '.key' <<< "${cache_entry}")"
-            echo "Deleting rust cache key=${cache_key}"
-            gh api \
-              --method DELETE \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/${{ github.repository }}/actions/caches/${cache_id}"
-          done
-
   # ===============================================================================================
   # WASM related jobs
   # ===============================================================================================
 
   # Tests the miden-remote-prover-client WASM support.
   #
-  # The WASM build is incompatible with the build job's cache, thankfully this compilation is fairly
-  # quick so we don't need a separate cache here.
+  # The WASM build is incompatible with native build caches, so it uses a dedicated cache.
   client-wasm:
     name: wasm targets
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
       - name: cargo build
         run: |
           cargo build --locked -p miden-remote-prover-client \
@@ -296,8 +243,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: typos@1.42.0
       - run: make typos-check
@@ -306,11 +255,11 @@ jobs:
     name: lint - rustfmt
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Rustup +nightly
-        run: |
-          rustup update --no-self-update nightly
-          rustup +nightly component add rustfmt
+        run: rustup toolchain install --no-self-update nightly --component rustfmt
       - name: Fmt
         run: make format-check
 
@@ -319,8 +268,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -330,16 +281,41 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
+
+  workspace-inheritance:
+    name: lint - workspace inheritance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-binstall
+      - name: Install workspace inheritance checker
+        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.2.0
+      - name: Check workspace inheritance
+        run: cargo workspace-inheritance-check --promotion-threshold 2 --promotion-failure
 
   unused_deps:
     name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - name: machete
-        uses: bnjbvr/cargo-machete@main
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-shear@1.11.2
+      - name: Check for unused dependencies
+        run: make shear

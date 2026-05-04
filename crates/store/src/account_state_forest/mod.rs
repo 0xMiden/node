@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
 use miden_crypto::hash::rpo::Rpo256;
-use miden_crypto::merkle::smt::ForestInMemoryBackend;
+#[cfg(feature = "rocksdb")]
+use miden_crypto::merkle::smt::ForestPersistentBackend;
+use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
@@ -64,6 +66,15 @@ pub enum WitnessError {
     AssetError(#[from] AssetError),
 }
 
+#[cfg(feature = "rocksdb")]
+pub(crate) type AccountStateForestBackend = ForestPersistentBackend;
+#[cfg(not(feature = "rocksdb"))]
+pub(crate) type AccountStateForestBackend = ForestInMemoryBackend;
+
+const fn empty_smt_root() -> Word {
+    *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
+}
+
 // ACCOUNT STATE FOREST
 // ================================================================================================
 
@@ -76,10 +87,10 @@ pub enum AccountStorageMapResult {
 }
 
 /// Container for forest-related state that needs to be updated atomically.
-pub(crate) struct AccountStateForest {
+pub(crate) struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
     /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
-    forest: LargeSmtForest<ForestInMemoryBackend>,
+    forest: LargeSmtForest<B>,
 
     /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
     ///
@@ -88,7 +99,8 @@ pub(crate) struct AccountStateForest {
     storage_map_key_cache: LruCache<Word, StorageMapKey>,
 }
 
-impl AccountStateForest {
+#[cfg(test)]
+impl AccountStateForest<ForestInMemoryBackend> {
     pub(crate) fn new() -> Self {
         Self {
             forest: Self::create_forest(),
@@ -99,18 +111,35 @@ impl AccountStateForest {
         }
     }
 
+    /// Returns the root of an empty SMT.
+    pub(crate) const fn empty_smt_root() -> Word {
+        empty_smt_root()
+    }
+
     fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
         let backend = ForestInMemoryBackend::new();
         LargeSmtForest::new(backend).expect("in-memory backend should initialize")
     }
+}
+
+impl<B: Backend> AccountStateForest<B> {
+    pub(crate) fn from_backend(backend: B) -> Result<Self, LargeSmtForestError> {
+        Ok(Self {
+            forest: LargeSmtForest::new(backend)?,
+            storage_map_key_cache: LruCache::new(
+                NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
+                    .expect("storage map key cache capacity must be non-zero"),
+            ),
+        })
+    }
+
+    #[cfg(feature = "rocksdb")]
+    pub(crate) fn lineage_count(&self) -> usize {
+        self.forest.lineage_count()
+    }
 
     // HELPERS
     // --------------------------------------------------------------------------------------------
-
-    /// Returns the root of an empty SMT.
-    const fn empty_smt_root() -> Word {
-        *EmptySubtreeRoots::entry(SMT_DEPTH, 0)
-    }
 
     #[cfg(test)]
     fn tree_id_for_root(
@@ -517,9 +546,9 @@ impl AccountStateForest {
 
     /// Retrieves the most recent vault SMT root for an account. If no vault root is found for the
     /// account, returns an empty SMT root.
-    fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
+    pub(crate) fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
         let lineage = Self::vault_lineage_id(account_id);
-        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
+        self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
     }
 
     /// Inserts asset vault data into the forest for the specified account. Assumes that asset
@@ -532,7 +561,7 @@ impl AccountStateForest {
     ) -> Result<(), AccountStateForestError> {
         let prev_root = self.get_latest_vault_root(account_id);
         let lineage = Self::vault_lineage_id(account_id);
-        assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+        assert_eq!(prev_root, empty_smt_root(), "account should not be in the forest");
         assert!(
             self.forest.latest_version(lineage).is_none(),
             "account should not be in the forest"
@@ -602,7 +631,7 @@ impl AccountStateForest {
         for (slot_name, map_delta) in storage_delta.maps() {
             // get the latest root for this map, and make sure the root is for an empty tree
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
-            assert_eq!(prev_root, Self::empty_smt_root(), "account should not be in the forest");
+            assert_eq!(prev_root, empty_smt_root(), "account should not be in the forest");
 
             let raw_map_entries: Vec<(StorageMapKey, Word)> =
                 Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
@@ -734,13 +763,13 @@ impl AccountStateForest {
     // --------------------------------------------------------------------------------------------
 
     /// Retrieves the most recent storage map SMT root for an account slot.
-    fn get_latest_storage_map_root(
+    pub(crate) fn get_latest_storage_map_root(
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
     ) -> Word {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.forest.latest_root(lineage).unwrap_or_else(Self::empty_smt_root)
+        self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
     }
 
     /// Updates the forest with storage map changes from a delta.
