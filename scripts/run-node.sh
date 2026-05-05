@@ -12,18 +12,26 @@ fi
 
 GENESIS_CONFIG="crates/store/src/genesis/config/samples/01-simple.toml"
 STORE_DIR="/tmp/store"
+STORE_REPLICA_1_DIR="/tmp/store-replica-1"
+STORE_REPLICA_2_DIR="/tmp/store-replica-2"
 VALIDATOR_DIR="/tmp/validator"
 NTX_BUILDER_DIR="/tmp/ntx-builder"
 ACCOUNTS_DIR="/tmp/accounts"
 
-# Store exposes 3 separate APIs.
+# Primary store (block-producer mode): 3 APIs.
 STORE_RPC_URL="http://0.0.0.0:50001"
 STORE_NTX_BUILDER_URL="http://0.0.0.0:50002"
 STORE_BLOCK_PRODUCER_URL="http://0.0.0.0:50003"
 
+# Replica stores expose only the RPC API (no block-producer or ntx-builder endpoints).
+STORE_REPLICA_1_RPC_URL="http://0.0.0.0:50011"
+STORE_REPLICA_2_RPC_URL="http://0.0.0.0:50021"
+
 VALIDATOR_URL="http://0.0.0.0:50101"
 BLOCK_PRODUCER_URL="http://0.0.0.0:50201"
 RPC_URL="http://0.0.0.0:57291"
+RPC_REPLICA_1_URL="http://0.0.0.0:57292"
+RPC_REPLICA_2_URL="http://0.0.0.0:57293"
 
 PIDS=()
 
@@ -39,7 +47,7 @@ trap cleanup EXIT INT TERM
 
 # --- Kill processes on required ports ---
 
-PORTS=(50001 50002 50003 50101 50201 57291)
+PORTS=(50001 50002 50003 50011 50021 50101 50201 57291 57292 57293)
 echo "=== Killing processes on required ports ==="
 for port in "${PORTS[@]}"; do
     pids=$(lsof -ti :"$port" 2>/dev/null || true)
@@ -57,7 +65,8 @@ sleep 1
 if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     echo "=== Bootstrapping ==="
 
-    rm -rf "$VALIDATOR_DIR" "$ACCOUNTS_DIR" "$STORE_DIR" "$NTX_BUILDER_DIR"
+    rm -rf "$VALIDATOR_DIR" "$ACCOUNTS_DIR" "$STORE_DIR" \
+        "$STORE_REPLICA_1_DIR" "$STORE_REPLICA_2_DIR" "$NTX_BUILDER_DIR"
     mkdir -p "$NTX_BUILDER_DIR"
 
     echo "Bootstrapping validator..."
@@ -77,6 +86,16 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     $BINARY store bootstrap \
         --data-directory "$STORE_DIR" \
         --genesis-block "$VALIDATOR_DIR/genesis.dat"
+
+    echo "Bootstrapping store replica 1..."
+    $BINARY store bootstrap \
+        --data-directory "$STORE_REPLICA_1_DIR" \
+        --genesis-block "$VALIDATOR_DIR/genesis.dat"
+
+    echo "Bootstrapping store replica 2..."
+    $BINARY store bootstrap \
+        --data-directory "$STORE_REPLICA_2_DIR" \
+        --genesis-block "$VALIDATOR_DIR/genesis.dat"
 else
     echo "=== Skipping bootstrap (SKIP_BOOTSTRAP=true) ==="
 fi
@@ -85,13 +104,12 @@ fi
 
 echo "=== Starting components ==="
 
-echo "Starting store..."
+echo "Starting store (block-producer mode)..."
 $BINARY store start \
     --rpc.url "$STORE_RPC_URL" \
     --ntx-builder.url "$STORE_NTX_BUILDER_URL" \
     --block-producer.url "$STORE_BLOCK_PRODUCER_URL" \
-    --data-directory "$STORE_DIR" \
-    --enable-otel &
+    --data-directory "$STORE_DIR" &
 PIDS+=($!)
 
 KMS_START_ARGS=()
@@ -101,7 +119,6 @@ fi
 
 echo "Starting validator..."
 $BINARY validator start "$VALIDATOR_URL" \
-    --enable-otel \
     --data-directory "$VALIDATOR_DIR" \
     "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)
@@ -109,16 +126,48 @@ PIDS+=($!)
 # Give store and validator a moment to bind their ports.
 sleep 2
 
+# Replica 1 syncs from the primary store.
+echo "Starting store replica 1 (upstream: primary store at $STORE_RPC_URL)..."
+$BINARY store start-replica \
+    --rpc.url "$STORE_REPLICA_1_RPC_URL" \
+    --upstream-store.url "$STORE_RPC_URL" \
+    --data-directory "$STORE_REPLICA_1_DIR" &
+PIDS+=($!)
+
+# Replica 2 syncs from replica 1, proving replicas can act as upstreams.
+echo "Starting store replica 2 (upstream: replica 1 at $STORE_REPLICA_1_RPC_URL)..."
+$BINARY store start-replica \
+    --rpc.url "$STORE_REPLICA_2_RPC_URL" \
+    --upstream-store.url "$STORE_REPLICA_1_RPC_URL" \
+    --data-directory "$STORE_REPLICA_2_DIR" &
+PIDS+=($!)
+
 echo "Starting block producer..."
 $BINARY block-producer start "$BLOCK_PRODUCER_URL" \
     --store.url "http://127.0.0.1:50003" \
     --validator.url "http://127.0.0.1:50101" &
 PIDS+=($!)
 
-echo "Starting RPC server..."
+echo "Starting RPC server (primary store)..."
 $BINARY rpc start \
     --url "$RPC_URL" \
     --store.url "http://127.0.0.1:50001" \
+    --block-producer.url "http://127.0.0.1:50201" \
+    --validator.url "http://127.0.0.1:50101" &
+PIDS+=($!)
+
+echo "Starting RPC server (replica 1)..."
+$BINARY rpc start \
+    --url "$RPC_REPLICA_1_URL" \
+    --store.url "http://127.0.0.1:50011" \
+    --block-producer.url "http://127.0.0.1:50201" \
+    --validator.url "http://127.0.0.1:50101" &
+PIDS+=($!)
+
+echo "Starting RPC server (replica 2)..."
+$BINARY rpc start \
+    --url "$RPC_REPLICA_2_URL" \
+    --store.url "http://127.0.0.1:50021" \
     --block-producer.url "http://127.0.0.1:50201" \
     --validator.url "http://127.0.0.1:50101" &
 PIDS+=($!)
@@ -132,4 +181,6 @@ $BINARY ntx-builder start \
 PIDS+=($!)
 
 echo "=== All components running. Ctrl+C to stop. ==="
+echo "=== Block propagation chain: $STORE_RPC_URL -> $STORE_REPLICA_1_RPC_URL -> $STORE_REPLICA_2_RPC_URL ==="
+echo "=== RPC endpoints: $RPC_URL, $RPC_REPLICA_1_URL, $RPC_REPLICA_2_URL ==="
 wait

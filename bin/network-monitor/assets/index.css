@@ -78,7 +78,7 @@ body {
 
 .main-content {
     width: 100%;
-    max-width: 1200px;
+    max-width: 1400px;
     padding: 0 20px;
 }
 
@@ -325,7 +325,7 @@ body {
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: 16px;
     width: 100%;
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
 }
 

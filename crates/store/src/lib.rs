@@ -17,7 +17,7 @@ pub use errors::DatabaseError;
 pub use genesis::GenesisState;
 pub use server::block_prover_client::BlockProver;
 pub use server::proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
-pub use server::{DataDirectory, Store};
+pub use server::{DataDirectory, Store, StoreMode};
 
 // CONSTANTS
 // =================================================================================================

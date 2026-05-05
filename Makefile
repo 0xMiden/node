@@ -131,7 +131,7 @@ install-network-monitor: ## Installs network monitor binary
 .PHONY: compose-genesis
 compose-genesis: ## Wipes node volumes and creates a fresh genesis block
 	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) down --volumes --remove-orphans
-	$(CONTAINER_RUNTIME) volume rm -f miden-node_genesis-data miden-node_store-data miden-node_validator-data miden-node_ntx-builder-data miden-node_accounts
+	$(CONTAINER_RUNTIME) volume rm -f miden-node_node-data
 	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) --profile genesis run --rm genesis
 
 .PHONY: compose-up

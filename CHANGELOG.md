@@ -3,6 +3,7 @@
 ## v0.15.0 (TBD)
 
 - Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).
+- Reworked `SyncNotes` store queries to fetch multiple matching blocks within one database transaction while preserving the response payload cap ([#2027](https://github.com/0xMiden/node/pull/2027)).
 - Added composite index `idx_transactions_account_block_txid` on `transactions(account_id, block_num, transaction_id)` to speed up `select_transactions_records` queries used by `SyncTransactions` ([#1965](https://github.com/0xMiden/node/issues/1965)).
 - [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` (with optional `include_proof` flag) and returns a response containing the block and an optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
 - Network monitor now auto-regenerates accounts after persistent increment failures instead of staying unhealthy indefinitely ([#1942](https://github.com/0xMiden/node/pull/1942)).
@@ -12,6 +13,9 @@
 - [BREAKING] Network monitor `/status` endpoint now emits a single `RemoteProverStatus` entry per remote prover that bundles status, workers, and test results, instead of separate entries ([#1980](https://github.com/0xMiden/node/pull/1980)).
 - Refactored the validator gRPC API implementation to use the new per-method trait implementations ([#1959](https://github.com/0xMiden/node/pull/1959)).
 - Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, extended `GetLimits` test coverage, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
+- Added a `replica` mode to the store, which streams blocks from an upstream master store ([#1987](https://github.com/0xMiden/node/pull/1987)).
+- Added `StoreReplica` gRPC service with endpoints for streaming blocks and proofs ([#1987](https://github.com/0xMiden/node/pull/1987)).
+- Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 
 ## v0.14.10 (2026-05-29)
 

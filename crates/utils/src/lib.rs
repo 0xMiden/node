@@ -3,6 +3,7 @@ pub mod cors;
 pub mod crypto;
 #[cfg(feature = "testing")]
 pub mod fee;
+pub mod fifo_cache;
 pub mod formatting;
 pub mod fs;
 pub mod grpc;

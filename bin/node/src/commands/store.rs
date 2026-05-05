@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store, StoreMode};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
@@ -15,11 +15,11 @@ use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
 const ENV_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
+const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
 const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 
-#[expect(clippy::large_enum_variant, reason = "single use enum")]
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
     /// Bootstraps the blockchain database with a pre-existing genesis block.
@@ -34,10 +34,10 @@ pub enum StoreCommand {
         genesis_block: PathBuf,
     },
 
-    /// Starts the store component.
+    /// Starts the store in block-producer mode.
     ///
-    /// The store exposes three separate APIs, each on a different address and with the necessary
-    /// endpoints to be accessed by the node's components.
+    /// In this mode the store accepts blocks from a block producer via a dedicated gRPC endpoint
+    /// and runs the proof scheduler to generate block proofs.
     Start {
         /// Url at which to serve the store's RPC API.
         #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
@@ -73,6 +73,36 @@ pub enum StoreCommand {
             value_name = "NUM"
         )]
         max_concurrent_proofs: NonZeroUsize,
+
+        #[command(flatten)]
+        grpc_options: GrpcOptionsInternal,
+
+        #[command(flatten)]
+        storage_options: StorageOptions,
+    },
+
+    /// Starts the store in replica mode.
+    ///
+    /// In this mode the store syncs blocks from an upstream store's `StoreReplica` gRPC service.
+    /// Only the `Rpc` and `StoreReplica` gRPC services are exposed — the `BlockProducer` and
+    /// `NtxBuilder` services are not started and no proof scheduler runs.
+    StartReplica {
+        /// Url at which to serve the store's RPC API.
+        #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
+        url: Url,
+
+        /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
+        #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
+        upstream_store_url: Url,
+
+        /// Directory in which to store the database and raw block data.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+
+        /// Enables the exporting of traces for OpenTelemetry.
+        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
+        enable_otel: bool,
+
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
 
@@ -112,14 +142,32 @@ impl StoreCommand {
                 )
                 .await
             },
+            StoreCommand::StartReplica {
+                url: rpc_url,
+                upstream_store_url,
+                data_directory,
+                enable_otel: _,
+                grpc_options,
+                storage_options,
+            } => {
+                Self::start_replica(
+                    rpc_url,
+                    upstream_store_url,
+                    data_directory,
+                    grpc_options,
+                    storage_options,
+                )
+                .await
+            },
         }
     }
 
     pub fn is_open_telemetry_enabled(&self) -> bool {
-        if let Self::Start { enable_otel, .. } = self {
-            *enable_otel
-        } else {
-            false
+        match self {
+            Self::Start { enable_otel, .. } | Self::StartReplica { enable_otel, .. } => {
+                *enable_otel
+            },
+            Self::Bootstrap { .. } => false,
         }
     }
 
@@ -148,26 +196,54 @@ impl StoreCommand {
             .await
             .context("Failed to bind to store's ntx-builder gRPC URL")?;
 
-        let block_producer_listener = block_producer_url
+        let block_producer_addr = block_producer_url
             .to_socket()
             .context("Failed to extract socket address from store block-producer URL")?;
-        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_listener)
+        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_addr)
             .await
             .context("Failed to bind to store's block-producer gRPC URL")?;
 
         Store {
             rpc_listener,
-            block_prover_url,
-            ntx_builder_listener,
-            block_producer_listener,
+            mode: StoreMode::BlockProducer {
+                block_producer_listener,
+                ntx_builder_listener,
+                block_prover_url,
+                max_concurrent_proofs,
+            },
             data_directory,
             grpc_options,
-            max_concurrent_proofs,
             storage_options,
         }
         .serve()
         .await
         .context("failed while serving store component")
+    }
+
+    async fn start_replica(
+        rpc_url: Url,
+        upstream_store_url: Url,
+        data_directory: PathBuf,
+        grpc_options: GrpcOptionsInternal,
+        storage_options: StorageOptions,
+    ) -> anyhow::Result<()> {
+        let rpc_listener = rpc_url
+            .to_socket()
+            .context("Failed to extract socket address from store RPC URL")?;
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_listener)
+            .await
+            .context("Failed to bind to store's RPC gRPC URL")?;
+
+        Store {
+            rpc_listener,
+            mode: StoreMode::Replica { upstream_url: upstream_store_url },
+            data_directory,
+            grpc_options,
+            storage_options,
+        }
+        .serve()
+        .await
+        .context("failed while serving store replica component")
     }
 }
 
