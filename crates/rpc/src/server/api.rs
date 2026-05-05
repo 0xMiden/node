@@ -741,7 +741,6 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamAccountIdLimit as AccountId;
     use QueryParamNoteIdLimit as NoteId;
     use QueryParamNoteTagLimit as NoteTag;
-    
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
 
