@@ -19,6 +19,7 @@ doctest = false
 
 [dependencies]
 anyhow                          = { workspace = true }
+async-trait                     = { workspace = true }
 deadpool                        = { features = ["managed", "rt_tokio_1"], workspace = true }
 deadpool-diesel                 = { features = ["sqlite"], workspace = true }
 diesel                          = { features = ["numeric", "sqlite"], workspace = true }
@@ -36,6 +37,7 @@ miden-node-proto-build          = { features = ["internal"], workspace = true }
 miden-node-utils                = { workspace = true }
 miden-remote-prover-client      = { features = ["block-prover"], workspace = true }
 miden-standards                 = { workspace = true }
+pin-project                     = "1"
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -44,7 +46,7 @@ rand_chacha       = { workspace = true }
 serde             = { workspace = true }
 thiserror         = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
-tokio-stream      = { features = ["net"], workspace = true }
+tokio-stream      = { features = ["net", "sync"], workspace = true }
 toml              = { workspace = true }
 tonic             = { default-features = true, workspace = true }
 tonic-reflection  = { workspace = true }

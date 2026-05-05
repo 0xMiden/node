@@ -8,7 +8,7 @@ use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
-use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store};
+use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store, StoreMode};
 use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
@@ -552,12 +552,14 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
-            block_prover_url: None,
-            ntx_builder_listener,
-            block_producer_listener,
+            mode: StoreMode::BlockProducer {
+                block_producer_listener,
+                ntx_builder_listener,
+                block_prover_url: None,
+                max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
+            },
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::test(),
-            max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             storage_options: StorageOptions::default(),
         }
         .serve()
@@ -596,12 +598,14 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
     store_runtime.spawn(async move {
         Store {
             rpc_listener,
-            block_prover_url: None,
-            ntx_builder_listener,
-            block_producer_listener,
+            mode: StoreMode::BlockProducer {
+                block_producer_listener,
+                ntx_builder_listener,
+                block_prover_url: None,
+                max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
+            },
             data_directory: dir,
             grpc_options: GrpcOptionsInternal::test(),
-            max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             storage_options: StorageOptions::default(),
         }
         .serve()
