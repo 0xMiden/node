@@ -157,6 +157,7 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
         ServiceDetails::ExplorerStatus(d) => cards::render_explorer(d, rpc_chain_tip, healthy),
         ServiceDetails::NoteTransportStatus(d) => cards::render_note_transport(d, healthy),
         ServiceDetails::ValidatorStatus(d) => cards::render_validator(d, healthy),
+        ServiceDetails::NightlyCi(d) => cards::render_nightly_ci(d, healthy),
         ServiceDetails::Error => html! {},
     }
 }

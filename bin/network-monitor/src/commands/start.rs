@@ -63,6 +63,14 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     let validator_rx =
         config.validator_url.is_some().then(|| tasks.spawn_validator_checker(&config));
 
+    // External nightly CI card. Both --nightly-ci-repo and --nightly-ci-workflow must be
+    // set; either alone is treated as misconfiguration and the card is dropped silently.
+    // (We don't error out so a partial/copy-paste config doesn't block the whole monitor.)
+    let nightly_ci_rx = match (&config.nightly_ci_repo, &config.nightly_ci_workflow) {
+        (Some(_), Some(_)) => Some(tasks.spawn_nightly_ci_checker(&config)),
+        _ => None,
+    };
+
     // Build the flat services Vec in the order the dashboard expects to render cards.
     let services = std::iter::once(rpc_rx)
         .chain(prover_rxs)
@@ -72,6 +80,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         .chain(ntx_tracking_rx)
         .chain(note_transport_rx)
         .chain(validator_rx)
+        .chain(nightly_ci_rx)
         .collect();
 
     let server_state = ServerState {

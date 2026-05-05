@@ -11,6 +11,7 @@ use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus, StoreStat
 use serde::{Deserialize, Serialize};
 
 use crate::faucet::FaucetTestDetails;
+use crate::nightly_ci::NightlyCiDetails;
 use crate::remote_prover::{ProofType, ProverTestDetails};
 
 // STATUS
@@ -136,6 +137,8 @@ pub enum ServiceDetails {
     ExplorerStatus(ExplorerStatusDetails),
     NoteTransportStatus(NoteTransportStatusDetails),
     ValidatorStatus(ValidatorStatusDetails),
+    /// Latest scheduled run of an external (e.g. wallet) CI workflow.
+    NightlyCi(NightlyCiDetails),
     Error,
 }
 

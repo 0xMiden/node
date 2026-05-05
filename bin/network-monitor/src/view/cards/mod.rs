@@ -3,6 +3,7 @@
 
 mod explorer;
 mod faucet;
+mod nightly_ci;
 mod note_transport;
 mod ntx;
 mod remote_prover;
@@ -11,6 +12,7 @@ mod validator;
 
 pub(super) use explorer::render_explorer;
 pub(super) use faucet::render_faucet_test;
+pub(super) use nightly_ci::render_nightly_ci;
 pub(super) use note_transport::render_note_transport;
 pub(super) use ntx::{render_ntx_increment, render_ntx_tracking};
 pub(super) use remote_prover::render_remote_prover;

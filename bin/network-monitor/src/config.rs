@@ -203,4 +203,66 @@ pub struct MonitorConfig {
         help = "Maximum time without a chain tip update before marking RPC as unhealthy"
     )]
     pub stale_chain_tip_threshold: Duration,
+
+    // ============================================================================================
+    // External nightly CI card
+    // ============================================================================================
+    //
+    // Optional card surfacing the latest scheduled run of a workflow on a public GitHub
+    // repository (anonymous read; 60 req/hr quota). Intended for the wallet's
+    // `e2e-blockchain-chrome-{devnet,testnet}.yml` nightly. Set both `--nightly-ci-repo`
+    // and `--nightly-ci-workflow` to enable; either alone is treated as misconfiguration
+    // and the card stays absent.
+
+    /// External repository to monitor in `owner/repo` form (e.g. `0xMiden/wallet`).
+    ///
+    /// When set together with `--nightly-ci-workflow`, the monitor adds a card showing the
+    /// latest scheduled run of that workflow on the configured branch.
+    #[arg(
+        long = "nightly-ci-repo",
+        env = "MIDEN_MONITOR_NIGHTLY_CI_REPO",
+        help = "External GitHub repo to surface a nightly CI card for, in owner/repo form"
+    )]
+    pub nightly_ci_repo: Option<String>,
+
+    /// Workflow filename inside the configured repo (e.g.
+    /// `e2e-blockchain-chrome-devnet.yml`). Filename is stable across repo renames; we use
+    /// it instead of the numeric workflow id.
+    #[arg(
+        long = "nightly-ci-workflow",
+        env = "MIDEN_MONITOR_NIGHTLY_CI_WORKFLOW",
+        help = "Workflow filename to monitor inside --nightly-ci-repo"
+    )]
+    pub nightly_ci_workflow: Option<String>,
+
+    /// Card title shown on the dashboard for the nightly CI card.
+    #[arg(
+        long = "nightly-ci-card-name",
+        env = "MIDEN_MONITOR_NIGHTLY_CI_CARD_NAME",
+        default_value = "Wallet Nightly E2E",
+        help = "Display name for the nightly CI card"
+    )]
+    pub nightly_ci_card_name: String,
+
+    /// Branch the nightly schedule runs against. Almost always `main` — exposed as a
+    /// config knob mostly so a maintainer can point at a temporary branch for testing.
+    #[arg(
+        long = "nightly-ci-branch",
+        env = "MIDEN_MONITOR_NIGHTLY_CI_BRANCH",
+        default_value = "main",
+        help = "Branch the monitored nightly workflow runs against"
+    )]
+    pub nightly_ci_branch: String,
+
+    /// Poll interval for the nightly CI card. 10 min is well under the 60 req/hr anon
+    /// limit (6/hour) while still being fresh enough that a UI viewer never sees data
+    /// older than a quarter hour.
+    #[arg(
+        long = "nightly-ci-check-interval",
+        env = "MIDEN_MONITOR_NIGHTLY_CI_CHECK_INTERVAL",
+        default_value = "10m",
+        value_parser = humantime::parse_duration,
+        help = "How often to poll GitHub for the latest nightly run"
+    )]
+    pub nightly_ci_check_interval: Duration,
 }

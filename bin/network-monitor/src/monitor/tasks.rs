@@ -18,6 +18,7 @@ use crate::deploy::ensure_accounts_exist;
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
+use crate::nightly_ci::{NightlyCiConfig, NightlyCiService};
 use crate::note_transport::NoteTransportService;
 use crate::remote_prover::{ProbeSnapshot, ProverStatusService, generate_prover_test_payload};
 use crate::service::{Service, build_tls_client};
@@ -85,6 +86,29 @@ impl Tasks {
             config.status_check_interval,
             config.request_timeout,
         );
+        self.spawn_service(svc)
+    }
+
+    /// Spawn the external nightly CI checker task. Requires both
+    /// `--nightly-ci-repo` and `--nightly-ci-workflow` to be set; the caller is responsible
+    /// for that gating (returns early in `start.rs` if either is missing).
+    pub fn spawn_nightly_ci_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let repo = config
+            .nightly_ci_repo
+            .clone()
+            .expect("--nightly-ci-repo set when spawn_nightly_ci_checker is called");
+        let workflow_path = config
+            .nightly_ci_workflow
+            .clone()
+            .expect("--nightly-ci-workflow set when spawn_nightly_ci_checker is called");
+        let svc = NightlyCiService::new(NightlyCiConfig {
+            name: config.nightly_ci_card_name.clone(),
+            repo,
+            workflow_path,
+            branch: config.nightly_ci_branch.clone(),
+            interval: config.nightly_ci_check_interval,
+            request_timeout: config.request_timeout,
+        });
         self.spawn_service(svc)
     }
 
