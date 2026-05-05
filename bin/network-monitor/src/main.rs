@@ -22,6 +22,7 @@ pub mod service;
 pub mod service_status;
 pub mod status;
 pub mod validator;
+mod view;
 
 // Re-exports for cleaner imports
 use cli::Cli;
