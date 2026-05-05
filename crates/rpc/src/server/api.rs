@@ -38,7 +38,13 @@ use miden_protocol::transaction::{
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
+use miden_protocol::{
+    MAX_ACCOUNTS_PER_BATCH,
+    MAX_INPUT_NOTES_PER_BATCH,
+    MAX_OUTPUT_NOTES_PER_BATCH,
+    MIN_PROOF_SECURITY_LEVEL,
+    Word,
+};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
 use tonic::{IntoRequest, Request, Response, Status};
@@ -584,6 +590,8 @@ impl api_server::Api for RpcService {
             )));
         }
 
+        validate_batch_budget(&proposed_batch)?;
+
         // Only allow deployment transactions for new network accounts.
         for tx in proposed_batch.transactions() {
             if tx.account_id().is_network()
@@ -733,6 +741,31 @@ fn strip_output_note_decorators<'a>(
         },
         OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
+}
+
+fn validate_batch_budget(batch: &ProposedBatch) -> Result<(), Status> {
+    let accounts = batch.transactions().len();
+    let input_notes = batch
+        .transactions()
+        .iter()
+        .map(|tx| tx.input_notes().num_notes() as usize)
+        .sum::<usize>();
+    let output_notes = batch
+        .transactions()
+        .iter()
+        .map(|tx| tx.output_notes().num_notes())
+        .sum::<usize>();
+
+    if accounts > MAX_ACCOUNTS_PER_BATCH
+        || input_notes > MAX_INPUT_NOTES_PER_BATCH
+        || output_notes > MAX_OUTPUT_NOTES_PER_BATCH
+    {
+        return Err(Status::invalid_argument(format!(
+            "batch exceeds batch budget: max {MAX_ACCOUNTS_PER_BATCH} account updates, {MAX_INPUT_NOTES_PER_BATCH} input notes, and {MAX_OUTPUT_NOTES_PER_BATCH} output notes"
+        )));
+    }
+
+    Ok(())
 }
 
 // LIMIT HELPERS
