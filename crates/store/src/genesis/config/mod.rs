@@ -439,7 +439,8 @@ impl FungibleFaucetConfig {
         let init_seed: [u8; 32] = rng.random();
 
         let token_metadata = FungibleTokenMetadata::builder(
-            TokenName::new("").expect("empty token name is always valid"),
+            TokenName::new(&symbol.to_string())
+                .expect("token symbol fits within token name byte limit"),
             symbol.as_ref().clone(),
             decimals,
             max_supply,
