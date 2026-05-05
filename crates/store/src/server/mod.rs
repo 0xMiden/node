@@ -200,7 +200,7 @@ impl Store {
     /// Spawns a background task that periodically records the on-disk size of every store data
     /// path as OTel span attributes.
     ///
-    /// Sizes are measured with [`std::fs::metadata`] (no SQL connections, no lock contention).
+    /// Sizes are measured with [`fs_err::metadata`] (no SQL connections, no lock contention).
     /// Errors are logged as warnings and never cause the server to stop.
     fn spawn_disk_monitor(data_directory: PathBuf) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
@@ -277,7 +277,7 @@ struct DiskUsage {
 
 /// Collects on-disk byte sizes for every store data path under `data_dir`.
 ///
-/// Uses only [`std::fs::metadata`] and [`std::fs::read_dir`] — no SQLite connections are opened,
+/// Uses only [`fs_err::metadata`] and [`fs_err::read_dir`] — no SQLite connections are opened,
 /// so there is no read-lock contention with concurrent database writers.
 fn measure_disk_usage_bytes(data_dir: &Path) -> DiskUsage {
     DiskUsage {
@@ -293,7 +293,7 @@ fn measure_disk_usage_bytes(data_dir: &Path) -> DiskUsage {
 
 /// Returns the byte length of the file at `path`, or `0` if it does not exist.
 fn path_size_bytes(path: &Path) -> u64 {
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    fs_err::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
 /// Returns the total byte length of all files in `path` iteratively, or `0` on any error.
@@ -301,7 +301,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
     let mut to_process = vec![path.to_path_buf()];
     let mut total = 0u64;
     while let Some(dir) = to_process.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Ok(entries) = fs_err::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
