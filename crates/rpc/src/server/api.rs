@@ -238,6 +238,7 @@ impl RpcService {
 
         Ok(())
     }
+
 }
 
 // API IMPLEMENTATION
@@ -474,6 +475,13 @@ impl api_server::Api for RpcService {
         span.set_attribute("transaction.reference_block.number", tx.ref_block_num());
         span.set_attribute("transaction.reference_block.commitment", tx.ref_block_commitment());
 
+        let chain_tip = BlockNumber::from(
+            self.store.clone().status(Request::new(())).await?.into_inner().chain_tip,
+        );
+        if let Some(err) = expiration_error("transaction", tx.expiration_block_num(), chain_tip) {
+            return Err(err);
+        }
+
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
             .await?;
@@ -556,6 +564,15 @@ impl api_server::Api for RpcService {
             "batch.reference_block.commitment",
             proven_batch.reference_block_commitment(),
         );
+
+        let chain_tip = BlockNumber::from(
+            self.store.clone().status(Request::new(())).await?.into_inner().chain_tip,
+        );
+        if let Some(err) =
+            expiration_error("batch", proven_batch.batch_expiration_block_num(), chain_tip)
+        {
+            return Err(err);
+        }
 
         let proposed_batch = request
             .proposed_batch
@@ -733,6 +750,51 @@ fn strip_output_note_decorators<'a>(
         },
         OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
+}
+
+fn expiration_error(
+    kind: &'static str,
+    expires_at: BlockNumber,
+    chain_tip: BlockNumber,
+) -> Option<Status> {
+    (expires_at <= chain_tip).then(|| {
+        Status::invalid_argument(format!(
+            "{kind} expired at block height {expires_at} but the chain tip is {chain_tip}",
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use tonic::Code;
+
+    use super::expiration_error;
+
+    #[test]
+    fn expiration_error_rejects_expired_transaction() {
+        let err = expiration_error("transaction", 10u32.into(), 10u32.into())
+            .expect("transaction should be expired");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(
+            err.message(),
+            "transaction expired at block height 10 but the chain tip is 10"
+        );
+    }
+
+    #[test]
+    fn expiration_error_rejects_expired_batch() {
+        let err =
+            expiration_error("batch", 9u32.into(), 10u32.into()).expect("batch should be expired");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(err.message(), "batch expired at block height 9 but the chain tip is 10");
+    }
+
+    #[test]
+    fn expiration_error_accepts_future_expiration() {
+        assert!(expiration_error("transaction", 11u32.into(), 10u32.into()).is_none());
+    }
 }
 
 // LIMIT HELPERS
