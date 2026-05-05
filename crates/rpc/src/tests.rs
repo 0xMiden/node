@@ -16,7 +16,6 @@ use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
-    QueryParamNullifierLimit,
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::Word;
@@ -627,18 +626,6 @@ async fn get_limits_endpoint() {
 
     // Verify the response contains expected endpoints and limits
     assert!(!limits.endpoints.is_empty(), "endpoints should not be empty");
-
-    // Verify CheckNullifiers endpoint
-    let check_nullifiers =
-        limits.endpoints.get("CheckNullifiers").expect("CheckNullifiers should exist");
-
-    assert_eq!(
-        check_nullifiers.parameters.get(QueryParamNullifierLimit::PARAM_NAME),
-        Some(&(QueryParamNullifierLimit::LIMIT as u32)),
-        "CheckNullifiers {} limit should be {}",
-        QueryParamNullifierLimit::PARAM_NAME,
-        QueryParamNullifierLimit::LIMIT
-    );
 
     let sync_transactions =
         limits.endpoints.get("SyncTransactions").expect("SyncTransactions should exist");

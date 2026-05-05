@@ -24,19 +24,6 @@ service Api {
     // multiple smaller requests.
     rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
 
-    // Returns a Sparse Merkle Tree opening proof for each requested nullifier
-    //
-    // Each proof demonstrates either:
-    // - **Inclusion**: Nullifier exists in the tree (note was consumed)
-    // - **Non-inclusion**: Nullifier does not exist (note was not consumed)
-    //
-    // The `leaf` field indicates the status:
-    // * `empty_leaf_index`: Non-inclusion proof (nullifier not in tree)
-    // * `single` or `multiple`: Inclusion proof only if the requested nullifier appears as a key.
-    //
-    // Verify proofs against the nullifier tree root in the latest block header.
-    rpc CheckNullifiers(NullifierList) returns (CheckNullifiersResponse) {}
-
     // Returns the latest details of the specified account.
     rpc GetAccount(AccountRequest) returns (AccountResponse) {}
 
@@ -358,21 +345,6 @@ message AccountStorageDetails {
     repeated AccountStorageMapDetails map_details = 2;
 }
 
-// CHECK NULLIFIERS
-// ================================================================================================
-
-// List of nullifiers to return proofs for.
-message NullifierList {
-    // List of nullifiers to return proofs for.
-    repeated primitives.Digest nullifiers = 1;
-}
-
-// Represents the result of checking nullifiers.
-message CheckNullifiersResponse {
-    // Each requested nullifier has its corresponding nullifier proof at the same position.
-    repeated primitives.SmtOpening proofs = 1;
-}
-
 // SYNC NULLIFIERS
 // ================================================================================================
 
@@ -685,7 +657,7 @@ message GetNetworkNoteStatusResponse {
 // Represents the query parameter limits for RPC endpoints.
 message RpcLimits {
     // Maps RPC endpoint names to their parameter limits.
-    // Key: endpoint name (e.g., "CheckNullifiers")
+    // Key: endpoint name (e.g., "SyncNullifiers")
     // Value: map of parameter names to their limit values
     map<string, EndpointLimits> endpoints = 1;
 }
