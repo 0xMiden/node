@@ -198,7 +198,7 @@ impl Store {
     }
 
     /// Spawns a background task that periodically records the on-disk size of every store data
-    /// path as OTel span attributes.
+    /// path as `OTel` span attributes.
     ///
     /// Sizes are measured with [`fs_err::metadata`] (no SQL connections, no lock contention).
     /// Errors are logged as warnings and never cause the server to stop.
