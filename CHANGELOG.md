@@ -17,6 +17,7 @@
 - Added `StoreReplica` gRPC service with endpoints for streaming blocks and proofs ([#1987](https://github.com/0xMiden/node/pull/1987)).
 - Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 - [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
+- Added RPC validation to reject submitted batches that exceed protocol account or note budgets ([#2037](https://github.com/0xMiden/node/issues/2037)).
 
 ## v0.14.10 (2026-05-29)
 
