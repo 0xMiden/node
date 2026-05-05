@@ -4,6 +4,7 @@
 //! data is atomically written, and that reads are consistent.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 use tracing::{Instrument, info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, WitnessError};
@@ -52,11 +53,16 @@ use crate::errors::{
     GetCurrentBlockchainDataError,
     StateInitializationError,
 };
-use crate::proven_tip::{ProvenTipReader, ProvenTipWriter};
+use crate::proven_tip::ProvenTipWriter;
 use crate::{COMPONENT, DataDirectory};
 
-mod loader;
+/// Number of recent committed blocks held in the in-memory cache for replica subscriptions.
+const BLOCK_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
+/// Number of recent block proofs held in the in-memory cache for replica subscriptions.
+const PROOF_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+
+mod loader;
 use loader::{
     ACCOUNT_TREE_STORAGE_DIR,
     NULLIFIER_TREE_STORAGE_DIR,
@@ -67,7 +73,11 @@ use loader::{
     verify_tree_consistency,
 };
 
+mod replica;
+pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
+
 mod apply_block;
+mod apply_proof;
 mod sync_state;
 
 // FINALITY
@@ -139,8 +149,21 @@ pub struct State {
     /// Request termination of the process due to a fatal internal state error.
     termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
 
-    /// The latest proven-in-sequence block number, updated by the proof scheduler.
-    proven_tip: ProvenTipReader,
+    /// The latest proven-in-sequence block number, updated by the proof scheduler or
+    /// `apply_proof`.
+    proven_tip: ProvenTipWriter,
+
+    /// Watch sender fired after each block is committed. Replicas subscribe via
+    /// `subscribe_committed_tip()` to be woken when new blocks arrive.
+    committed_tip_tx: watch::Sender<BlockNumber>,
+
+    /// FIFO cache of recent committed blocks for replica subscriptions. When a subscriber needs a
+    /// block that has been evicted, it falls back to loading from the block store.
+    pub(crate) block_cache: BlockCache,
+
+    /// FIFO cache of recent block proofs for replica subscriptions. When a subscriber needs a
+    /// proof that has been evicted, it falls back to loading from the block store.
+    pub(crate) proof_cache: ProofCache,
 }
 
 impl State {
@@ -148,6 +171,9 @@ impl State {
     // --------------------------------------------------------------------------------------------
 
     /// Loads the state from the data directory.
+    ///
+    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler to
+    /// advance the proven tip; callers can subscribe to tip changes via the methods on `Self`.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
@@ -202,9 +228,12 @@ impl State {
         let db = Arc::new(db);
 
         // Initialize the proven tip from database.
-        let proven_tip =
+        let proven_tip_init =
             db.proven_chain_tip().await.map_err(StateInitializationError::DatabaseError)?;
-        let (proven_tip_writer, proven_tip) = ProvenTipWriter::new(proven_tip);
+        let (proven_tip, _rx) = ProvenTipWriter::new(proven_tip_init);
+
+        // Committed-tip watch: fires after each successful apply_block.
+        let (committed_tip_tx, _rx) = watch::channel(latest_block_num);
 
         Ok((
             Self {
@@ -214,9 +243,12 @@ impl State {
                 forest,
                 writer,
                 termination_ask,
-                proven_tip,
+                proven_tip: proven_tip.clone(),
+                committed_tip_tx,
+                block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),
+                proof_cache: ProofCache::new(PROOF_CACHE_CAPACITY),
             },
-            proven_tip_writer,
+            proven_tip,
         ))
     }
 
@@ -228,6 +260,16 @@ impl State {
     /// Returns the block store.
     pub(crate) fn block_store(&self) -> Arc<BlockStore> {
         Arc::clone(&self.block_store)
+    }
+
+    /// Returns a watch receiver that wakes every time a new block is committed.
+    pub(crate) fn subscribe_committed_tip(&self) -> watch::Receiver<BlockNumber> {
+        self.committed_tip_tx.subscribe()
+    }
+
+    /// Returns a watch receiver that wakes every time the proven-in-sequence tip advances.
+    pub(crate) fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
+        self.proven_tip.subscribe()
     }
 
     // STATE ACCESSORS

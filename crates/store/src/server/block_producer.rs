@@ -13,6 +13,7 @@ use miden_protocol::Word;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
+use tokio::sync::watch;
 use tonic::{Request, Response, Status};
 use tracing::{Instrument, error};
 
@@ -26,11 +27,23 @@ use crate::server::api::{
 };
 use crate::state::Finality;
 
+// BLOCK PRODUCER API
+// ================================================================================================
+
+/// Extends [`StoreApi`] with the proof-scheduler notification channel, which is only required
+/// by the `BlockProducer` gRPC service. Not used in replica mode.
+#[derive(Clone)]
+pub(super) struct BlockProducerApi {
+    pub(super) inner: StoreApi,
+    /// Notifies the proof scheduler of the latest committed block number after each `apply_block`.
+    pub(super) chain_tip_sender: watch::Sender<BlockNumber>,
+}
+
 // BLOCK PRODUCER ENDPOINTS
 // ================================================================================================
 
 #[tonic::async_trait]
-impl block_producer_server::BlockProducer for StoreApi {
+impl block_producer_server::BlockProducer for BlockProducerApi {
     /// Returns block header for the specified block number.
     ///
     /// If the block number is not provided, block header for the latest block is returned.
@@ -38,7 +51,7 @@ impl block_producer_server::BlockProducer for StoreApi {
         &self,
         request: Request<proto::rpc::BlockHeaderByNumberRequest>,
     ) -> Result<Response<proto::rpc::BlockHeaderByNumberResponse>, Status> {
-        self.get_block_header_by_number_inner(request).await
+        self.inner.get_block_header_by_number_inner(request).await
     }
 
     /// Updates the local DB by inserting a new block header and the related data.
@@ -66,11 +79,13 @@ impl block_producer_server::BlockProducer for StoreApi {
 
         // Get block inputs from ordered batches.
         let block_inputs =
-            self.block_inputs_from_ordered_batches(&ordered_batches).await.map_err(|err| {
-                Status::invalid_argument(
-                    err.as_report_context("failed to get block inputs from ordered batches"),
-                )
-            })?;
+            self.inner.block_inputs_from_ordered_batches(&ordered_batches).await.map_err(
+                |err| {
+                    Status::invalid_argument(
+                        err.as_report_context("failed to get block inputs from ordered batches"),
+                    )
+                },
+            )?;
 
         let span = tracing::Span::current();
         span.set_attribute("block.number", header.block_num());
@@ -101,7 +116,8 @@ impl block_producer_server::BlockProducer for StoreApi {
                     .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
                 // Note: This is an internal endpoint, so its safe to expose the full error
                 // report.
-                this.state
+                this.inner
+                    .state
                     .apply_block(signed_block, Some(proving_inputs))
                     .await
                     .inspect(|_| {
@@ -144,7 +160,8 @@ impl block_producer_server::BlockProducer for StoreApi {
         let unauthenticated_note_commitments =
             unauthenticated_note_commitments.into_iter().collect();
 
-        self.state
+        self.inner
+            .state
             .get_block_inputs(
                 account_ids,
                 nullifiers,
@@ -177,7 +194,8 @@ impl block_producer_server::BlockProducer for StoreApi {
                 .expect("operation should be infallible");
         let reference_blocks = reference_blocks.into_iter().map(BlockNumber::from).collect();
 
-        self.state
+        self.inner
+            .state
             .get_batch_inputs(reference_blocks, note_commitments.into_iter().collect())
             .await
             .map(Into::into)
@@ -200,13 +218,14 @@ impl block_producer_server::BlockProducer for StoreApi {
             validate_note_commitments(&request.unauthenticated_notes)?;
 
         let tx_inputs = self
+            .inner
             .state
             .get_transaction_inputs(account_id, &nullifiers, unauthenticated_note_commitments)
             .await
             .inspect_err(|err| tracing::Span::current().set_error(err))
             .map_err(|err| tonic::Status::internal(err.as_report()))?;
 
-        let block_height = self.state.chain_tip(Finality::Committed).await.as_u32();
+        let block_height = self.inner.state.chain_tip(Finality::Committed).await.as_u32();
 
         Ok(Response::new(proto::store::TransactionInputs {
             account_state: Some(proto::store::transaction_inputs::AccountTransactionInputRecord {

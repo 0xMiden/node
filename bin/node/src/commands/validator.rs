@@ -62,7 +62,7 @@ pub enum ValidatorCommand {
         ///
         /// This can be further configured using environment variables as defined in the official
         /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = true, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
+        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
 
         #[command(flatten)]

@@ -5,29 +5,27 @@ services:
     profiles:
       - genesis
     volumes:
-      - genesis-data:/genesis
-      - store-data:/store
-      - validator-data:/validator
-      - accounts:/accounts
+      - node-data:/data
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
+        mkdir -p /data/genesis /data/store /data/validator /data/accounts /data/ntx-builder
         echo "Bootstrapping validator (creating genesis block)..."
         miden-node validator bootstrap \
-          --data-directory /validator \
-          --genesis-block-directory /genesis \
-          --accounts-directory /accounts
+          --data-directory /data/validator \
+          --genesis-block-directory /data/genesis \
+          --accounts-directory /data/accounts
         echo "Bootstrapping store..."
         miden-node store bootstrap \
-          --data-directory /store \
-          --genesis-block /genesis/genesis.dat
+          --data-directory /data/store \
+          --genesis-block /data/genesis/genesis.dat
 
   store:
     image: miden-node-image
     pull_policy: if_not_present
     volumes:
-      - store-data:/data
+      - node-data:/data
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
@@ -39,7 +37,7 @@ services:
       - --rpc.url=http://0.0.0.0:50001
       - --ntx-builder.url=http://0.0.0.0:50002
       - --block-producer.url=http://0.0.0.0:50003
-      - --data-directory=/data
+      - --data-directory=/data/store
       - --account_tree.rocksdb.max_cache_size=4294967296
       - --account_tree.rocksdb.max_open_fds=512
       - --nullifier_tree.rocksdb.max_cache_size=4294967296
@@ -53,7 +51,7 @@ services:
     image: miden-node-image
     pull_policy: if_not_present
     volumes:
-      - validator-data:/data
+      - node-data:/data
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
@@ -63,7 +61,7 @@ services:
       - validator
       - start
       - http://0.0.0.0:50101
-      - --data-directory=/data
+      - --data-directory=/data/validator
     ports:
       - "50101:50101"
 
@@ -106,7 +104,7 @@ services:
     image: miden-node-image
     pull_policy: if_not_present
     volumes:
-      - ntx-builder-data:/data
+      - node-data:/data
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
@@ -118,11 +116,8 @@ services:
       - --store.url=http://store:50002
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101
-      - --data-directory=/data
+      - --data-directory=/data/ntx-builder
+
 
 volumes:
-  genesis-data:
-  store-data:
-  validator-data:
-  ntx-builder-data:
-  accounts:
+  node-data:

@@ -15,7 +15,7 @@ use tracing::{Instrument, info, info_span, instrument};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, InvalidBlockError};
-use crate::state::State;
+use crate::state::{BlockNotification, State};
 use crate::{COMPONENT, HistoricalError};
 
 impl State {
@@ -69,6 +69,8 @@ impl State {
         // finalized blocks. So we should check for the latest block when getting block from
         // the store.
         let signed_block_bytes = signed_block.to_bytes();
+        // Clone before moving into the block-save task so we can cache for replicas at commit.
+        let cache_bytes = signed_block_bytes.clone();
         let store = Arc::clone(&self.block_store);
         let block_save_task = tokio::spawn(
             async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
@@ -178,6 +180,10 @@ impl State {
             .instrument(info_span!(target: COMPONENT, "acquire_forest_write_lock"))
             .await
             .apply_block_updates(block_num, account_deltas)?;
+
+        // Push to cache and notify replica subscribers.
+        self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
+        let _ = self.committed_tip_tx.send(block_num);
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 
