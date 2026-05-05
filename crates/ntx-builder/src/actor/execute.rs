@@ -201,6 +201,7 @@ impl NtxContext {
                 // using the parent runtime handle so that async data-store callbacks (gRPC
                 // calls to the store) are driven by the existing I/O driver.
                 let ctx = self.clone();
+                let handle = tokio::runtime::Handle::current();
                 let (executed_tx, failed_notes, scripts_to_cache) =
                     tokio::task::spawn_blocking(move || {
                         let data_store = NtxDataStore::new(
@@ -211,7 +212,7 @@ impl NtxContext {
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
                         );
-                        tokio::runtime::Handle::current().block_on(async {
+                        handle.block_on(async {
                             let (successful_notes, failed_notes) =
                                 ctx.filter_notes(&data_store, notes).await?;
                             let executed_tx =
