@@ -145,9 +145,13 @@ fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountBuilder, AccountFile, AccountStorageMode, AccountType};
     use miden_standards::account::auth::AuthSingleSig;
-    use miden_standards::account::burn_policies::BurnAuthControlled;
     use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
-    use miden_standards::account::mint_policies::MintAuthControlled;
+    use miden_standards::account::policies::{
+        BurnPolicyConfig,
+        MintPolicyConfig,
+        PolicyAuthority,
+        TokenPolicyManager,
+    };
     use tempfile::tempdir;
 
     // Create a temporary directory for our test files
@@ -176,8 +180,11 @@ fn parsing_native_faucet_from_file() -> TestResult {
         .with_auth_component(auth)
         .with_component(token_metadata)
         .with_component(BasicFungibleFaucet)
-        .with_component(MintAuthControlled::allow_all())
-        .with_component(BurnAuthControlled::allow_all())
+        .with_components(TokenPolicyManager::new(
+            PolicyAuthority::AuthControlled,
+            MintPolicyConfig::AllowAll,
+            BurnPolicyConfig::AllowAll,
+        ))
         .build()?;
 
     let faucet_id = faucet_account.id();

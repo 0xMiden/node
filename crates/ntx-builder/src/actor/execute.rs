@@ -18,7 +18,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::errors::TransactionInputError;
-use miden_protocol::note::{Note, NoteScript};
+use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -566,9 +566,10 @@ impl DataStore for NtxDataStore {
     /// 3. Remote store via gRPC.
     fn get_note_script(
         &self,
-        script_root: Word,
+        script_root: NoteScriptRoot,
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
+            let script_root = Word::from(script_root);
             // 1. In-memory LRU cache.
             if let Some(cached_script) = self.script_cache.get(&script_root) {
                 return Ok(Some(cached_script));

@@ -602,7 +602,7 @@ fn note_script_insert_and_lookup() {
     let account_id = mock_network_account_id();
     let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into_note();
     let script = note.script().clone();
-    let root = script.root();
+    let root = Word::from(script.root());
 
     // Insert the script.
     insert_note_script(conn, &root, &script).unwrap();
@@ -629,7 +629,7 @@ fn note_script_insert_is_idempotent() {
     let account_id = mock_network_account_id();
     let note: miden_protocol::note::Note = mock_single_target_note(account_id, 10).into_note();
     let script = note.script().clone();
-    let root = script.root();
+    let root = Word::from(script.root());
 
     // Insert the same script twice — should not error.
     insert_note_script(conn, &root, &script).unwrap();

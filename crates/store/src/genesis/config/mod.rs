@@ -28,10 +28,14 @@ use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
-use miden_standards::account::burn_policies::BurnAuthControlled;
 use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
 use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
-use miden_standards::account::mint_policies::MintAuthControlled;
+use miden_standards::account::policies::{
+    BurnPolicyConfig,
+    MintPolicyConfig,
+    PolicyAuthority,
+    TokenPolicyManager,
+};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
 use rand::{Rng, SeedableRng};
@@ -454,8 +458,11 @@ impl FungibleFaucetConfig {
             .with_auth_component(auth)
             .with_component(token_metadata)
             .with_component(BasicFungibleFaucet)
-            .with_component(MintAuthControlled::allow_all())
-            .with_component(BurnAuthControlled::allow_all())
+            .with_components(TokenPolicyManager::new(
+                PolicyAuthority::AuthControlled,
+                MintPolicyConfig::AllowAll,
+                BurnPolicyConfig::AllowAll,
+            ))
             .build()?;
 
         debug_assert_eq!(faucet_account.nonce(), Felt::ZERO);
