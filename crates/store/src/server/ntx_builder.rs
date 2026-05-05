@@ -140,16 +140,16 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
     ) -> Result<Response<proto::store::NetworkAccountIdList>, Status> {
         let request = request.into_inner();
 
-        let mut chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
             read_block_range::<GetNetworkAccountIdsError>(Some(request), "GetNetworkAccountIds")?
-                .into_inclusive_range::<GetNetworkAccountIdsError>(&chain_tip)?;
+                .into_inclusive_range::<GetNetworkAccountIdsError>()?;
 
         let (account_ids, mut last_block_included) =
             self.state.get_all_network_accounts(block_range).await.map_err(internal_error)?;
 
         let account_ids = Vec::from_iter(account_ids.into_iter().map(Into::into));
 
+        let mut chain_tip = self.state.chain_tip(Finality::Committed).await;
         if last_block_included > chain_tip {
             last_block_included = chain_tip;
         }
