@@ -107,72 +107,78 @@ impl From<NetworkNoteType> for i32 {
 ///
 /// # Raw SQL
 ///
+/// Tags are passed as a single JSON integer array so the prepared statement text is stable
+/// regardless of how many tags are supplied. `json_each(?1)` expands the array inside SQLite.
+///
 /// ```sql
-/// SELECT
-///     committed_at,
-///     batch_index,
-///     note_index,
-///     note_id,
-///     note_type,
-///     sender,
-///     tag,
-///     attachment,
-///     inclusion_path
-/// FROM
-///     notes
-/// WHERE
-///     committed_at = (
-///         SELECT
-///             committed_at
-///         FROM
-///             notes
-///         WHERE
-///             tag IN (?1) AND
-///             committed_at >= ?2 AND
-///             committed_at <= ?3
-///         ORDER BY
-///             committed_at ASC
-///         LIMIT 1
-///     ) AND
-///     tag IN (?1)
-/// ORDER BY
-///     committed_at ASC, batch_index ASC, note_index ASC
+/// WITH
+///     tags(v) AS (SELECT value FROM json_each(?1)),
+///     first_block(committed_at) AS (
+///         SELECT MIN(committed_at) FROM notes
+///         WHERE tag IN (SELECT v FROM tags)
+///           AND committed_at >= ?2 AND committed_at <= ?3
+///     )
+/// SELECT n.committed_at, n.batch_index, n.note_index, n.note_id,
+///        n.note_type, n.sender, n.tag, n.attachment, n.inclusion_path
+/// FROM notes n
+/// CROSS JOIN first_block fb
+/// WHERE n.committed_at = fb.committed_at
+///   AND n.tag IN (SELECT v FROM tags)
+/// ORDER BY n.committed_at ASC, n.batch_index ASC, n.note_index ASC
 /// ```
 pub(crate) fn select_notes_since_block_by_tag(
     conn: &mut SqliteConnection,
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
+    // Pass tags as a JSON integer array so the SQL text is the same for any number of tags.
+    const SQL: &str = "\
+        WITH \
+            tags(v) AS (SELECT value FROM json_each(?1)), \
+            first_block(committed_at) AS ( \
+                SELECT MIN(committed_at) FROM notes \
+                WHERE tag IN (SELECT v FROM tags) \
+                  AND committed_at >= ?2 AND committed_at <= ?3 \
+            ) \
+        SELECT n.committed_at, n.batch_index, n.note_index, n.note_id, \
+               n.note_type, n.sender, n.tag, n.attachment, n.inclusion_path \
+        FROM notes n \
+        CROSS JOIN first_block fb \
+        WHERE n.committed_at = fb.committed_at \
+          AND n.tag IN (SELECT v FROM tags) \
+        ORDER BY n.committed_at ASC, n.batch_index ASC, n.note_index ASC";
+
     QueryParamNoteTagLimit::check(note_tags.len())?;
-    let desired_note_tags: Vec<i32> = note_tags.iter().map(|tag| *tag as i32).collect();
+    let tags_json = build_json_int_array(note_tags.iter().map(|t| i64::from(*t)));
     let start_block_num = block_range.start().to_raw_sql();
     let end_block_num = block_range.end().to_raw_sql();
 
-    let Some(desired_block_num): Option<i64> =
-        SelectDsl::select(schema::notes::table, schema::notes::committed_at)
-            .filter(schema::notes::tag.eq_any(&desired_note_tags))
-            .filter(schema::notes::committed_at.ge(start_block_num))
-            .filter(schema::notes::committed_at.le(end_block_num))
-            .order_by(schema::notes::committed_at.asc())
-            .limit(1)
-            .get_result(conn)
-            .optional()?
-    else {
-        return Ok(Vec::new());
-    };
-
-    let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
-        .filter(schema::notes::committed_at.eq(desired_block_num))
-        .filter(schema::notes::tag.eq_any(&desired_note_tags))
-        .order_by((
-            schema::notes::committed_at.asc(),
-            schema::notes::batch_index.asc(),
-            schema::notes::note_index.asc(),
-        ))
-        .get_results::<NoteSyncRecordRawRow>(conn)
+    let raw_notes = diesel::sql_query(SQL)
+        .bind::<diesel::sql_types::Text, _>(&tags_json)
+        .bind::<diesel::sql_types::BigInt, _>(start_block_num)
+        .bind::<diesel::sql_types::BigInt, _>(end_block_num)
+        .load::<NoteSyncRecordRawRow>(conn)
         .map_err(DatabaseError::from)?;
 
-    vec_raw_try_into(notes)
+    vec_raw_try_into(raw_notes)
+}
+
+/// Builds a JSON integer array from an iterator, e.g. `[1,2,3]`.
+///
+/// Used to pass integer lists through `json_each(?)` in SQLite, keeping the prepared statement
+/// text stable regardless of how many values are supplied.
+fn build_json_int_array(values: impl Iterator<Item = i64>) -> String {
+    let mut s = String::from("[");
+    let mut first = true;
+    for v in values {
+        if !first {
+            s.push(',');
+        }
+        s.push_str(&v.to_string());
+        first = false;
+    }
+    s.push(']');
+    s
 }
 
 /// Select all notes matching the given set of identifiers
