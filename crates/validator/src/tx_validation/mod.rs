@@ -63,7 +63,12 @@ pub async fn validate_transaction(
             .expect("failed to build tokio runtime")
             .block_on(
                 executor
-                    .execute_transaction(account.id(), block_header.block_num(), input_notes, tx_args)
+                    .execute_transaction(
+                        account.id(),
+                        block_header.block_num(),
+                        input_notes,
+                        tx_args,
+                    )
                     .instrument(execute_span),
             )
     })
