@@ -1,0 +1,27 @@
+[package]
+authors.workspace      = true
+description            = "Miden validator binary"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["miden", "validator"]
+license.workspace      = true
+name                   = "miden-validator"
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow               = { workspace = true }
+clap                 = { features = ["env", "string"], workspace = true }
+fs-err               = { workspace = true }
+hex                  = { workspace = true }
+miden-node-store     = { workspace = true }
+miden-node-utils     = { workspace = true }
+miden-node-validator = { workspace = true }
+miden-protocol       = { workspace = true }
+tokio                = { features = ["macros", "rt-multi-thread"], workspace = true }
+url                  = { workspace = true }

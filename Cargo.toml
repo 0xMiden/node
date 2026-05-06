@@ -5,6 +5,7 @@ members = [
   "bin/node",
   "bin/remote-prover",
   "bin/stress-test",
+  "bin/validator",
   "crates/block-producer",
   "crates/db",
   "crates/grpc-error-macro",

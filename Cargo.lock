@@ -3213,7 +3213,6 @@ dependencies = [
  "miden-node-rpc",
  "miden-node-store",
  "miden-node-utils",
- "miden-node-validator",
  "miden-protocol",
  "tokio",
  "url",
@@ -3795,6 +3794,22 @@ dependencies = [
  "loom",
  "once_cell",
  "parking_lot",
+]
+
+[[package]]
+name = "miden-validator"
+version = "0.15.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "fs-err",
+ "hex",
+ "miden-node-store",
+ "miden-node-utils",
+ "miden-node-validator",
+ "miden-protocol",
+ "tokio",
+ "url",
 ]
 
 [[package]]
