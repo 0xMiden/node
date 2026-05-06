@@ -18,7 +18,6 @@
 - Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 - Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 
-
 ## v0.14.10 (2026-05-29)
 
 - Optimize `GetAccount` implementation to serve vault assets from `AccountStateForest` ([#1981](https://github.com/0xMiden/node/pull/1981)).
