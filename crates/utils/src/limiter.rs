@@ -68,15 +68,6 @@ impl QueryParamLimiter for QueryParamNullifierPrefixLimit {
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
 
-/// Only used internally, not exposed via public RPC.
-///
-/// Capped at 1000 nullifiers to bound `IN` clauses and keep response sizes under the 4 MB budget.
-pub struct QueryParamNullifierLimit;
-impl QueryParamLimiter for QueryParamNullifierLimit {
-    const PARAM_NAME: &str = "nullifier";
-    const LIMIT: usize = GENERAL_REQUEST_LIMIT;
-}
-
 /// Used for the following RPC endpoints
 /// * `get_note_sync_multi`
 ///
