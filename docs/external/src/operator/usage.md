@@ -20,7 +20,7 @@ its database from that block. By default the genesis block will contain a single
 
 ```sh
 # Step 1: Validator bootstrap — create the signed genesis block and account files.
-miden-node validator bootstrap \
+miden-validator bootstrap \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts
 
@@ -36,7 +36,7 @@ transactions to achieve the desired state. Any account secrets will be written t
 the provided `--accounts-directory` path in the process.
 
 ```sh
-miden-node validator bootstrap \
+miden-validator bootstrap \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
   --genesis-config-file genesis.toml
@@ -110,7 +110,7 @@ The default `compose-up` target starts all node components along with a telemetr
 a network monitor:
 
 ```sh
-make docker-build-node
+make docker-build
 make docker-build-monitor
 make compose-genesis
 make compose-up
@@ -166,7 +166,7 @@ miden-node store start \
   --data-directory /tmp/store
 
 # Start the validator
-miden-node validator start http://0.0.0.0:50101 \
+miden-validator start http://0.0.0.0:50101 \
   --data-directory /tmp/validator
 
 # Start the block producer

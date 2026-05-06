@@ -105,6 +105,10 @@ build: ## Builds all crates and re-builds protobuf bindings for proto crates
 install-node: ## Installs node
 	cargo install --path bin/node --locked
 
+.PHONY: install-validator
+install-validator: ## Installs validator
+	cargo install --path bin/validator --locked
+
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
 	cargo install --path bin/remote-prover --bin miden-remote-prover --locked
@@ -132,7 +136,7 @@ install-network-monitor: ## Installs network monitor binary
 compose-genesis: ## Wipes node volumes and creates a fresh genesis block
 	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) down --volumes --remove-orphans
 	$(CONTAINER_RUNTIME) volume rm -f miden-node_node-data
-	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) --profile genesis run --rm genesis
+	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) --profile genesis run --rm genesis-store
 
 .PHONY: compose-up
 compose-up: ## Starts all node components, telemetry, and monitor via docker compose
@@ -146,6 +150,9 @@ compose-down: ## Stops and removes all containers via docker compose
 compose-logs: ## Follows logs for all components via docker compose
 	$(CONTAINER_RUNTIME) compose $(COMPOSE_FILES) logs -f
 
+.PHONY: docker-build
+docker-build: docker-build-node docker-build-validator ## Builds all Docker images
+
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker (override with CONTAINER_RUNTIME=podman)
 	@CREATED=$$(date) && \
@@ -156,6 +163,17 @@ docker-build-node: ## Builds the Miden node using Docker (override with CONTAINE
           		 --build-arg COMMIT="$$COMMIT" \
                  -f bin/node/Dockerfile \
                  -t miden-node-image .
+
+.PHONY: docker-build-validator
+docker-build-validator: ## Builds the Miden validator using Docker (override with CONTAINER_RUNTIME=podman)
+	@CREATED=$$(date) && \
+	VERSION=$$(cat bin/validator/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	$(CONTAINER_RUNTIME) build --build-arg CREATED="$$CREATED" \
+        		 --build-arg VERSION="$$VERSION" \
+          		 --build-arg COMMIT="$$COMMIT" \
+                 -f bin/validator/Dockerfile \
+                 -t miden-validator-image .
 
 .PHONY: docker-build-monitor
 docker-build-monitor: ## Builds the network monitor using Docker (override with CONTAINER_RUNTIME=podman)
