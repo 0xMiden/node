@@ -3206,7 +3206,6 @@ dependencies = [
  "anyhow",
  "clap",
  "fs-err",
- "hex",
  "humantime",
  "miden-node-block-producer",
  "miden-node-ntx-builder",

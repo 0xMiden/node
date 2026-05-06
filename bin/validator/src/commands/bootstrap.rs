@@ -34,10 +34,24 @@ pub async fn run(
     let signer = validator_key.into_signer().await?;
     match signer {
         ValidatorSigner::Kms(signer) => {
-            build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory, data_directory).await
+            build_and_write_genesis(
+                config,
+                signer,
+                accounts_directory,
+                genesis_block_directory,
+                data_directory,
+            )
+            .await
         },
         ValidatorSigner::Local(signer) => {
-            build_and_write_genesis(config, signer, accounts_directory, genesis_block_directory, data_directory).await
+            build_and_write_genesis(
+                config,
+                signer,
+                accounts_directory,
+                genesis_block_directory,
+                data_directory,
+            )
+            .await
         },
     }
 }

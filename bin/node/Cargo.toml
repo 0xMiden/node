@@ -21,7 +21,6 @@ tracing-forest = ["miden-node-block-producer/tracing-forest"]
 anyhow                    = { workspace = true }
 clap                      = { features = ["env", "string"], workspace = true }
 fs-err                    = { workspace = true }
-hex                       = { workspace = true }
 humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }
 miden-node-ntx-builder    = { workspace = true }

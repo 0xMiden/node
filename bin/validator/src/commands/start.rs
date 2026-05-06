@@ -11,8 +11,13 @@ pub async fn run(
     signer: ValidatorSigner,
     data_directory: PathBuf,
 ) -> anyhow::Result<()> {
-    Validator { address, grpc_options, signer, data_directory }
-        .serve()
-        .await
-        .context("failed while serving validator component")
+    Validator {
+        address,
+        grpc_options,
+        signer,
+        data_directory,
+    }
+    .serve()
+    .await
+    .context("failed while serving validator component")
 }
