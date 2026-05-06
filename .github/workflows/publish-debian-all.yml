@@ -72,6 +72,34 @@ jobs:
           crate: miden-remote-prover
           arch: ${{ matrix.arch }}
 
+  publish-validator:
+    name: Publish Validator ${{ matrix.arch }} Debian
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on:
+      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
+      - name: Build and Publish Validator
+        uses: ./.github/actions/debian
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gitref: ${{ env.version }}
+          crate_dir: validator
+          package: miden-validator
+          packaging_dir: validator
+          crate: miden-validator
+          arch: ${{ matrix.arch }}
+
   publish-network-monitor:
     name: Publish Network Monitor ${{ matrix.arch }} Debian
     permissions:

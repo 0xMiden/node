@@ -11,7 +11,7 @@ on:
           - miden-network-monitor
           - miden-node
           - miden-prover
-          - miden-prover-proxy
+          - miden-validator
       crate_dir:
         required: true
         description: "Name of crate directory"
@@ -20,6 +20,7 @@ on:
           - network-monitor
           - node
           - remote-prover
+          - validator
       packaging_dir:
         required: true
         description: "Name of packaging directory"
@@ -28,7 +29,7 @@ on:
           - network-monitor
           - node
           - prover
-          - prover-proxy
+          - validator
       crate:
         description: "Name of the binary crate to publish"
         required: true
@@ -37,6 +38,7 @@ on:
           - miden-network-monitor
           - miden-node
           - miden-remote-prover
+          - miden-validator
       version:
         description: "Version to release (E.G. v0.10.0-rc.1, v0.10.0). Corresponding git tag must already exist."
         required: true
