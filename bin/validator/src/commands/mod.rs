@@ -4,7 +4,7 @@ mod start;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::Subcommand;
+use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
 use miden_node_validator::ValidatorSigner;
@@ -26,7 +26,8 @@ pub(crate) const INSECURE_KEY_HEX: &str =
 // VALIDATOR COMMAND
 // ================================================================================================
 
-#[derive(Subcommand)]
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
 pub enum ValidatorCommand {
     /// Bootstraps the genesis block.
     ///

@@ -3,34 +3,20 @@ use miden_node_utils::logging::OpenTelemetry;
 
 mod commands;
 
-// CLI
-// ================================================================================================
-
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: commands::ValidatorCommand,
-}
-
-impl Cli {
-    fn open_telemetry(&self) -> OpenTelemetry {
-        if self.command.is_open_telemetry_enabled() {
-            OpenTelemetry::Enabled
-        } else {
-            OpenTelemetry::Disabled
-        }
-    }
-}
-
 // MAIN
 // ================================================================================================
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let command = commands::ValidatorCommand::parse();
 
-    let _otel_guard = miden_node_utils::logging::setup_tracing(cli.open_telemetry())?;
+    let otel = if command.is_open_telemetry_enabled() {
+        OpenTelemetry::Enabled
+    } else {
+        OpenTelemetry::Disabled
+    };
 
-    cli.command.handle().await
+    let _otel_guard = miden_node_utils::logging::setup_tracing(otel)?;
+
+    command.handle().await
 }
