@@ -193,13 +193,12 @@ impl StoreCommand {
         .await
         .context("Failed to bind to store's ntx-builder gRPC port")?;
 
-        let block_producer_listener =
-            tokio::net::TcpListener::bind(std::net::SocketAddr::from((
-                [0, 0, 0, 0],
-                block_producer_port,
-            )))
-            .await
-            .context("Failed to bind to store's block-producer gRPC port")?;
+        let block_producer_listener = tokio::net::TcpListener::bind(std::net::SocketAddr::from((
+            [0, 0, 0, 0],
+            block_producer_port,
+        )))
+        .await
+        .context("Failed to bind to store's block-producer gRPC port")?;
 
         Store {
             rpc_listener,
