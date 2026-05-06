@@ -119,7 +119,7 @@ impl ProveRequest for LocalBatchProver {
                 .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
         })
         .await
-        .map_err(|e| tonic::Status::internal(format!("batch prover task panicked: {e}")))?
+        .map_err(|e| tonic::Status::internal(e.as_report("batch prover task panicked")))?
     }
 }
 
