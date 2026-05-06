@@ -27,7 +27,8 @@ fn parsing_yields_expected_default_values() -> TestResult {
     let config_path = write_toml_file(temp_dir.path(), sample_content);
 
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
-    let (state, _secrets) = gcfg.into_state(SecretKey::new())?;
+    let signer = SecretKey::new();
+    let (state, _secrets) = gcfg.into_state(signer.public_key())?;
     let _ = state;
     // faucets always precede wallet accounts
     let native_faucet = state.accounts[0].clone();
@@ -70,14 +71,15 @@ fn parsing_yields_expected_default_values() -> TestResult {
 #[miden_node_test_macro::enable_logging]
 async fn genesis_accounts_have_nonce_one() -> TestResult {
     let gcfg = GenesisConfig::default();
-    let (state, secrets) = gcfg.into_state(SecretKey::new()).unwrap();
+    let signer = SecretKey::new();
+    let (state, secrets) = gcfg.into_state(signer.public_key()).unwrap();
     let mut iter = secrets.as_account_files(&state);
     let AccountFileWithName { account_file: status_quo, .. } = iter.next().unwrap().unwrap();
     assert!(iter.next().is_none());
 
     assert_eq!(status_quo.account.nonce(), ONE);
 
-    let _block = state.into_block().await?;
+    let _block = state.into_block(&signer)?;
     Ok(())
 }
 
@@ -134,7 +136,8 @@ path = "test_account.mac"
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // Convert to state and verify the account is included
-    let (state, _secrets) = gcfg.into_state(SecretKey::new())?;
+    let signer = SecretKey::new();
+    let (state, _secrets) = gcfg.into_state(signer.public_key())?;
     assert!(state.accounts.iter().any(|a| a.id() == account_id));
 
     Ok(())
@@ -192,7 +195,8 @@ verification_base_fee = 0
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // Convert to state and verify the native faucet is included
-    let (state, secrets) = gcfg.into_state(SecretKey::new())?;
+    let signer = SecretKey::new();
+    let (state, secrets) = gcfg.into_state(signer.public_key())?;
     assert!(state.accounts.iter().any(|a| a.id() == faucet_id));
 
     // No secrets should be generated for file-loaded native faucet
@@ -251,7 +255,7 @@ verification_base_fee = 0
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // into_state should fail with NativeFaucetNotFungible error when loading the file
-    let result = gcfg.into_state(SecretKey::new());
+    let result = gcfg.into_state(SecretKey::new().public_key());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -284,7 +288,7 @@ path = "does_not_exist.mac"
     let gcfg = GenesisConfig::read_toml_file(&config_path).unwrap();
 
     // into_state should fail with AccountFileRead error when loading the file
-    let result = gcfg.into_state(SecretKey::new());
+    let result = gcfg.into_state(SecretKey::new().public_key());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -303,7 +307,8 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
         .join("src/genesis/config/samples/02-with-account-files.toml");
 
     let gcfg = GenesisConfig::read_toml_file(&sample_path)?;
-    let (state, secrets) = gcfg.into_state(SecretKey::new())?;
+    let signer = SecretKey::new();
+    let (state, secrets) = gcfg.into_state(signer.public_key())?;
 
     // Should have 4 accounts:
     // 1. Native faucet (MIDEN) - built from parameters
@@ -355,7 +360,7 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
 
     // Verify the genesis state can be converted to a block
-    let block = state.into_block().await?;
+    let block = state.into_block(&signer)?;
 
     // Verify that non-private accounts (Public and Network) get full Delta details.
     for update in block.inner().body().updated_accounts() {

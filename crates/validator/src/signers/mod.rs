@@ -1,8 +1,7 @@
 mod kms;
 pub use kms::KmsSigner;
-use miden_node_utils::signer::BlockSigner;
 use miden_protocol::block::BlockHeader;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{SecretKey, Signature};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signature};
 
 // VALIDATOR SIGNER
 // =================================================================================================
@@ -28,26 +27,27 @@ impl ValidatorSigner {
         Self::Local(secret_key)
     }
 
+    /// Returns the public key corresponding to the configured signer.
+    pub fn public_key(&self) -> PublicKey {
+        match self {
+            Self::Kms(signer) => signer.public_key(),
+            Self::Local(signer) => signer.public_key(),
+        }
+    }
+
     /// Signs a block header using the configured signer.
     pub async fn sign(&self, header: &BlockHeader) -> anyhow::Result<Signature> {
-        match self {
-            Self::Kms(signer) => {
-                let sig = signer.sign(header).await?;
-                Ok(sig)
-            },
-            Self::Local(signer) => {
+        let commitment = header.commitment();
+        let signature = match self {
+            Self::Kms(signer) => signer.sign(commitment).await?,
+            Self::Local(signer) => tokio::task::spawn_blocking({
                 let signer = signer.clone();
-                let header = header.clone();
-                let sig = tokio::task::spawn_blocking(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .build()
-                        .expect("failed to build tokio runtime")
-                        .block_on(<SecretKey as BlockSigner>::sign(&signer, &header))
-                })
-                .await
-                .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
-                Ok(sig)
-            },
-        }
+                move || signer.sign(commitment)
+            })
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())),
+        };
+
+        Ok(signature)
     }
 }
