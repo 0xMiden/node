@@ -18,7 +18,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::errors::TransactionInputError;
-use miden_protocol::note::{Note, NoteScript};
+use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -43,7 +43,6 @@ use miden_tx::{
     MastForestStore,
     NoteCheckerError,
     NoteConsumptionChecker,
-    NoteConsumptionInfo,
     TransactionExecutor,
     TransactionExecutorError,
     TransactionMastStore,
@@ -270,18 +269,21 @@ impl NtxContext {
         ))
         .await
         {
-            Ok(NoteConsumptionInfo { successful, failed, .. }) => {
+            Ok(consumption_info) => {
+                let (successful, failed) = consumption_info.into_parts();
                 for failed_note in &failed {
                     tracing::info!(
-                        note.id = %failed_note.note.id(),
-                        nullifier = %failed_note.note.nullifier(),
-                        err = %failed_note.error.as_report(),
+                        note.id = %failed_note.note().id(),
+                        nullifier = %failed_note.note().nullifier(),
+                        err = %failed_note.error().as_report(),
                         "note failed consumability check",
                     );
                 }
 
                 // Map successful notes to input notes.
-                let successful = InputNotes::from_unauthenticated_notes(successful)
+                let successful_notes =
+                    successful.into_iter().map(|s| s.note().clone()).collect::<Vec<_>>();
+                let successful = InputNotes::from_unauthenticated_notes(successful_notes)
                     .map_err(NtxError::InputNotes)?;
 
                 // If none are successful, abort.
@@ -564,9 +566,10 @@ impl DataStore for NtxDataStore {
     /// 3. Remote store via gRPC.
     fn get_note_script(
         &self,
-        script_root: Word,
+        script_root: NoteScriptRoot,
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
+            let script_root = Word::from(script_root);
             // 1. In-memory LRU cache.
             if let Some(cached_script) = self.script_cache.get(&script_root) {
                 return Ok(Some(cached_script));

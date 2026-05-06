@@ -15,7 +15,6 @@ use diesel::{
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamLimiter,
-    QueryParamNullifierLimit,
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::block::BlockNumber;
@@ -236,7 +235,6 @@ pub(crate) fn insert_nullifiers_for_block(
     nullifiers: &[Nullifier],
     block_num: BlockNumber,
 ) -> Result<usize, DatabaseError> {
-    QueryParamNullifierLimit::check(nullifiers.len())?;
     let serialized_nullifiers =
         Vec::<Vec<u8>>::from_iter(nullifiers.iter().map(Nullifier::to_bytes));
 

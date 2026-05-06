@@ -11,7 +11,6 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 
 <!--toc:start-->
 
-- [CheckNullifiers](#checknullifiers)
 - [GetAccount](#getaccount)
 - [GetBlockByNumber](#getblockbynumber)
 - [GetBlockHeaderByNumber](#getblockheaderbynumber)
@@ -31,74 +30,6 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 <!--toc:end-->
 
 ## API Endpoints
-
-### CheckNullifiers
-
-Request Sparse Merkle Tree opening proofs to verify whether nullifiers have been consumed.
-
-#### Request
-
-```protobuf
-message NullifierList {
-    repeated Digest nullifiers = 1;  // List of nullifiers to check
-}
-```
-
-#### Response
-
-```protobuf
-message CheckNullifiersResponse {
-    repeated SmtOpening proofs = 1;  // One proof per requested nullifier
-}
-
-message SmtOpening {
-    SparseMerklePath path = 1;  // Merkle authentication path
-    SmtLeaf leaf = 2;           // Leaf at this position
-}
-
-message SmtLeaf {
-    oneof leaf {
-        uint64 empty_leaf_index = 1;
-        SmtLeafEntry single = 2;
-        SmtLeafEntryList multiple = 3;
-    }
-}
-```
-
-#### Understanding Proofs
-
-**Non-Inclusion (Nullifier NOT consumed):**
-- `leaf` contains `empty_leaf_index`
-- Note can still be consumed
-
-**Inclusion (Nullifier IS consumed):**
-- `leaf` contains `single` or `multiple` with key-value pairs, including the `nullifier` key
-- Note has been spent
-
-#### Verification
-
-```rust
-use miden_crypto::merkle::{SmtProof, SmtProofError};
-
-let block_header = get_latest_block_header();
-let nullifier_tree_root = block_header.state_commitment().nullifier_root();
-
-let proof: SmtProof = smt_opening.try_into()?;
-
-match proof.verify_unset(&nullifier, &nullifier_tree_root) {
-    Ok(()) => {
-        // Nullifier is NOT in the tree - note can be consumed
-    }
-    Err(SmtProofError::ValueMismatch { .. }) => {
-        // Proof is valid, but nullifier has a value (not empty) - note already consumed
-    }
-    Err(_) => {
-        // Proof is invalid (wrong root, wrong key, etc.)
-    }
-}
-```
-
-**Limits:** `nullifier` (1000)
 
 ### GetAccount
 
@@ -140,7 +71,6 @@ This endpoint allows clients to discover the maximum number of items that can be
 ```json
 {
   "endpoints": {
-    "CheckNullifiers": { "parameters": { "nullifier": 1000 } },
     "SyncNullifiers": { "parameters": { "nullifier": 1000 } },
     "SyncTransactions": { "parameters": { "account_id": 1000 } },
     "SyncAccountVault": { "parameters": { "account_id": 1000 } },

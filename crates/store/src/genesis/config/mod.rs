@@ -29,7 +29,13 @@ use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
-use miden_standards::account::mint_policies::AuthControlled;
+use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
+use miden_standards::account::policies::{
+    BurnPolicyConfig,
+    MintPolicyConfig,
+    PolicyAuthority,
+    TokenPolicyManager,
+};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
 use rand::{Rng, SeedableRng};
@@ -311,8 +317,8 @@ impl GenesisConfig {
             debug_assert_eq!(faucet_account.nonce(), ONE);
 
             // sanity check the total issuance against
-            let basic = BasicFungibleFaucet::try_from(&faucet_account)?;
-            let max_supply = basic.max_supply().as_canonical_u64();
+            let metadata = TokenMetadata::try_from(faucet_account.storage())?;
+            let max_supply = metadata.max_supply().as_canonical_u64();
             if max_supply < total_issuance {
                 return Err(GenesisConfigError::MaxIssuanceExceeded {
                     max_supply,
@@ -394,9 +400,9 @@ impl NativeFaucetConfig {
                     return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
                 }
 
-                let faucet = BasicFungibleFaucet::try_from(&account)
+                let metadata = TokenMetadata::try_from(account.storage())
                     .expect("validated as fungible faucet above");
-                let symbol = TokenSymbolStr::from(faucet.symbol().clone());
+                let symbol = TokenSymbolStr::from(metadata.symbol().clone());
                 Ok((account, symbol, None))
             },
         }
@@ -436,18 +442,27 @@ impl FungibleFaucetConfig {
             AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
         let init_seed: [u8; 32] = rng.random();
 
-        let max_supply = Felt::try_from(max_supply)
-            .expect("The `Felt::MODULUS` is _always_ larger than the `max_supply`");
-
-        let component = BasicFungibleFaucet::new(symbol.as_ref().clone(), decimals, max_supply)?;
+        let token_metadata = FungibleTokenMetadata::builder(
+            TokenName::new(&symbol.to_string())
+                .expect("token symbol fits within token name byte limit"),
+            symbol.as_ref().clone(),
+            decimals,
+            max_supply,
+        )
+        .build()?;
 
         // It's similar to `fn create_basic_fungible_faucet`, but we need to cover more cases.
         let faucet_account = AccountBuilder::new(init_seed)
             .account_type(AccountType::FungibleFaucet)
             .storage_mode(storage_mode.into())
             .with_auth_component(auth)
-            .with_component(component)
-            .with_component(AuthControlled::allow_all())
+            .with_component(token_metadata)
+            .with_component(BasicFungibleFaucet)
+            .with_components(TokenPolicyManager::new(
+                PolicyAuthority::AuthControlled,
+                MintPolicyConfig::AllowAll,
+                BurnPolicyConfig::AllowAll,
+            ))
             .build()?;
 
         debug_assert_eq!(faucet_account.nonce(), Felt::ZERO);

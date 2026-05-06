@@ -31,7 +31,6 @@ the store) to keep database queries bounded and to keep response payloads within
 
 | Endpoint           | Parameter          | Limit  | Rationale                                                            |
 | ------------------ | ------------------ | ------ | -------------------------------------------------------------------- |
-| `CheckNullifiers`  | `nullifier`        | `1000` | Bounds `IN`-style lookups and keeps responses under payload budget    |
 | `GetAccount`       | `storage_map_key`  | `64`   | SMT proof generation for storage map keys is comparatively expensive |
 | `GetNotesById`     | `note_id`          | `100`  | Notes can be large (~32 KiB), so this is intentionally tighter       |
 | `SyncNotes`        | `note_tag`         | `1000` | Keeps note sync responses within payload budget                      |

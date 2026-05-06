@@ -326,7 +326,7 @@ impl From<FeeParameters> for proto::blockchain::FeeParameters {
 impl From<&FeeParameters> for proto::blockchain::FeeParameters {
     fn from(value: &FeeParameters) -> Self {
         Self {
-            native_asset_id: Some(value.native_asset_id().into()),
+            native_asset_id: Some(value.fee_faucet_id().into()),
             verification_base_fee: value.verification_base_fee(),
         }
     }
