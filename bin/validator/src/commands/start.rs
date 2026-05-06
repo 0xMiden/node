@@ -1,0 +1,18 @@
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use anyhow::Context;
+use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_validator::{Validator, ValidatorSigner};
+
+pub async fn run(
+    address: SocketAddr,
+    grpc_options: GrpcOptionsInternal,
+    signer: ValidatorSigner,
+    data_directory: PathBuf,
+) -> anyhow::Result<()> {
+    Validator { address, grpc_options, signer, data_directory }
+        .serve()
+        .await
+        .context("failed while serving validator component")
+}
