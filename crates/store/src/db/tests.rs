@@ -319,7 +319,8 @@ fn sql_select_note_script_by_root() {
     assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
     // test querying the script by the root
-    let note_script = queries::select_note_script_by_root(conn, new_note.script().root()).unwrap();
+    let note_script =
+        queries::select_note_script_by_root(conn, Word::from(new_note.script().root())).unwrap();
     assert_eq!(note_script, Some(new_note.script().clone()));
 
     // test querying the script by the root that is not in the database

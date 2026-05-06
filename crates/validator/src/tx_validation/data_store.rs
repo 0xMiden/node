@@ -6,7 +6,7 @@ use miden_protocol::Word;
 use miden_protocol::account::{AccountId, PartialAccount, StorageMapKey, StorageMapWitness};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::NoteScript;
+use miden_protocol::note::{NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{AccountInputs, PartialBlockchain, TransactionInputs};
 use miden_protocol::vm::FutureMaybeSend;
 use miden_tx::{DataStore, DataStoreError, MastForestStore, TransactionMastStore};
@@ -94,7 +94,7 @@ impl DataStore for TransactionInputsDataStore {
 
     fn get_note_script(
         &self,
-        _script_root: Word,
+        _script_root: NoteScriptRoot,
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move { unimplemented!("get_note_script is not used during re-execution of transactions") }
     }

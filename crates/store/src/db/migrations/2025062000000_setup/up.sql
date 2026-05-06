@@ -58,7 +58,7 @@ CREATE TABLE notes (
     note_index                    INTEGER NOT NULL, -- Index of note in batch, starting from 0
     note_id                       BLOB    NOT NULL,
     note_commitment               BLOB    NOT NULL,
-    note_type                     INTEGER NOT NULL, -- 1-Public (0b01), 2-Private (0b10), 3-Encrypted (0b11)
+    note_type                     INTEGER NOT NULL, -- 0-Private, 1-Public
     sender                        BLOB    NOT NULL,
     tag                           INTEGER NOT NULL,
     network_note_type             INTEGER NOT NULL, -- 0-not a network note, 1-single account target network note
@@ -73,7 +73,7 @@ CREATE TABLE notes (
     serial_num                    BLOB,
 
     PRIMARY KEY (committed_at, batch_index, note_index),
-    CONSTRAINT notes_type_in_enum CHECK (note_type BETWEEN 1 AND 3),
+    CONSTRAINT notes_type_in_enum CHECK (note_type BETWEEN 0 AND 1),
     CONSTRAINT notes_network_note_type_in_enum CHECK (network_note_type BETWEEN 0 AND 1),
     CONSTRAINT notes_consumed_at_is_u32 CHECK (consumed_at BETWEEN 0 AND 0xFFFFFFFF),
     CONSTRAINT notes_batch_index_is_u32 CHECK (batch_index BETWEEN 0 AND 0xFFFFFFFF),
