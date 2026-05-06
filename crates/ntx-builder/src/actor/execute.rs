@@ -194,25 +194,35 @@ impl NtxContext {
 
         async move {
             Box::pin(async move {
-                let data_store = NtxDataStore::new(
-                    account,
-                    chain_tip_header,
-                    chain_mmr,
-                    self.store.clone(),
-                    self.script_cache.clone(),
-                    self.db.clone(),
-                );
-
-                // Filter notes.
                 let notes = notes.into_iter().map(Note::from).collect::<Vec<_>>();
-                let (successful_notes, failed_notes) =
-                    self.filter_notes(&data_store, notes).await?;
 
-                // Execute transaction.
-                let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
-
-                // Collect scripts fetched from the remote store during execution.
-                let scripts_to_cache = data_store.take_fetched_scripts();
+                // VM execution (note filtering + transaction execution) is CPU-intensive and
+                // may not yield between await points. Run on a dedicated blocking thread,
+                // using the parent runtime handle so that async data-store callbacks (gRPC
+                // calls to the store) are driven by the existing I/O driver.
+                let ctx = self.clone();
+                let handle = tokio::runtime::Handle::current();
+                let (executed_tx, failed_notes, scripts_to_cache) =
+                    tokio::task::spawn_blocking(move || {
+                        let data_store = NtxDataStore::new(
+                            account,
+                            chain_tip_header,
+                            chain_mmr,
+                            ctx.store.clone(),
+                            ctx.script_cache.clone(),
+                            ctx.db.clone(),
+                        );
+                        handle.block_on(async {
+                            let (successful_notes, failed_notes) =
+                                ctx.filter_notes(&data_store, notes).await?;
+                            let executed_tx =
+                                Box::pin(ctx.execute(&data_store, successful_notes)).await?;
+                            let scripts_to_cache = data_store.take_fetched_scripts();
+                            Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
+                        })
+                    })
+                    .await
+                    .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
@@ -316,13 +326,21 @@ impl NtxContext {
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
         if let Some(remote) = &self.prover {
-            remote.prove(tx_inputs).await
+            remote.prove(tx_inputs).await.map_err(NtxError::Proving)
         } else {
-            // Only perform tx inputs clone for local proving.
+            // ZK proof generation is CPU-intensive; run it on a dedicated blocking thread.
             let tx_inputs = tx_inputs.clone();
-            LocalTransactionProver::default().prove(tx_inputs).await
+            tokio::task::spawn_blocking(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build tokio runtime")
+                    .block_on(LocalTransactionProver::default().prove(tx_inputs))
+            })
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+            .map_err(NtxError::Proving)
         }
-        .map_err(NtxError::Proving)
     }
 
     /// Submits the transaction to the block producer.

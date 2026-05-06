@@ -112,8 +112,14 @@ impl ProveRequest for LocalBatchProver {
     type Output = ProvenBatch;
 
     async fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
-        self.prove(input)
-            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
+        let prover = self.clone();
+        tokio::task::spawn_blocking(move || {
+            prover
+                .prove(input)
+                .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
+        })
+        .await
+        .map_err(|e| tonic::Status::internal(e.as_report_context("batch prover task panicked")))?
     }
 }
 
@@ -123,8 +129,14 @@ impl ProveRequest for LocalBlockProver {
     type Output = BlockProof;
 
     async fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
+        let prover = self.clone();
         let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
-        self.prove(tx_batches, &block_header, block_inputs)
-            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))
+        tokio::task::spawn_blocking(move || {
+            prover
+                .prove(tx_batches, &block_header, block_inputs)
+                .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))
+        })
+        .await
+        .map_err(|e| tonic::Status::internal(e.as_report_context("block prover task panicked")))?
     }
 }
