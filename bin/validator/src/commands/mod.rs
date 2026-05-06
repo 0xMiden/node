@@ -108,7 +108,7 @@ impl ValidatorCommand {
                 genesis_config_file,
                 validator_key,
             } => {
-                bootstrap::run(
+                bootstrap::bootstrap(
                     &genesis_block_directory,
                     &accounts_directory,
                     &data_directory,
@@ -131,11 +131,11 @@ impl ValidatorCommand {
 
                 if let Some(kms_key_id) = kms_key_id {
                     let signer = ValidatorSigner::new_kms(kms_key_id).await?;
-                    start::run(address, grpc_options, signer, data_directory).await
+                    start::start(address, grpc_options, signer, data_directory).await
                 } else {
                     let signer = SecretKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
                     let signer = ValidatorSigner::new_local(signer);
-                    start::run(address, grpc_options, signer, data_directory).await
+                    start::start(address, grpc_options, signer, data_directory).await
                 }
             },
         }

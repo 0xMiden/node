@@ -5,7 +5,8 @@ use anyhow::Context;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_validator::{Validator, ValidatorSigner};
 
-pub async fn run(
+// Starts the validator component.
+pub async fn start(
     address: SocketAddr,
     grpc_options: GrpcOptionsInternal,
     signer: ValidatorSigner,

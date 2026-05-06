@@ -11,7 +11,8 @@ use super::ValidatorKey;
 
 const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";
 
-pub async fn run(
+// Bootstraps the validator component.
+pub async fn bootstrap(
     genesis_block_directory: &Path,
     accounts_directory: &Path,
     data_directory: &Path,
