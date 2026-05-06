@@ -4,14 +4,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_utils::clap::duration_to_human_readable_string;
-use miden_node_utils::grpc::UrlExt;
 use tokio::net::TcpListener;
 use url::Url;
 
 use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_URL: &str = "MIDEN_NODE_NTX_BUILDER_URL";
+const ENV_PORT: &str = "MIDEN_NODE_NTX_BUILDER_PORT";
 const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
@@ -27,9 +26,9 @@ const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
-        /// Url at which to serve the ntx-builder's gRPC API.
-        #[arg(long = "url", env = ENV_URL, value_name = "URL")]
-        url: Option<Url>,
+        /// Port at which to serve the ntx-builder's gRPC API.
+        #[arg(long = "port", env = ENV_PORT, value_name = "PORT")]
+        port: Option<u16>,
 
         /// The store's ntx-builder service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -105,7 +104,7 @@ pub enum NtxBuilderCommand {
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            url,
+            port,
             store_url,
             block_producer_url,
             validator_url,
@@ -118,14 +117,11 @@ impl NtxBuilderCommand {
             enable_otel: _,
         } = self;
 
-        let listener = if let Some(url) = url {
-            let addr = url
-                .to_socket()
-                .context("Failed to extract socket address from ntx-builder URL")?;
+        let listener = if let Some(port) = port {
             Some(
-                TcpListener::bind(addr)
+                TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], port)))
                     .await
-                    .context("Failed to bind to ntx-builder's gRPC URL")?,
+                    .context("Failed to bind to ntx-builder's gRPC port")?,
             )
         } else {
             None

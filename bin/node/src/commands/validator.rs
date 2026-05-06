@@ -5,16 +5,14 @@ use anyhow::Context;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::fs::ensure_empty_directory;
-use miden_node_utils::grpc::UrlExt;
 use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use url::Url;
 
 use crate::commands::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL};
 
-const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
+const ENV_PORT: &str = "MIDEN_NODE_VALIDATOR_PORT";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
 const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
@@ -54,9 +52,9 @@ pub enum ValidatorCommand {
 
     /// Starts the validator component.
     Start {
-        /// Url at which to serve the gRPC API.
-        #[arg(env = ENV_URL)]
-        url: Url,
+        /// Port at which to serve the gRPC API.
+        #[arg(long = "port", env = ENV_PORT, value_name = "PORT")]
+        port: u16,
 
         /// Enables the exporting of traces for OpenTelemetry.
         ///
@@ -120,16 +118,14 @@ impl ValidatorCommand {
                 .await
             },
             Self::Start {
-                url,
+                port,
                 grpc_options,
                 validator_key,
                 data_directory,
                 kms_key_id,
                 ..
             } => {
-                let address = url
-                    .to_socket()
-                    .context("failed to extract socket address from validator URL")?;
+                let address = SocketAddr::from(([0, 0, 0, 0], port));
 
                 // Run validator with KMS key backend if key id provided.
                 if let Some(kms_key_id) = kms_key_id {
