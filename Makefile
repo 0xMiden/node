@@ -162,7 +162,7 @@ docker-build-node: ## Builds the Miden node using Docker (override with CONTAINE
         		 --build-arg VERSION="$$VERSION" \
           		 --build-arg COMMIT="$$COMMIT" \
                  -f bin/node/Dockerfile \
-                 -t miden-node-image .
+                 -t miden-node .
 
 .PHONY: docker-build-validator
 docker-build-validator: ## Builds the Miden validator using Docker (override with CONTAINER_RUNTIME=podman)
@@ -173,7 +173,7 @@ docker-build-validator: ## Builds the Miden validator using Docker (override wit
         		 --build-arg VERSION="$$VERSION" \
           		 --build-arg COMMIT="$$COMMIT" \
                  -f bin/validator/Dockerfile \
-                 -t miden-validator-image .
+                 -t miden-validator .
 
 .PHONY: docker-build-monitor
 docker-build-monitor: ## Builds the network monitor using Docker (override with CONTAINER_RUNTIME=podman)
@@ -187,7 +187,7 @@ docker-run-node: ## Runs the Miden node as a Docker container (override with CON
 	$(CONTAINER_RUNTIME) run --name miden-node \
 			   -p 57291:57291 \
                -v miden-db:/db \
-               -d miden-node-image
+               -d miden-node
 
 ## --- setup --------------------------------------------------------------------------------------
 

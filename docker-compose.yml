@@ -1,6 +1,6 @@
 services:
   genesis-validator:
-    image: miden-validator-image
+    image: miden-validator
     pull_policy: if_not_present
     profiles:
       - genesis
@@ -18,7 +18,7 @@ services:
           --accounts-directory /data/accounts
 
   genesis-store:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     profiles:
       - genesis
@@ -37,7 +37,7 @@ services:
           --genesis-block /data/genesis/genesis.dat
 
   store:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     volumes:
       - node-data:/data
@@ -63,7 +63,7 @@ services:
       - "50003:50003"
 
   validator:
-    image: miden-validator-image
+    image: miden-validator
     pull_policy: if_not_present
     volumes:
       - node-data:/data
@@ -80,7 +80,7 @@ services:
       - "50101:50101"
 
   block-producer:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
@@ -97,7 +97,7 @@ services:
       - "50201:50201"
 
   rpc:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
@@ -115,7 +115,7 @@ services:
       - "57291:57291"
 
   ntx-builder:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     volumes:
       - node-data:/data
