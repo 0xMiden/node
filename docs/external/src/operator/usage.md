@@ -160,23 +160,23 @@ Each component can also be started as a standalone process. For example:
 ```sh
 # Start the store
 miden-node store start \
-  --rpc.url http://0.0.0.0:50001 \
-  --ntx-builder.url http://0.0.0.0:50002 \
-  --block-producer.url http://0.0.0.0:50003 \
+  --rpc.port 50001 \
+  --ntx-builder.port 50002 \
+  --block-producer.port 50003 \
   --data-directory /tmp/store
 
 # Start the validator
-miden-node validator start http://0.0.0.0:50101 \
+miden-node validator start --port 50101 \
   --data-directory /tmp/validator
 
 # Start the block producer
-miden-node block-producer start http://0.0.0.0:50201 \
+miden-node block-producer start --port 50201 \
   --store.url http://127.0.0.1:50003 \
   --validator.url http://127.0.0.1:50101
 
 # Start the RPC server
 miden-node rpc start \
-  --url http://0.0.0.0:57291 \
+  --port 57291 \
   --store.url http://127.0.0.1:50001 \
   --block-producer.url http://127.0.0.1:50201 \
   --validator.url http://127.0.0.1:50101
@@ -226,7 +226,7 @@ Compaction parallelism is set automatically to the number of available CPU cores
 ```sh
 miden-node store start \
   --data-directory data \
-  --rpc.url http://0.0.0.0:57291 \
+  --rpc.port 57291 \
   --account_tree.rocksdb.max_cache_size 4294967296 \
   --account_tree.rocksdb.max_open_fds 512 \
   --nullifier_tree.rocksdb.max_cache_size 4294967296 \

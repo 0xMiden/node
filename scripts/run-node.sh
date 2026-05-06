@@ -19,19 +19,19 @@ NTX_BUILDER_DIR="/tmp/ntx-builder"
 ACCOUNTS_DIR="/tmp/accounts"
 
 # Primary store (block-producer mode): 3 APIs.
-STORE_RPC_URL="http://0.0.0.0:50001"
-STORE_NTX_BUILDER_URL="http://0.0.0.0:50002"
-STORE_BLOCK_PRODUCER_URL="http://0.0.0.0:50003"
+STORE_RPC_PORT=50001
+STORE_NTX_BUILDER_PORT=50002
+STORE_BLOCK_PRODUCER_PORT=50003
 
 # Replica stores expose only the RPC API (no block-producer or ntx-builder endpoints).
-STORE_REPLICA_1_RPC_URL="http://0.0.0.0:50011"
-STORE_REPLICA_2_RPC_URL="http://0.0.0.0:50021"
+STORE_REPLICA_1_RPC_PORT=50011
+STORE_REPLICA_2_RPC_PORT=50021
 
-VALIDATOR_URL="http://0.0.0.0:50101"
-BLOCK_PRODUCER_URL="http://0.0.0.0:50201"
-RPC_URL="http://0.0.0.0:57291"
-RPC_REPLICA_1_URL="http://0.0.0.0:57292"
-RPC_REPLICA_2_URL="http://0.0.0.0:57293"
+VALIDATOR_PORT=50101
+BLOCK_PRODUCER_PORT=50201
+RPC_PORT=57291
+RPC_REPLICA_1_PORT=57292
+RPC_REPLICA_2_PORT=57293
 
 PIDS=()
 
@@ -106,9 +106,9 @@ echo "=== Starting components ==="
 
 echo "Starting store (block-producer mode)..."
 $BINARY store start \
-    --rpc.url "$STORE_RPC_URL" \
-    --ntx-builder.url "$STORE_NTX_BUILDER_URL" \
-    --block-producer.url "$STORE_BLOCK_PRODUCER_URL" \
+    --rpc.port "$STORE_RPC_PORT" \
+    --ntx-builder.port "$STORE_NTX_BUILDER_PORT" \
+    --block-producer.port "$STORE_BLOCK_PRODUCER_PORT" \
     --data-directory "$STORE_DIR" &
 PIDS+=($!)
 
@@ -118,7 +118,7 @@ if [[ -n "$KMS_KEY_ID" ]]; then
 fi
 
 echo "Starting validator..."
-$BINARY validator start "$VALIDATOR_URL" \
+$BINARY validator start --port "$VALIDATOR_PORT" \
     --data-directory "$VALIDATOR_DIR" \
     "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)
@@ -127,60 +127,60 @@ PIDS+=($!)
 sleep 2
 
 # Replica 1 syncs from the primary store.
-echo "Starting store replica 1 (upstream: primary store at $STORE_RPC_URL)..."
+echo "Starting store replica 1 (upstream: primary store at 127.0.0.1:$STORE_RPC_PORT)..."
 $BINARY store start-replica \
-    --rpc.url "$STORE_REPLICA_1_RPC_URL" \
-    --upstream-store.url "$STORE_RPC_URL" \
+    --rpc.port "$STORE_REPLICA_1_RPC_PORT" \
+    --upstream-store.url "http://127.0.0.1:$STORE_RPC_PORT" \
     --data-directory "$STORE_REPLICA_1_DIR" &
 PIDS+=($!)
 
 # Replica 2 syncs from replica 1, proving replicas can act as upstreams.
-echo "Starting store replica 2 (upstream: replica 1 at $STORE_REPLICA_1_RPC_URL)..."
+echo "Starting store replica 2 (upstream: replica 1 at 127.0.0.1:$STORE_REPLICA_1_RPC_PORT)..."
 $BINARY store start-replica \
-    --rpc.url "$STORE_REPLICA_2_RPC_URL" \
-    --upstream-store.url "$STORE_REPLICA_1_RPC_URL" \
+    --rpc.port "$STORE_REPLICA_2_RPC_PORT" \
+    --upstream-store.url "http://127.0.0.1:$STORE_REPLICA_1_RPC_PORT" \
     --data-directory "$STORE_REPLICA_2_DIR" &
 PIDS+=($!)
 
 echo "Starting block producer..."
-$BINARY block-producer start "$BLOCK_PRODUCER_URL" \
-    --store.url "http://127.0.0.1:50003" \
-    --validator.url "http://127.0.0.1:50101" &
+$BINARY block-producer start --port "$BLOCK_PRODUCER_PORT" \
+    --store.url "http://127.0.0.1:$STORE_BLOCK_PRODUCER_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
 PIDS+=($!)
 
 echo "Starting RPC server (primary store)..."
 $BINARY rpc start \
-    --url "$RPC_URL" \
-    --store.url "http://127.0.0.1:50001" \
-    --block-producer.url "http://127.0.0.1:50201" \
-    --validator.url "http://127.0.0.1:50101" &
+    --port "$RPC_PORT" \
+    --store.url "http://127.0.0.1:$STORE_RPC_PORT" \
+    --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
 PIDS+=($!)
 
 echo "Starting RPC server (replica 1)..."
 $BINARY rpc start \
-    --url "$RPC_REPLICA_1_URL" \
-    --store.url "http://127.0.0.1:50011" \
-    --block-producer.url "http://127.0.0.1:50201" \
-    --validator.url "http://127.0.0.1:50101" &
+    --port "$RPC_REPLICA_1_PORT" \
+    --store.url "http://127.0.0.1:$STORE_REPLICA_1_RPC_PORT" \
+    --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
 PIDS+=($!)
 
 echo "Starting RPC server (replica 2)..."
 $BINARY rpc start \
-    --url "$RPC_REPLICA_2_URL" \
-    --store.url "http://127.0.0.1:50021" \
-    --block-producer.url "http://127.0.0.1:50201" \
-    --validator.url "http://127.0.0.1:50101" &
+    --port "$RPC_REPLICA_2_PORT" \
+    --store.url "http://127.0.0.1:$STORE_REPLICA_2_RPC_PORT" \
+    --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
 PIDS+=($!)
 
 echo "Starting network transaction builder..."
 $BINARY ntx-builder start \
-    --store.url "http://127.0.0.1:50002" \
-    --block-producer.url "http://127.0.0.1:50201" \
-    --validator.url "http://127.0.0.1:50101" \
+    --store.url "http://127.0.0.1:$STORE_NTX_BUILDER_PORT" \
+    --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
     --data-directory "$NTX_BUILDER_DIR" &
 PIDS+=($!)
 
 echo "=== All components running. Ctrl+C to stop. ==="
-echo "=== Block propagation chain: $STORE_RPC_URL -> $STORE_REPLICA_1_RPC_URL -> $STORE_REPLICA_2_RPC_URL ==="
-echo "=== RPC endpoints: $RPC_URL, $RPC_REPLICA_1_URL, $RPC_REPLICA_2_URL ==="
+echo "=== Block propagation chain: :$STORE_RPC_PORT -> :$STORE_REPLICA_1_RPC_PORT -> :$STORE_REPLICA_2_RPC_PORT ==="
+echo "=== RPC endpoints: :$RPC_PORT, :$RPC_REPLICA_1_PORT, :$RPC_REPLICA_2_PORT ==="
 wait
