@@ -558,7 +558,7 @@ message BlockRange {
     // Block number from which to start (inclusive).
     fixed32 block_from = 1;
 
-    // Block number up to which to check (inclusive). If not specified, checks up to the latest block.
+    // Block number up to which to check (inclusive).
     fixed32 block_to = 2;
 }
 
