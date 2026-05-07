@@ -1,5 +1,6 @@
 mod kms;
 pub use kms::KmsSigner;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signature};
 
@@ -40,7 +41,7 @@ impl ValidatorSigner {
         let commitment = header.commitment();
         let signature = match self {
             Self::Kms(signer) => signer.sign(commitment).await?,
-            Self::Local(signer) => tokio::task::spawn_blocking({
+            Self::Local(signer) => spawn_blocking_in_current_span({
                 let signer = signer.clone();
                 move || signer.sign(commitment)
             })

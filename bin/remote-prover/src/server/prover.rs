@@ -1,6 +1,7 @@
 use miden_block_prover::LocalBlockProver;
 use miden_node_proto::BlockProofRequest;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
@@ -113,7 +114,8 @@ impl ProveRequest for LocalBatchProver {
 
     async fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
         let prover = self.clone();
-        tokio::task::spawn_blocking(move || {
+
+        spawn_blocking_in_current_span(move || {
             prover
                 .prove(input)
                 .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
@@ -131,7 +133,8 @@ impl ProveRequest for LocalBlockProver {
     async fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
         let prover = self.clone();
         let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
-        tokio::task::spawn_blocking(move || {
+
+        spawn_blocking_in_current_span(move || {
             prover
                 .prove(tx_batches, &block_header, block_inputs)
                 .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))
