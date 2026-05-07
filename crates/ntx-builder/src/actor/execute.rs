@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
@@ -48,7 +48,6 @@ use miden_tx::{
     TransactionMastStore,
     TransactionProverError,
 };
-use tokio::sync::Mutex;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
@@ -195,26 +194,35 @@ impl NtxContext {
 
         async move {
             Box::pin(async move {
-                let data_store = NtxDataStore::new(
-                    account,
-                    chain_tip_header,
-                    chain_mmr,
-                    self.store.clone(),
-                    self.script_cache.clone(),
-                    self.db.clone(),
-                );
-
-                // Filter notes.
                 let notes =
                     notes.into_iter().map(AccountTargetNetworkNote::into_note).collect::<Vec<_>>();
-                let (successful_notes, failed_notes) =
-                    self.filter_notes(&data_store, notes).await?;
 
-                // Execute transaction.
-                let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
-
-                // Collect scripts fetched from the remote store during execution.
-                let scripts_to_cache = data_store.take_fetched_scripts().await;
+                // VM execution (note filtering + transaction execution) is CPU-intensive and may
+                // not yield between await points. Run it on a dedicated blocking thread while using
+                // the parent runtime handle to drive async store callbacks.
+                let ctx = self.clone();
+                let handle = tokio::runtime::Handle::current();
+                let (executed_tx, failed_notes, scripts_to_cache) =
+                    tokio::task::spawn_blocking(move || {
+                        let data_store = NtxDataStore::new(
+                            account,
+                            chain_tip_header,
+                            chain_mmr,
+                            ctx.store.clone(),
+                            ctx.script_cache.clone(),
+                            ctx.db.clone(),
+                        );
+                        handle.block_on(async {
+                            let (successful_notes, failed_notes) =
+                                ctx.filter_notes(&data_store, notes).await?;
+                            let executed_tx =
+                                Box::pin(ctx.execute(&data_store, successful_notes)).await?;
+                            let scripts_to_cache = data_store.take_fetched_scripts();
+                            Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
+                        })
+                    })
+                    .await
+                    .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
@@ -430,19 +438,23 @@ impl NtxDataStore {
     }
 
     /// Returns the list of note scripts fetched from the remote store during execution.
-    async fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
-        self.fetched_scripts.lock().await.drain(..).collect()
+    fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
+        self.fetched_scripts
+            .lock()
+            .expect("fetched scripts lock poisoned")
+            .drain(..)
+            .collect()
     }
 
     /// Registers storage map slot names for the given account ID and storage header.
     ///
     /// These slot names are subsequently used to query for storage map witnesses against the store.
-    async fn register_storage_map_slots(
+    fn register_storage_map_slots(
         &self,
         account_id: AccountId,
         storage_header: &AccountStorageHeader,
     ) {
-        let mut storage_slots = self.storage_slots.lock().await;
+        let mut storage_slots = self.storage_slots.lock().expect("storage slots lock poisoned");
         for slot_header in storage_header.slots() {
             if let StorageSlotType::Map = slot_header.slot_type() {
                 storage_slots.insert((account_id, slot_header.value()), slot_header.name().clone());
@@ -471,8 +483,7 @@ impl DataStore for NtxDataStore {
             }
 
             // Register slot names from the native account for later use.
-            self.register_storage_map_slots(account_id, &self.account.storage().to_header())
-                .await;
+            self.register_storage_map_slots(account_id, &self.account.storage().to_header());
 
             let partial_account = PartialAccount::from(&self.account);
             Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
@@ -498,8 +509,7 @@ impl DataStore for NtxDataStore {
             self.mast_store.load_account_code(account_inputs.code());
 
             // Register slot names from the foreign account for later use.
-            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header())
-                .await;
+            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header());
 
             Ok(account_inputs)
         }
@@ -536,11 +546,14 @@ impl DataStore for NtxDataStore {
         async move {
             // The slot name that corresponds to the given account ID and map root must have been
             // registered during previous calls of this data store.
-            let storage_slots = self.storage_slots.lock().await;
-            let Some(slot_name) = storage_slots.get(&(account_id, map_root)) else {
-                return Err(DataStoreError::other(
-                    "requested storage slot has not been registered",
-                ));
+            let slot_name = {
+                let storage_slots = self.storage_slots.lock().expect("storage slots lock poisoned");
+                let Some(slot_name) = storage_slots.get(&(account_id, map_root)) else {
+                    return Err(DataStoreError::other(
+                        "requested storage slot has not been registered",
+                    ));
+                };
+                slot_name.clone()
             };
 
             let ref_block = self.reference_block.block_num();
@@ -548,7 +561,7 @@ impl DataStore for NtxDataStore {
             // Get storage map witness from the store.
             let witness = self
                 .store
-                .get_storage_map_witness(account_id, slot_name.clone(), map_key, Some(ref_block))
+                .get_storage_map_witness(account_id, slot_name, map_key, Some(ref_block))
                 .await
                 .map_err(|err| {
                     DataStoreError::other_with_source("failed to get storage map witness", err)
@@ -594,7 +607,10 @@ impl DataStore for NtxDataStore {
 
             if let Some(script) = maybe_script {
                 // Collect for later persistence by the coordinator.
-                self.fetched_scripts.lock().await.push((script_root, script.clone()));
+                self.fetched_scripts
+                    .lock()
+                    .expect("fetched scripts lock poisoned")
+                    .push((script_root, script.clone()));
                 self.script_cache.put(script_root, script.clone());
                 Ok(Some(script))
             } else {

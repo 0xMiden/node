@@ -8,14 +8,14 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::NtxBuilderConfig;
 use crate::actor::{AccountActorContext, ActorRequest};
-use crate::chain_state::ChainState;
+use crate::chain_state::SharedChainState;
 use crate::clients::StoreClient;
 use crate::coordinator::Coordinator;
 use crate::db::Db;
@@ -51,7 +51,7 @@ pub struct NetworkTransactionBuilder {
     /// Database for persistent state.
     db: Db,
     /// Shared chain state updated by the event loop and read by actors.
-    chain_state: Arc<RwLock<ChainState>>,
+    chain_state: Arc<SharedChainState>,
     /// Context shared with all account actors.
     actor_context: AccountActorContext,
     /// Stream of mempool events from the block producer.
@@ -70,7 +70,7 @@ impl NetworkTransactionBuilder {
         coordinator: Coordinator,
         store: StoreClient,
         db: Db,
-        chain_state: Arc<RwLock<ChainState>>,
+        chain_state: Arc<SharedChainState>,
         actor_context: AccountActorContext,
         mempool_events: MempoolEventStream,
         actor_request_rx: mpsc::Receiver<ActorRequest>,
@@ -197,7 +197,7 @@ impl NetworkTransactionBuilder {
             .context("failed to load account from store")?
             .context("account should exist in store")?;
 
-        let block_num = self.chain_state.read().await.chain_tip_header.block_num();
+        let block_num = self.chain_state.chain_tip_block_number();
         let notes = self
             .store
             .get_unconsumed_network_notes(account_id, block_num.as_u32())
@@ -248,7 +248,7 @@ impl NetworkTransactionBuilder {
                     .await
                     .context("failed to write BlockCommitted to DB")?;
 
-                self.update_chain_tip(header.as_ref().clone()).await;
+                self.update_chain_tip(header.as_ref().clone());
                 self.coordinator.notify_accounts(&result.accounts_to_notify);
                 Ok(())
             },
@@ -289,35 +289,7 @@ impl NetworkTransactionBuilder {
     }
 
     /// Updates the chain tip and prunes old blocks from the MMR.
-    async fn update_chain_tip(&mut self, tip: BlockHeader) {
-        let mut chain_state = self.chain_state.write().await;
-
-        // Skip blocks already reflected in the chain state. A `BlockCommitted` event may arrive
-        // for a block whose state was already loaded from the store during startup: the mempool
-        // subscription is established first and then the chain tip is fetched, so any block
-        // committed in that window produces an event for state we have already ingested.
-        if tip.block_num() <= chain_state.chain_tip_header.block_num() {
-            tracing::debug!(
-                event_block = %tip.block_num(),
-                current_tip = %chain_state.chain_tip_header.block_num(),
-                "skipping BlockCommitted event for block already in chain state",
-            );
-            return;
-        }
-
-        // Update MMR which lags by one block.
-        let mmr_tip = chain_state.chain_tip_header.clone();
-        Arc::make_mut(&mut chain_state.chain_mmr).add_block(&mmr_tip, true);
-
-        // Set the new tip.
-        chain_state.chain_tip_header = tip;
-
-        // Keep MMR pruned.
-        let pruned_block_height = (chain_state
-            .chain_mmr
-            .chain_length()
-            .as_usize()
-            .saturating_sub(self.config.max_block_count)) as u32;
-        Arc::make_mut(&mut chain_state.chain_mmr).prune_to(..pruned_block_height.into());
+    fn update_chain_tip(&mut self, tip: BlockHeader) {
+        self.chain_state.update_chain_tip(tip, self.config.max_block_count);
     }
 }

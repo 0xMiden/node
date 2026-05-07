@@ -340,6 +340,24 @@ pub struct PublicAccountIdsPage {
     pub next_cursor: Option<AccountId>,
 }
 
+/// Latest account state forest roots for a public account.
+#[derive(Debug)]
+pub struct PublicAccountStateRoots {
+    pub account_id: AccountId,
+    pub vault_root: Word,
+    pub storage_header: AccountStorageHeader,
+}
+
+/// Page of public account state roots returned by
+/// [`select_public_account_state_roots_paged`].
+#[derive(Debug)]
+pub struct PublicAccountStateRootsPage {
+    /// The public account state roots in this page.
+    pub accounts: Vec<PublicAccountStateRoots>,
+    /// If `Some`, there are more results. Use this as the `after_account_id` for the next page.
+    pub next_cursor: Option<AccountId>,
+}
+
 /// Selects public account IDs with pagination.
 ///
 /// Returns up to `page_size` public account IDs, starting after `after_account_id` if provided.
@@ -398,6 +416,94 @@ pub(crate) fn select_public_account_ids_paged(
     };
 
     Ok(PublicAccountIdsPage { account_ids, next_cursor })
+}
+
+/// Selects public account vault roots and storage headers with pagination.
+///
+/// Returns up to `page_size` public account states, starting after `after_account_id` if provided.
+/// Results are ordered by `account_id` for stable pagination.
+///
+/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
+/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
+/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT
+///     account_id,
+///     vault_root,
+///     storage_header
+/// FROM
+///     accounts
+/// WHERE
+///     is_latest = 1
+///     AND code_commitment IS NOT NULL
+///     AND (account_id > :after_account_id OR :after_account_id IS NULL)
+/// ORDER BY
+///     account_id ASC
+/// LIMIT :page_size + 1
+/// ```
+pub(crate) fn select_public_account_state_roots_paged(
+    conn: &mut SqliteConnection,
+    page_size: NonZeroUsize,
+    after_account_id: Option<AccountId>,
+) -> Result<PublicAccountStateRootsPage, DatabaseError> {
+    #[expect(clippy::cast_possible_wrap)]
+    let limit = (page_size.get() + 1) as i64;
+
+    let mut query = SelectDsl::select(
+        schema::accounts::table,
+        (
+            schema::accounts::account_id,
+            schema::accounts::vault_root,
+            schema::accounts::storage_header,
+        ),
+    )
+    .filter(schema::accounts::is_latest.eq(true))
+    .filter(schema::accounts::code_commitment.is_not_null())
+    .order_by(schema::accounts::account_id.asc())
+    .limit(limit)
+    .into_boxed();
+
+    if let Some(cursor) = after_account_id {
+        query = query.filter(schema::accounts::account_id.gt(cursor.to_bytes()));
+    }
+
+    let raw = query.load::<(Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)>(conn)?;
+
+    let mut accounts: Vec<PublicAccountStateRoots> = Result::from_iter(raw.into_iter().map(
+        |(account_id_bytes, vault_root_bytes, storage_header_bytes)| {
+            let account_id = AccountId::read_from_bytes(&account_id_bytes)
+                .map_err(DatabaseError::DeserializationError)?;
+            let vault_root_bytes = vault_root_bytes.ok_or_else(|| {
+                DatabaseError::DataCorrupted(format!(
+                    "public account {account_id} is missing a vault root"
+                ))
+            })?;
+            let storage_header_bytes = storage_header_bytes.ok_or_else(|| {
+                DatabaseError::DataCorrupted(format!(
+                    "public account {account_id} is missing a storage header"
+                ))
+            })?;
+
+            Ok::<_, DatabaseError>(PublicAccountStateRoots {
+                account_id,
+                vault_root: Word::read_from_bytes(&vault_root_bytes)?,
+                storage_header: AccountStorageHeader::read_from_bytes(&storage_header_bytes)?,
+            })
+        },
+    ))?;
+
+    // If we got more than page_size, there are more results.
+    let next_cursor = if accounts.len() > page_size.get() {
+        accounts.pop();
+        accounts.last().map(|account| account.account_id)
+    } else {
+        None
+    };
+
+    Ok(PublicAccountStateRootsPage { accounts, next_cursor })
 }
 
 /// Select account vault assets within a block range (inclusive).

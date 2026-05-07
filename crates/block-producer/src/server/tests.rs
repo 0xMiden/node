@@ -130,11 +130,11 @@ async fn start_store(
     store_addr: std::net::SocketAddr,
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
-    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
+    let signer = random_secret_key();
+    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, signer.public_key());
     let genesis_block = genesis_state
         .clone()
-        .into_block()
-        .await
+        .into_block(&signer)
         .expect("genesis block should be created");
     Store::bootstrap(genesis_block, data_directory).expect("store should bootstrap");
 

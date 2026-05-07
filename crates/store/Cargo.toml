@@ -75,7 +75,7 @@ tempfile              = { workspace = true }
 
 [features]
 default = ["rocksdb"]
-rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-node-utils/rocksdb"]
+rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-crypto/persistent-forest", "miden-node-utils/rocksdb"]
 
 [[bench]]
 harness           = false

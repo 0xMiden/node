@@ -205,17 +205,17 @@ mod tests {
 
     /// Parses the generated genesis.toml, builds a genesis block, and asserts the bridge account
     /// is included with nonce=1.
-    async fn assert_valid_genesis_block(dir: &Path) {
+    fn assert_valid_genesis_block(dir: &Path) {
         let bridge_id = AccountFile::read(dir.join("bridge.mac")).unwrap().account.id();
 
         let config = GenesisConfig::read_toml_file(&dir.join("genesis.toml")).unwrap();
         let signer = SecretKey::read_from_bytes(&[0x01; 32]).unwrap();
-        let (state, _) = config.into_state(signer).unwrap();
+        let (state, _) = config.into_state(signer.public_key()).unwrap();
 
         let bridge = state.accounts.iter().find(|a| a.id() == bridge_id).unwrap();
         assert_eq!(bridge.nonce(), ONE);
 
-        state.into_block().await.expect("genesis block should build");
+        state.into_block(&signer).expect("genesis block should build");
     }
 
     #[tokio::test]
@@ -229,7 +229,7 @@ mod tests {
         let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
         assert_eq!(ger.auth_secret_keys.len(), 1);
 
-        assert_valid_genesis_block(dir.path()).await;
+        assert_valid_genesis_block(dir.path());
     }
 
     #[tokio::test]
@@ -249,6 +249,6 @@ mod tests {
         let ger = AccountFile::read(dir.path().join("ger_manager.mac")).unwrap();
         assert!(ger.auth_secret_keys.is_empty());
 
-        assert_valid_genesis_block(dir.path()).await;
+        assert_valid_genesis_block(dir.path());
     }
 }
