@@ -46,7 +46,9 @@ It expects that this gRPC interface is _only_ accessible internally i.e. there i
 The block-producer is responsible for aggregating received transactions into blocks and submitting them to the store.
 
 Transactions are placed in a mempool and are periodically sampled to form batches of transactions. These batches are
-proved, and then periodically aggregated into a block. This proposed block is then submitted to the store.
+proved, and then periodically aggregated into a block. This constructed block is sent to the validator, which verifies the
+contents of the block before signing the block's commitment and returning the signature to the block-producer. This signed 
+block is then submitted to the store where it is proven and committed.
 
 Proof generation in production is typically outsourced to a remote machine with appropriate resources. For convenience,
 it is also possible to perform proving in-process. This is useful when running a local node for test purposes.

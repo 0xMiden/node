@@ -15,9 +15,14 @@ the mempool where it can be included in a block.
 
 ## Block production
 
-Proven batches are selected from the mempool periodically to form the next block. The block is then built and submitted
-to the store, which ensures it gets signed by the validator before it is committed. At this point all transactions and 
-batches in the block are marked in the mempool as committed.
+Proven batches are selected from the mempool periodically to form the next block. The block is then built and sent to the
+validator for verification and signing.
+This signed block is then submitted to the store where it gets proven and committed. Proof
+generation in production is typically 
+outsourced to a remote machine with appropriate resources. For convenience,
+it is also possible to perform proving in-process. This is useful when running a local node for test purposes.
+
+Once the block is committed,  all transactions and batches in the block are marked in the mempool as committed.
 
 ## Mempool data pruning
 
