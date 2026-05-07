@@ -29,7 +29,7 @@ pub enum NtxBuilderCommand {
     Start {
         /// Socket address at which to serve the ntx-builder's gRPC API.
         #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
-        socket: Option<SocketAddr>,
+        socket: SocketAddr,
 
         /// The store's ntx-builder service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -118,15 +118,9 @@ impl NtxBuilderCommand {
             enable_otel: _,
         } = self;
 
-        let listener = if let Some(socket) = socket {
-            Some(
-                TcpListener::bind(socket)
-                    .await
-                    .context("Failed to bind to ntx-builder's gRPC socket")?,
-            )
-        } else {
-            None
-        };
+        let listener = TcpListener::bind(socket)
+            .await
+            .context("Failed to bind to ntx-builder's gRPC socket")?;
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
