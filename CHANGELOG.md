@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.14.11 (TBD)
+
+- Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
+- Implement persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
+
+## v0.14.10 (2026-05-29)
+
+- Optimize `GetAccount` implementation to serve vault assets from `AccountStateForest` ([#1981](https://github.com/0xMiden/node/pull/1981)).
+- Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982)).
+- Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
+- Fixed occasional mempool panic during transaction submission, causing the lock to be held for longer than expected ([#1984](https://github.com/0xMiden/node/pull/1984)).
+- Optimize `GetAccount` implementation: `all_entries` requests now mostly use state from `AccountStateForest` ([#2012](https://github.com/0xMiden/node/pull/2012)).
+
+## v0.14.9 (2026-04-21)
+
+- Simplified network monitor counter script loading by linking the counter module directly via `with_linked_module` instead of assembling a standalone library ([#1957](https://github.com/0xMiden/node/pull/1957)).
+
 ## v0.14.8 (2026-04-19)
 
 - Fixed a startup race in the network transaction builder that could panic the chain MMR when a block committed between subscribing to the mempool and fetching the chain tip from the store ([#1953](https://github.com/0xMiden/node/pull/1953)).

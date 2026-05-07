@@ -14,20 +14,42 @@ After building the binary, you can run the following command to generate one mil
 
 The store file will then be located at `./data/miden-store.sqlite3`.
 
+The seed data can be tuned for account-detail benchmarks:
+
+- `--public-accounts-percentage` controls how many generated accounts are public. The default is `0`.
+- `--storage-map-entries` adds a deterministic storage map with the given number of entries to every public account. The default is `0`.
+- `--vault-entries` adds the given number of distinct fungible assets to every public account's vault. The default is `1`, and the value must fit within the protocol note asset limit.
+- `--account-update-blocks` appends the given number of blocks after account initialization. These blocks randomly update existing accounts and rotate updates through the seeded storage-map entries. The default is `0`.
+
+For example, this creates public accounts with storage maps, multiple vault assets, and additional account-update history:
+
+```bash
+miden-node-stress-test seed-store \
+  --data-directory ./data \
+  --num-accounts 100000 \
+  --public-accounts-percentage 50 \
+  --storage-map-entries 128 \
+  --vault-entries 5 \
+  --account-update-blocks 100
+```
+
 ## Benchmark Store
 
 This command allows to run stress tests against the Store component. These tests use the dump file with accounts ids created when seeding the store, so be sure to run the `seed-store` command beforehand.
 
 The endpoints that you can test are:
-- `load_state`
-- `sync_notes`
-- `sync_nullifiers`
-- `sync_transactions`
+- `load-state`
+- `get-account`
+- `sync-notes`
+- `sync-nullifiers`
+- `sync-transactions`
 - `sync-chain-mmr`
 
-Most benchmarks accept options to control the number of iterations and concurrency level. The `load_state` endpoint is different - it simply measures the one-time startup cost of loading the state from disk.
+Most benchmarks accept options to control the number of iterations and concurrency level. The `load-state` endpoint is different - it simply measures the one-time startup cost of loading the state from disk.
 
-**Note on Concurrency**: For the endpoints that support it (`sync_notes`, `sync_nullifiers`), the concurrency parameter controls how many requests are sent in parallel to the store. Since these benchmarks run against a local store (no network overhead), higher concurrency values can help identify bottlenecks in the store's internal processing. The latency measurements exclude network time and represent pure store processing time.
+The `get-account` benchmark uses the account id dump created by `seed-store`, selects public accounts, and requests account details from the store. Each request asks for vault details and all entries from a storage map slot. By default, it uses the slot created by `--storage-map-entries`: `miden::mock::stress_test::map`. You can request a different slot with `--storage-map-slot`.
+
+**Note on Concurrency**: For request benchmarks, the concurrency parameter controls how many requests are sent in parallel to the store. Since these benchmarks run against a local store (no network overhead), higher concurrency values can help identify bottlenecks in the store's internal processing. The latency measurements exclude network time and represent pure store processing time.
 
 Example usage:
 
@@ -37,6 +59,16 @@ miden-node-stress-test benchmark-store \
   --iterations 10000 \
   --concurrency 16 \
   sync-notes
+```
+
+To benchmark public account detail loading, seed public accounts first and then run:
+
+```bash
+miden-node-stress-test benchmark-store \
+  --data-directory ./data \
+  --iterations 10000 \
+  --concurrency 16 \
+  get-account
 ```
 
 ### Results
@@ -58,49 +90,49 @@ Average DB growth rate: 325.3 KB per block
 
 > Note: Each block contains 256 transactions (16 batches * 16 transactions).
 
-| Block  | Insert Time (ms)   |  Get Block Inputs Time (ms)   |  Get Batch Inputs Time (ms)    | Block Size (KB)    |  DB Size (MB) |
-| ------ | ------------------ | ----------------------------- | ------------------------------ | ------------------ | ------------- |
-| 0      | 22                 | 1                             | 0                              | 375.6              | 0.3           |
-| 50     | 186                | 9                             | 1                              | 473.6              | 22.2          |
-| 100    | 199                | 10                            | 1                              | 473.6              | 40.7          |
-| 150    | 219                | 10                            | 1                              | 473.6              | 58.1          |
-| 200    | 218                | 11                            | 1                              | 473.6              | 74.8          |
-| 250    | 222                | 11                            | 1                              | 473.6              | 91.6          |
-| 300    | 228                | 12                            | 1                              | 473.6              | 108.1         |
-| 350    | 232                | 13                            | 1                              | 473.6              | 124.4         |
+| Block | Insert Time (ms) | Get Block Inputs Time (ms) | Get Batch Inputs Time (ms) | Block Size (KB) | DB Size (MB) |
+| ----- | ---------------- | -------------------------- | -------------------------- | --------------- | ------------ |
+| 0     | 22               | 1                          | 0                          | 375.6           | 0.3          |
+| 50    | 186              | 9                          | 1                          | 473.6           | 22.2         |
+| 100   | 199              | 10                         | 1                          | 473.6           | 40.7         |
+| 150   | 219              | 10                         | 1                          | 473.6           | 58.1         |
+| 200   | 218              | 11                         | 1                          | 473.6           | 74.8         |
+| 250   | 222              | 11                         | 1                          | 473.6           | 91.6         |
+| 300   | 228              | 12                         | 1                          | 473.6           | 108.1        |
+| 350   | 232              | 13                         | 1                          | 473.6           | 124.4        |
 
 #### Database stats
 
 > Note: Database contains 100215 accounts and 100215 notes across all blocks.
 
-| Table                              | Size (MB)       | KB/Entry   |
-| ---------------------------------- | --------------- | ---------- |
-| accounts                           | 26.1            | 0.3        |
-| account_deltas                     | 1.2             | 0.0        |
-| account_fungible_asset_deltas      | 2.2             | 0.0        |
-| account_non_fungible_asset_updates | 0.0             | -          |
-| account_storage_map_updates        | 0.0             | -          |
-| account_storage_slot_updates       | 3.1             | 0.1        |
-| block_headers                      | 0.1             | 0.3        |
-| notes                              | 49.1            | 0.5        |
-| note_scripts                       | 0.0             | 8.0        |
-| nullifiers                         | 4.6             | 0.0        |
-| transactions                       | 6.0             | 0.1        |
+| Table                              | Size (MB) | KB/Entry |
+| ---------------------------------- | --------- | -------- |
+| accounts                           | 26.1      | 0.3      |
+| account_deltas                     | 1.2       | 0.0      |
+| account_fungible_asset_deltas      | 2.2       | 0.0      |
+| account_non_fungible_asset_updates | 0.0       | -        |
+| account_storage_map_updates        | 0.0       | -        |
+| account_storage_slot_updates       | 3.1       | 0.1      |
+| block_headers                      | 0.1       | 0.3      |
+| notes                              | 49.1      | 0.5      |
+| note_scripts                       | 0.0       | 8.0      |
+| nullifiers                         | 4.6       | 0.0      |
+| transactions                       | 6.0       | 0.1      |
 
 #### Index stats
 
-| Index                              | Size (MB)       |
-| ---------------------------------- | --------------- |
-| idx_accounts_network_prefix        | 0.0             |
-| idx_notes_note_id                  | 4.4             |
-| idx_notes_sender                   | 2.9             |
-| idx_notes_tag                      | 1.6             |
-| idx_notes_nullifier                | 4.4             |
-| idx_unconsumed_network_notes       | 1.1             |
-| idx_nullifiers_prefix              | 4.3             |
-| idx_nullifiers_block_num           | 4.2             |
-| idx_transactions_account_id        | 5.6             |
-| idx_transactions_block_num         | 4.2             |
+| Index                        | Size (MB) |
+| ---------------------------- | --------- |
+| idx_accounts_network_prefix  | 0.0       |
+| idx_notes_note_id            | 4.4       |
+| idx_notes_sender             | 2.9       |
+| idx_notes_tag                | 1.6       |
+| idx_notes_nullifier          | 4.4       |
+| idx_unconsumed_network_notes | 1.1       |
+| idx_nullifiers_prefix        | 4.3       |
+| idx_nullifiers_block_num     | 4.2       |
+| idx_transactions_account_id  | 5.6       |
+| idx_transactions_block_num   | 4.2       |
 
 
 Current results of the store stress-tests:
@@ -173,6 +205,23 @@ Pagination statistics:
   Runs triggering pagination: 1
   Pagination rate: 0.01%
   Average pages per run: 1.00
+```
+
+- get-account
+``` bash
+$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 get-account
+
+Average request latency: 937.969µs
+P50 request latency: 688.332µs
+P95 request latency: 932.549µs
+P99 request latency: 1.119977ms
+P99.9 request latency: 42.992839ms
+GetAccount statistics:
+  Total runs: 10000
+  Storage map limit exceeded responses: 0
+  Average returned storage map entries: 64.00
+  Vault limit exceeded responses: 0
+  Average returned vault assets: 2.00
 ```
 
 ## License

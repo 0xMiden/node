@@ -1406,9 +1406,9 @@ dependencies = [
 
 [[package]]
 name = "diesel"
-version = "2.3.7"
+version = "2.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4ae09a41a4b89f94ec1e053623da8340d996bc32c6517d325a9daad9b239358"
+checksum = "9940fb8467a0a06312218ed384185cb8536aa10d8ec017d0ce7fad2c1bd882d5"
 dependencies = [
  "bigdecimal",
  "diesel_derives",
@@ -2993,6 +2993,7 @@ dependencies = [
  "rand_core 0.9.5",
  "rand_hc",
  "rayon",
+ "rocksdb",
  "serde",
  "sha2",
  "sha3",
@@ -3041,7 +3042,7 @@ dependencies = [
  "p3-field",
  "p3-goldilocks",
  "paste",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "subtle",
  "thiserror 2.0.18",
@@ -3058,7 +3059,7 @@ dependencies = [
 
 [[package]]
 name = "miden-genesis"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -3066,7 +3067,6 @@ dependencies = [
  "hex",
  "miden-agglayer",
  "miden-node-store",
- "miden-node-utils",
  "miden-protocol",
  "miden-standards",
  "rand 0.9.2",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "miden-large-smt-backend-rocksdb"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "miden-crypto",
  "miden-node-rocksdb-cxx-linkage-fix",
@@ -3138,7 +3138,7 @@ dependencies = [
 
 [[package]]
 name = "miden-network-monitor"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -3166,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -3186,7 +3186,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-block-producer"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3195,18 +3195,15 @@ dependencies = [
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
- "miden-node-test-macro",
  "miden-node-utils",
  "miden-node-validator",
  "miden-protocol",
  "miden-remote-prover-client",
  "miden-standards",
- "miden-tx",
  "miden-tx-batch-prover",
  "pretty_assertions",
  "rand 0.9.2",
  "rand_chacha",
- "rstest",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
@@ -3221,7 +3218,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-db"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "deadpool",
  "deadpool-diesel",
@@ -3234,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-grpc-error-macro"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -3242,7 +3239,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-ntx-builder"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "build-rs",
@@ -3253,7 +3250,6 @@ dependencies = [
  "miden-node-db",
  "miden-node-proto",
  "miden-node-proto-build",
- "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
@@ -3275,10 +3271,9 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
- "assert_matches",
  "build-rs",
  "fs-err",
  "hex",
@@ -3300,7 +3295,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto-build"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "build-rs",
  "fs-err",
@@ -3311,11 +3306,11 @@ dependencies = [
 
 [[package]]
 name = "miden-node-rocksdb-cxx-linkage-fix"
-version = "0.14.8"
+version = "0.14.10"
 
 [[package]]
 name = "miden-node-rpc"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "futures",
@@ -3347,7 +3342,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-store"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3376,10 +3371,8 @@ dependencies = [
  "pretty_assertions",
  "rand 0.9.2",
  "rand_chacha",
- "regex",
  "serde",
  "tempfile",
- "termtree",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -3393,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-stress-test"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "clap",
  "fs-err",
@@ -3421,7 +3414,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-utils"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3454,7 +3447,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-validator"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -3590,7 +3583,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3598,14 +3591,12 @@ dependencies = [
  "build-rs",
  "clap",
  "fs-err",
- "http 1.4.0",
  "humantime",
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-utils",
  "miden-protocol",
- "miden-standards",
  "miden-testing",
  "miden-tx",
  "miden-tx-batch-prover",
@@ -3627,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover-client"
-version = "0.14.8"
+version = "0.14.10"
 dependencies = [
  "build-rs",
  "fs-err",
@@ -3642,7 +3633,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
- "tonic-web",
  "tonic-web-wasm-client",
 ]
 
@@ -4219,7 +4209,7 @@ dependencies = [
  "p3-maybe-rayon",
  "p3-util",
  "paste",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "tracing",
 ]
@@ -4240,7 +4230,7 @@ dependencies = [
  "p3-symmetric",
  "p3-util",
  "paste",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
 ]
 
@@ -4265,7 +4255,7 @@ dependencies = [
  "p3-field",
  "p3-maybe-rayon",
  "p3-util",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "tracing",
 ]
@@ -4289,7 +4279,7 @@ dependencies = [
  "p3-field",
  "p3-symmetric",
  "p3-util",
- "rand 0.10.0",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -4320,7 +4310,7 @@ dependencies = [
  "p3-miden-lmcs",
  "p3-miden-transcript",
  "p3-util",
- "rand 0.10.0",
+ "rand 0.10.1",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -4360,7 +4350,7 @@ dependencies = [
  "p3-miden-transcript",
  "p3-symmetric",
  "p3-util",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -4406,7 +4396,7 @@ dependencies = [
  "p3-symmetric",
  "p3-util",
  "paste",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "spin 0.10.0",
  "tracing",
@@ -4420,7 +4410,7 @@ checksum = "6a018b618e3fa0aec8be933b1d8e404edd23f46991f6bf3f5c2f3f95e9413fe9"
 dependencies = [
  "p3-field",
  "p3-symmetric",
- "rand 0.10.0",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -4433,7 +4423,7 @@ dependencies = [
  "p3-mds",
  "p3-symmetric",
  "p3-util",
- "rand 0.10.0",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -4794,7 +4784,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -4815,7 +4805,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5022,9 +5012,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
  "rand_core 0.10.0",
 ]
@@ -5370,7 +5360,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.10",
+ "rustls-webpki 0.103.13",
  "subtle",
  "zeroize",
 ]
@@ -5411,7 +5401,7 @@ dependencies = [
  "rustls 0.23.37",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.10",
+ "rustls-webpki 0.103.13",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -5436,9 +5426,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -6067,12 +6057,6 @@ dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "termtree"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d1330fe7f7f872cd05165130b10602d667b205fd85be09be2814b115d4ced9"
 
 [[package]]
 name = "textwrap"

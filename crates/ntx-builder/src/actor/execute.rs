@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -48,7 +49,6 @@ use miden_tx::{
     TransactionMastStore,
     TransactionProverError,
 };
-use tokio::sync::Mutex;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
@@ -195,25 +195,40 @@ impl NtxContext {
 
         async move {
             Box::pin(async move {
-                let data_store = NtxDataStore::new(
-                    account,
-                    chain_tip_header,
-                    chain_mmr,
-                    self.store.clone(),
-                    self.script_cache.clone(),
-                    self.db.clone(),
-                );
-
-                // Filter notes.
                 let notes = notes.into_iter().map(Note::from).collect::<Vec<_>>();
-                let (successful_notes, failed_notes) =
-                    self.filter_notes(&data_store, notes).await?;
 
-                // Execute transaction.
-                let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
+                // VM execution (note filtering + transaction execution) is CPU-intensive and
+                // may not yield between await points. Run on a dedicated blocking thread,
+                // using the parent runtime handle so that async data-store callbacks (gRPC
+                // calls to the store) are driven by the existing I/O driver.
+                let ctx = self.clone();
+                let handle = tokio::runtime::Handle::current();
+                let span = tracing::Span::current();
 
-                // Collect scripts fetched from the remote store during execution.
-                let scripts_to_cache = data_store.take_fetched_scripts().await;
+                let (executed_tx, failed_notes, scripts_to_cache) =
+                    spawn_blocking_in_current_span(move || {
+                        let data_store = NtxDataStore::new(
+                            account,
+                            chain_tip_header,
+                            chain_mmr,
+                            ctx.store.clone(),
+                            ctx.script_cache.clone(),
+                            ctx.db.clone(),
+                        );
+                        handle.block_on(
+                            async {
+                                let (successful_notes, failed_notes) =
+                                    ctx.filter_notes(&data_store, notes).await?;
+                                let executed_tx =
+                                    Box::pin(ctx.execute(&data_store, successful_notes)).await?;
+                                let scripts_to_cache = data_store.take_fetched_scripts();
+                                Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
+                            }
+                            .instrument(span),
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
@@ -317,13 +332,23 @@ impl NtxContext {
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
         if let Some(remote) = &self.prover {
-            remote.prove(tx_inputs).await
+            remote.prove(tx_inputs).await.map_err(NtxError::Proving)
         } else {
-            // Only perform tx inputs clone for local proving.
+            // ZK proof generation is CPU-intensive; run it on a dedicated blocking thread.
             let tx_inputs = tx_inputs.clone();
-            LocalTransactionProver::default().prove(tx_inputs).await
+            let span = tracing::Span::current();
+
+            spawn_blocking_in_current_span(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build tokio runtime")
+                    .block_on(LocalTransactionProver::default().prove(tx_inputs).instrument(span))
+            })
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+            .map_err(NtxError::Proving)
         }
-        .map_err(NtxError::Proving)
     }
 
     /// Submits the transaction to the block producer.
@@ -374,29 +399,9 @@ struct NtxDataStore {
     db: Db,
     /// Scripts fetched from the remote store during execution, to be persisted by the
     /// coordinator.
-    fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
+    fetched_scripts: Arc<FetchedNoteScripts>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
-    ///
-    /// The registered slot names are subsequently used to retrieve storage map witnesses from the
-    /// store. We need this because the store interface (and the underling SMT forest) use storage
-    /// slot names, but the `DataStore` interface works with tree roots. To get around this problem
-    /// we populate this map when:
-    /// - The the native account is loaded (in `get_transaction_inputs()`).
-    /// - When a foreign account is loaded (in `get_foreign_account_inputs`).
-    ///
-    /// The assumption here are:
-    /// - Once an account is loaded, the mapping between `(account_id, map_root)` and slot names do
-    ///   not change. This is always the case.
-    /// - New storage slots created during transaction execution will not be accesses in the same
-    ///   transaction. The mechanism for adding new storage slots is not implemented yet, but the
-    ///   plan for it is consistent with this assumption.
-    ///
-    /// One nuance worth mentioning: it is possible that there could be a root collision where an
-    /// account has two storage maps with the same root. In this case, the map will contain only a
-    /// single entry with the storage slot name that was added last. Thus, technically, requests
-    /// to the store could be "wrong", but given that two identical maps have identical witnesses
-    /// this does not cause issues in practice.
-    storage_slots: Arc<Mutex<BTreeMap<(AccountId, Word), StorageSlotName>>>,
+    storage_slots: Arc<StorageSlotRegistry>,
 }
 
 impl NtxDataStore {
@@ -420,30 +425,25 @@ impl NtxDataStore {
             store,
             script_cache,
             db,
-            fetched_scripts: Arc::new(Mutex::new(Vec::new())),
-            storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
+            fetched_scripts: Arc::new(FetchedNoteScripts::new()),
+            storage_slots: Arc::new(StorageSlotRegistry::new()),
         }
     }
 
     /// Returns the list of note scripts fetched from the remote store during execution.
-    async fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
-        self.fetched_scripts.lock().await.drain(..).collect()
+    fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
+        self.fetched_scripts.take_all()
     }
 
     /// Registers storage map slot names for the given account ID and storage header.
     ///
     /// These slot names are subsequently used to query for storage map witnesses against the store.
-    async fn register_storage_map_slots(
+    fn register_storage_map_slots(
         &self,
         account_id: AccountId,
         storage_header: &AccountStorageHeader,
     ) {
-        let mut storage_slots = self.storage_slots.lock().await;
-        for slot_header in storage_header.slots() {
-            if let StorageSlotType::Map = slot_header.slot_type() {
-                storage_slots.insert((account_id, slot_header.value()), slot_header.name().clone());
-            }
-        }
+        self.storage_slots.register_slots(account_id, storage_header);
     }
 }
 
@@ -467,8 +467,7 @@ impl DataStore for NtxDataStore {
             }
 
             // Register slot names from the native account for later use.
-            self.register_storage_map_slots(account_id, &self.account.storage().to_header())
-                .await;
+            self.register_storage_map_slots(account_id, &self.account.storage().to_header());
 
             let partial_account = PartialAccount::from(&self.account);
             Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
@@ -494,8 +493,7 @@ impl DataStore for NtxDataStore {
             self.mast_store.load_account_code(account_inputs.code());
 
             // Register slot names from the foreign account for later use.
-            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header())
-                .await;
+            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header());
 
             Ok(account_inputs)
         }
@@ -532,8 +530,7 @@ impl DataStore for NtxDataStore {
         async move {
             // The slot name that corresponds to the given account ID and map root must have been
             // registered during previous calls of this data store.
-            let storage_slots = self.storage_slots.lock().await;
-            let Some(slot_name) = storage_slots.get(&(account_id, map_root)) else {
+            let Some(slot_name) = self.storage_slots.get_slot_name(account_id, map_root) else {
                 return Err(DataStoreError::other(
                     "requested storage slot has not been registered",
                 ));
@@ -566,7 +563,7 @@ impl DataStore for NtxDataStore {
     ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
         async move {
             // 1. In-memory LRU cache.
-            if let Some(cached_script) = self.script_cache.get(&script_root).await {
+            if let Some(cached_script) = self.script_cache.get(&script_root) {
                 return Ok(Some(cached_script));
             }
 
@@ -574,7 +571,7 @@ impl DataStore for NtxDataStore {
             if let Some(script) = self.db.lookup_note_script(script_root).await.map_err(|err| {
                 DataStoreError::other_with_source("failed to look up note script in local DB", err)
             })? {
-                self.script_cache.put(script_root, script.clone()).await;
+                self.script_cache.put(script_root, script.clone());
                 return Ok(Some(script));
             }
 
@@ -589,8 +586,8 @@ impl DataStore for NtxDataStore {
 
             if let Some(script) = maybe_script {
                 // Collect for later persistence by the coordinator.
-                self.fetched_scripts.lock().await.push((script_root, script.clone()));
-                self.script_cache.put(script_root, script.clone()).await;
+                self.fetched_scripts.add(script_root, script.clone());
+                self.script_cache.put(script_root, script.clone());
                 Ok(Some(script))
             } else {
                 Ok(None)
@@ -605,5 +602,80 @@ impl MastForestStore for NtxDataStore {
         procedure_hash: &miden_protocol::Word,
     ) -> Option<std::sync::Arc<miden_protocol::MastForest>> {
         self.mast_store.get(procedure_hash)
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Scripts fetched from the remote store during execution, to be persisted by the
+/// coordinator.
+///
+/// The API guarantees that the mutex is never held across an await point.
+struct FetchedNoteScripts {
+    scripts: Mutex<Vec<(Word, NoteScript)>>,
+}
+
+impl FetchedNoteScripts {
+    fn new() -> Self {
+        Self { scripts: Mutex::new(Vec::new()) }
+    }
+
+    fn add(&self, script_root: Word, script: NoteScript) {
+        self.scripts
+            .lock()
+            .expect("Note scripts mutex is poisoned")
+            .push((script_root, script));
+    }
+
+    fn take_all(&self) -> Vec<(Word, NoteScript)> {
+        self.scripts.lock().expect("Note scripts mutex is poisoned").drain(..).collect()
+    }
+}
+
+/// Mapping of storage map roots to storage slot names observed during various calls.
+///
+/// The registered slot names are subsequently used to retrieve storage map witnesses from the
+/// store. We need this because the store interface (and the underling SMT forest) use storage
+/// slot names, but the `DataStore` interface works with tree roots. To get around this problem
+/// we populate this map when:
+/// - The the native account is loaded (in `get_transaction_inputs()`).
+/// - When a foreign account is loaded (in `get_foreign_account_inputs`).
+///
+/// The assumption here are:
+/// - Once an account is loaded, the mapping between `(account_id, map_root)` and slot names do not
+///   change. This is always the case.
+/// - New storage slots created during transaction execution will not be accesses in the same
+///   transaction. The mechanism for adding new storage slots is not implemented yet, but the plan
+///   for it is consistent with this assumption.
+///
+/// One nuance worth mentioning: it is possible that there could be a root collision where an
+/// account has two storage maps with the same root. In this case, the map will contain only a
+/// single entry with the storage slot name that was added last. Thus, technically, requests
+/// to the store could be "wrong", but given that two identical maps have identical witnesses
+/// this does not cause issues in practice.
+///
+/// The API guarantees that the mutex is never held across an await point.
+struct StorageSlotRegistry {
+    slots: Mutex<BTreeMap<(AccountId, Word), StorageSlotName>>,
+}
+
+impl StorageSlotRegistry {
+    fn new() -> Self {
+        Self { slots: Mutex::new(BTreeMap::default()) }
+    }
+
+    fn register_slots(&self, account_id: AccountId, storage_header: &AccountStorageHeader) {
+        let mut slots = self.slots.lock().expect("Storage slot registry mutex is poisoned");
+        for slot_header in storage_header.slots() {
+            if let StorageSlotType::Map = slot_header.slot_type() {
+                slots.insert((account_id, slot_header.value()), slot_header.name().clone());
+            }
+        }
+    }
+
+    fn get_slot_name(&self, account_id: AccountId, map_root: Word) -> Option<StorageSlotName> {
+        let slots = self.slots.lock().expect("Storage slot registry mutex is poisoned");
+        slots.get(&(account_id, map_root)).cloned()
     }
 }

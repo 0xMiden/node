@@ -1,2 +1,30 @@
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[env]
+# These compile-time flags are used to disable SQLite's memory
+# accounting features. These introduce global mutexes into SQLite's
+# memory allocator which can cause contention and performance
+# degradation in high-concurrency scenarios we have in the node.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
+
+[profile.release]
+debug = true
+
+# Optimise for test execution speed. These overrides live here so that CI
+# rust-cache picks up on them as part of its key hash. Changes in Cargo.toml
+# are ignored because they're part of a virtual manifest and not a package per se.
+#
+# Proving in particular is extremely slow without this.
+#
+# Unfortunately, we cannot simply optimise specific dependencies because at the
+# moment the slow code is monomorphised only at the final executable stage,
+# which means it inherits the binaries optimisation level.
+#
+# This uses the dev profile because we share a single build in CI for all jobs so this
+# cannot be set for test only.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.miden-remote-prover]
+opt-level = 2

@@ -13,12 +13,14 @@ use miden_node_proto_build::{
 };
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::spawn::spawn_blocking_in_span;
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
-use tracing::{info, instrument};
+use tracing::{info, info_span, instrument};
 use url::Url;
 
 use crate::blocks::BlockStore;
@@ -88,6 +90,7 @@ impl Store {
         let rpc_address = self.rpc_listener.local_addr()?;
         let ntx_builder_address = self.ntx_builder_listener.local_addr()?;
         let block_producer_address = self.block_producer_listener.local_addr()?;
+        let data_directory = self.data_directory.clone();
         info!(target: COMPONENT, rpc_endpoint=?rpc_address, ntx_builder_endpoint=?ntx_builder_address,
             block_producer_endpoint=?block_producer_address, ?self.data_directory, ?self.grpc_options.request_timeout,
             "Loading database");
@@ -143,22 +146,10 @@ impl Store {
 
         info!(target: COMPONENT, "Database loaded");
 
+        // Spawn disk monitor (fire-and-forget; never causes server shutdown).
+        let _disk_monitor_task = Self::spawn_disk_monitor(data_directory);
+
         let mut join_set = JoinSet::new();
-
-        join_set.spawn(async move {
-            // Manual tests on testnet indicate each iteration takes ~2s once things are OS cached.
-            //
-            // 5 minutes seems like a reasonable interval, where this should have minimal database
-            // IO impact while providing a decent view into table growth over time.
-            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
-            let database = Arc::clone(&state);
-            loop {
-                interval.tick().await;
-                let _ = database.analyze_table_sizes().await;
-            }
-        });
-
-        // Build the gRPC server with the API services and trace layer.
         join_set.spawn(
             tonic::transport::Server::builder()
                 .timeout(self.grpc_options.request_timeout)
@@ -206,6 +197,38 @@ impl Store {
             }
         }
     }
+
+    /// Spawns a background task that periodically records the on-disk size of every store data
+    /// path as `OTel` span attributes.
+    ///
+    /// Sizes are measured with [`fs_err::metadata`] (no SQL connections, no lock contention).
+    /// Errors are logged as warnings and never cause the server to stop.
+    fn spawn_disk_monitor(data_directory: PathBuf) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_mins(5));
+            loop {
+                interval.tick().await;
+                let dir = data_directory.clone();
+                let span = info_span!(target: COMPONENT, "measure_disk_space_usage");
+                let result =
+                    spawn_blocking_in_span(move || measure_disk_usage_bytes(&dir), span.clone())
+                        .await;
+                match result {
+                    Ok(usage) => {
+                        span.set_attribute("db.sqlite.size", usage.sqlite_db);
+                        span.set_attribute("db.sqlite.wal.size", usage.sqlite_wal);
+                        span.set_attribute("db.block_store.size", usage.block_store);
+                        #[cfg(feature = "rocksdb")]
+                        {
+                            span.set_attribute("db.account_tree.size", usage.account_tree);
+                            span.set_attribute("db.nullifier_tree.size", usage.nullifier_tree);
+                        }
+                    },
+                    Err(err) => span.set_error(&err),
+                }
+            }
+        })
+    }
 }
 
 /// Represents the store's data-directory and its content paths.
@@ -237,4 +260,60 @@ impl DataDirectory {
     pub fn display(&self) -> std::path::Display<'_> {
         self.0.display()
     }
+}
+
+// DISK USAGE HELPERS
+// ================================================================================================
+
+/// Byte counts for each on-disk storage component.
+struct DiskUsage {
+    sqlite_db: u64,
+    sqlite_wal: u64,
+    block_store: u64,
+    #[cfg(feature = "rocksdb")]
+    account_tree: u64,
+    #[cfg(feature = "rocksdb")]
+    nullifier_tree: u64,
+}
+
+/// Collects on-disk byte sizes for every store data path under `data_dir`.
+///
+/// Uses only [`fs_err::metadata`] and [`fs_err::read_dir`] — no SQLite connections are opened,
+/// so there is no read-lock contention with concurrent database writers.
+fn measure_disk_usage_bytes(data_dir: &Path) -> DiskUsage {
+    DiskUsage {
+        sqlite_db: path_size_bytes(&data_dir.join("miden-store.sqlite3")),
+        sqlite_wal: path_size_bytes(&data_dir.join("miden-store.sqlite3-wal")),
+        block_store: dir_size_bytes(&data_dir.join("blocks")),
+        #[cfg(feature = "rocksdb")]
+        account_tree: dir_size_bytes(&data_dir.join("accounttree")),
+        #[cfg(feature = "rocksdb")]
+        nullifier_tree: dir_size_bytes(&data_dir.join("nullifiertree")),
+    }
+}
+
+/// Returns the byte length of the file at `path`, or `0` if it does not exist.
+fn path_size_bytes(path: &Path) -> u64 {
+    fs_err::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Returns the total byte length of all files in `path` iteratively, or `0` on any error.
+fn dir_size_bytes(path: &Path) -> u64 {
+    let mut to_process = vec![path.to_path_buf()];
+    let mut total = 0u64;
+    while let Some(dir) = to_process.pop() {
+        let Ok(entries) = fs_err::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_dir() {
+                    to_process.push(entry.path());
+                } else {
+                    total += meta.len();
+                }
+            }
+        }
+    }
+    total
 }
