@@ -18,19 +18,6 @@ service Rpc {
     // Returns the status info.
     rpc Status(google.protobuf.Empty) returns (rpc.StoreStatus) {}
 
-    // Returns a Sparse Merkle Tree opening proof for each requested nullifier
-    //
-    // Each proof demonstrates either:
-    // - **Inclusion**: Nullifier exists in the tree (note was consumed)
-    // - **Non-inclusion**: Nullifier does not exist (note was not consumed)
-    //
-    // The `leaf` field indicates the status:
-    // - `empty_leaf_index`: Non-inclusion proof
-    // - `single` or `multiple`: Inclusion proof if the nullifier key is present
-    //
-    // Verify proofs against the nullifier tree root in the latest block header.
-    rpc CheckNullifiers(rpc.NullifierList) returns (rpc.CheckNullifiersResponse) {}
-
     // Returns the latest details the specified account.
     rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
 

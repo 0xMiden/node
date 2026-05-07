@@ -42,7 +42,6 @@ The full gRPC API can be found [here](../../proto/proto/store.proto).
 
 <!--toc:start-->
 - [ApplyBlock](#applyblock)
-- [CheckNullifiers](#checknullifiers)
 - [GetAccount](#getaccount)
 - [GetBlockByNumber](#getblockbynumber)
 - [GetBlockHeaderByNumber](#getblockheaderbynumber)
@@ -64,22 +63,6 @@ The full gRPC API can be found [here](../../proto/proto/store.proto).
 ### ApplyBlock
 
 Applies changes of a new block to the DB and in-memory data structures. Raw block data is also stored as a flat file.
-
----
-
-### CheckNullifiers
-
-Returns a nullifier proof for each of the requested nullifiers.
-
-#### Error Handling
-
-When nullifier checking fails, detailed error information is provided through gRPC status details. The following error codes may be returned:
-
-| Error Code                | Value | gRPC Status        | Description                           |
-|---------------------------|-------|--------------------|---------------------------------------|
-| `INTERNAL_ERROR`          | 0     | `INTERNAL`         | Internal server error occurred        |
-| `DESERIALIZATION_FAILED`  | 1     | `INVALID_ARGUMENT` | Malformed nullifier format            |
-| `TOO_MANY_NULLIFIERS`     | 2     | `INVALID_ARGUMENT` | Too many nullifiers in request        |
 
 ---
 

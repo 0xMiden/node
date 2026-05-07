@@ -460,18 +460,6 @@ pub enum GetNoteScriptByRootError {
     ScriptNotFound,
 }
 
-// CHECK NULLIFIERS ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum CheckNullifiersError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("malformed nullifier")]
-    DeserializationFailed(#[from] ConversionError),
-}
-
 // SYNC TRANSACTIONS ERRORS
 // ================================================================================================
 

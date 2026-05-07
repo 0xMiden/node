@@ -23,7 +23,6 @@ use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
-    QueryParamNullifierLimit,
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
 };
@@ -246,24 +245,6 @@ impl RpcService {
 #[tonic::async_trait]
 impl api_server::Api for RpcService {
     // -- Nullifier endpoints -----------------------------------------------------------------
-
-    async fn check_nullifiers(
-        &self,
-        request: Request<proto::rpc::NullifierList>,
-    ) -> Result<Response<proto::rpc::CheckNullifiersResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request.get_ref());
-
-        check::<QueryParamNullifierLimit>(request.get_ref().nullifiers.len())?;
-
-        // validate all the nullifiers from the user request
-        for nullifier in &request.get_ref().nullifiers {
-            let _: Word = nullifier
-                .try_into()
-                .or(Err(Status::invalid_argument("Word field is not in the modulus range")))?;
-        }
-
-        self.store.clone().check_nullifiers(request).await
-    }
 
     async fn sync_nullifiers(
         &self,
@@ -760,16 +741,11 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamAccountIdLimit as AccountId;
     use QueryParamNoteIdLimit as NoteId;
     use QueryParamNoteTagLimit as NoteTag;
-    use QueryParamNullifierLimit as Nullifier;
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([
-            (
-                "CheckNullifiers".into(),
-                endpoint_limits(&[(Nullifier::PARAM_NAME, Nullifier::LIMIT)]),
-            ),
             (
                 "SyncNullifiers".into(),
                 endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),

@@ -803,12 +803,12 @@ pub struct NoteMetadataRawRow {
     attachment: Vec<u8>,
 }
 
-#[expect(clippy::cast_sign_loss)]
+#[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 impl TryInto<NoteMetadata> for NoteMetadataRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<NoteMetadata, Self::Error> {
         let sender = AccountId::read_from_bytes(&self.sender[..])?;
-        let note_type = NoteType::try_from(self.note_type as u32)
+        let note_type = NoteType::try_from(self.note_type as u8)
             .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
         let attachment = NoteAttachment::read_from_bytes(&self.attachment)?;
