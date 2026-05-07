@@ -119,11 +119,10 @@ pub async fn seed_store(
     let asset_faucet_ids = benchmark_faucets.iter().map(Account::id).collect::<Vec<_>>();
     let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
     let signer = EcdsaSecretKey::new();
-    let genesis_state = GenesisState::new(benchmark_faucets, fee_params, 1, 1, signer.clone());
+    let genesis_state = GenesisState::new(benchmark_faucets, fee_params, 1, 1, signer.public_key());
     let genesis_block = genesis_state
         .clone()
-        .into_block()
-        .await
+        .into_block(&signer)
         .expect("genesis block should be created");
     Store::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
 
@@ -135,7 +134,7 @@ pub async fn seed_store(
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
     let data_directory =
         miden_node_store::DataDirectory::load(data_directory).expect("data directory should exist");
-    let genesis_header = genesis_state.into_block().await.unwrap().into_inner();
+    let genesis_header = genesis_state.into_block(&signer).unwrap().into_inner();
     let metrics = generate_blocks(
         num_accounts,
         public_accounts_percentage,
