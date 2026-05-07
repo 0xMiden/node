@@ -24,7 +24,7 @@ service Api {
     // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
 
     // Subscribe to mempool events.
     //

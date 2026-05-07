@@ -543,7 +543,7 @@ impl api_server::Api for RpcService {
     /// the batch, then forwards it to the block producer.
     async fn submit_proven_batch(
         &self,
-        request: tonic::Request<proto::transaction::TransactionBatch>,
+        request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         let Some(block_producer) = &self.block_producer else {
             return Err(Status::unavailable("Batch submission not available in read-only mode"));
