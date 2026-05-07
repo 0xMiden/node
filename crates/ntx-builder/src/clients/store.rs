@@ -494,7 +494,7 @@ pub fn build_minimal_foreign_account(
             "account_code",
         )
     })?;
-    let account_code = AccountCode::from_bytes(account_code_bytes)?;
+    let account_code = AccountCode::read_from_bytes(account_code_bytes)?;
 
     // Derive partial storage. Storage maps are not required for foreign accounts.
     let partial_storage = PartialStorage::new(account_details.storage_details.header.clone(), [])?;

@@ -44,11 +44,11 @@ fn parsing_yields_expected_default_values() -> TestResult {
     assert_eq!(wallet2.nonce(), ONE);
 
     {
-        let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
+        let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
 
-        assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
-        assert_eq!(faucet.decimals(), 6);
-        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(metadata.max_supply(), Felt::new(100_000_000_000_000_000));
+        assert_eq!(metadata.decimals(), 6);
+        assert_eq!(*metadata.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // check account balance, and ensure ordering is retained
@@ -145,6 +145,13 @@ fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountBuilder, AccountFile, AccountStorageMode, AccountType};
     use miden_standards::account::auth::AuthSingleSig;
+    use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
+    use miden_standards::account::policies::{
+        BurnPolicyConfig,
+        MintPolicyConfig,
+        PolicyAuthority,
+        TokenPolicyManager,
+    };
     use tempfile::tempdir;
 
     // Create a temporary directory for our test files
@@ -159,14 +166,25 @@ fn parsing_native_faucet_from_file() -> TestResult {
     );
     let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
-    let faucet_component =
-        BasicFungibleFaucet::new(TokenSymbol::new("MIDEN").unwrap(), 6, Felt::new(1_000_000_000))?;
+    let token_metadata = FungibleTokenMetadata::builder(
+        TokenName::new("MIDEN").unwrap(),
+        TokenSymbol::new("MIDEN").unwrap(),
+        6,
+        1_000_000_000,
+    )
+    .build()?;
 
     let faucet_account = AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Public)
         .with_auth_component(auth)
-        .with_component(faucet_component)
+        .with_component(token_metadata)
+        .with_component(BasicFungibleFaucet)
+        .with_components(TokenPolicyManager::new(
+            PolicyAuthority::AuthControlled,
+            MintPolicyConfig::AllowAll,
+            BurnPolicyConfig::AllowAll,
+        ))
         .build()?;
 
     let faucet_id = faucet_account.id();
@@ -327,8 +345,8 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
 
     // Verify native faucet symbol
     {
-        let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
-        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
+        assert_eq!(*metadata.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // Bridge account is a regular account (not a faucet)

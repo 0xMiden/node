@@ -50,7 +50,14 @@ use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthSingleSig;
-use miden_standards::account::faucets::BasicFungibleFaucet;
+use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
+use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
+use miden_standards::account::policies::{
+    BurnPolicyConfig,
+    MintPolicyConfig,
+    PolicyAuthority,
+    TokenPolicyManager,
+};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::note::P2idNote;
 use rand::Rng;
@@ -279,7 +286,7 @@ async fn apply_block(
 /// Extract the payable fee as `FungibleAsset` from the given `BlockHeader`.
 fn fee_from_block(block_ref: &BlockHeader) -> Result<FungibleAsset, AssetError> {
     FungibleAsset::new(
-        block_ref.fee_parameters().native_asset_id(),
+        block_ref.fee_parameters().fee_faucet_id(),
         u64::from(block_ref.fee_parameters().verification_base_fee()),
     )
 }
@@ -350,10 +357,24 @@ fn create_faucet() -> Account {
     let init_seed = [0_u8; 32];
 
     let token_symbol = TokenSymbol::new("TEST").unwrap();
+    let token_metadata = FungibleTokenMetadata::builder(
+        TokenName::new("TEST").unwrap(),
+        token_symbol,
+        2,
+        FungibleAsset::MAX_AMOUNT,
+    )
+    .build()
+    .unwrap();
     AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
-        .with_component(BasicFungibleFaucet::new(token_symbol, 2, Felt::new(u64::MAX)).unwrap())
+        .with_component(token_metadata)
+        .with_component(BasicFungibleFaucet)
+        .with_components(TokenPolicyManager::new(
+            PolicyAuthority::AuthControlled,
+            MintPolicyConfig::AllowAll,
+            BurnPolicyConfig::AllowAll,
+        ))
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
@@ -370,7 +391,7 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         .collect();
     let input_notes = txs.iter().flat_map(|tx| tx.input_notes().iter().cloned()).collect();
     let output_notes = txs.iter().flat_map(|tx| tx.output_notes().iter().cloned()).collect();
-    ProvenBatch::new(
+    ProvenBatch::new_unchecked(
         BatchId::from_transactions(txs.iter()),
         block_ref.commitment(),
         block_ref.block_num(),
@@ -458,7 +479,7 @@ fn create_emit_note_tx(
 ) -> ProvenTransaction {
     let initial_account_hash = faucet.to_commitment();
 
-    let metadata_slot_name = BasicFungibleFaucet::metadata_slot();
+    let metadata_slot_name = TokenMetadata::metadata_slot();
     let slot = faucet.storage().get_item(metadata_slot_name).unwrap();
     faucet
         .storage_mut()
@@ -485,7 +506,7 @@ fn create_emit_note_tx(
         block_ref.block_num(),
         block_ref.commitment(),
         FungibleAsset::new(
-            block_ref.fee_parameters().native_asset_id(),
+            block_ref.fee_parameters().fee_faucet_id(),
             u64::from(block_ref.fee_parameters().verification_base_fee()),
         )
         .unwrap(),

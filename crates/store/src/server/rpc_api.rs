@@ -1,4 +1,3 @@
-use miden_node_proto::convert;
 use miden_node_proto::decode::{
     convert_digests_to_words,
     read_account_id,
@@ -14,7 +13,6 @@ use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
-    QueryParamNullifierLimit,
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::Word;
@@ -26,7 +24,6 @@ use tracing::{debug, info};
 
 use crate::COMPONENT;
 use crate::errors::{
-    CheckNullifiersError,
     GetAccountError,
     GetBlockByNumberError,
     GetNoteScriptByRootError,
@@ -38,7 +35,7 @@ use crate::errors::{
     SyncNullifiersError,
     SyncTransactionsError,
 };
-use crate::server::api::{StoreApi, internal_error, validate_nullifiers};
+use crate::server::api::{StoreApi, internal_error};
 use crate::state::Finality;
 
 // CLIENT ENDPOINTS
@@ -54,30 +51,6 @@ impl rpc_server::Rpc for StoreApi {
         request: Request<proto::rpc::BlockHeaderByNumberRequest>,
     ) -> Result<Response<proto::rpc::BlockHeaderByNumberResponse>, Status> {
         self.get_block_header_by_number_inner(request).await
-    }
-
-    /// Returns info on whether the specified nullifiers have been consumed.
-    ///
-    /// This endpoint also returns Merkle authentication path for each requested nullifier which can
-    /// be verified against the latest root of the nullifier database.
-    async fn check_nullifiers(
-        &self,
-        request: Request<proto::rpc::NullifierList>,
-    ) -> Result<Response<proto::rpc::CheckNullifiersResponse>, Status> {
-        // Validate the nullifiers and convert them to Word values. Stop on first error.
-        let request = request.into_inner();
-
-        // Validate nullifiers count
-        check::<QueryParamNullifierLimit>(request.nullifiers.len())?;
-
-        let nullifiers = validate_nullifiers::<CheckNullifiersError>(&request.nullifiers)?;
-
-        // Query the state for the request's nullifiers
-        let proofs = self.state.check_nullifiers(&nullifiers).await;
-
-        Ok(Response::new(proto::rpc::CheckNullifiersResponse {
-            proofs: convert(proofs).collect(),
-        }))
     }
 
     /// Returns nullifiers that match the specified prefixes and have been consumed.

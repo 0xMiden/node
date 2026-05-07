@@ -32,7 +32,7 @@ use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
-use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
+use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock, watch};
@@ -298,20 +298,6 @@ impl State {
         } else {
             Ok((None, None))
         }
-    }
-
-    /// Generates membership proofs for each one of the `nullifiers` against the latest nullifier
-    /// tree.
-    ///
-    /// Note: these proofs are invalidated once the nullifier tree is modified, i.e. on a new block.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret)]
-    pub async fn check_nullifiers(&self, nullifiers: &[Nullifier]) -> Vec<SmtProof> {
-        let inner = self.inner.read().await;
-        nullifiers
-            .iter()
-            .map(|n| inner.nullifier_tree.open(n))
-            .map(NullifierWitness::into_proof)
-            .collect()
     }
 
     /// Queries a list of notes from the database.

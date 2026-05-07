@@ -312,7 +312,7 @@ async fn unknown_transactions_rejected() {
     // Build a dummy transaction header with a transaction ID that has NOT been
     // submitted through `submit_proven_transaction`.
     let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
-    let fee = FungibleAsset::new(test_fee_params().native_asset_id(), 0).unwrap();
+    let fee = FungibleAsset::new(test_fee_params().fee_faucet_id(), 0).unwrap();
     let tx_header = TransactionHeader::new(
         account_id,
         Word::default(),
@@ -324,7 +324,7 @@ async fn unknown_transactions_rejected() {
     let tx_id = tx_header.id();
 
     // Build a ProvenBatch containing this transaction.
-    let batch = ProvenBatch::new(
+    let batch = ProvenBatch::new_unchecked(
         BatchId::from_ids(std::iter::once((tx_id, account_id))),
         genesis_header.commitment(),
         BlockNumber::GENESIS,

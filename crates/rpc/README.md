@@ -13,7 +13,6 @@ The full gRPC method definitions can be found in the [proto](../proto/README.md)
 
 <!--toc:start-->
 
-- [CheckNullifiers](#checknullifiers)
 - [SyncNullifiers](#syncnullifiers)
 - [GetAccount](#getaccount)
 - [GetBlockByNumber](#getblockbynumber)
@@ -29,24 +28,6 @@ The full gRPC method definitions can be found in the [proto](../proto/README.md)
 - [SyncTransactions](#synctransactions)
 
 <!--toc:end-->
-
----
-
-### CheckNullifiers
-
-Returns a nullifier proof for each of the requested nullifiers.
-
-**Limits:** `nullifier` (1000)
-
-#### Error Handling
-
-When nullifier checking fails, detailed error information is provided through gRPC status details. The following error codes may be returned:
-
-| Error Code                | Value | gRPC Status        | Description                           |
-|---------------------------|-------|--------------------|---------------------------------------|
-| `INTERNAL_ERROR`          | 0     | `INTERNAL`         | Internal server error occurred        |
-| `DESERIALIZATION_FAILED`  | 1     | `INVALID_ARGUMENT` | Malformed nullifier format            |
-| `TOO_MANY_NULLIFIERS`     | 2     | `INVALID_ARGUMENT` | Too many nullifiers in request        |
 
 ---
 

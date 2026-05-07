@@ -15,7 +15,7 @@ use miden_protocol::account::{Account, AccountId, PartialAccount, StorageMapKey}
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
-use miden_protocol::note::NoteScript;
+use miden_protocol::note::{NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{AccountInputs, InputNotes, PartialBlockchain, TransactionArgs};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, Word};
@@ -324,7 +324,7 @@ impl DataStore for MonitorDataStore {
 
     async fn get_note_script(
         &self,
-        _script_root: Word,
+        _script_root: NoteScriptRoot,
     ) -> Result<Option<NoteScript>, DataStoreError> {
         Ok(None)
     }
