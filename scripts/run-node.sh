@@ -29,6 +29,7 @@ STORE_REPLICA_2_RPC_PORT=50021
 
 VALIDATOR_PORT=50101
 BLOCK_PRODUCER_PORT=50201
+NTX_BUILDER_PORT=50301
 RPC_PORT=57291
 RPC_REPLICA_1_PORT=57292
 RPC_REPLICA_2_PORT=57293
@@ -47,7 +48,7 @@ trap cleanup EXIT INT TERM
 
 # --- Kill processes on required ports ---
 
-PORTS=(50001 50002 50003 50011 50021 50101 50201 57291 57292 57293)
+PORTS=(50001 50002 50003 50011 50021 50101 50201 50301 57291 57292 57293)
 echo "=== Killing processes on required ports ==="
 for port in "${PORTS[@]}"; do
     pids=$(lsof -ti :"$port" 2>/dev/null || true)
@@ -174,6 +175,7 @@ PIDS+=($!)
 
 echo "Starting network transaction builder..."
 $BINARY ntx-builder start \
+    --socket "0.0.0.0:$NTX_BUILDER_PORT" \
     --store.url "http://127.0.0.1:$STORE_NTX_BUILDER_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
