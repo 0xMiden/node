@@ -29,8 +29,10 @@ impl TestValidator {
     async fn new() -> Self {
         let signer = ValidatorSigner::new_local(random_secret_key());
 
-        let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, random_secret_key());
-        let genesis_block = genesis_state.into_block().await.unwrap();
+        let genesis_signer = random_secret_key();
+        let genesis_state =
+            GenesisState::new(vec![], test_fee_params(), 1, 0, genesis_signer.public_key());
+        let genesis_block = genesis_state.into_block(&genesis_signer).unwrap();
         let genesis_header = genesis_block.inner().header().clone();
 
         let dir = tempfile::tempdir().unwrap();
@@ -234,9 +236,10 @@ async fn commitment_mismatch_rejected() {
 
     // Build a valid ProposedBlock on a *different* genesis so its prev_block_commitment
     // won't match the validator's actual chain tip.
+    let other_genesis_signer = random_secret_key();
     let other_genesis_state =
-        GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
-    let other_genesis_block = other_genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![], test_fee_params(), 1, 1, other_genesis_signer.public_key());
+    let other_genesis_block = other_genesis_state.into_block(&other_genesis_signer).unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
     let mismatched_block = empty_block(&other_genesis_header, &PartialBlockchain::default());
 
@@ -261,9 +264,10 @@ async fn replacement_commitment_mismatch_rejected() {
 
     // Build a replacement block at the same height but using a *different* genesis so its
     // prev_block_commitment won't match the validator's actual parent of the chain tip.
+    let other_genesis_signer = random_secret_key();
     let other_genesis_state =
-        GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
-    let other_genesis_block = other_genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![], test_fee_params(), 1, 1, other_genesis_signer.public_key());
+    let other_genesis_block = other_genesis_state.into_block(&other_genesis_signer).unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
     let mismatched_replacement = empty_block(&other_genesis_header, &PartialBlockchain::default());
 

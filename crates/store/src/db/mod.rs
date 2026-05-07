@@ -5,11 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use diesel::{Connection, QueryableByName, RunQueryDsl, SqliteConnection};
+use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetVaultKey};
@@ -745,47 +744,6 @@ impl Db {
             slot_name,
             entries: StorageMapEntries::AllEntries(entries),
         })
-    }
-
-    /// Emits size metrics for each table in the database, and the entire database.
-    #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn analyze_table_sizes(&self) -> Result<(), DatabaseError> {
-        self.transact("db analysis", |conn| {
-            #[derive(QueryableByName)]
-            struct TotalSize {
-                #[diesel(sql_type = diesel::sql_types::BigInt)]
-                size: i64,
-            }
-
-            #[derive(QueryableByName)]
-            struct Table {
-                #[diesel(sql_type = diesel::sql_types::Text)]
-                name: String,
-                #[diesel(sql_type = diesel::sql_types::BigInt)]
-                size: i64,
-            }
-
-            let tables =
-                diesel::sql_query("SELECT name, sum(payload) AS size FROM dbstat GROUP BY name")
-                    .load::<Table>(conn)?;
-
-            let span = tracing::Span::current();
-            for Table { name, size } in tables {
-                span.set_attribute(format!("database.table.{name}.size"), size);
-            }
-
-            let total = diesel::sql_query(
-                "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()",
-            )
-            .get_result::<TotalSize>(conn)?;
-            span.set_attribute("database.total.size", total.size);
-
-            Result::<_, DatabaseError>::Ok(())
-        })
-        .await
-        .inspect_err(|err| tracing::Span::current().set_error(err))?;
-
-        Ok(())
     }
 
     /// Loads the network notes for an account that are unconsumed by a specified block number.
