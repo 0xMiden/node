@@ -877,21 +877,22 @@ async fn create_and_submit_network_note(
     Ok((tx_id, final_account, block_height))
 }
 
+const INCREMENT_NOTE_SCRIPT: &str = "
+    use external_contract::counter_contract
+
+    begin
+        call.counter_contract::increment
+    end
+";
+
 /// Create the increment procedure script.
 fn create_increment_script() -> Result<NoteScript> {
-    let script =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/counter_program.masm"));
+    use crate::deploy::counter::COUNTER_PROGRAM_CODE;
 
-    let script_builder = CodeBuilder::new()
-        .with_linked_module("external_contract::counter_contract", script)
-        .context("Failed to create script builder with library")?;
-
-    // Compile the script directly as a NoteScript
-    let note_script = script_builder
-        .compile_note_script(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/assets/increment_counter.masm"
-        )))
+    let note_script = CodeBuilder::new()
+        .with_linked_module("external_contract::counter_contract", COUNTER_PROGRAM_CODE)
+        .context("Failed to create script builder with library")?
+        .compile_note_script(INCREMENT_NOTE_SCRIPT)
         .context("Failed to compile note script")?;
 
     Ok(note_script)
