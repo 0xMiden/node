@@ -13,13 +13,14 @@ use miden_node_proto_build::{
 };
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::spawn::spawn_blocking_in_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
-use tracing::{Instrument, info, info_span, instrument};
+use tracing::{info, info_span, instrument};
 use url::Url;
 
 use crate::blocks::BlockStore;
@@ -208,10 +209,10 @@ impl Store {
             loop {
                 interval.tick().await;
                 let dir = data_directory.clone();
-                let span = info_span!(target: COMPONENT, "measure disk space usage");
-                let result = tokio::task::spawn_blocking(move || measure_disk_usage_bytes(&dir))
-                    .instrument(span.clone())
-                    .await;
+                let span = info_span!(target: COMPONENT, "measure_disk_space_usage");
+                let result =
+                    spawn_blocking_in_span(move || measure_disk_usage_bytes(&dir), span.clone())
+                        .await;
                 match result {
                     Ok(usage) => {
                         span.set_attribute("db.sqlite.size", usage.sqlite_db);
