@@ -72,6 +72,66 @@ pub enum NtxError {
     Submission(#[source] tonic::Status),
 }
 
+/// Classifies an [`NtxError`] as caused by infrastructure (transient: node, prover, or transport
+/// problem) or intrinsic to the transaction batch.
+///
+/// Infrastructure failures must not consume per-note retry budget, intrinsic failures must.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// Transient infrastructure failure: prover unreachable, validator/block-producer down,
+    /// transport error, or our own checker erroring on a store fetch. The note batch is not
+    /// to blame, we need to retry without penalising notes.
+    Infrastructure,
+    /// The note batch itself is the problem: consumability check rejected notes, the executor or
+    /// local prover failed on this specific batch, or the validator/block-producer rejected the
+    /// transaction content. Penalise the notes per the existing retry policy.
+    Intrinsic,
+}
+
+impl NtxError {
+    /// Returns whether this error is caused by infrastructure or by the transaction batch.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::AllNotesFailed(_) | Self::Execution(_) => ErrorKind::Intrinsic,
+            Self::NoteFilter(_) | Self::InputNotes(_) => ErrorKind::Infrastructure,
+            Self::Proving(err) => match err {
+                // The remote prover client wraps every transport / connection / deserialization
+                // failure in `TransactionProverError::Other`.
+                TransactionProverError::Other { .. } => ErrorKind::Infrastructure,
+                TransactionProverError::AccountDeltaApplyFailed(_)
+                | TransactionProverError::RemoveFeeAssetFromDelta(_)
+                | TransactionProverError::TransactionOutputConstructionFailed(_)
+                | TransactionProverError::OutputNoteShrinkFailed(_)
+                | TransactionProverError::ProvenTransactionBuildFailed(_)
+                | TransactionProverError::TransactionProgramExecutionFailed(_) => {
+                    ErrorKind::Intrinsic
+                },
+            },
+            // gRPC status codes split into transport / server-side hiccups (Infrastructure)
+            // versus content-rejection codes (Intrinsic).
+            Self::Submission(status) => match status.code() {
+                tonic::Code::Unavailable
+                | tonic::Code::DeadlineExceeded
+                | tonic::Code::Cancelled
+                | tonic::Code::Aborted
+                | tonic::Code::Unknown
+                | tonic::Code::Internal
+                | tonic::Code::ResourceExhausted => ErrorKind::Infrastructure,
+                tonic::Code::InvalidArgument
+                | tonic::Code::FailedPrecondition
+                | tonic::Code::OutOfRange
+                | tonic::Code::NotFound
+                | tonic::Code::AlreadyExists
+                | tonic::Code::Unauthenticated
+                | tonic::Code::PermissionDenied
+                | tonic::Code::Unimplemented
+                | tonic::Code::DataLoss
+                | tonic::Code::Ok => ErrorKind::Intrinsic,
+            },
+        }
+    }
+}
+
 type NtxResult<T> = Result<T, NtxError>;
 
 /// The result of a successful transaction execution.
@@ -677,5 +737,85 @@ impl StorageSlotRegistry {
     fn get_slot_name(&self, account_id: AccountId, map_root: Word) -> Option<StorageSlotName> {
         let slots = self.slots.lock().expect("Storage slot registry mutex is poisoned");
         slots.get(&(account_id, map_root)).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::errors::TransactionInputError;
+    use miden_tx::{NoteCheckerError, TransactionExecutorError, TransactionProverError};
+
+    use super::{ErrorKind, NtxError};
+
+    #[test]
+    fn error_kind_matrix() {
+        // Submission: tonic codes mapping to Infrastructure.
+        for (code, ctor) in [
+            ("unavailable", tonic::Status::unavailable as fn(&'static str) -> tonic::Status),
+            ("deadline_exceeded", tonic::Status::deadline_exceeded),
+            ("cancelled", tonic::Status::cancelled),
+            ("aborted", tonic::Status::aborted),
+            ("unknown", tonic::Status::unknown),
+            ("internal", tonic::Status::internal),
+            ("resource_exhausted", tonic::Status::resource_exhausted),
+        ] {
+            assert_eq!(
+                NtxError::Submission(ctor("test")).kind(),
+                ErrorKind::Infrastructure,
+                "expected Submission({code}) to be Infrastructure",
+            );
+        }
+
+        // Submission: tonic codes mapping to Intrinsic.
+        for (code, ctor) in [
+            (
+                "invalid_argument",
+                tonic::Status::invalid_argument as fn(&'static str) -> tonic::Status,
+            ),
+            ("failed_precondition", tonic::Status::failed_precondition),
+            ("out_of_range", tonic::Status::out_of_range),
+            ("not_found", tonic::Status::not_found),
+            ("already_exists", tonic::Status::already_exists),
+            ("unauthenticated", tonic::Status::unauthenticated),
+            ("permission_denied", tonic::Status::permission_denied),
+            ("unimplemented", tonic::Status::unimplemented),
+            ("data_loss", tonic::Status::data_loss),
+        ] {
+            assert_eq!(
+                NtxError::Submission(ctor("test")).kind(),
+                ErrorKind::Intrinsic,
+                "expected Submission({code}) to be Intrinsic",
+            );
+        }
+
+        // Proving: only the catch-all `Other` variant
+        assert_eq!(
+            NtxError::Proving(TransactionProverError::other("remote prover unreachable")).kind(),
+            ErrorKind::Infrastructure,
+        );
+        assert_eq!(
+            NtxError::Proving(TransactionProverError::other_with_source(
+                "wrapped",
+                std::io::Error::other("boom"),
+            ))
+            .kind(),
+            ErrorKind::Infrastructure,
+        );
+
+        // The remaining failure modes are batch-intrinsic.
+        assert_eq!(NtxError::AllNotesFailed(Vec::new()).kind(), ErrorKind::Intrinsic);
+        assert_eq!(
+            NtxError::Execution(TransactionExecutorError::FeeAssetMustBeFungible).kind(),
+            ErrorKind::Intrinsic,
+        );
+
+        assert_eq!(
+            NtxError::NoteFilter(NoteCheckerError::InputNoteCountOutOfRange(0)).kind(),
+            ErrorKind::Infrastructure,
+        );
+        assert_eq!(
+            NtxError::InputNotes(TransactionInputError::TooManyInputNotes(usize::MAX)).kind(),
+            ErrorKind::Infrastructure,
+        );
     }
 }

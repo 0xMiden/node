@@ -67,6 +67,15 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
+/// Default initial sleep applied at the actor level after an infrastructure-classified failure
+/// (downed prover, transport error, validator/block-producer crash). Doubles on each consecutive
+/// infra failure up to [`DEFAULT_INFRA_FAILURE_BACKOFF_MAX`]. Resets on the next successful
+/// transaction.
+const DEFAULT_INFRA_FAILURE_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+
+/// Default upper bound on the actor-level infra-failure backoff sleep.
+const DEFAULT_INFRA_FAILURE_BACKOFF_MAX: Duration = Duration::from_secs(30);
+
 /// Default maximum number of VM execution cycles allowed for a network transaction.
 ///
 /// This limits the computational cost of network transactions. The protocol maximum is
@@ -131,6 +140,15 @@ pub struct NtxBuilderConfig {
     /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
+    /// Initial actor-level sleep after an infrastructure-classified failure (e.g. prover
+    /// unreachable, validator/block-producer crash, transport error). Doubles on each consecutive
+    /// infra failure up to [`Self::infra_failure_backoff_max`] and resets on success. Per-note
+    /// `attempt_count` is *not* advanced for infra failures.
+    pub infra_failure_backoff_initial: Duration,
+
+    /// Upper bound on the actor-level infra-failure backoff sleep.
+    pub infra_failure_backoff_max: Duration,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -156,6 +174,8 @@ impl NtxBuilderConfig {
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
+            infra_failure_backoff_initial: DEFAULT_INFRA_FAILURE_BACKOFF_INITIAL,
+            infra_failure_backoff_max: DEFAULT_INFRA_FAILURE_BACKOFF_MAX,
             database_filepath,
         }
     }
@@ -244,6 +264,14 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the actor-level infra-failure backoff bounds (initial sleep and cap).
+    #[must_use]
+    pub fn with_infra_failure_backoff(mut self, initial: Duration, max: Duration) -> Self {
+        self.infra_failure_backoff_initial = initial;
+        self.infra_failure_backoff_max = max;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -307,6 +335,8 @@ impl NtxBuilderConfig {
             db: db.clone(),
             request_tx,
             max_cycles: self.max_cycles,
+            infra_failure_backoff_initial: self.infra_failure_backoff_initial,
+            infra_failure_backoff_max: self.infra_failure_backoff_max,
         };
 
         Ok(NetworkTransactionBuilder::new(
