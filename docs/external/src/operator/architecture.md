@@ -77,7 +77,7 @@ The builder also exposes an internal gRPC server that the RPC component uses to 
 
 ## Validator
 
-The validator is responsible for verifying the integrity of the blockchain by signing new blocks before they can be commited.
+The validator is responsible for verifying the integrity of the blockchain by signing new blocks before they can be committed.
 
 At the moment this is implemented by having all transactions sent here to be re-executed to double-check their integrity. This
 also guards against bugs in the proving or execution systems, by backing up the transactions and their private inputs. This 

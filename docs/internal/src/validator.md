@@ -3,7 +3,7 @@
 The validator is responsible for verifying each new block and signing it if correct.
 
 This signature is required _before_ a block may be committed on chain, and thus acts as an
-indepedent safe guard.
+independent safe guard.
 
 The validator is therefore run completely separate from the main node operations, and is operated
 by a separate entity. The validator's public key is published (or at least will be for `mainnet`).

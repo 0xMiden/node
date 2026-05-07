@@ -1,4 +1,4 @@
-<!-- This file is used to represent agregate documentation for the Miden book -->
+<!-- This file is used to represent aggregate documentation for the Miden book -->
 
 # Summary
 
