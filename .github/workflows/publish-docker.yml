@@ -28,7 +28,13 @@ jobs:
     environment: publish-docker
     strategy:
       matrix:
-        component: [node]
+        include:
+          - component: node
+            bin: miden-node
+            port: 57291
+          - component: validator
+            bin: miden-validator
+            port: 50101
     name: Publish ${{ matrix.component }} ${{ inputs.version }}
     steps:
       - name: Checkout repo
@@ -62,7 +68,10 @@ jobs:
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           push: true
-          file: ./bin/${{ matrix.component }}/Dockerfile
+          file: ./Dockerfile
+          build-args: |
+            BIN=${{ matrix.bin }}
+            PORT=${{ matrix.port }}
           tags: ${{ env.registry }}/0xmiden/miden-${{ matrix.component }}:${{ env.version }}
           cache-from: type=s3,region=${{ secrets.AWS_REGION }},bucket=${{ secrets.AWS_CACHE_BUCKET }},name=miden-${{ matrix.component }}
           cache-to: type=s3,region=${{ secrets.AWS_REGION }},bucket=${{ secrets.AWS_CACHE_BUCKET }},name=miden-${{ matrix.component }},mode=max
