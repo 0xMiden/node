@@ -1,4 +1,4 @@
-<!-- This file is used to represent aggregate documentation for the Miden book -->
+<!-- This file is used to represent agregate documentation for the Miden book -->
 
 # Summary
 
@@ -11,4 +11,5 @@
   - [Store](./store.md)
   - [Block producer](./block-producer.md)
   - [Network transaction builder](./ntx-builder.md)
+  - [Validator](./validator.md)
 - [Common issues other oddities](./oddities.md)

@@ -10,10 +10,6 @@ information is always read from disk. We will need to revisit this in the future
 We have database migration support in place but don't actively use it yet. There is only the latest schema, and we reset
 chain state (aka nuke the existing database) on each release.
 
-Note that the migration logic includes both a schema number _and_ a hash based on the sql schema. These are both checked
-on node startup to ensure that any existing database matches the expected schema. If you're seeing database failures on
-startup its likely that you created the database _before_ making schema changes resulting in different schema hashes.
-
 ## RocksDB tree storage
 
 The account and nullifier trees are persisted in separate RocksDB instances under
@@ -26,7 +22,6 @@ WAL sync per write is disabled for throughput; a 512 MiB WAL cap bounds recovery
 bits vary by depth (8.0–12.0) and memtables are 128 MiB per column family. See `RocksDbStorage::open` for the
 full fixed configuration. Runtime-tuneable parameters are documented in the
 [operator usage guide](https://github.com/0xMiden/node/blob/next/docs/external/src/operator/usage.md#rocksdb-tuning).
-
 
 ## Architecture
 
