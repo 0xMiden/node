@@ -255,7 +255,7 @@ impl api_server::Api for RpcService {
 
         let span = Span::current();
         span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("block_range.to", range.block_to);
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
@@ -327,7 +327,7 @@ impl api_server::Api for RpcService {
 
         let span = Span::current();
         span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("block_range.to", range.block_to);
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
@@ -382,7 +382,7 @@ impl api_server::Api for RpcService {
         let span = Span::current();
         span.set_attribute("account.id", account_id);
         span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("block_range.to", range.block_to);
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
@@ -403,7 +403,7 @@ impl api_server::Api for RpcService {
         let span = Span::current();
         span.set_attribute("account.id", account_id);
         span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("block_range.to", range.block_to);
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
@@ -636,7 +636,7 @@ impl api_server::Api for RpcService {
 
         let span = Span::current();
         span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to());
+        span.set_attribute("block_range.to", range.block_to);
         span.set_attribute("account.ids", format!("{account_ids:?}").as_str());
         span.set_attribute("account.ids.count", n_accounts);
 

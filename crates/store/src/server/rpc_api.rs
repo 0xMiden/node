@@ -69,10 +69,9 @@ impl rpc_server::Rpc for StoreApi {
         // Validate nullifier prefix list size before querying state.
         check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
             read_block_range::<SyncNullifiersError>(request.block_range, "SyncNullifiersRequest")?
-                .into_inclusive_range::<SyncNullifiersError>(&chain_tip)?;
+                .into_inclusive_range::<SyncNullifiersError>()?;
 
         let (nullifiers, block_num) = self
             .state
@@ -87,6 +86,8 @@ impl rpc_server::Rpc for StoreApi {
                 block_num: nullifier_info.block_num.as_u32(),
             })
             .collect();
+
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncNullifiersResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -104,10 +105,11 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
         let request = request.into_inner();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range =
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
-                .into_inclusive_range::<NoteSyncError>(&chain_tip)?;
+                .into_inclusive_range::<NoteSyncError>()?;
+
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         if *block_range.end() > chain_tip {
             Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
         }
@@ -171,7 +173,7 @@ impl rpc_server::Rpc for StoreApi {
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
             block_range: Some(proto::rpc::BlockRange {
                 block_from: block_range.start().as_u32(),
-                block_to: Some(block_range.end().as_u32()),
+                block_to: block_range.end().as_u32(),
             }),
             mmr_delta: Some(mmr_delta.into()),
             block_header: Some(block_header.into()),
@@ -249,7 +251,6 @@ impl rpc_server::Rpc for StoreApi {
         request: Request<proto::rpc::SyncAccountVaultRequest>,
     ) -> Result<Response<proto::rpc::SyncAccountVaultResponse>, Status> {
         let request = request.into_inner();
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         let account_id: AccountId = read_account_id::<
             proto::rpc::SyncAccountVaultRequest,
@@ -264,7 +265,7 @@ impl rpc_server::Rpc for StoreApi {
             request.block_range,
             "SyncAccountVaultRequest",
         )?
-        .into_inclusive_range::<SyncAccountVaultError>(&chain_tip)?;
+        .into_inclusive_range::<SyncAccountVaultError>()?;
 
         let (last_included_block, updates) = self
             .state
@@ -283,6 +284,8 @@ impl rpc_server::Rpc for StoreApi {
                 }
             })
             .collect();
+
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncAccountVaultResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -311,12 +314,11 @@ impl rpc_server::Rpc for StoreApi {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
         }
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range = read_block_range::<SyncAccountStorageMapsError>(
             request.block_range,
             "SyncAccountStorageMapsRequest",
         )?
-        .into_inclusive_range::<SyncAccountStorageMapsError>(&chain_tip)?;
+        .into_inclusive_range::<SyncAccountStorageMapsError>()?;
 
         let storage_maps_page = self
             .state
@@ -334,6 +336,8 @@ impl rpc_server::Rpc for StoreApi {
                 block_num: map_value.block_num.as_u32(),
             })
             .collect();
+
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -383,12 +387,11 @@ impl rpc_server::Rpc for StoreApi {
 
         let request = request.into_inner();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
         let block_range = read_block_range::<SyncTransactionsError>(
             request.block_range,
             "SyncTransactionsRequest",
         )?
-        .into_inclusive_range::<SyncTransactionsError>(&chain_tip)?;
+        .into_inclusive_range::<SyncTransactionsError>()?;
 
         let account_ids: Vec<AccountId> =
             read_account_ids::<SyncTransactionsError, _>(request.account_ids)?;
@@ -408,6 +411,8 @@ impl rpc_server::Rpc for StoreApi {
             .into_iter()
             .map(crate::db::TransactionRecord::into_proto)
             .collect();
+
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
