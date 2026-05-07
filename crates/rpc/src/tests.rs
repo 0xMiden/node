@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteTagLimit,
     QueryParamNullifierPrefixLimit,
 };
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -571,7 +572,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
 /// Shuts down the store runtime properly to allow `RocksDB` to flush before the temp directory is
 /// deleted.
 async fn shutdown_store(store_runtime: Runtime) {
-    task::spawn_blocking(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
+    spawn_blocking_in_current_span(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
         .await
         .expect("shutdown should complete");
     // Give RocksDB time to release its lock file after the runtime shutdown
