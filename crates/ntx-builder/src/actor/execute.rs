@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -202,8 +203,10 @@ impl NtxContext {
                 // calls to the store) are driven by the existing I/O driver.
                 let ctx = self.clone();
                 let handle = tokio::runtime::Handle::current();
+                let span = tracing::Span::current();
+
                 let (executed_tx, failed_notes, scripts_to_cache) =
-                    tokio::task::spawn_blocking(move || {
+                    spawn_blocking_in_current_span(move || {
                         let data_store = NtxDataStore::new(
                             account,
                             chain_tip_header,
@@ -212,14 +215,17 @@ impl NtxContext {
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
                         );
-                        handle.block_on(async {
-                            let (successful_notes, failed_notes) =
-                                ctx.filter_notes(&data_store, notes).await?;
-                            let executed_tx =
-                                Box::pin(ctx.execute(&data_store, successful_notes)).await?;
-                            let scripts_to_cache = data_store.take_fetched_scripts();
-                            Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
-                        })
+                        handle.block_on(
+                            async {
+                                let (successful_notes, failed_notes) =
+                                    ctx.filter_notes(&data_store, notes).await?;
+                                let executed_tx =
+                                    Box::pin(ctx.execute(&data_store, successful_notes)).await?;
+                                let scripts_to_cache = data_store.take_fetched_scripts();
+                                Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
+                            }
+                            .instrument(span),
+                        )
                     })
                     .await
                     .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
@@ -330,12 +336,14 @@ impl NtxContext {
         } else {
             // ZK proof generation is CPU-intensive; run it on a dedicated blocking thread.
             let tx_inputs = tx_inputs.clone();
-            tokio::task::spawn_blocking(move || {
+            let span = tracing::Span::current();
+
+            spawn_blocking_in_current_span(move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("failed to build tokio runtime")
-                    .block_on(LocalTransactionProver::default().prove(tx_inputs))
+                    .block_on(LocalTransactionProver::default().prove(tx_inputs).instrument(span))
             })
             .await
             .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))

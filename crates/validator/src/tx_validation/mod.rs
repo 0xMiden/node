@@ -2,6 +2,7 @@ mod data_store;
 mod validated_tx;
 
 pub use data_store::TransactionInputsDataStore;
+use miden_node_utils::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
@@ -41,11 +42,10 @@ pub async fn validate_transaction(
 ) -> Result<ValidatedTransaction, TransactionValidationError> {
     // Proof verification is CPU-intensive; run it on a dedicated blocking thread.
     let proven_tx_clone = proven_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        info_span!("verify").in_scope(|| {
-            TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&proven_tx_clone)
-        })
-    })
+    spawn_blocking_in_span(
+        move || TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&proven_tx_clone),
+        info_span!("verify"),
+    )
     .await
     .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
@@ -54,8 +54,8 @@ pub async fn validate_transaction(
 
     // VM execution may not yield; run it on a dedicated blocking thread.
     let (account, block_header, _, input_notes, tx_args) = tx_inputs.into_parts();
-    let execute_span = info_span!("execute");
-    let executed_tx = tokio::task::spawn_blocking(move || {
+    let execute_span = info_span!("execute").or_current();
+    let executed_tx = spawn_blocking_in_current_span(move || {
         let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
             TransactionExecutor::new(&data_store);
         tokio::runtime::Builder::new_current_thread()
