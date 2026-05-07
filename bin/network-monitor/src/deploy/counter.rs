@@ -115,8 +115,12 @@ impl From<CounterComponent> for AccountComponent {
 
         let metadata = AccountComponentMetadata::new("counter::program", AccountType::all());
 
-        AccountComponent::new(COUNTER_PROGRAM_LIBRARY.clone(), vec![counter_slot, owner_id_slot], metadata)
-            .expect("counter component should be valid")
+        AccountComponent::new(
+            COUNTER_PROGRAM_LIBRARY.clone(),
+            vec![counter_slot, owner_id_slot],
+            metadata,
+        )
+        .expect("counter component should be valid")
     }
 }
 
