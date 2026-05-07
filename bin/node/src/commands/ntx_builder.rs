@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,7 +11,7 @@ use url::Url;
 use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_PORT: &str = "MIDEN_NODE_NTX_BUILDER_PORT";
+const ENV_SOCKET: &str = "MIDEN_NODE_NTX_BUILDER_SOCKET";
 const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
@@ -26,9 +27,9 @@ const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
-        /// Port at which to serve the ntx-builder's gRPC API.
-        #[arg(long = "port", env = ENV_PORT, value_name = "PORT")]
-        port: Option<u16>,
+        /// Socket address at which to serve the ntx-builder's gRPC API.
+        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
+        socket: Option<SocketAddr>,
 
         /// The store's ntx-builder service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -104,7 +105,7 @@ pub enum NtxBuilderCommand {
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            port,
+            socket,
             store_url,
             block_producer_url,
             validator_url,
@@ -117,11 +118,11 @@ impl NtxBuilderCommand {
             enable_otel: _,
         } = self;
 
-        let listener = if let Some(port) = port {
+        let listener = if let Some(socket) = socket {
             Some(
-                TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], port)))
+                TcpListener::bind(socket)
                     .await
-                    .context("Failed to bind to ntx-builder's gRPC port")?,
+                    .context("Failed to bind to ntx-builder's gRPC socket")?,
             )
         } else {
             None

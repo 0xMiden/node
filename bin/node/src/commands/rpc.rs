@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use anyhow::Context;
 use miden_node_rpc::Rpc;
 use miden_node_utils::clap::GrpcOptionsExternal;
@@ -5,7 +7,7 @@ use url::Url;
 
 use super::ENV_ENABLE_OTEL;
 
-const ENV_PORT: &str = "MIDEN_NODE_RPC_PORT";
+const ENV_SOCKET: &str = "MIDEN_NODE_RPC_SOCKET";
 const ENV_STORE_URL: &str = "MIDEN_NODE_RPC_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_RPC_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_RPC_VALIDATOR_URL";
@@ -15,9 +17,9 @@ const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_RPC_NTX_BUILDER_URL";
 pub enum RpcCommand {
     /// Starts the RPC component.
     Start {
-        /// Port at which to serve the gRPC API.
-        #[arg(long = "port", env = ENV_PORT, value_name = "PORT")]
-        port: u16,
+        /// Socket address at which to serve the gRPC API.
+        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
+        socket: SocketAddr,
 
         /// The store's RPC service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -51,7 +53,7 @@ pub enum RpcCommand {
 impl RpcCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            port,
+            socket,
             store_url,
             block_producer_url,
             validator_url,
@@ -60,10 +62,9 @@ impl RpcCommand {
             grpc_options,
         } = self;
 
-        let listener =
-            tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], port)))
-                .await
-                .context("Failed to bind to RPC's gRPC port")?;
+        let listener = tokio::net::TcpListener::bind(socket)
+            .await
+            .context("Failed to bind to RPC's gRPC socket")?;
 
         Rpc {
             listener,

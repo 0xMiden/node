@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use url::Url;
 
 use super::ENV_ENABLE_OTEL;
 
-const ENV_PORT: &str = "MIDEN_NODE_BLOCK_PRODUCER_PORT";
+const ENV_SOCKET: &str = "MIDEN_NODE_BLOCK_PRODUCER_SOCKET";
 const ENV_STORE_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_STORE_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_VALIDATOR_URL";
 const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_TXS_PER_BATCH";
@@ -29,9 +30,9 @@ const ENV_BATCH_PROVER_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_BATCH_PROVER_URL";
 pub enum BlockProducerCommand {
     /// Starts the block-producer component.
     Start {
-        /// Port at which to serve the gRPC API.
-        #[arg(long = "port", env = ENV_PORT, value_name = "PORT")]
-        port: u16,
+        /// Socket address at which to serve the gRPC API.
+        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
+        socket: SocketAddr,
 
         /// The store's block-producer service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL)]
@@ -59,7 +60,7 @@ pub enum BlockProducerCommand {
 impl BlockProducerCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            port,
+            socket,
             store_url,
             validator_url,
             block_producer,
@@ -67,7 +68,7 @@ impl BlockProducerCommand {
             grpc_options,
         } = self;
 
-        let block_producer_address = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let block_producer_address = socket;
 
         // Runtime validation for protocol constraints
         if block_producer.max_batches_per_block > miden_protocol::MAX_BATCHES_PER_BLOCK {
@@ -121,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_too_large_max_batches_per_block() {
         let cmd = BlockProducerCommand::Start {
-            port: 1234,
+            socket: "0.0.0.0:1234".parse().unwrap(),
             store_url: dummy_url(),
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {
@@ -144,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_too_large_max_txs_per_batch() {
         let cmd = BlockProducerCommand::Start {
-            port: 1234,
+            socket: "0.0.0.0:1234".parse().unwrap(),
             store_url: dummy_url(),
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {

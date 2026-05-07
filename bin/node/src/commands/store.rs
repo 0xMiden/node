@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -13,10 +14,10 @@ use url::Url;
 use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_RPC_PORT: &str = "MIDEN_NODE_STORE_RPC_PORT";
+const ENV_RPC_SOCKET: &str = "MIDEN_NODE_STORE_RPC_SOCKET";
 const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
-const ENV_NTX_BUILDER_PORT: &str = "MIDEN_NODE_STORE_NTX_BUILDER_PORT";
-const ENV_BLOCK_PRODUCER_PORT: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_PORT";
+const ENV_NTX_BUILDER_SOCKET: &str = "MIDEN_NODE_STORE_NTX_BUILDER_SOCKET";
+const ENV_BLOCK_PRODUCER_SOCKET: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_SOCKET";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 
 #[derive(clap::Subcommand)]
@@ -38,17 +39,17 @@ pub enum StoreCommand {
     /// In this mode the store accepts blocks from a block producer via a dedicated gRPC endpoint
     /// and runs the proof scheduler to generate block proofs.
     Start {
-        /// Port at which to serve the store's RPC API.
-        #[arg(long = "rpc.port", env = ENV_RPC_PORT, value_name = "PORT")]
-        rpc_port: u16,
+        /// Socket address at which to serve the store's RPC API.
+        #[arg(long = "rpc.socket", env = ENV_RPC_SOCKET, value_name = "SOCKET")]
+        rpc_socket: SocketAddr,
 
-        /// Port at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.port", env = ENV_NTX_BUILDER_PORT, value_name = "PORT")]
-        ntx_builder_port: u16,
+        /// Socket address at which to serve the store's network transaction builder API.
+        #[arg(long = "ntx-builder.socket", env = ENV_NTX_BUILDER_SOCKET, value_name = "SOCKET")]
+        ntx_builder_socket: SocketAddr,
 
-        /// Port at which to serve the store's block producer API.
-        #[arg(long = "block-producer.port", env = ENV_BLOCK_PRODUCER_PORT, value_name = "PORT")]
-        block_producer_port: u16,
+        /// Socket address at which to serve the store's block producer API.
+        #[arg(long = "block-producer.socket", env = ENV_BLOCK_PRODUCER_SOCKET, value_name = "SOCKET")]
+        block_producer_socket: SocketAddr,
 
         /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
         #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
@@ -86,9 +87,9 @@ pub enum StoreCommand {
     /// Only the `Rpc` and `StoreReplica` gRPC services are exposed — the `BlockProducer` and
     /// `NtxBuilder` services are not started and no proof scheduler runs.
     StartReplica {
-        /// Port at which to serve the store's RPC API.
-        #[arg(long = "rpc.port", env = ENV_RPC_PORT, value_name = "PORT")]
-        rpc_port: u16,
+        /// Socket address at which to serve the store's RPC API.
+        #[arg(long = "rpc.socket", env = ENV_RPC_SOCKET, value_name = "SOCKET")]
+        rpc_socket: SocketAddr,
 
         /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
@@ -119,9 +120,9 @@ impl StoreCommand {
                 bootstrap_store(&data_directory, &genesis_block)
             },
             StoreCommand::Start {
-                rpc_port,
-                ntx_builder_port,
-                block_producer_port,
+                rpc_socket,
+                ntx_builder_socket,
+                block_producer_socket,
                 block_prover_url,
                 data_directory,
                 enable_otel: _,
@@ -130,9 +131,9 @@ impl StoreCommand {
                 storage_options,
             } => {
                 Self::start(
-                    rpc_port,
-                    ntx_builder_port,
-                    block_producer_port,
+                    rpc_socket,
+                    ntx_builder_socket,
+                    block_producer_socket,
                     block_prover_url,
                     data_directory,
                     grpc_options,
@@ -142,7 +143,7 @@ impl StoreCommand {
                 .await
             },
             StoreCommand::StartReplica {
-                rpc_port,
+                rpc_socket,
                 upstream_store_url,
                 data_directory,
                 enable_otel: _,
@@ -150,7 +151,7 @@ impl StoreCommand {
                 storage_options,
             } => {
                 Self::start_replica(
-                    rpc_port,
+                    rpc_socket,
                     upstream_store_url,
                     data_directory,
                     grpc_options,
@@ -172,33 +173,26 @@ impl StoreCommand {
 
     #[expect(clippy::too_many_arguments)]
     async fn start(
-        rpc_port: u16,
-        ntx_builder_port: u16,
-        block_producer_port: u16,
+        rpc_socket: SocketAddr,
+        ntx_builder_socket: SocketAddr,
+        block_producer_socket: SocketAddr,
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
-        let rpc_listener =
-            tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], rpc_port)))
-                .await
-                .context("Failed to bind to store's RPC gRPC port")?;
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_socket)
+            .await
+            .context("Failed to bind to store's RPC gRPC socket")?;
 
-        let ntx_builder_listener = tokio::net::TcpListener::bind(std::net::SocketAddr::from((
-            [0, 0, 0, 0],
-            ntx_builder_port,
-        )))
-        .await
-        .context("Failed to bind to store's ntx-builder gRPC port")?;
+        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_socket)
+            .await
+            .context("Failed to bind to store's ntx-builder gRPC socket")?;
 
-        let block_producer_listener = tokio::net::TcpListener::bind(std::net::SocketAddr::from((
-            [0, 0, 0, 0],
-            block_producer_port,
-        )))
-        .await
-        .context("Failed to bind to store's block-producer gRPC port")?;
+        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_socket)
+            .await
+            .context("Failed to bind to store's block-producer gRPC socket")?;
 
         Store {
             rpc_listener,
@@ -218,16 +212,15 @@ impl StoreCommand {
     }
 
     async fn start_replica(
-        rpc_port: u16,
+        rpc_socket: SocketAddr,
         upstream_store_url: Url,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
-        let rpc_listener =
-            tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], rpc_port)))
-                .await
-                .context("Failed to bind to store's RPC gRPC port")?;
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_socket)
+            .await
+            .context("Failed to bind to store's RPC gRPC socket")?;
 
         Store {
             rpc_listener,
