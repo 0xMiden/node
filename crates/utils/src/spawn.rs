@@ -16,5 +16,6 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    #[expect(clippy::disallowed_methods)]
     tokio::task::spawn_blocking(move || span.in_scope(f))
 }

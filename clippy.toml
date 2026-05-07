@@ -29,4 +29,7 @@ disallowed-methods = [
   { path = "std::path::Path::read_link", reason = "Use fs_err::path::PathExt methods" },
   { path = "std::path::Path::symlink_metadata", reason = "Use fs_err::path::PathExt methods" },
   { path = "std::path::Path::try_exists", reason = "Use fs_err::path::PathExt methods" },
+
+  # Use our own `spawn_blocking` wrapper so that the tracing span is correctly propagated
+  { path = "tokio::task::spawn_blocking", replacement = "miden_node_utils::spawn::spawn_blocking_in_current_span" },
 ]
