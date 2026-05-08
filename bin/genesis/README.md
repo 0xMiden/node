@@ -38,7 +38,7 @@ The bridge account always uses NoAuth and has no secret keys.
 miden-genesis --output-dir ./genesis
 
 # 2. Bootstrap the genesis block
-miden-node validator bootstrap \
+miden-validator bootstrap \
   --genesis-block-directory ./data \
   --accounts-directory ./accounts \
   --genesis-config-file ./genesis/genesis.toml \
