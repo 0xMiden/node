@@ -380,16 +380,11 @@ pub enum InvalidBlockRange {
 }
 
 impl proto::rpc::BlockRange {
-    /// Converts the block range into an inclusive range, using the fallback block number if the
-    /// block to is not specified.
+    /// Converts the block range into an inclusive range.
     pub fn into_inclusive_range<T: From<InvalidBlockRange>>(
         self,
-        fallback: &BlockNumber,
     ) -> Result<RangeInclusive<BlockNumber>, T> {
-        let block_range = RangeInclusive::new(
-            self.block_from.into(),
-            self.block_to.map_or(*fallback, BlockNumber::from),
-        );
+        let block_range = RangeInclusive::new(self.block_from.into(), self.block_to.into());
 
         if block_range.start() > block_range.end() {
             return Err(InvalidBlockRange::StartGreaterThanEnd {
@@ -415,7 +410,7 @@ impl From<RangeInclusive<BlockNumber>> for proto::rpc::BlockRange {
     fn from(range: RangeInclusive<BlockNumber>) -> Self {
         Self {
             block_from: range.start().as_u32(),
-            block_to: Some(range.end().as_u32()),
+            block_to: range.end().as_u32(),
         }
     }
 }
