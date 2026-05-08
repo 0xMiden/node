@@ -21,7 +21,7 @@ fs-err               = { workspace = true }
 hex                  = { workspace = true }
 miden-node-store     = { workspace = true }
 miden-node-utils     = { workspace = true }
-miden-node-validator = { workspace = true }
 miden-protocol       = { workspace = true }
+miden-validator-core = { workspace = true }
 tokio                = { features = ["macros", "rt-multi-thread"], workspace = true }
 url                  = { workspace = true }

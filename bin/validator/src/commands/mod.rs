@@ -7,9 +7,9 @@ use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::grpc::UrlExt;
-use miden_node_validator::ValidatorSigner;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::Deserializable;
+use miden_validator_core::ValidatorSigner;
 use url::Url;
 
 pub(crate) const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
