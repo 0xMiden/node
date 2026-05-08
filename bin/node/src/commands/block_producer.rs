@@ -15,7 +15,7 @@ use url::Url;
 
 use super::ENV_ENABLE_OTEL;
 
-const ENV_SOCKET: &str = "MIDEN_NODE_BLOCK_PRODUCER_SOCKET";
+const ENV_LISTEN: &str = "MIDEN_NODE_BLOCK_PRODUCER_LISTEN";
 const ENV_STORE_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_STORE_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_VALIDATOR_URL";
 const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_TXS_PER_BATCH";
@@ -31,8 +31,8 @@ pub enum BlockProducerCommand {
     /// Starts the block-producer component.
     Start {
         /// Socket address at which to serve the gRPC API.
-        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
-        socket: SocketAddr,
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        listen: SocketAddr,
 
         /// The store's block-producer service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL)]
@@ -60,7 +60,7 @@ pub enum BlockProducerCommand {
 impl BlockProducerCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            socket,
+            listen,
             store_url,
             validator_url,
             block_producer,
@@ -68,7 +68,7 @@ impl BlockProducerCommand {
             grpc_options,
         } = self;
 
-        let block_producer_address = socket;
+        let block_producer_address = listen;
 
         // Runtime validation for protocol constraints
         if block_producer.max_batches_per_block > miden_protocol::MAX_BATCHES_PER_BLOCK {
@@ -122,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_too_large_max_batches_per_block() {
         let cmd = BlockProducerCommand::Start {
-            socket: "[::1]:0".parse().unwrap(),
+            listen: "[::1]:0".parse().unwrap(),
             store_url: dummy_url(),
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {
@@ -145,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_too_large_max_txs_per_batch() {
         let cmd = BlockProducerCommand::Start {
-            socket: "[::1]:0".parse().unwrap(),
+            listen: "[::1]:0".parse().unwrap(),
             store_url: dummy_url(),
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {

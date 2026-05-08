@@ -7,7 +7,7 @@ use url::Url;
 
 use super::ENV_ENABLE_OTEL;
 
-const ENV_SOCKET: &str = "MIDEN_NODE_RPC_SOCKET";
+const ENV_LISTEN: &str = "MIDEN_NODE_RPC_LISTEN";
 const ENV_STORE_URL: &str = "MIDEN_NODE_RPC_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_RPC_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_RPC_VALIDATOR_URL";
@@ -18,8 +18,8 @@ pub enum RpcCommand {
     /// Starts the RPC component.
     Start {
         /// Socket address at which to serve the gRPC API.
-        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
-        socket: SocketAddr,
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        listen: SocketAddr,
 
         /// The store's RPC service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -53,7 +53,7 @@ pub enum RpcCommand {
 impl RpcCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            socket,
+            listen,
             store_url,
             block_producer_url,
             validator_url,
@@ -62,7 +62,7 @@ impl RpcCommand {
             grpc_options,
         } = self;
 
-        let listener = tokio::net::TcpListener::bind(socket)
+        let listener = tokio::net::TcpListener::bind(listen)
             .await
             .context("Failed to bind to RPC's gRPC socket")?;
 

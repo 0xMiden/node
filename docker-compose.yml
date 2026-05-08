@@ -34,9 +34,9 @@ services:
       - miden-node
       - store
       - start
-      - --rpc.socket=0.0.0.0:50001
-      - --ntx-builder.socket=0.0.0.0:50002
-      - --block-producer.socket=0.0.0.0:50003
+      - --rpc.listen=0.0.0.0:50001
+      - --ntx-builder.listen=0.0.0.0:50002
+      - --block-producer.listen=0.0.0.0:50003
       - --data-directory=/data/store
       - --account_tree.rocksdb.max_cache_size=4294967296
       - --account_tree.rocksdb.max_open_fds=512
@@ -60,7 +60,7 @@ services:
       - miden-node
       - validator
       - start
-      - --socket=0.0.0.0:50101
+      - --listen=0.0.0.0:50101
       - --data-directory=/data/validator
     ports:
       - "50101:50101"
@@ -76,7 +76,7 @@ services:
       - miden-node
       - block-producer
       - start
-      - --socket=0.0.0.0:50201
+      - --listen=0.0.0.0:50201
       - --store.url=http://store:50003
       - --validator.url=http://validator:50101
     ports:
@@ -93,7 +93,7 @@ services:
       - miden-node
       - rpc
       - start
-      - --socket=0.0.0.0:57291
+      - --listen=0.0.0.0:57291
       - --store.url=http://store:50001
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101
@@ -113,7 +113,7 @@ services:
       - miden-node
       - ntx-builder
       - start
-      - --socket=0.0.0.0:50301
+      - --listen=0.0.0.0:50301
       - --store.url=http://store:50002
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101

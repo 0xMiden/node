@@ -11,7 +11,7 @@ use url::Url;
 use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_SOCKET: &str = "MIDEN_NODE_NTX_BUILDER_SOCKET";
+const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
@@ -28,8 +28,8 @@ pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
         /// Socket address at which to serve the ntx-builder's gRPC API.
-        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
-        socket: SocketAddr,
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        listen: SocketAddr,
 
         /// The store's ntx-builder service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -105,7 +105,7 @@ pub enum NtxBuilderCommand {
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            socket,
+            listen,
             store_url,
             block_producer_url,
             validator_url,
@@ -118,7 +118,7 @@ impl NtxBuilderCommand {
             enable_otel: _,
         } = self;
 
-        let listener = TcpListener::bind(socket)
+        let listener = TcpListener::bind(listen)
             .await
             .context("Failed to bind to ntx-builder's gRPC socket")?;
 

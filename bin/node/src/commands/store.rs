@@ -14,10 +14,10 @@ use url::Url;
 use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_RPC_SOCKET: &str = "MIDEN_NODE_STORE_RPC_SOCKET";
+const ENV_RPC_LISTEN: &str = "MIDEN_NODE_STORE_RPC_LISTEN";
 const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
-const ENV_NTX_BUILDER_SOCKET: &str = "MIDEN_NODE_STORE_NTX_BUILDER_SOCKET";
-const ENV_BLOCK_PRODUCER_SOCKET: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_SOCKET";
+const ENV_NTX_BUILDER_LISTEN: &str = "MIDEN_NODE_STORE_NTX_BUILDER_LISTEN";
+const ENV_BLOCK_PRODUCER_LISTEN: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_LISTEN";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 
 #[derive(clap::Subcommand)]
@@ -40,16 +40,16 @@ pub enum StoreCommand {
     /// and runs the proof scheduler to generate block proofs.
     Start {
         /// Socket address at which to serve the store's RPC API.
-        #[arg(long = "rpc.socket", env = ENV_RPC_SOCKET, value_name = "SOCKET")]
-        rpc_socket: SocketAddr,
+        #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
+        rpc_listen: SocketAddr,
 
         /// Socket address at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.socket", env = ENV_NTX_BUILDER_SOCKET, value_name = "SOCKET")]
-        ntx_builder_socket: SocketAddr,
+        #[arg(long = "ntx-builder.listen", env = ENV_NTX_BUILDER_LISTEN, value_name = "LISTEN")]
+        ntx_builder_listen: SocketAddr,
 
         /// Socket address at which to serve the store's block producer API.
-        #[arg(long = "block-producer.socket", env = ENV_BLOCK_PRODUCER_SOCKET, value_name = "SOCKET")]
-        block_producer_socket: SocketAddr,
+        #[arg(long = "block-producer.listen", env = ENV_BLOCK_PRODUCER_LISTEN, value_name = "LISTEN")]
+        block_producer_listen: SocketAddr,
 
         /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
         #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
@@ -88,8 +88,8 @@ pub enum StoreCommand {
     /// `NtxBuilder` services are not started and no proof scheduler runs.
     StartReplica {
         /// Socket address at which to serve the store's RPC API.
-        #[arg(long = "rpc.socket", env = ENV_RPC_SOCKET, value_name = "SOCKET")]
-        rpc_socket: SocketAddr,
+        #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
+        rpc_listen: SocketAddr,
 
         /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
@@ -120,9 +120,9 @@ impl StoreCommand {
                 bootstrap_store(&data_directory, &genesis_block)
             },
             StoreCommand::Start {
-                rpc_socket,
-                ntx_builder_socket,
-                block_producer_socket,
+                rpc_listen,
+                ntx_builder_listen,
+                block_producer_listen,
                 block_prover_url,
                 data_directory,
                 enable_otel: _,
@@ -131,9 +131,9 @@ impl StoreCommand {
                 storage_options,
             } => {
                 Self::start(
-                    rpc_socket,
-                    ntx_builder_socket,
-                    block_producer_socket,
+                    rpc_listen,
+                    ntx_builder_listen,
+                    block_producer_listen,
                     block_prover_url,
                     data_directory,
                     grpc_options,
@@ -143,7 +143,7 @@ impl StoreCommand {
                 .await
             },
             StoreCommand::StartReplica {
-                rpc_socket,
+                rpc_listen,
                 upstream_store_url,
                 data_directory,
                 enable_otel: _,
@@ -151,7 +151,7 @@ impl StoreCommand {
                 storage_options,
             } => {
                 Self::start_replica(
-                    rpc_socket,
+                    rpc_listen,
                     upstream_store_url,
                     data_directory,
                     grpc_options,
@@ -173,24 +173,24 @@ impl StoreCommand {
 
     #[expect(clippy::too_many_arguments)]
     async fn start(
-        rpc_socket: SocketAddr,
-        ntx_builder_socket: SocketAddr,
-        block_producer_socket: SocketAddr,
+        rpc_listen: SocketAddr,
+        ntx_builder_listen: SocketAddr,
+        block_producer_listen: SocketAddr,
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_socket)
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
             .await
             .context("Failed to bind to store's RPC gRPC socket")?;
 
-        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_socket)
+        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_listen)
             .await
             .context("Failed to bind to store's ntx-builder gRPC socket")?;
 
-        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_socket)
+        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_listen)
             .await
             .context("Failed to bind to store's block-producer gRPC socket")?;
 
@@ -212,13 +212,13 @@ impl StoreCommand {
     }
 
     async fn start_replica(
-        rpc_socket: SocketAddr,
+        rpc_listen: SocketAddr,
         upstream_store_url: Url,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_socket)
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
             .await
             .context("Failed to bind to store's RPC gRPC socket")?;
 

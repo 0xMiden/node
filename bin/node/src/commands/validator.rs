@@ -12,7 +12,7 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::commands::{ENV_DATA_DIRECTORY, ENV_ENABLE_OTEL};
 
-const ENV_SOCKET: &str = "MIDEN_NODE_VALIDATOR_SOCKET";
+const ENV_LISTEN: &str = "MIDEN_NODE_VALIDATOR_LISTEN";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
 const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
@@ -53,8 +53,8 @@ pub enum ValidatorCommand {
     /// Starts the validator component.
     Start {
         /// Socket address at which to serve the gRPC API.
-        #[arg(long = "socket", env = ENV_SOCKET, value_name = "SOCKET")]
-        socket: std::net::SocketAddr,
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        listen: std::net::SocketAddr,
 
         /// Enables the exporting of traces for OpenTelemetry.
         ///
@@ -118,14 +118,14 @@ impl ValidatorCommand {
                 .await
             },
             Self::Start {
-                socket,
+                listen,
                 grpc_options,
                 validator_key,
                 data_directory,
                 kms_key_id,
                 ..
             } => {
-                let address = socket;
+                let address = listen;
 
                 // Run validator with KMS key backend if key id provided.
                 if let Some(kms_key_id) = kms_key_id {
