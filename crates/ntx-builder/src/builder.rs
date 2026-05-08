@@ -86,7 +86,11 @@ impl CatchUpState {
         prev_local_block: Option<BlockNumber>,
         inflight_affected: Vec<NetworkAccountId>,
     ) -> Self {
-        Self { prev_local_block, inflight_affected, complete: false }
+        Self {
+            prev_local_block,
+            inflight_affected,
+            complete: false,
+        }
     }
 }
 
@@ -157,7 +161,6 @@ impl NetworkTransactionBuilder {
 
     /// Runs the main event loop.
     async fn run_event_loop(mut self) -> anyhow::Result<()> {
-
         // Reconcile inflight-affected accounts.
         //
         // For each account that had an inflight row at startup, do a full hydration
@@ -296,9 +299,7 @@ impl NetworkTransactionBuilder {
     /// A coordinator task waits for both gap discovery and all note-refresh tasks to
     /// finish, then signals via `catch_up_done_tx` so the main loop can flip the
     /// catch-up flag and persist the watermark.
-    #[expect(
-        clippy::too_many_arguments,
-    )]
+    #[expect(clippy::too_many_arguments)]
     async fn kickoff_catch_up(
         store: StoreClient,
         db: Db,
