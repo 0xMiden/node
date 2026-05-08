@@ -6,7 +6,6 @@ use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::Serializable;
@@ -177,7 +176,13 @@ pub fn add_transaction(
     Ok(())
 }
 
-/// Handles a `BlockCommitted` event by committing transaction effects.
+/// Handles the per-transaction effects of a `BlockCommitted` event without writing to the
+/// `chain_state` row.
+///
+/// The chain-tip and store-sync-checkpoint writes are the caller's responsibility (see
+/// [`upsert_chain_state`] and [`set_store_sync_checkpoint`]). Splitting them out lets the builder
+/// gate the store-sync-checkpoint advance during startup catch-up so a partial-catch-up crash
+/// can't leave the watermark inflated.
 ///
 /// # Raw SQL
 ///
@@ -200,13 +205,9 @@ pub fn add_transaction(
 /// -- Promote inflight-created notes to committed
 /// UPDATE notes SET created_by = NULL WHERE created_by = ?1
 /// ```
-///
-/// Finally updates chain state (see [`upsert_chain_state`]).
-pub fn commit_block(
+pub fn commit_block_effects(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
-    block_num: BlockNumber,
-    block_header: &BlockHeader,
 ) -> Result<Vec<NetworkAccountId>, DatabaseError> {
     let mut affected_accounts = HashSet::new();
 
@@ -261,10 +262,20 @@ pub fn commit_block(
             .execute(conn)?;
     }
 
-    // Update chain state.
-    upsert_chain_state(conn, block_num, block_header)?;
-
     Ok(affected_accounts.into_iter().collect())
+}
+
+/// Convenience wrapper that runs [`commit_block_effects`] and then updates the chain state.
+#[cfg(test)]
+pub fn commit_block(
+    conn: &mut SqliteConnection,
+    tx_ids: &[TransactionId],
+    block_num: miden_protocol::block::BlockNumber,
+    block_header: &miden_protocol::block::BlockHeader,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let affected = commit_block_effects(conn, tx_ids)?;
+    upsert_chain_state(conn, block_num, block_header)?;
+    Ok(affected)
 }
 
 /// Handles a `TransactionsReverted` event by undoing transaction effects.

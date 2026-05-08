@@ -104,7 +104,7 @@ impl AccountActorContext {
             validator: ValidatorClient::new(url.clone()),
             prover: None,
             chain_state,
-            store: StoreClient::new(url),
+            store: StoreClient::new(url, NonZeroUsize::new(1).unwrap()),
             script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
             max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
             max_note_attempts: 1,

@@ -103,6 +103,46 @@ pub fn get_account(
         .transpose()
 }
 
+/// Returns the IDs of all accounts that have a committed row (`transaction_id IS NULL`).
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT account_id FROM accounts WHERE transaction_id IS NULL
+/// ```
+pub fn list_committed_account_ids(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let rows: Vec<Vec<u8>> = schema::accounts::table
+        .filter(schema::accounts::transaction_id.is_null())
+        .select(schema::accounts::account_id)
+        .load(conn)?;
+    rows.iter()
+        .map(|bytes| conversions::network_account_id_from_bytes(bytes))
+        .collect()
+}
+
+/// Returns the distinct IDs of all accounts that have at least one inflight row at the time of
+/// the call.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT DISTINCT account_id FROM accounts WHERE transaction_id IS NOT NULL
+/// ```
+pub fn list_inflight_account_ids(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let rows: Vec<Vec<u8>> = schema::accounts::table
+        .filter(schema::accounts::transaction_id.is_not_null())
+        .select(schema::accounts::account_id)
+        .distinct()
+        .load(conn)?;
+    rows.iter()
+        .map(|bytes| conversions::network_account_id_from_bytes(bytes))
+        .collect()
+}
+
 /// Returns `true` when an inflight account row exists with the given `transaction_id`.
 ///
 /// # Raw SQL

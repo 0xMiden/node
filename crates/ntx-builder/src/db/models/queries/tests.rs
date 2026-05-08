@@ -251,6 +251,76 @@ fn block_committed_promotes_inflight_account_to_committed() {
     assert_eq!(count_inflight_accounts(conn), 0);
 }
 
+// LIST COMMITTED / INFLIGHT ACCOUNT IDS
+// ================================================================================================
+
+#[test]
+fn list_committed_account_ids_returns_only_committed_accounts() {
+    let (conn, _dir) = &mut test_conn();
+
+    let committed_a = mock_network_account_id();
+    let committed_b = mock_network_account_id_seeded(1);
+    let inflight_only = mock_network_account_id_seeded(2);
+
+    upsert_committed_account(conn, committed_a, &mock_account(committed_a)).unwrap();
+    upsert_committed_account(conn, committed_b, &mock_account(committed_b)).unwrap();
+
+    // Insert an inflight-only account (no committed row).
+    let tx_id = mock_tx_id(1);
+    let row = AccountInsert {
+        account_id: conversions::network_account_id_to_bytes(inflight_only),
+        transaction_id: Some(conversions::transaction_id_to_bytes(&tx_id)),
+        account_data: conversions::account_to_bytes(&mock_account(inflight_only)),
+    };
+    diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
+
+    let listed: std::collections::HashSet<_> =
+        list_committed_account_ids(conn).unwrap().into_iter().collect();
+    let expected: std::collections::HashSet<_> = [committed_a, committed_b].into_iter().collect();
+    assert_eq!(listed, expected, "should return only committed account IDs");
+}
+
+#[test]
+fn list_inflight_account_ids_returns_distinct_inflight_accounts() {
+    let (conn, _dir) = &mut test_conn();
+
+    let account_a = mock_network_account_id();
+    let account_b = mock_network_account_id_seeded(1);
+    let committed_only = mock_network_account_id_seeded(2);
+
+    // Account A has two inflight rows (different tx_ids) — should be returned once.
+    let tx_id_1 = mock_tx_id(1);
+    let tx_id_2 = mock_tx_id(2);
+    for tx_id in [&tx_id_1, &tx_id_2] {
+        let row = AccountInsert {
+            account_id: conversions::network_account_id_to_bytes(account_a),
+            transaction_id: Some(conversions::transaction_id_to_bytes(tx_id)),
+            account_data: conversions::account_to_bytes(&mock_account(account_a)),
+        };
+        diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
+    }
+
+    // Account B has one inflight row.
+    let tx_id_3 = mock_tx_id(3);
+    let row_b = AccountInsert {
+        account_id: conversions::network_account_id_to_bytes(account_b),
+        transaction_id: Some(conversions::transaction_id_to_bytes(&tx_id_3)),
+        account_data: conversions::account_to_bytes(&mock_account(account_b)),
+    };
+    diesel::insert_into(schema::accounts::table)
+        .values(&row_b)
+        .execute(conn)
+        .unwrap();
+
+    // committed_only has only a committed row.
+    upsert_committed_account(conn, committed_only, &mock_account(committed_only)).unwrap();
+
+    let listed: std::collections::HashSet<_> =
+        list_inflight_account_ids(conn).unwrap().into_iter().collect();
+    let expected: std::collections::HashSet<_> = [account_a, account_b].into_iter().collect();
+    assert_eq!(listed, expected, "should return distinct inflight account IDs");
+}
+
 // HANDLE TRANSACTIONS REVERTED TESTS
 // ================================================================================================
 
@@ -492,6 +562,92 @@ fn get_note_error_returns_none_for_unknown_note() {
 
 // CHAIN STATE TESTS
 // ================================================================================================
+
+#[test]
+fn read_store_sync_checkpoint_returns_none_on_empty_db() {
+    let (conn, _dir) = &mut test_conn();
+
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert!(checkpoint.is_none(), "fresh DB should report no checkpoint");
+}
+
+#[test]
+fn read_store_sync_checkpoint_returns_none_when_chain_state_exists_but_checkpoint_unset() {
+    let (conn, _dir) = &mut test_conn();
+
+    let block_num = BlockNumber::from(7u32);
+    let header = mock_block_header(block_num);
+    upsert_chain_state(conn, block_num, &header).unwrap();
+
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert!(
+        checkpoint.is_none(),
+        "checkpoint should be NULL after only chain_state has been written"
+    );
+}
+
+#[test]
+fn set_store_sync_checkpoint_persists_value() {
+    let (conn, _dir) = &mut test_conn();
+
+    // Seed chain_state so the row exists.
+    let block_num = BlockNumber::from(0u32);
+    let header = mock_block_header(block_num);
+    upsert_chain_state(conn, block_num, &header).unwrap();
+
+    let target = BlockNumber::from(42u32);
+    set_store_sync_checkpoint(conn, target).unwrap();
+
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert_eq!(checkpoint, Some(target));
+}
+
+#[test]
+fn set_store_sync_checkpoint_does_not_regress() {
+    let (conn, _dir) = &mut test_conn();
+
+    let block_num = BlockNumber::from(0u32);
+    let header = mock_block_header(block_num);
+    upsert_chain_state(conn, block_num, &header).unwrap();
+
+    set_store_sync_checkpoint(conn, BlockNumber::from(100u32)).unwrap();
+
+    // Attempt to regress to a lower block — should be a no-op.
+    set_store_sync_checkpoint(conn, BlockNumber::from(50u32)).unwrap();
+
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert_eq!(checkpoint, Some(BlockNumber::from(100u32)), "checkpoint must not regress");
+
+    // Equal value — also a no-op.
+    set_store_sync_checkpoint(conn, BlockNumber::from(100u32)).unwrap();
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert_eq!(checkpoint, Some(BlockNumber::from(100u32)));
+
+    // Higher value — advances.
+    set_store_sync_checkpoint(conn, BlockNumber::from(150u32)).unwrap();
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert_eq!(checkpoint, Some(BlockNumber::from(150u32)));
+}
+
+#[test]
+fn upsert_chain_state_preserves_store_sync_checkpoint() {
+    let (conn, _dir) = &mut test_conn();
+
+    let block_num_1 = BlockNumber::from(10u32);
+    upsert_chain_state(conn, block_num_1, &mock_block_header(block_num_1)).unwrap();
+    set_store_sync_checkpoint(conn, BlockNumber::from(5u32)).unwrap();
+
+    // Mempool advances chain tip; checkpoint must NOT be clobbered.
+    let block_num_2 = BlockNumber::from(20u32);
+    upsert_chain_state(conn, block_num_2, &mock_block_header(block_num_2)).unwrap();
+
+    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    assert_eq!(
+        checkpoint,
+        Some(BlockNumber::from(5u32)),
+        "upsert_chain_state must preserve store_sync_checkpoint"
+    );
+}
 
 #[test]
 fn upsert_chain_state_updates_singleton() {

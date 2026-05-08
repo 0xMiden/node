@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use actor::AccountActorContext;
 use anyhow::Context;
-use builder::MempoolEventStream;
+use builder::{CatchUpState, MempoolEventStream};
 use chain_state::SharedChainState;
 use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
@@ -53,6 +53,13 @@ const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
 
 /// Default channel capacity for account loading from the store.
 const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
+
+/// Default cap on concurrent in-flight startup-hydration RPCs to the store.
+///
+/// Bounds the burst of `GetNetworkAccountDetailsById` and `GetUnconsumedNetworkNotes` calls the
+/// ntx-builder fires when catching up after a restart.
+const DEFAULT_STORE_HYDRATION_CONCURRENCY: NonZeroUsize =
+    NonZeroUsize::new(4).expect("literal is non-zero");
 
 /// Default maximum number of attempts to execute a failing note before dropping it.
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
@@ -114,6 +121,12 @@ pub struct NtxBuilderConfig {
     /// Channel capacity for loading accounts from the store during startup.
     pub account_channel_capacity: usize,
 
+    /// Maximum number of concurrent in-flight startup-hydration RPCs to the store.
+    ///
+    /// Caps the burst of account-details and unconsumed-notes calls the ntx-builder fires when
+    /// catching up missing state after a restart. Does not affect steady-state actor RPCs.
+    pub store_hydration_concurrency: NonZeroUsize,
+
     /// Duration after which an idle network account will deactivate.
     ///
     /// An account is considered idle once it has no viable notes to consume.
@@ -153,6 +166,7 @@ impl NtxBuilderConfig {
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
             account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
+            store_hydration_concurrency: DEFAULT_STORE_HYDRATION_CONCURRENCY,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
@@ -221,6 +235,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the cap on concurrent in-flight startup-hydration RPCs to the store.
+    #[must_use]
+    pub fn with_store_hydration_concurrency(mut self, concurrency: NonZeroUsize) -> Self {
+        self.store_hydration_concurrency = concurrency;
+        self
+    }
+
     /// Sets the idle timeout for actors.
     ///
     /// Actors that remain idle (no viable notes) for this duration will be deactivated.
@@ -259,6 +280,19 @@ impl NtxBuilderConfig {
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup(self.database_filepath.clone()).await?;
 
+        // Snapshot the previous store-sync watermark and any inflight-affected accounts BEFORE
+        // we purge inflight state. Those accounts need to be reconciled against the store at
+        // startup because their inflight tx may have landed in a block during downtime, and the
+        // mempool replay only carries currently-inflight (uncommitted) txs.
+        let prev_local_block = db
+            .read_store_sync_checkpoint()
+            .await
+            .context("failed to read store sync checkpoint")?;
+        let inflight_affected = db
+            .list_inflight_account_ids()
+            .await
+            .context("failed to list inflight-affected accounts")?;
+
         // Purge inflight state from previous run.
         db.purge_inflight().await.context("failed to purge inflight state")?;
 
@@ -266,7 +300,7 @@ impl NtxBuilderConfig {
         let coordinator =
             Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
 
-        let store = StoreClient::new(self.store_url.clone());
+        let store = StoreClient::new(self.store_url.clone(), self.store_hydration_concurrency);
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
@@ -285,7 +319,8 @@ impl NtxBuilderConfig {
             .await?
             .context("store should contain a latest block")?;
 
-        // Store the chain tip in the DB.
+        // Store the chain tip in the DB. This is the mempool-driven tip, which is distinct from
+        // `store_sync_checkpoint`, which only advances after a successful catch-up.
         db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
             .await
             .context("failed to upsert chain state")?;
@@ -318,6 +353,7 @@ impl NtxBuilderConfig {
             actor_context,
             mempool_events,
             actor_request_rx,
+            CatchUpState::new(prev_local_block, inflight_affected),
         ))
     }
 }

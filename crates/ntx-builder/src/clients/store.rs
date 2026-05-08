@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
@@ -44,11 +46,14 @@ use crate::COMPONENT;
 #[derive(Clone, Debug)]
 pub struct StoreClient {
     inner: StoreNtxBuilderClient,
+    /// Caps concurrent in-flight startup-hydration RPCs (account details + unconsumed notes) so
+    /// the ntx-builder doesn't hammers the store on restart.
+    hydration_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl StoreClient {
     /// Creates a new store client with a lazy connection.
-    pub fn new(store_url: Url) -> Self {
+    pub fn new(store_url: Url, hydration_concurrency: NonZeroUsize) -> Self {
         info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
 
         let store = Builder::new(store_url)
@@ -59,7 +64,10 @@ impl StoreClient {
             .with_otel_context_injection()
             .connect_lazy::<StoreNtxBuilderClient>();
 
-        Self { inner: store }
+        Self {
+            inner: store,
+            hydration_permits: Arc::new(tokio::sync::Semaphore::new(hydration_concurrency.get())),
+        }
     }
 
     /// Returns the block header and MMR peaks at the current chain tip.
@@ -130,6 +138,13 @@ impl StoreClient {
         &self,
         account_id: NetworkAccountId,
     ) -> Result<Option<Account>, StoreError> {
+        let _permit = self
+            .hydration_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("hydration semaphore is never closed");
+
         let request = proto::account::AccountId::from(account_id.inner());
 
         let store_response = self
@@ -204,6 +219,15 @@ impl StoreClient {
         // Upper bound of each note is ~10KB. Limit page size to ~10MB.
         const PAGE_SIZE: u64 = 1024;
 
+        // Hold one hydration permit for the entire call: an account's note refresh counts as one
+        // in-flight slot regardless of how many pages it spans.
+        let _permit = self
+            .hydration_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("hydration semaphore is never closed");
+
         let mut all_notes = Vec::new();
         let mut page_token: Option<u64> = None;
 
@@ -241,9 +265,10 @@ impl StoreClient {
     /// without waiting for all accounts to be preloaded.
     pub async fn stream_network_account_ids(
         &self,
+        from_block: BlockNumber,
         sender: tokio::sync::mpsc::Sender<NetworkAccountId>,
     ) -> Result<(), StoreError> {
-        let mut block_range = BlockNumber::GENESIS..=BlockNumber::MAX;
+        let mut block_range = from_block..=BlockNumber::MAX;
 
         while let Some(next_start) = self.load_accounts_page(block_range, &sender).await? {
             block_range = next_start..=BlockNumber::MAX;

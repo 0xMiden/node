@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -6,6 +7,7 @@ use futures::Stream;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::block::BlockNumber;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -60,6 +62,32 @@ pub struct NetworkTransactionBuilder {
     /// We keep database writes centralized so this is how actors communicate
     /// items to write.
     actor_request_rx: mpsc::Receiver<ActorRequest>,
+    /// Bookkeeping for the startup catch-up phase. Owned by the run loop and consulted on every
+    /// `BlockCommitted` event to decide whether to advance the store-sync watermark.
+    catch_up: CatchUpState,
+}
+
+/// State that drives the ntx-builder's startup catch-up.
+pub(crate) struct CatchUpState {
+    /// Persisted store-sync checkpoint from the previous run, or `None` on first-ever startup
+    /// (or before any successful catch-up). Scopes the gap that startup catch-up needs to
+    /// bridge.
+    prev_local_block: Option<BlockNumber>,
+    /// Account IDs that had inflight rows at startup and therefore must be reconciled against
+    /// the store before normal operation: their inflight tx may have landed in a block during
+    /// downtime, leaving locally-committed state stale.
+    inflight_affected: Vec<NetworkAccountId>,
+    /// Keeps the state of the catch up process.
+    complete: bool,
+}
+
+impl CatchUpState {
+    pub(crate) fn new(
+        prev_local_block: Option<BlockNumber>,
+        inflight_affected: Vec<NetworkAccountId>,
+    ) -> Self {
+        Self { prev_local_block, inflight_affected, complete: false }
+    }
 }
 
 impl NetworkTransactionBuilder {
@@ -73,6 +101,7 @@ impl NetworkTransactionBuilder {
         actor_context: AccountActorContext,
         mempool_events: MempoolEventStream,
         actor_request_rx: mpsc::Receiver<ActorRequest>,
+        catch_up: CatchUpState,
     ) -> Self {
         Self {
             config,
@@ -83,6 +112,7 @@ impl NetworkTransactionBuilder {
             actor_context,
             mempool_events,
             actor_request_rx,
+            catch_up,
         }
     }
 
@@ -127,17 +157,41 @@ impl NetworkTransactionBuilder {
 
     /// Runs the main event loop.
     async fn run_event_loop(mut self) -> anyhow::Result<()> {
-        // Spawn a background task to load network accounts from the store.
-        // Accounts are sent through a channel and processed in the main event loop.
+
+        // Reconcile inflight-affected accounts.
+        //
+        // For each account that had an inflight row at startup, do a full hydration
+        // (account-details + unconsumed-notes) from the store. The inflight tx may have
+        // landed in a block we didn't witnessed, so locally-committed state cannot be
+        // trusted for these specific accounts. The set is bounded by `max_concurrent_txs`
+        // so this is small and we run it sequentially before opening the main loop.
+        let inflight_set: HashSet<NetworkAccountId> =
+            self.catch_up.inflight_affected.iter().copied().collect();
+        for account_id in std::mem::take(&mut self.catch_up.inflight_affected) {
+            if let Err(err) = self.handle_loaded_account(account_id).await {
+                tracing::error!(
+                    %account_id,
+                    error = %err,
+                    "failed to reconcile inflight-affected account; will retry on next event"
+                );
+            }
+        }
+
+        // Setup hydration channels.
         let (account_tx, mut account_rx) =
             mpsc::channel::<NetworkAccountId>(self.config.account_channel_capacity);
-        let account_loader_store = self.store.clone();
-        let mut account_loader_handle = tokio::spawn(async move {
-            account_loader_store
-                .stream_network_account_ids(account_tx)
-                .await
-                .context("failed to load network accounts from store")
-        });
+        let (note_refresh_done_tx, mut note_refresh_done_rx) =
+            mpsc::channel::<NetworkAccountId>(self.config.account_channel_capacity);
+        let (catch_up_done_tx, mut catch_up_done_rx) = mpsc::channel::<BlockNumber>(1);
+
+        let prev_local_block = self.catch_up.prev_local_block;
+        let mut catch_up_started = false;
+        let mut account_loader_handle: tokio::task::JoinHandle<anyhow::Result<()>> =
+            tokio::spawn(async move { Ok(()) });
+        // Take the senders out of `self` so we can move them into the kickoff closure.
+        let mut account_tx_holder = Some(account_tx);
+        let mut note_refresh_done_tx_holder = Some(note_refresh_done_tx);
+        let mut catch_up_done_tx_holder = Some(catch_up_done_tx);
 
         // Main event loop.
         loop {
@@ -155,13 +209,62 @@ impl NetworkTransactionBuilder {
                         .context("mempool event stream ended")?
                         .context("mempool event stream failed")?;
 
+                        let kickoff_block = if catch_up_started {
+                        None
+                    } else {
+                        match &event {
+                            MempoolEvent::BlockCommitted { header, .. } => {
+                                Some(header.block_num())
+                            },
+                            _ => None,
+                        }
+                    };
+
                     self.handle_mempool_event(event).await?;
+
+                    if let Some(m) = kickoff_block {
+                        catch_up_started = true;
+                        let account_tx = account_tx_holder.take().expect("kickoff runs once");
+                        let note_refresh_done_tx =
+                            note_refresh_done_tx_holder.take().expect("kickoff runs once");
+                        let catch_up_done_tx =
+                            catch_up_done_tx_holder.take().expect("kickoff runs once");
+                        account_loader_handle = Self::kickoff_catch_up(
+                            self.store.clone(),
+                            self.db.clone(),
+                            prev_local_block,
+                            m,
+                            &inflight_set,
+                            account_tx,
+                            note_refresh_done_tx,
+                            catch_up_done_tx,
+                        )
+                        .await?;
+                    }
                 },
-                // Handle account batches loaded from the store.
-                // Once all accounts are loaded, the channel closes and this branch
-                // becomes inactive (recv returns None and we stop matching).
+                // Gap discovery: a new account ID created during downtime. Full 2-call hydration.
                 Some(account_id) = account_rx.recv() => {
                     self.handle_loaded_account(account_id).await?;
+                },
+                // Per-known-account note refresh complete: spawn its actor.
+                Some(account_id) = note_refresh_done_rx.recv() => {
+                    self.coordinator
+                        .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
+                },
+                // Store catch-up finished: flip the flag and bump store_sync_checkpoint to
+                // `block_number`.
+                Some(block_number) = catch_up_done_rx.recv() => {
+                    self.catch_up.complete = true;
+                    if let Err(err) = self.db.set_store_sync_checkpoint(block_number).await {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist store_sync_checkpoint after catch-up"
+                        );
+                    }
+                    tracing::info!(
+                        catch_up_to = %block_number,
+                        "ntx-builder catch-up complete; sync watermark set"
+                    );
                 },
                 // Handle requests from actors.
                 Some(request) = self.actor_request_rx.recv() => {
@@ -180,6 +283,115 @@ impl NetworkTransactionBuilder {
                 },
             }
         }
+    }
+
+    /// Spawns the store catch-up tasks (gap discovery + per-account note refresh) and
+    /// returns the join handle for the gap-discovery task.
+    ///
+    /// For each locally-known committed account that is NOT in `inflight_set` (those have
+    /// already been reconciled by the inflight-reconcile pass), spawns a task that fetches
+    /// the unconsumed-notes delta as of block `M` and writes it. On task completion, the account
+    /// ID flows through `note_refresh_done_tx` so the main loop can spawn the actor.
+    ///
+    /// A coordinator task waits for both gap discovery and all note-refresh tasks to
+    /// finish, then signals via `catch_up_done_tx` so the main loop can flip the
+    /// catch-up flag and persist the watermark.
+    #[expect(
+        clippy::too_many_arguments,
+    )]
+    async fn kickoff_catch_up(
+        store: StoreClient,
+        db: Db,
+        prev_local_block: Option<BlockNumber>,
+        catch_up_target: BlockNumber,
+        inflight_set: &HashSet<NetworkAccountId>,
+        account_tx: mpsc::Sender<NetworkAccountId>,
+        note_refresh_done_tx: mpsc::Sender<NetworkAccountId>,
+        catch_up_done_tx: mpsc::Sender<BlockNumber>,
+    ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
+        let gap_from = match prev_local_block {
+            Some(prev) if prev < catch_up_target => {
+                Some(BlockNumber::from(prev.as_u32().saturating_add(1)))
+            },
+            Some(_) => None,
+            None => Some(BlockNumber::GENESIS),
+        };
+
+        // Spawn the gap-discovery loader (or a no-op task if there's nothing to bridge).
+        let account_loader_handle: tokio::task::JoinHandle<anyhow::Result<()>> =
+            if let Some(from_block) = gap_from {
+                let loader_store = store.clone();
+                tokio::spawn(async move {
+                    loader_store
+                        .stream_network_account_ids(from_block, account_tx)
+                        .await
+                        .context("failed to load network accounts from store")
+                })
+            } else {
+                drop(account_tx);
+                tokio::spawn(async move { Ok::<(), anyhow::Error>(()) })
+            };
+
+        // Per-account note refresh for locally-known committed accounts (excluding inflight).
+        let known_accounts = db
+            .list_committed_account_ids()
+            .await
+            .context("failed to list committed accounts")?;
+        let known_to_refresh: Vec<_> =
+            known_accounts.into_iter().filter(|id| !inflight_set.contains(id)).collect();
+
+        tracing::info!(
+            ?gap_from,
+            catch_up_target = %catch_up_target,
+            inflight_reconciled = inflight_set.len(),
+            known_to_refresh = known_to_refresh.len(),
+            "ntx-builder store catch-up kicked off"
+        );
+
+        let mut refresh_handles: Vec<tokio::task::JoinHandle<()>> =
+            Vec::with_capacity(known_to_refresh.len());
+        for account_id in known_to_refresh {
+            let task_store = store.clone();
+            let task_db = db.clone();
+            let done_tx = note_refresh_done_tx.clone();
+            refresh_handles.push(tokio::spawn(async move {
+                // The hydration semaphore is acquired inside `get_unconsumed_network_notes`.
+                match task_store
+                    .get_unconsumed_network_notes(account_id, catch_up_target.as_u32())
+                    .await
+                {
+                    Ok(notes) => {
+                        if let Err(err) = task_db.upsert_committed_notes(notes).await {
+                            tracing::error!(
+                                %account_id,
+                                error = %err,
+                                "failed to persist refreshed notes"
+                            );
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            %account_id,
+                            error = %err,
+                            "note refresh failed; spawning actor with possibly stale notes"
+                        );
+                    },
+                }
+                // Always signal completion so the actor still spawns even if refresh failed.
+                let _ = done_tx.send(account_id).await;
+            }));
+        }
+        // Drop the local sender so the channel closes once all spawned refresh tasks finish.
+        drop(note_refresh_done_tx);
+
+        tokio::spawn(async move {
+            for handle in refresh_handles {
+                let _ = handle.await;
+            }
+            let _ = catch_up_done_tx.send(catch_up_target).await;
+        });
+
+        Ok(account_loader_handle)
     }
 
     /// Handles account IDs loaded from the store by syncing state to DB and spawning actors.
@@ -221,7 +433,7 @@ impl NetworkTransactionBuilder {
             MempoolEvent::TransactionAdded { account_delta, .. } => {
                 // Write event effects to DB first.
                 self.coordinator
-                    .write_event(&event)
+                    .write_event(&event, self.catch_up.complete)
                     .await
                     .context("failed to write TransactionAdded to DB")?;
 
@@ -248,7 +460,7 @@ impl NetworkTransactionBuilder {
                 // Write event effects to DB first.
                 let result = self
                     .coordinator
-                    .write_event(&event)
+                    .write_event(&event, self.catch_up.complete)
                     .await
                     .context("failed to write BlockCommitted to DB")?;
 
@@ -263,7 +475,7 @@ impl NetworkTransactionBuilder {
                 // Write event effects to DB first.
                 let result = self
                     .coordinator
-                    .write_event(&event)
+                    .write_event(&event, self.catch_up.complete)
                     .await
                     .context("failed to write TransactionsReverted to DB")?;
 

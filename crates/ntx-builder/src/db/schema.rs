@@ -14,6 +14,7 @@ diesel::table! {
         id -> Integer,
         block_num -> BigInt,
         block_header -> Binary,
+        store_sync_checkpoint -> Nullable<BigInt>,
     }
 }
 

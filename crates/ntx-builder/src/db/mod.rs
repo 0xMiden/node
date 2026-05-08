@@ -141,15 +141,28 @@ impl Db {
     /// Handles a `BlockCommitted` mempool event by committing transaction effects.
     ///
     /// Returns the list of affected account IDs that should be notified.
+    ///
+    /// `advance_store_sync_checkpoint` controls whether the store-sync checkpoint is advanced
+    /// alongside the chain tip. During startup catch-up the caller passes `false` so a partial
+    /// crash can't leave the watermark inflated past what was actually sync'd from the store. In
+    /// steady-state operation the caller passes `true`: the mempool stream is delivering all the
+    /// data we'd otherwise need to fetch from the store, so the checkpoint can follow the chain
+    /// tip.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,
         block_num: BlockNumber,
         header: BlockHeader,
+        advance_store_sync_checkpoint: bool,
     ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_block_committed", move |conn| {
-                queries::commit_block(conn, &txs, block_num, &header)
+                let affected = queries::commit_block_effects(conn, &txs)?;
+                queries::upsert_chain_state(conn, block_num, &header)?;
+                if advance_store_sync_checkpoint {
+                    queries::set_store_sync_checkpoint(conn, block_num)?;
+                }
+                Ok(affected)
             })
             .await
     }
@@ -171,6 +184,51 @@ impl Db {
     /// Purges all inflight state. Called on startup to get a clean slate.
     pub async fn purge_inflight(&self) -> Result<()> {
         self.inner.transact("purge_inflight", queries::purge_inflight).await
+    }
+
+    /// Returns the persisted store-sync checkpoint, or `None` on first-ever startup / before any
+    /// successful catch-up has run.
+    pub async fn read_store_sync_checkpoint(&self) -> Result<Option<BlockNumber>> {
+        self.inner
+            .query("read_store_sync_checkpoint", queries::read_store_sync_checkpoint)
+            .await
+    }
+
+    /// Monotonically advances the store-sync checkpoint to `block_num`.
+    pub async fn set_store_sync_checkpoint(&self, block_num: BlockNumber) -> Result<()> {
+        self.inner
+            .transact("set_store_sync_checkpoint", move |conn| {
+                queries::set_store_sync_checkpoint(conn, block_num)
+            })
+            .await
+    }
+
+    /// Returns all account IDs with a committed row in the local DB.
+    pub async fn list_committed_account_ids(&self) -> Result<Vec<NetworkAccountId>> {
+        self.inner
+            .query("list_committed_account_ids", queries::list_committed_account_ids)
+            .await
+    }
+
+    /// Returns the distinct account IDs that have at least one inflight row at the time of the
+    /// call. Intended for use *before* `purge_inflight` so the caller can reconcile those
+    /// accounts' committed state from the store.
+    pub async fn list_inflight_account_ids(&self) -> Result<Vec<NetworkAccountId>> {
+        self.inner
+            .query("list_inflight_account_ids", queries::list_inflight_account_ids)
+            .await
+    }
+
+    /// Replaces committed note rows for the given set of notes. Account state is left untouched.
+    ///
+    /// Used by the per-account note refresh that runs at startup to catch up on notes that
+    /// landed during the builder's downtime.
+    pub async fn upsert_committed_notes(&self, notes: Vec<AccountTargetNetworkNote>) -> Result<()> {
+        self.inner
+            .transact("upsert_committed_notes", move |conn| {
+                queries::insert_committed_notes(conn, &notes)
+            })
+            .await
     }
 
     /// Inserts or replaces the singleton chain state row.
@@ -245,5 +303,87 @@ impl Db {
         let db_path = dir.path().join("test.sqlite3");
         let db = Db::setup(db_path).await.expect("test DB setup should succeed");
         (db, dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::block::BlockNumber;
+
+    use super::*;
+    use crate::test_utils::mock_block_header;
+
+    /// `handle_block_committed` advances the chain tip but NOT the `store_sync_checkpoint` when
+    /// `advance_store_sync_checkpoint=false`.
+    #[tokio::test]
+    async fn handle_block_committed_does_not_advance_checkpoint_when_gated() {
+        let (db, _dir) = Db::test_setup().await;
+
+        // Seed chain_state at block 0 so the row exists.
+        let zero = BlockNumber::from(0u32);
+        db.upsert_chain_state(zero, mock_block_header(zero)).await.unwrap();
+
+        let block_num = BlockNumber::from(5u32);
+        let header = mock_block_header(block_num);
+        db.handle_block_committed(vec![], block_num, header, false).await.unwrap();
+
+        let checkpoint = db.read_store_sync_checkpoint().await.unwrap();
+        assert!(
+            checkpoint.is_none(),
+            "checkpoint must remain unset while catch-up is gated; got {checkpoint:?}",
+        );
+    }
+
+    /// `handle_block_committed` advances both the chain tip AND the `store_sync_checkpoint` when
+    /// `advance_store_sync_checkpoint=true`. This is the steady-state path: the mempool stream
+    /// is delivering all the data we'd otherwise need from the store, so the watermark can
+    /// follow the chain tip.
+    #[tokio::test]
+    async fn handle_block_committed_advances_checkpoint_when_caught_up() {
+        let (db, _dir) = Db::test_setup().await;
+
+        let zero = BlockNumber::from(0u32);
+        db.upsert_chain_state(zero, mock_block_header(zero)).await.unwrap();
+
+        let block_num = BlockNumber::from(5u32);
+        let header = mock_block_header(block_num);
+        db.handle_block_committed(vec![], block_num, header, true).await.unwrap();
+
+        let checkpoint = db.read_store_sync_checkpoint().await.unwrap();
+        assert_eq!(checkpoint, Some(block_num));
+    }
+
+    /// Going from gated → caught-up → gated again, the checkpoint should advance only when the
+    /// flag is true and never regress when it's false.
+    #[tokio::test]
+    async fn handle_block_committed_checkpoint_is_monotone_across_modes() {
+        let (db, _dir) = Db::test_setup().await;
+
+        let zero = BlockNumber::from(0u32);
+        db.upsert_chain_state(zero, mock_block_header(zero)).await.unwrap();
+
+        // Gated: chain tip moves to 5, checkpoint stays unset.
+        db.handle_block_committed(vec![], BlockNumber::from(5u32), mock_block_header(zero), false)
+            .await
+            .unwrap();
+        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), None);
+
+        // Caught up: checkpoint advances to 7.
+        db.handle_block_committed(vec![], BlockNumber::from(7u32), mock_block_header(zero), true)
+            .await
+            .unwrap();
+        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), Some(BlockNumber::from(7u32)));
+
+        // Gated again (shouldn't normally happen, but the guard must hold): checkpoint stays at 7.
+        db.handle_block_committed(vec![], BlockNumber::from(9u32), mock_block_header(zero), false)
+            .await
+            .unwrap();
+        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), Some(BlockNumber::from(7u32)));
+
+        // Caught up at higher block — advances to 10.
+        db.handle_block_committed(vec![], BlockNumber::from(10u32), mock_block_header(zero), true)
+            .await
+            .unwrap();
+        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), Some(BlockNumber::from(10u32)));
     }
 }
