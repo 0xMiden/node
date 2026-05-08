@@ -122,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_too_large_max_batches_per_block() {
         let cmd = BlockProducerCommand::Start {
-            socket: "0.0.0.0:1234".parse().unwrap(),
+            socket: "[::1]:0".parse().unwrap(),
             store_url: dummy_url(),
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {
@@ -145,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_too_large_max_txs_per_batch() {
         let cmd = BlockProducerCommand::Start {
-            socket: "0.0.0.0:1234".parse().unwrap(),
+            socket: "[::1]:0".parse().unwrap(),
             store_url: dummy_url(),
             validator_url: dummy_url(),
             block_producer: BlockProducerConfig {
