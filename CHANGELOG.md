@@ -18,8 +18,8 @@
 - Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 - [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
 - [BREAKING] Replaced binding URL env vars and CLI flags with listen socket addresses ([#2054](https://github.com/0xMiden/node/pull/2054)).
-- [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 - [BREAKING] `BlockRange.block_to` is now required for all RPC endpoints ([#2056](https://github.com/0xMiden/node/pull/2056)).
+- [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 
 ## v0.14.10 (2026-05-29)
 
