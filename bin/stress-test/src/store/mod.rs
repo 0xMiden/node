@@ -56,13 +56,17 @@ pub async fn bench_sync_notes(data_directory: PathBuf, iterations: usize, concur
 
     wait_for_store(&store_client).await.unwrap();
 
+    // Get the latest block number to determine the range
+    let status = store_client.clone().status(()).await.unwrap().into_inner();
+    let chain_tip = status.chain_tip;
+
     // each request will have `ACCOUNTS_PER_SYNC_NOTES` note tags and will be sent with block number
     // 0.
     let request = |_| {
         let mut client = store_client.clone();
         let account_batch: Vec<AccountId> =
             account_ids.by_ref().take(ACCOUNTS_PER_SYNC_NOTES).collect();
-        tokio::spawn(async move { sync_notes(&mut client, account_batch).await })
+        tokio::spawn(async move { sync_notes(&mut client, account_batch, chain_tip).await })
     };
 
     // create a stream of tasks to send the requests
@@ -82,13 +86,14 @@ pub async fn bench_sync_notes(data_directory: PathBuf, iterations: usize, concur
 pub async fn sync_notes(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
     account_ids: Vec<AccountId>,
+    chain_tip: u32,
 ) -> Duration {
     let note_tags = account_ids
         .iter()
         .map(|id| u32::from(NoteTag::with_account_target(*id)))
         .collect::<Vec<_>>();
     let sync_request = proto::rpc::SyncNotesRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: None }),
+        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: chain_tip }),
         note_tags,
     };
 
@@ -128,6 +133,10 @@ pub async fn bench_sync_nullifiers(
         .map(|a| AccountId::from_hex(a).unwrap())
         .collect();
 
+    // Get the latest block number to determine the range
+    let status = store_client.clone().status(()).await.unwrap().into_inner();
+    let chain_tip = status.chain_tip;
+
     // Get all nullifier prefixes from the store using sync_notes
     let mut nullifier_prefixes: Vec<u32> = vec![];
     let mut current_block_num = 0;
@@ -140,7 +149,7 @@ pub async fn bench_sync_nullifiers(
         let sync_request = proto::rpc::SyncNotesRequest {
             block_range: Some(proto::rpc::BlockRange {
                 block_from: current_block_num,
-                block_to: None,
+                block_to: chain_tip,
             }),
             note_tags,
         };
@@ -191,7 +200,7 @@ pub async fn bench_sync_nullifiers(
 
         let nullifiers_batch: Vec<u32> = nullifiers.by_ref().take(prefixes_per_request).collect();
 
-        tokio::spawn(async move { sync_nullifiers(&mut client, nullifiers_batch).await })
+        tokio::spawn(async move { sync_nullifiers(&mut client, nullifiers_batch, chain_tip).await })
     };
 
     // Create a stream of tasks to send the requests
@@ -216,9 +225,10 @@ pub async fn bench_sync_nullifiers(
 async fn sync_nullifiers(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
     nullifiers_prefixes: Vec<u32>,
+    chain_tip: u32,
 ) -> (Duration, proto::rpc::SyncNullifiersResponse) {
     let sync_request = proto::rpc::SyncNullifiersRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: None }),
+        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: chain_tip }),
         nullifiers: nullifiers_prefixes,
         prefix_len: 16,
     };
@@ -345,7 +355,7 @@ pub async fn sync_transactions(
         .collect::<Vec<_>>();
 
     let sync_request = proto::rpc::SyncTransactionsRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from, block_to: Some(block_to) }),
+        block_range: Some(proto::rpc::BlockRange { block_from, block_to }),
         account_ids,
     };
 
