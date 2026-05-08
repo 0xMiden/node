@@ -4,6 +4,7 @@
 
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
 - Implement persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
+- Bounded the ntx-builder's startup load on the store and added a separate `store_sync_checkpoint` watermark so a partial-catch-up crash can no longer leave the builder thinking it's caught up when it isn't ([#1952](https://github.com/0xMiden/node/issues/1952)).
 
 ## v0.14.10 (2026-05-29)
 
