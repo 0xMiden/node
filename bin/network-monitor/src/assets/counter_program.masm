@@ -8,8 +8,6 @@ use miden::protocol::active_account
 use miden::protocol::native_account
 use miden::protocol::active_note
 use miden::protocol::account_id
-use miden::protocol::tx
-
 
 const COUNTER_SLOT = word("miden::monitor::counter_contract::counter")
 const OWNER_SLOT = word("miden::monitor::counter_contract::owner")

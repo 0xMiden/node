@@ -2,7 +2,7 @@
 # This script is executed as a note and calls the
 # `counter_contract::increment` entrypoint.
 
-use external_contract::counter_contract
+use miden::monitor::counter_contract
 
 begin
     call.counter_contract::increment

@@ -4,8 +4,8 @@
 //! of the network account deployed at startup by creating and submitting network notes.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -31,7 +31,6 @@ use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
-use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
@@ -64,6 +63,11 @@ const REGENERATE_COOLDOWN: Duration = Duration::from_secs(3600);
 
 // SHARED STATE
 // ================================================================================================
+
+static INCREMENT_NOTE_SCRIPT: LazyLock<NoteScript> = LazyLock::new(|| {
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/increment_note_script.bin"));
+    NoteScript::read_from_bytes(bytes).expect("increment note script should be valid")
+});
 
 #[derive(Debug, Default, Clone)]
 pub struct LatencyState {
@@ -567,7 +571,7 @@ async fn setup_increment_task(
 
     let block_header = get_genesis_block_header(rpc_client).await?;
 
-    let increment_script = create_increment_script()?;
+    let increment_script = INCREMENT_NOTE_SCRIPT.clone();
 
     let mut data_store = MonitorDataStore::new(block_header.clone(), PartialBlockchain::default());
     data_store.add_account(wallet_account.clone());
@@ -915,25 +919,6 @@ fn load_counter_account(file_path: &Path) -> Result<Account> {
         AccountFile::read(file_path).context("Failed to read counter account file")?;
 
     Ok(account_file.account.clone())
-}
-
-/// Create the increment procedure script.
-fn create_increment_script() -> Result<NoteScript> {
-    let script =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/counter_program.masm"));
-
-    let script_builder = CodeBuilder::new()
-        .with_linked_module("external_contract::counter_contract", script)
-        .context("Failed to create script builder with library")?;
-
-    let note_script = script_builder
-        .compile_note_script(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/assets/increment_counter.masm"
-        )))
-        .context("Failed to compile note script")?;
-
-    Ok(note_script)
 }
 
 /// Create a network note that targets the counter account.
