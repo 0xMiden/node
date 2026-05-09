@@ -2,6 +2,8 @@
 
 ## v0.15.0 (TBD)
 
+- Fixed `FifoCache::push` creating a ghost eviction entry when called with a key that already exists in the cache. The duplicate queue entry inflated the eviction queue length beyond the number of live map entries, consumed an eviction slot without a corresponding map value, and caused a still-live entry to be prematurely dropped when the ghost surfaced as the oldest key. Existing keys are now updated in-place without modifying the eviction queue.
+
 - Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).
 - Reworked `SyncNotes` store queries to fetch multiple matching blocks within one database transaction while preserving the response payload cap ([#2027](https://github.com/0xMiden/node/pull/2027)).
 - Added composite index `idx_transactions_account_block_txid` on `transactions(account_id, block_num, transaction_id)` to speed up `select_transactions_records` queries used by `SyncTransactions` ([#1965](https://github.com/0xMiden/node/issues/1965)).
