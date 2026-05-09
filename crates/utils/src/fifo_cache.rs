@@ -39,8 +39,20 @@ where
     }
 
     /// Inserts a key-value pair, evicting the oldest entry if the cache is at capacity.
+    /// Inserts or updates `key` with `value`.
+    ///
+    /// If `key` already exists, its value is updated in-place without touching the eviction
+    /// queue. Re-enqueueing an existing key would create a ghost entry: the queue would
+    /// grow beyond the number of live map entries, consume an eviction slot for a key that
+    /// may no longer exist, and prematurely evict a valid entry when the ghost surfaces as
+    /// the oldest key.
     pub fn push(&self, key: K, value: V) {
         let mut inner = self.0.lock().expect("fifo cache lock poisoned");
+        // Key already in cache: update value in-place, leave eviction queue unchanged.
+        if inner.map.contains_key(&key) {
+            inner.map.insert(key, value);
+            return;
+        }
         if inner.eviction.len() >= inner.capacity.get() {
             if let Some(oldest) = inner.eviction.pop_front() {
                 inner.map.remove(&oldest);
