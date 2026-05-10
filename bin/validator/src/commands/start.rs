@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_validator_core::{Validator, ValidatorSigner};
+use miden_validator::{Validator, ValidatorSigner};
 
 // Starts the validator component.
 pub async fn start(

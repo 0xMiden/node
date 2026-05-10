@@ -5,7 +5,7 @@ use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::signer::BlockSigner;
 use miden_protocol::utils::serde::Serializable;
-use miden_validator_core::ValidatorSigner;
+use miden_validator::ValidatorSigner;
 
 use super::ValidatorKey;
 
@@ -88,11 +88,11 @@ async fn build_and_write_genesis(
     fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
 
     let (genesis_header, ..) = genesis_block.into_inner().into_parts();
-    let db = miden_validator_core::db::load(data_directory.join("validator.sqlite3"))
+    let db = miden_validator::db::load(data_directory.join("validator.sqlite3"))
         .await
         .context("failed to initialize validator database during bootstrap")?;
     db.transact("upsert_block_header", move |conn| {
-        miden_validator_core::db::upsert_block_header(conn, &genesis_header)
+        miden_validator::db::upsert_block_header(conn, &genesis_header)
     })
     .await
     .context("failed to persist genesis block header as chain tip")?;
