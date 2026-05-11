@@ -176,7 +176,7 @@ $BINARY rpc start \
 PIDS+=($!)
 
 echo "Starting network transaction builder..."
-$BINARY ntx-builder start \
+$NTX_BUILDER_BINARY start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
     --store.url "http://127.0.0.1:$STORE_NTX_BUILDER_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
