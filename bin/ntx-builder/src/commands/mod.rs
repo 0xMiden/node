@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -5,13 +6,12 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
-use miden_node_utils::grpc::UrlExt;
 use tokio::net::TcpListener;
 use url::Url;
 
 const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
-const ENV_URL: &str = "MIDEN_NODE_NTX_BUILDER_URL";
+const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
@@ -31,9 +31,9 @@ const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
-        /// Url at which to serve the ntx-builder's gRPC API.
-        #[arg(long = "url", env = ENV_URL, value_name = "URL")]
-        url: Option<Url>,
+        /// Socket address at which to serve the ntx-builder's gRPC API.
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        listen: SocketAddr,
 
         /// The store's ntx-builder service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
@@ -109,7 +109,7 @@ pub enum NtxBuilderCommand {
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
-            url,
+            listen,
             store_url,
             block_producer_url,
             validator_url,
@@ -122,18 +122,9 @@ impl NtxBuilderCommand {
             enable_otel: _,
         } = self;
 
-        let listener = if let Some(url) = url {
-            let addr = url
-                .to_socket()
-                .context("Failed to extract socket address from ntx-builder URL")?;
-            Some(
-                TcpListener::bind(addr)
-                    .await
-                    .context("Failed to bind to ntx-builder's gRPC URL")?,
-            )
-        } else {
-            None
-        };
+        let listener = TcpListener::bind(listen)
+            .await
+            .context("Failed to bind to ntx-builder's gRPC socket")?;
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 

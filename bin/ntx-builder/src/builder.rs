@@ -104,16 +104,14 @@ impl NetworkTransactionBuilder {
     /// - An actor encounters a fatal error
     /// - The account loader task fails
     /// - The gRPC server fails
-    pub async fn run(self, listener: Option<TcpListener>) -> anyhow::Result<()> {
+    pub async fn run(self, listener: TcpListener) -> anyhow::Result<()> {
         let mut join_set = JoinSet::new();
 
-        // Start the gRPC server if a listener is provided.
-        if let Some(listener) = listener {
-            let server = NtxBuilderRpcServer::new(self.db.clone(), self.config.max_note_attempts);
-            join_set.spawn(async move {
-                server.serve(listener).await.context("ntx-builder gRPC server failed")
-            });
-        }
+        // Start the gRPC server.
+        let server = NtxBuilderRpcServer::new(self.db.clone(), self.config.max_note_attempts);
+        join_set.spawn(async move {
+            server.serve(listener).await.context("ntx-builder gRPC server failed")
+        });
 
         join_set.spawn(self.run_event_loop());
 

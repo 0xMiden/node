@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +7,6 @@ use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store, StoreMode};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
-use miden_node_utils::grpc::UrlExt;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
@@ -14,10 +14,10 @@ use url::Url;
 use super::ENV_ENABLE_OTEL;
 use crate::commands::ENV_DATA_DIRECTORY;
 
-const ENV_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
+const ENV_RPC_LISTEN: &str = "MIDEN_NODE_STORE_RPC_LISTEN";
 const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
-const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
-const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
+const ENV_NTX_BUILDER_LISTEN: &str = "MIDEN_NODE_STORE_NTX_BUILDER_LISTEN";
+const ENV_BLOCK_PRODUCER_LISTEN: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_LISTEN";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 
 #[derive(clap::Subcommand)]
@@ -39,17 +39,17 @@ pub enum StoreCommand {
     /// In this mode the store accepts blocks from a block producer via a dedicated gRPC endpoint
     /// and runs the proof scheduler to generate block proofs.
     Start {
-        /// Url at which to serve the store's RPC API.
-        #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
-        rpc_url: Url,
+        /// Socket address at which to serve the store's RPC API.
+        #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
+        rpc_listen: SocketAddr,
 
-        /// Url at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.url", env = ENV_NTX_BUILDER_URL, value_name = "URL")]
-        ntx_builder_url: Url,
+        /// Socket address at which to serve the store's network transaction builder API.
+        #[arg(long = "ntx-builder.listen", env = ENV_NTX_BUILDER_LISTEN, value_name = "LISTEN")]
+        ntx_builder_listen: SocketAddr,
 
-        /// Url at which to serve the store's block producer API.
-        #[arg(long = "block-producer.url", env = ENV_BLOCK_PRODUCER_URL, value_name = "URL")]
-        block_producer_url: Url,
+        /// Socket address at which to serve the store's block producer API.
+        #[arg(long = "block-producer.listen", env = ENV_BLOCK_PRODUCER_LISTEN, value_name = "LISTEN")]
+        block_producer_listen: SocketAddr,
 
         /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
         #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
@@ -87,9 +87,9 @@ pub enum StoreCommand {
     /// Only the `Rpc` and `StoreReplica` gRPC services are exposed — the `BlockProducer` and
     /// `NtxBuilder` services are not started and no proof scheduler runs.
     StartReplica {
-        /// Url at which to serve the store's RPC API.
-        #[arg(long = "rpc.url", env = ENV_URL, value_name = "URL")]
-        url: Url,
+        /// Socket address at which to serve the store's RPC API.
+        #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
+        rpc_listen: SocketAddr,
 
         /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
@@ -120,9 +120,9 @@ impl StoreCommand {
                 bootstrap_store(&data_directory, &genesis_block)
             },
             StoreCommand::Start {
-                rpc_url,
-                ntx_builder_url,
-                block_producer_url,
+                rpc_listen,
+                ntx_builder_listen,
+                block_producer_listen,
                 block_prover_url,
                 data_directory,
                 enable_otel: _,
@@ -131,9 +131,9 @@ impl StoreCommand {
                 storage_options,
             } => {
                 Self::start(
-                    rpc_url,
-                    ntx_builder_url,
-                    block_producer_url,
+                    rpc_listen,
+                    ntx_builder_listen,
+                    block_producer_listen,
                     block_prover_url,
                     data_directory,
                     grpc_options,
@@ -143,7 +143,7 @@ impl StoreCommand {
                 .await
             },
             StoreCommand::StartReplica {
-                url: rpc_url,
+                rpc_listen,
                 upstream_store_url,
                 data_directory,
                 enable_otel: _,
@@ -151,7 +151,7 @@ impl StoreCommand {
                 storage_options,
             } => {
                 Self::start_replica(
-                    rpc_url,
+                    rpc_listen,
                     upstream_store_url,
                     data_directory,
                     grpc_options,
@@ -173,35 +173,26 @@ impl StoreCommand {
 
     #[expect(clippy::too_many_arguments)]
     async fn start(
-        rpc_url: Url,
-        ntx_builder_url: Url,
-        block_producer_url: Url,
+        rpc_listen: SocketAddr,
+        ntx_builder_listen: SocketAddr,
+        block_producer_listen: SocketAddr,
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
-        let rpc_listener = rpc_url
-            .to_socket()
-            .context("Failed to extract socket address from store RPC URL")?;
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_listener)
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
             .await
-            .context("Failed to bind to store's RPC gRPC URL")?;
+            .context("Failed to bind to store's RPC gRPC socket")?;
 
-        let ntx_builder_addr = ntx_builder_url
-            .to_socket()
-            .context("Failed to extract socket address from store ntx-builder URL")?;
-        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_addr)
+        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_listen)
             .await
-            .context("Failed to bind to store's ntx-builder gRPC URL")?;
+            .context("Failed to bind to store's ntx-builder gRPC socket")?;
 
-        let block_producer_addr = block_producer_url
-            .to_socket()
-            .context("Failed to extract socket address from store block-producer URL")?;
-        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_addr)
+        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_listen)
             .await
-            .context("Failed to bind to store's block-producer gRPC URL")?;
+            .context("Failed to bind to store's block-producer gRPC socket")?;
 
         Store {
             rpc_listener,
@@ -221,18 +212,15 @@ impl StoreCommand {
     }
 
     async fn start_replica(
-        rpc_url: Url,
+        rpc_listen: SocketAddr,
         upstream_store_url: Url,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
-        let rpc_listener = rpc_url
-            .to_socket()
-            .context("Failed to extract socket address from store RPC URL")?;
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_listener)
+        let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
             .await
-            .context("Failed to bind to store's RPC gRPC URL")?;
+            .context("Failed to bind to store's RPC gRPC socket")?;
 
         Store {
             rpc_listener,

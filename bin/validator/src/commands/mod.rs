@@ -3,21 +3,18 @@ mod start;
 
 use std::path::PathBuf;
 
-use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_node_utils::grpc::UrlExt;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::ValidatorSigner;
-use url::Url;
 
-pub(crate) const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
+const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
+const ENV_LISTEN: &str = "MIDEN_NODE_VALIDATOR_LISTEN";
+const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
+const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
-const ENV_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
-pub(crate) const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
-pub(crate) const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 
 /// A predefined, insecure validator key for development purposes.
 pub(crate) const INSECURE_KEY_HEX: &str =
@@ -54,9 +51,9 @@ pub enum ValidatorCommand {
 
     /// Starts the validator component.
     Start {
-        /// Url at which to serve the gRPC API.
-        #[arg(env = ENV_URL)]
-        url: Url,
+        /// Socket address at which to serve the gRPC API.
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        listen: std::net::SocketAddr,
 
         /// Enables the exporting of traces for OpenTelemetry.
         ///
@@ -119,16 +116,14 @@ impl ValidatorCommand {
                 .await
             },
             Self::Start {
-                url,
+                listen,
                 grpc_options,
                 validator_key,
                 data_directory,
                 kms_key_id,
                 ..
             } => {
-                let address = url
-                    .to_socket()
-                    .context("failed to extract socket address from validator URL")?;
+                let address = listen;
 
                 if let Some(kms_key_id) = kms_key_id {
                     let signer = ValidatorSigner::new_kms(kms_key_id).await?;
