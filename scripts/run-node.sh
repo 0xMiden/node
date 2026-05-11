@@ -120,7 +120,7 @@ if [[ -n "$KMS_KEY_ID" ]]; then
 fi
 
 echo "Starting validator..."
-$VALIDATOR_BINARY validator start --listen "0.0.0.0:$VALIDATOR_PORT" \
+$VALIDATOR_BINARY start --listen "0.0.0.0:$VALIDATOR_PORT" \
     --data-directory "$VALIDATOR_DIR" \
     "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)
