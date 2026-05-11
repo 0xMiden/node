@@ -129,6 +129,10 @@ install-stress-test: ## Installs stress-test binary
 install-network-monitor: ## Installs network monitor binary
 	cargo install --path bin/network-monitor --locked
 
+.PHONY: install-benchmark
+install-benchmark: ## Installs the benchmark binary
+	cargo install --path bin/benchmark --locked
+
 # --- docker --------------------------------------------------------------------------------------
 
 .PHONY: compose-genesis

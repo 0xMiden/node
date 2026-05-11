@@ -2969,6 +2969,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-benchmark"
+version = "0.15.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "miden-node-block-producer",
+ "miden-node-proto",
+ "miden-node-store",
+ "miden-node-utils",
+ "miden-protocol",
+ "miden-standards",
+ "rand 0.9.2",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "miden-block-prover"
 version = "0.15.0"
 source = "git+https://github.com/0xMiden/protocol?branch=next#9160eee3eea8b79bbff9ff1113c535743d6c693c"
