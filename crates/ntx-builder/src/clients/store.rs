@@ -47,7 +47,7 @@ use crate::COMPONENT;
 pub struct StoreClient {
     inner: StoreNtxBuilderClient,
     /// Caps concurrent in-flight startup-hydration RPCs (account details + unconsumed notes) so
-    /// the ntx-builder doesn't hammers the store on restart.
+    /// the ntx-builder doesn't hammer the store on restart.
     hydration_permits: Arc<tokio::sync::Semaphore>,
 }
 

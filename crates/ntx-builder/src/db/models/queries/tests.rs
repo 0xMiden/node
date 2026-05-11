@@ -53,6 +53,18 @@ fn count_committed_accounts(conn: &mut SqliteConnection) -> i64 {
         .unwrap()
 }
 
+/// Convenience wrapper that runs [`commit_block_effects`] and then updates the chain state.
+fn commit_block(
+    conn: &mut SqliteConnection,
+    tx_ids: &[TransactionId],
+    block_num: BlockNumber,
+    block_header: &miden_protocol::block::BlockHeader,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let affected = commit_block_effects(conn, tx_ids)?;
+    upsert_chain_state(conn, block_num, block_header)?;
+    Ok(affected)
+}
+
 // PURGE INFLIGHT TESTS
 // ================================================================================================
 

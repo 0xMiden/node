@@ -265,19 +265,6 @@ pub fn commit_block_effects(
     Ok(affected_accounts.into_iter().collect())
 }
 
-/// Convenience wrapper that runs [`commit_block_effects`] and then updates the chain state.
-#[cfg(test)]
-pub fn commit_block(
-    conn: &mut SqliteConnection,
-    tx_ids: &[TransactionId],
-    block_num: miden_protocol::block::BlockNumber,
-    block_header: &miden_protocol::block::BlockHeader,
-) -> Result<Vec<NetworkAccountId>, DatabaseError> {
-    let affected = commit_block_effects(conn, tx_ids)?;
-    upsert_chain_state(conn, block_num, block_header)?;
-    Ok(affected)
-}
-
 /// Handles a `TransactionsReverted` event by undoing transaction effects.
 ///
 /// Returns all affected account IDs (for notification). Accounts whose creation was fully

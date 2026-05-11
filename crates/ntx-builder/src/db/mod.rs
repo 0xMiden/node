@@ -143,11 +143,15 @@ impl Db {
     /// Returns the list of affected account IDs that should be notified.
     ///
     /// `advance_store_sync_checkpoint` controls whether the store-sync checkpoint is advanced
-    /// alongside the chain tip. During startup catch-up the caller passes `false` so a partial
-    /// crash can't leave the watermark inflated past what was actually sync'd from the store. In
-    /// steady-state operation the caller passes `true`: the mempool stream is delivering all the
-    /// data we'd otherwise need to fetch from the store, so the checkpoint can follow the chain
-    /// tip.
+    /// alongside the chain tip.
+    ///
+    /// During startup catch-up the caller passes `false`. If we advanced the checkpoint here and
+    /// then crashed mid-catch-up, the next restart would treat blocks we never actually pulled
+    /// from the store as already synced and skip fetching their unconsumed-notes delta. Catch-up
+    /// advances the checkpoint explicitly once it completes successfully.
+    ///
+    /// In steady-state the caller passes `true`: the mempool stream is the source of truth for
+    /// new blocks, so the checkpoint can follow the chain tip.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,

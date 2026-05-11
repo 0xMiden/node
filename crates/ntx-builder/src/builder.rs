@@ -212,7 +212,7 @@ impl NetworkTransactionBuilder {
                         .context("mempool event stream ended")?
                         .context("mempool event stream failed")?;
 
-                        let kickoff_block = if catch_up_started {
+                    let kickoff_block = if catch_up_started {
                         None
                     } else {
                         match &event {
