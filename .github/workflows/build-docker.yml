@@ -22,6 +22,9 @@ jobs:
           - component: validator
             bin: miden-validator
             port: 50101
+          - component: ntx-builder
+            bin: miden-ntx-builder
+            port: 50301
     name: Build ${{ matrix.component }}
     steps:
       - name: Set up Docker Buildx

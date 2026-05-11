@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::grpc::UrlExt;
 use tokio::net::TcpListener;
 use url::Url;
 
-use super::ENV_ENABLE_OTEL;
-use crate::commands::ENV_DATA_DIRECTORY;
-
+const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
+const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_URL: &str = "MIDEN_NODE_NTX_BUILDER_URL";
 const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
@@ -23,7 +23,11 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 
-#[derive(clap::Subcommand)]
+// NTX BUILDER COMMAND
+// ================================================================================================
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
@@ -133,7 +137,7 @@ impl NtxBuilderCommand {
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
-        let config = miden_node_ntx_builder::NtxBuilderConfig::new(
+        let config = miden_ntx_builder::NtxBuilderConfig::new(
             store_url,
             block_producer_url,
             validator_url,

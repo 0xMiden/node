@@ -151,7 +151,7 @@ compose-logs: ## Follows logs for all components via docker compose
 	docker compose $(COMPOSE_FILES) logs -f
 
 .PHONY: docker-build
-docker-build: docker-build-node docker-build-validator ## Builds all Docker images
+docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor ## Builds all Docker images
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
@@ -177,11 +177,29 @@ docker-build-validator: ## Builds the Miden validator using Docker
                  --build-arg PORT=50101 \
                  -t miden-validator .
 
+.PHONY: docker-build-ntx-builder
+docker-build-ntx-builder: ## Builds the Miden network transaction builder using Docker
+	@CREATED=$$(date) && \
+	VERSION=$$(cat bin/ntx-builder/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	docker build --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=miden-ntx-builder \
+                 --build-arg PORT=50301 \
+                 -t miden-ntx-builder .
+
 .PHONY: docker-build-monitor
 docker-build-monitor: ## Builds the network monitor using Docker
-	docker build \
-                 -f bin/network-monitor/Dockerfile \
-                 -t miden-network-monitor-image .
+	@CREATED=$$(date) && \
+	VERSION=$$(cat bin/network-monitor/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	docker build --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=miden-network-monitor \
+                 --build-arg PORT=3000 \
+                 -t miden-network-monitor .
 
 .PHONY: docker-run-node
 docker-run-node: ## Runs the Miden node as a Docker container

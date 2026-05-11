@@ -1,5 +1,4 @@
 pub mod block_producer;
-pub mod ntx_builder;
 pub mod rpc;
 pub mod store;
 
