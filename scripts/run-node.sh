@@ -4,6 +4,7 @@ set -euo pipefail
 # Configuration
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
 BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
+VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
 KMS_KEY_ID="${KMS_KEY_ID:-}"
 if [[ -n "$KMS_KEY_ID" ]]; then
     AWS_REGION="${AWS_REGION:?error: AWS_REGION environment variable must be set when KMS_KEY_ID is set}"
@@ -76,7 +77,7 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
         KMS_BOOTSTRAP_ARGS+=(--validator.key.kms-id "$KMS_KEY_ID")
     fi
 
-    $BINARY validator bootstrap \
+    $VALIDATOR_BINARY bootstrap \
         --data-directory "$VALIDATOR_DIR" \
         --genesis-block-directory "$VALIDATOR_DIR" \
         --accounts-directory "$ACCOUNTS_DIR" \
@@ -119,7 +120,7 @@ if [[ -n "$KMS_KEY_ID" ]]; then
 fi
 
 echo "Starting validator..."
-$BINARY validator start --listen "0.0.0.0:$VALIDATOR_PORT" \
+$VALIDATOR_BINARY validator start --listen "0.0.0.0:$VALIDATOR_PORT" \
     --data-directory "$VALIDATOR_DIR" \
     "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)

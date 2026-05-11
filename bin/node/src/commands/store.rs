@@ -24,7 +24,7 @@ const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
 pub enum StoreCommand {
     /// Bootstraps the blockchain database with a pre-existing genesis block.
     ///
-    /// The genesis block file should be produced by `miden-node validator bootstrap`.
+    /// The genesis block file should be produced by `miden-validator bootstrap`.
     Bootstrap {
         /// Directory in which to store the database and raw block data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]

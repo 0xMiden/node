@@ -17,16 +17,6 @@ fn block_producer_start_parses() {
 }
 
 #[test]
-fn validator_bootstrap_parses() {
-    let _ = parse(&["validator", "bootstrap"]);
-}
-
-#[test]
-fn validator_start_parses() {
-    let _ = parse(&["validator", "start"]);
-}
-
-#[test]
 fn bundled_bootstrap_parses() {
     let _ = parse(&["bundled", "bootstrap"]);
 }

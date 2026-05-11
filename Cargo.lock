@@ -3230,14 +3230,12 @@ dependencies = [
  "anyhow",
  "clap",
  "fs-err",
- "hex",
  "humantime",
  "miden-node-block-producer",
  "miden-node-ntx-builder",
  "miden-node-rpc",
  "miden-node-store",
  "miden-node-utils",
- "miden-node-validator",
  "miden-protocol",
  "tokio",
  "url",
@@ -3255,11 +3253,11 @@ dependencies = [
  "miden-node-proto-build",
  "miden-node-store",
  "miden-node-utils",
- "miden-node-validator",
  "miden-protocol",
  "miden-remote-prover-client",
  "miden-standards",
  "miden-tx-batch-prover",
+ "miden-validator",
  "pretty_assertions",
  "rand 0.9.2",
  "rand_chacha",
@@ -3506,33 +3504,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
-]
-
-[[package]]
-name = "miden-node-validator"
-version = "0.15.0"
-dependencies = [
- "anyhow",
- "aws-config",
- "aws-sdk-kms",
- "build-rs",
- "diesel",
- "diesel_migrations",
- "miden-node-db",
- "miden-node-proto",
- "miden-node-proto-build",
- "miden-node-store",
- "miden-node-utils",
- "miden-protocol",
- "miden-tx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-reflection",
- "tower-http",
- "tracing",
 ]
 
 [[package]]
@@ -3801,6 +3772,37 @@ dependencies = [
  "loom",
  "once_cell",
  "parking_lot",
+]
+
+[[package]]
+name = "miden-validator"
+version = "0.15.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-kms",
+ "build-rs",
+ "clap",
+ "diesel",
+ "diesel_migrations",
+ "fs-err",
+ "hex",
+ "miden-node-db",
+ "miden-node-proto",
+ "miden-node-proto-build",
+ "miden-node-store",
+ "miden-node-utils",
+ "miden-protocol",
+ "miden-tx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-reflection",
+ "tower-http",
+ "tracing",
+ "url",
 ]
 
 [[package]]
