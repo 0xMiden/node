@@ -23,9 +23,6 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 
-// NTX BUILDER COMMAND
-// ================================================================================================
-
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 pub enum NtxBuilderCommand {

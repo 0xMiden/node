@@ -3,9 +3,6 @@ use miden_node_utils::logging::OpenTelemetry;
 
 mod commands;
 
-// MAIN
-// ================================================================================================
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let command = commands::NtxBuilderCommand::parse();
