@@ -19,6 +19,7 @@
 - [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
 - [BREAKING] `BlockRange.block_to` is now required for all RPC endpoints ([#2056](https://github.com/0xMiden/node/pull/2056)).
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
+- [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
 
 ## v0.14.10 (2026-05-29)
 
