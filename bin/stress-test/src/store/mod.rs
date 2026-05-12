@@ -624,10 +624,11 @@ pub async fn bench_sync_chain_mmr(
 
     let chain_tip = store_client.clone().status(()).await.unwrap().into_inner().chain_tip;
     let block_range_size = block_range_size.max(1);
+    let start_block = chain_tip.saturating_sub(block_range_size);
 
     let request = |_| {
         let mut client = store_client.clone();
-        tokio::spawn(async move { sync_chain_mmr(&mut client, chain_tip, block_range_size).await })
+        tokio::spawn(async move { sync_chain_mmr(&mut client, start_block).await })
     };
 
     let results = stream::iter(0..iterations)
@@ -653,18 +654,16 @@ pub async fn bench_sync_chain_mmr(
 async fn sync_chain_mmr(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
     block_from: u32,
-    block_to: u32,
 ) -> SyncChainMmrRun {
-    let sync_request = proto::rpc::SyncChainMmrRequest {
-        block_from,
-        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::BlockNum(block_to)),
-    };
+    let sync_request = proto::rpc::SyncChainMmrRequest { current_block_height: block_from };
 
     let start = Instant::now();
     let response = api_client.sync_chain_mmr(sync_request).await.unwrap();
     let elapsed = start.elapsed();
     let response = response.into_inner();
-    let _mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
+    let _mmr_delta = response.latest_committed_mmr_delta.expect("mmr_delta should exist");
+    let _mmr_path = response.latest_committed_mmr_path.expect("mmr_path should exist");
+
     SyncChainMmrRun { duration: elapsed }
 }
 

@@ -680,22 +680,17 @@ async fn get_limits_endpoint() {
 }
 
 #[tokio::test]
-async fn sync_chain_mmr_returns_delta() {
+async fn sync_chain_mmr_returns_no_delta_if_already_synced() {
     let (mut rpc_client, _rpc_addr, store_listener) = start_rpc().await;
     let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
 
-    let request = proto::rpc::SyncChainMmrRequest {
-        block_from: 0,
-        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::ChainTip(
-            proto::rpc::ChainTip::Committed.into(),
-        )),
-    };
+    let request = proto::rpc::SyncChainMmrRequest { current_block_height: 0 };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();
 
-    let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
-    assert_eq!(mmr_delta.forest, 0);
-    assert!(mmr_delta.data.is_empty());
+    // Chain consists of a genesis block only, there should be no delta.
+    assert!(response.latest_committed_mmr_delta.is_none());
+    assert!(response.latest_committed_mmr_path.is_none());
 
     shutdown_store(store_runtime).await;
 }

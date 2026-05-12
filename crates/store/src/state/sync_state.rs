@@ -30,12 +30,12 @@ impl State {
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(MmrDelta, BlockHeader), StateSyncError> {
+    ) -> Result<(BlockHeader, Option<MmrDelta>, Option<MmrProof>), StateSyncError> {
         let block_from = *block_range.start();
         let block_to = *block_range.end();
 
-        // SAFETY: block_to has been validated to be <= the effective tip (chain tip or latest
-        // proven block) by the caller, so it must exist in the database.
+        // SAFETY: block_to has been validated to be <= the chain tip by the caller,
+        // so it must exist in the database.
         let block_header = self
             .db
             .select_block_header_by_block_num(Some(block_to))
@@ -43,13 +43,7 @@ impl State {
             .expect("block_to should exist in the database");
 
         if block_from == block_to {
-            return Ok((
-                MmrDelta {
-                    forest: Forest::new(block_from.as_usize()),
-                    data: vec![],
-                },
-                block_header,
-            ));
+            return Ok((block_header, None, None));
         }
 
         // Important notes about the boundary conditions:
@@ -64,16 +58,27 @@ impl State {
         let from_forest = (block_from + 1).as_usize();
         let to_forest = block_to.as_usize();
 
-        let mmr_delta = self
-            .inner
-            .read()
-            .await
-            .blockchain
-            .as_mmr()
-            .get_delta(Forest::new(from_forest), Forest::new(to_forest))
-            .map_err(StateSyncError::FailedToBuildMmrDelta)?;
+        let (mmr_delta, mmr_proof) = {
+            let inner = self.inner.read().await;
 
-        Ok((mmr_delta, block_header))
+            inner.blockchain.num_blocks();
+
+            let mmr_delta = inner
+                .blockchain
+                .as_mmr()
+                .get_delta(Forest::new(from_forest), Forest::new(to_forest))
+                .map_err(StateSyncError::FailedToBuildMmrDelta)?;
+
+            // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_to + 1 to
+            // include the proof for block_to.
+            // SAFETY: it is ensured that block_to <= chain_tip, and the blockchain MMR always has
+            // at least chain_tip + 1 leaves.
+            let mmr_proof = inner.blockchain.open_at(block_to, block_to + 1)?;
+
+            (mmr_delta, mmr_proof)
+        };
+
+        Ok((block_header, Some(mmr_delta), Some(mmr_proof)))
     }
 
     /// Loads data to synchronize a client's notes.
