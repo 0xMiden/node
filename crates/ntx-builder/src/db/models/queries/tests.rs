@@ -576,30 +576,31 @@ fn get_note_error_returns_none_for_unknown_note() {
 // ================================================================================================
 
 #[test]
-fn read_store_sync_checkpoint_returns_none_on_empty_db() {
+fn read_next_block_to_sync_defaults_to_genesis_on_empty_db() {
     let (conn, _dir) = &mut test_conn();
 
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
-    assert!(checkpoint.is_none(), "fresh DB should report no checkpoint");
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
+    assert_eq!(next_to_sync, BlockNumber::GENESIS, "fresh DB should default to GENESIS");
 }
 
 #[test]
-fn read_store_sync_checkpoint_returns_none_when_chain_state_exists_but_checkpoint_unset() {
+fn read_next_block_to_sync_returns_genesis_when_chain_state_exists_but_unset() {
     let (conn, _dir) = &mut test_conn();
 
     let block_num = BlockNumber::from(7u32);
     let header = mock_block_header(block_num);
     upsert_chain_state(conn, block_num, &header).unwrap();
 
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
-    assert!(
-        checkpoint.is_none(),
-        "checkpoint should be NULL after only chain_state has been written"
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
+    assert_eq!(
+        next_to_sync,
+        BlockNumber::GENESIS,
+        "next_block_to_sync should default to GENESIS after only chain_state has been written"
     );
 }
 
 #[test]
-fn set_store_sync_checkpoint_persists_value() {
+fn set_next_block_to_sync_persists_value() {
     let (conn, _dir) = &mut test_conn();
 
     // Seed chain_state so the row exists.
@@ -608,56 +609,56 @@ fn set_store_sync_checkpoint_persists_value() {
     upsert_chain_state(conn, block_num, &header).unwrap();
 
     let target = BlockNumber::from(42u32);
-    set_store_sync_checkpoint(conn, target).unwrap();
+    set_next_block_to_sync(conn, target).unwrap();
 
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
-    assert_eq!(checkpoint, Some(target));
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
+    assert_eq!(next_to_sync, target);
 }
 
 #[test]
-fn set_store_sync_checkpoint_does_not_regress() {
+fn set_next_block_to_sync_does_not_regress() {
     let (conn, _dir) = &mut test_conn();
 
     let block_num = BlockNumber::from(0u32);
     let header = mock_block_header(block_num);
     upsert_chain_state(conn, block_num, &header).unwrap();
 
-    set_store_sync_checkpoint(conn, BlockNumber::from(100u32)).unwrap();
+    set_next_block_to_sync(conn, BlockNumber::from(100u32)).unwrap();
 
     // Attempt to regress to a lower block — should be a no-op.
-    set_store_sync_checkpoint(conn, BlockNumber::from(50u32)).unwrap();
+    set_next_block_to_sync(conn, BlockNumber::from(50u32)).unwrap();
 
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
-    assert_eq!(checkpoint, Some(BlockNumber::from(100u32)), "checkpoint must not regress");
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
+    assert_eq!(next_to_sync, BlockNumber::from(100u32), "next_block_to_sync must not regress");
 
     // Equal value — also a no-op.
-    set_store_sync_checkpoint(conn, BlockNumber::from(100u32)).unwrap();
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
-    assert_eq!(checkpoint, Some(BlockNumber::from(100u32)));
+    set_next_block_to_sync(conn, BlockNumber::from(100u32)).unwrap();
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
+    assert_eq!(next_to_sync, BlockNumber::from(100u32));
 
     // Higher value — advances.
-    set_store_sync_checkpoint(conn, BlockNumber::from(150u32)).unwrap();
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
-    assert_eq!(checkpoint, Some(BlockNumber::from(150u32)));
+    set_next_block_to_sync(conn, BlockNumber::from(150u32)).unwrap();
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
+    assert_eq!(next_to_sync, BlockNumber::from(150u32));
 }
 
 #[test]
-fn upsert_chain_state_preserves_store_sync_checkpoint() {
+fn upsert_chain_state_preserves_next_block_to_sync() {
     let (conn, _dir) = &mut test_conn();
 
     let block_num_1 = BlockNumber::from(10u32);
     upsert_chain_state(conn, block_num_1, &mock_block_header(block_num_1)).unwrap();
-    set_store_sync_checkpoint(conn, BlockNumber::from(5u32)).unwrap();
+    set_next_block_to_sync(conn, BlockNumber::from(5u32)).unwrap();
 
-    // Mempool advances chain tip; checkpoint must NOT be clobbered.
+    // Mempool advances chain tip; next_block_to_sync must NOT be clobbered.
     let block_num_2 = BlockNumber::from(20u32);
     upsert_chain_state(conn, block_num_2, &mock_block_header(block_num_2)).unwrap();
 
-    let checkpoint = read_store_sync_checkpoint(conn).unwrap();
+    let next_to_sync = read_next_block_to_sync(conn).unwrap();
     assert_eq!(
-        checkpoint,
-        Some(BlockNumber::from(5u32)),
-        "upsert_chain_state must preserve store_sync_checkpoint"
+        next_to_sync,
+        BlockNumber::from(5u32),
+        "upsert_chain_state must preserve next_block_to_sync"
     );
 }
 

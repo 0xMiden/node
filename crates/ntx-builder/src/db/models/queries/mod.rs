@@ -179,10 +179,10 @@ pub fn add_transaction(
 /// Handles the per-transaction effects of a `BlockCommitted` event without writing to the
 /// `chain_state` row.
 ///
-/// The chain-tip and store-sync-checkpoint writes are the caller's responsibility (see
-/// [`upsert_chain_state`] and [`set_store_sync_checkpoint`]). Splitting them out lets the builder
-/// gate the store-sync-checkpoint advance during startup catch-up so a partial-catch-up crash
-/// can't leave the watermark inflated.
+/// The chain-tip and `next_block_to_sync` writes are the caller's responsibility (see
+/// [`upsert_chain_state`] and [`set_next_block_to_sync`]). Splitting them out lets the builder
+/// gate the `next_block_to_sync` advance during startup catch-up so a partial-catch-up crash
+/// can't leave it inflated past what was actually synced.
 ///
 /// # Raw SQL
 ///

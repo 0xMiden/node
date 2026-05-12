@@ -63,16 +63,16 @@ pub struct NetworkTransactionBuilder {
     /// items to write.
     actor_request_rx: mpsc::Receiver<ActorRequest>,
     /// Bookkeeping for the startup catch-up phase. Owned by the run loop and consulted on every
-    /// `BlockCommitted` event to decide whether to advance the store-sync watermark.
+    /// `BlockCommitted` event to decide whether to advance `next_block_to_sync`.
     catch_up: CatchUpState,
 }
 
 /// State that drives the ntx-builder's startup catch-up.
 pub(crate) struct CatchUpState {
-    /// Persisted store-sync checkpoint from the previous run, or `None` on first-ever startup
-    /// (or before any successful catch-up). Scopes the gap that startup catch-up needs to
-    /// bridge.
-    prev_local_block: Option<BlockNumber>,
+    /// First block whose state hasn't yet been ingested from the store. The lower bound of the
+    /// range startup catch-up needs to sync. [`BlockNumber::GENESIS`] on a freshly migrated DB
+    /// or before any successful catch-up has persisted a higher value.
+    next_block_to_sync: BlockNumber,
     /// Account IDs that had inflight rows at startup and therefore must be reconciled against
     /// the store before normal operation: their inflight tx may have landed in a block during
     /// downtime, leaving locally-committed state stale.
@@ -83,11 +83,11 @@ pub(crate) struct CatchUpState {
 
 impl CatchUpState {
     pub(crate) fn new(
-        prev_local_block: Option<BlockNumber>,
+        next_block_to_sync: BlockNumber,
         inflight_affected: Vec<NetworkAccountId>,
     ) -> Self {
         Self {
-            prev_local_block,
+            next_block_to_sync,
             inflight_affected,
             complete: false,
         }
@@ -187,7 +187,7 @@ impl NetworkTransactionBuilder {
             mpsc::channel::<NetworkAccountId>(self.config.account_channel_capacity);
         let (catch_up_done_tx, mut catch_up_done_rx) = mpsc::channel::<BlockNumber>(1);
 
-        let prev_local_block = self.catch_up.prev_local_block;
+        let next_block_to_sync = self.catch_up.next_block_to_sync;
         let mut catch_up_started = false;
         let mut account_loader_handle: tokio::task::JoinHandle<anyhow::Result<()>> =
             tokio::spawn(async move { Ok(()) });
@@ -235,7 +235,7 @@ impl NetworkTransactionBuilder {
                         account_loader_handle = Self::kickoff_catch_up(
                             self.store.clone(),
                             self.db.clone(),
-                            prev_local_block,
+                            next_block_to_sync,
                             m,
                             &inflight_set,
                             account_tx,
@@ -254,19 +254,19 @@ impl NetworkTransactionBuilder {
                     self.coordinator
                         .spawn_actor(AccountOrigin::store(account_id), &self.actor_context);
                 },
-                // Store catch-up finished: flip the flag and bump store_sync_checkpoint to
-                // `block_number`.
+                // Store catch-up finished: flip the flag and bump `next_block_to_sync` to
+                // `block_number + 1`.
                 Some(block_number) = catch_up_done_rx.recv() => {
                     self.catch_up.complete = true;
-                    if let Err(err) = self.db.set_store_sync_checkpoint(block_number).await {
+                    if let Err(err) = self.db.set_next_block_to_sync(block_number.child()).await {
                         tracing::error!(
                             error = %err,
-                            "failed to persist store_sync_checkpoint after catch-up"
+                            "failed to persist next_block_to_sync after catch-up"
                         );
                     }
                     tracing::info!(
                         catch_up_to = %block_number,
-                        "ntx-builder catch-up complete; sync watermark set"
+                        "ntx-builder catch-up complete; next_block_to_sync advanced"
                     );
                 },
                 // Handle requests from actors.
@@ -298,25 +298,19 @@ impl NetworkTransactionBuilder {
     ///
     /// A coordinator task waits for both gap discovery and all note-refresh tasks to
     /// finish, then signals via `catch_up_done_tx` so the main loop can flip the
-    /// catch-up flag and persist the watermark.
+    /// catch-up flag and persist `next_block_to_sync`.
     #[expect(clippy::too_many_arguments)]
     async fn kickoff_catch_up(
         store: StoreClient,
         db: Db,
-        prev_local_block: Option<BlockNumber>,
+        next_block_to_sync: BlockNumber,
         catch_up_target: BlockNumber,
         inflight_set: &HashSet<NetworkAccountId>,
         account_tx: mpsc::Sender<NetworkAccountId>,
         note_refresh_done_tx: mpsc::Sender<NetworkAccountId>,
         catch_up_done_tx: mpsc::Sender<BlockNumber>,
     ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
-        let gap_from = match prev_local_block {
-            Some(prev) if prev < catch_up_target => {
-                Some(BlockNumber::from(prev.as_u32().saturating_add(1)))
-            },
-            Some(_) => None,
-            None => Some(BlockNumber::GENESIS),
-        };
+        let gap_from = (next_block_to_sync <= catch_up_target).then_some(next_block_to_sync);
 
         // Spawn the gap-discovery loader (or a no-op task if there's nothing to bridge).
         let account_loader_handle: tokio::task::JoinHandle<anyhow::Result<()>> =

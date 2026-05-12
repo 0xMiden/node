@@ -142,29 +142,29 @@ impl Db {
     ///
     /// Returns the list of affected account IDs that should be notified.
     ///
-    /// `advance_store_sync_checkpoint` controls whether the store-sync checkpoint is advanced
-    /// alongside the chain tip.
+    /// `advance_next_block_to_sync` controls whether `next_block_to_sync` is advanced alongside
+    /// the chain tip.
     ///
-    /// During startup catch-up the caller passes `false`. If we advanced the checkpoint here and
-    /// then crashed mid-catch-up, the next restart would treat blocks we never actually pulled
-    /// from the store as already synced and skip fetching their unconsumed-notes delta. Catch-up
-    /// advances the checkpoint explicitly once it completes successfully.
+    /// During startup catch-up the caller passes `false`. If we advanced it here and then
+    /// crashed mid-catch-up, the next restart would treat blocks we never actually pulled from
+    /// the store as already synced and skip fetching their unconsumed-notes delta. Catch-up
+    /// advances it explicitly once it completes successfully.
     ///
     /// In steady-state the caller passes `true`: the mempool stream is the source of truth for
-    /// new blocks, so the checkpoint can follow the chain tip.
+    /// new blocks, so `next_block_to_sync` can follow the chain tip, storing `block_num + 1`.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,
         block_num: BlockNumber,
         header: BlockHeader,
-        advance_store_sync_checkpoint: bool,
+        advance_next_block_to_sync: bool,
     ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_block_committed", move |conn| {
                 let affected = queries::commit_block_effects(conn, &txs)?;
                 queries::upsert_chain_state(conn, block_num, &header)?;
-                if advance_store_sync_checkpoint {
-                    queries::set_store_sync_checkpoint(conn, block_num)?;
+                if advance_next_block_to_sync {
+                    queries::set_next_block_to_sync(conn, block_num.child())?;
                 }
                 Ok(affected)
             })
@@ -190,19 +190,19 @@ impl Db {
         self.inner.transact("purge_inflight", queries::purge_inflight).await
     }
 
-    /// Returns the persisted store-sync checkpoint, or `None` on first-ever startup / before any
-    /// successful catch-up has run.
-    pub async fn read_store_sync_checkpoint(&self) -> Result<Option<BlockNumber>> {
+    /// Returns the next chain block the ntx-builder should ingest from the store. Defaults to
+    /// [`BlockNumber::GENESIS`] on first-ever startup.
+    pub async fn read_next_block_to_sync(&self) -> Result<BlockNumber> {
         self.inner
-            .query("read_store_sync_checkpoint", queries::read_store_sync_checkpoint)
+            .query("read_next_block_to_sync", queries::read_next_block_to_sync)
             .await
     }
 
-    /// Monotonically advances the store-sync checkpoint to `block_num`.
-    pub async fn set_store_sync_checkpoint(&self, block_num: BlockNumber) -> Result<()> {
+    /// Monotonically advances `next_block_to_sync`.
+    pub async fn set_next_block_to_sync(&self, next_block_to_sync: BlockNumber) -> Result<()> {
         self.inner
-            .transact("set_store_sync_checkpoint", move |conn| {
-                queries::set_store_sync_checkpoint(conn, block_num)
+            .transact("set_next_block_to_sync", move |conn| {
+                queries::set_next_block_to_sync(conn, next_block_to_sync)
             })
             .await
     }
@@ -317,10 +317,10 @@ mod tests {
     use super::*;
     use crate::test_utils::mock_block_header;
 
-    /// `handle_block_committed` advances the chain tip but NOT the `store_sync_checkpoint` when
-    /// `advance_store_sync_checkpoint=false`.
+    /// `handle_block_committed` advances the chain tip but NOT `next_block_to_sync` when
+    /// `advance_next_block_to_sync=false`.
     #[tokio::test]
-    async fn handle_block_committed_does_not_advance_checkpoint_when_gated() {
+    async fn handle_block_committed_does_not_advance_next_block_to_sync_when_gated() {
         let (db, _dir) = Db::test_setup().await;
 
         // Seed chain_state at block 0 so the row exists.
@@ -331,19 +331,20 @@ mod tests {
         let header = mock_block_header(block_num);
         db.handle_block_committed(vec![], block_num, header, false).await.unwrap();
 
-        let checkpoint = db.read_store_sync_checkpoint().await.unwrap();
-        assert!(
-            checkpoint.is_none(),
-            "checkpoint must remain unset while catch-up is gated; got {checkpoint:?}",
+        let next_to_sync = db.read_next_block_to_sync().await.unwrap();
+        assert_eq!(
+            next_to_sync,
+            BlockNumber::GENESIS,
+            "next_block_to_sync must remain at GENESIS while catch-up is gated; got {next_to_sync}",
         );
     }
 
-    /// `handle_block_committed` advances both the chain tip AND the `store_sync_checkpoint` when
-    /// `advance_store_sync_checkpoint=true`. This is the steady-state path: the mempool stream
-    /// is delivering all the data we'd otherwise need from the store, so the watermark can
-    /// follow the chain tip.
+    /// `handle_block_committed` advances both the chain tip AND `next_block_to_sync` when
+    /// `advance_next_block_to_sync=true`. This is the steady-state path: the mempool stream is
+    /// delivering all the data we'd otherwise need from the store, so `next_block_to_sync` can
+    /// follow the chain tip (set to `block_num + 1` which is the next block to sync).
     #[tokio::test]
-    async fn handle_block_committed_advances_checkpoint_when_caught_up() {
+    async fn handle_block_committed_advances_next_block_to_sync_when_caught_up() {
         let (db, _dir) = Db::test_setup().await;
 
         let zero = BlockNumber::from(0u32);
@@ -353,41 +354,41 @@ mod tests {
         let header = mock_block_header(block_num);
         db.handle_block_committed(vec![], block_num, header, true).await.unwrap();
 
-        let checkpoint = db.read_store_sync_checkpoint().await.unwrap();
-        assert_eq!(checkpoint, Some(block_num));
+        let next_to_sync = db.read_next_block_to_sync().await.unwrap();
+        assert_eq!(next_to_sync, block_num.child());
     }
 
-    /// Going from gated → caught-up → gated again, the checkpoint should advance only when the
-    /// flag is true and never regress when it's false.
+    /// Going from gated → caught-up → gated again, `next_block_to_sync` should advance only when
+    /// the flag is true and never regress when it's false.
     #[tokio::test]
-    async fn handle_block_committed_checkpoint_is_monotone_across_modes() {
+    async fn handle_block_committed_next_block_to_sync_is_monotone_across_modes() {
         let (db, _dir) = Db::test_setup().await;
 
         let zero = BlockNumber::from(0u32);
         db.upsert_chain_state(zero, mock_block_header(zero)).await.unwrap();
 
-        // Gated: chain tip moves to 5, checkpoint stays unset.
+        // Gated: chain tip moves to 5, next_block_to_sync stays at GENESIS.
         db.handle_block_committed(vec![], BlockNumber::from(5u32), mock_block_header(zero), false)
             .await
             .unwrap();
-        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), None);
+        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::GENESIS);
 
-        // Caught up: checkpoint advances to 7.
+        // Caught up: next_block_to_sync advances to 8 (= 7.child()).
         db.handle_block_committed(vec![], BlockNumber::from(7u32), mock_block_header(zero), true)
             .await
             .unwrap();
-        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), Some(BlockNumber::from(7u32)));
+        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::from(7u32).child(),);
 
-        // Gated again (shouldn't normally happen, but the guard must hold): checkpoint stays at 7.
+        // Gated again (shouldn't normally happen, but the guard must hold): stays at 8.
         db.handle_block_committed(vec![], BlockNumber::from(9u32), mock_block_header(zero), false)
             .await
             .unwrap();
-        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), Some(BlockNumber::from(7u32)));
+        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::from(7u32).child(),);
 
-        // Caught up at higher block — advances to 10.
+        // Caught up at higher block.
         db.handle_block_committed(vec![], BlockNumber::from(10u32), mock_block_header(zero), true)
             .await
             .unwrap();
-        assert_eq!(db.read_store_sync_checkpoint().await.unwrap(), Some(BlockNumber::from(10u32)));
+        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::from(10u32).child(),);
     }
 }

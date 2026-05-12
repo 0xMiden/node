@@ -280,14 +280,14 @@ impl NtxBuilderConfig {
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup(self.database_filepath.clone()).await?;
 
-        // Snapshot the previous store-sync watermark and any inflight-affected accounts BEFORE
-        // we purge inflight state. Those accounts need to be reconciled against the store at
-        // startup because their inflight tx may have landed in a block during downtime, and the
-        // mempool replay only carries currently-inflight (uncommitted) txs.
-        let prev_local_block = db
-            .read_store_sync_checkpoint()
+        // Snapshot `next_block_to_sync` and any inflight-affected accounts BEFORE we purge
+        // inflight state. Those accounts need to be reconciled against the store at startup
+        // because their inflight tx may have landed in a block during downtime, and the mempool
+        // replay only carries currently-inflight (uncommitted) txs.
+        let next_block_to_sync = db
+            .read_next_block_to_sync()
             .await
-            .context("failed to read store sync checkpoint")?;
+            .context("failed to read next_block_to_sync")?;
         let inflight_affected = db
             .list_inflight_account_ids()
             .await
@@ -320,7 +320,7 @@ impl NtxBuilderConfig {
             .context("store should contain a latest block")?;
 
         // Store the chain tip in the DB. This is the mempool-driven tip, which is distinct from
-        // `store_sync_checkpoint`, which only advances after a successful catch-up.
+        // `next_block_to_sync`, which only advances after a successful catch-up.
         db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
             .await
             .context("failed to upsert chain state")?;
@@ -353,7 +353,7 @@ impl NtxBuilderConfig {
             actor_context,
             mempool_events,
             actor_request_rx,
-            CatchUpState::new(prev_local_block, inflight_affected),
+            CatchUpState::new(next_block_to_sync, inflight_affected),
         ))
     }
 }
