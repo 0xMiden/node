@@ -1,37 +1,45 @@
 //! Runs benchmarks
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use miden_node_proto::clients::{Builder, RpcClient};
+use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountId,
     AccountStorageMode,
     AccountType,
+    PartialAccount,
+    StorageMapKey,
 };
-use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset, TokenSymbol};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::note::Note;
+use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{
-    InputNoteCommitment,
-    OutputNote,
+    AccountInputs,
+    InputNote,
+    InputNotes,
+    PartialBlockchain,
     ProvenTransaction,
-    PublicOutputNote,
-    TxAccountUpdate,
+    TransactionArgs,
 };
-use miden_protocol::vm::ExecutionProof;
-use miden_protocol::{Felt, ONE, Word};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{Felt, MastForest, Word};
 use miden_standards::account::auth::AuthSingleSig;
-use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
+use miden_standards::account::faucets::BasicFungibleFaucet;
+use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
@@ -41,10 +49,21 @@ use miden_standards::account::policies::{
 };
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::note::P2idNote;
+use miden_tx::auth::BasicAuthenticator;
+use miden_tx::{
+    DataStore,
+    DataStoreError,
+    LocalTransactionProver,
+    MastForestStore,
+    TransactionExecutor,
+    TransactionMastStore,
+};
 use rand::Rng;
+use rayon::prelude::*;
+use tokio::sync::Semaphore;
 use url::Url;
 
-const TOTAL_WALLETS: u64 = 1_000_000;
+const PROOFS_DIR: &str = "./benchmark-proofs";
 
 // COMMANDS
 // ================================================================================================
@@ -58,8 +77,25 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    CreateProofs,
-    RunBenchmark,
+    CreateProofs {
+        /// RPC endpoint of the target miden node — used to discover the
+        /// genesis commitment that the generated proofs are bound to. Must
+        /// match the node you intend to submit the proofs against.
+        #[arg(long, default_value = "http://127.0.0.1:57291")]
+        rpc_url: Url,
+        /// Number of mint + consume transaction pairs to generate. Each
+        /// pair takes seconds of real STARK proving, so start small.
+        #[arg(long, default_value_t = 10)]
+        num_transactions: u64,
+    },
+    RunBenchmark {
+        /// RPC endpoint of the target miden node.
+        #[arg(long, default_value = "http://127.0.0.1:57291")]
+        rpc_url: Url,
+        /// Number of concurrent submission tasks.
+        #[arg(long, default_value_t = 32)]
+        concurrency: usize,
+    },
 }
 
 #[tokio::main]
@@ -71,77 +107,388 @@ async fn main() {
 impl Cli {
     async fn run(self) {
         match self.command {
-            Command::CreateProofs => self.create_proofs().await,
-            Command::RunBenchmark => self.run_benchmark(),
+            Command::CreateProofs { rpc_url, num_transactions } => {
+                create_proofs(rpc_url, num_transactions).await
+            },
+            Command::RunBenchmark { rpc_url, concurrency } => {
+                run_benchmark(rpc_url, concurrency).await
+            },
         }
     }
+}
 
-    async fn create_proofs(self) {
-        let url = Url::parse("https://rpc.devnet.miden.io").unwrap();
-        let mut rpc_client =
-            create_genesis_aware_rpc_client(&url, Duration::from_secs(10)).await.unwrap();
+async fn create_proofs(rpc_url: Url, num_transactions: u64) {
+    let mut rpc_client =
+        create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(10)).await.unwrap();
 
-        // We need to:
-        // 1. Create 1 faucet
-        let mut faucet = create_faucet();
+    println!("Fetching genesis block header from {rpc_url}...");
+    let genesis_header_proto = rpc_client
+        .get_block_header_by_number(get_genesis_header_request())
+        .await
+        .unwrap()
+        .into_inner()
+        .block_header
+        .expect("RPC returned no block header");
+    let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
 
-        // 2. Create N wallets
-        let mut wallets = vec![];
+    println!("Creating faucet...");
+    let (mut faucet, faucet_secret_key) = create_faucet();
 
-        // share random coin seed and key pair for all accounts to avoid key generation overhead
-        let coin_seed: [u64; 4] = rand::rng().random();
-        let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
-        let key_pair = {
-            let mut rng = rng.lock().unwrap();
-            SecretKey::with_rng(&mut *rng)
+    let coin_seed: [u64; 4] = rand::rng().random();
+    let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let wallet_secret_key = SecretKey::with_rng(&mut seed_rng);
+    let wallet_public_key = wallet_secret_key.public_key();
+
+    println!("Creating {num_transactions} wallets in parallel...");
+    let wallets: Vec<Account> = (0..num_transactions)
+        .into_par_iter()
+        .map(|index| create_wallet(wallet_public_key.clone(), index))
+        .collect();
+
+    let genesis_chain_mmr =
+        PartialBlockchain::new(PartialMmr::from_peaks(MmrPeaks::default()), Vec::new())
+            .expect("failed to create empty chain MMR");
+
+    let mut data_store = BenchmarkDataStore::new(genesis_header.clone(), genesis_chain_mmr);
+    data_store.add_account(faucet.clone());
+    for wallet in &wallets {
+        data_store.add_account(wallet.clone());
+    }
+
+    let authenticator = BasicAuthenticator::new(&[
+        AuthSecretKey::Falcon512Poseidon2(faucet_secret_key),
+        AuthSecretKey::Falcon512Poseidon2(wallet_secret_key),
+    ]);
+
+    let prover = LocalTransactionProver::default();
+    let faucet_id = faucet.id();
+
+    // Mint phase — sequential because each mint mutates the faucet.
+    println!("Proving {num_transactions} mint transactions (sequential)...");
+    let mut mint_txs: Vec<ProvenTransaction> = Vec::with_capacity(num_transactions as usize);
+    let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+    let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
+
+    for index in 0..num_transactions {
+        let wallet_id = wallets[index as usize].id();
+        let note = {
+            let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+            P2idNote::create(
+                faucet_id,
+                wallet_id,
+                vec![asset],
+                miden_protocol::note::NoteType::Public,
+                miden_protocol::note::NoteAttachment::default(),
+                &mut seed_rng,
+            )
+            .expect("note creation failed")
         };
 
-        for index in 0..TOTAL_WALLETS {
-            let wallet = create_account(key_pair.public_key(), index, AccountStorageMode::Public);
-            wallets.push(wallet);
-        }
+        let account_interface = AccountInterface::from_account(&faucet);
+        let script = account_interface
+            .build_send_notes_script(&[note.clone().into()], None)
+            .expect("failed to build mint send-notes script");
 
-        // 3. Create 1 mint tx per wallet
-        let block_header_from_rpc = rpc_client
-            .get_block_header_by_number(get_genesis_header_request())
+        let mut tx_args = TransactionArgs::default().with_tx_script(script);
+        tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
+
+        let executor =
+            TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
+
+        let executed_tx = Box::pin(executor.execute_transaction(
+            faucet_id,
+            genesis_header.block_num(),
+            InputNotes::default(),
+            tx_args,
+        ))
+        .await
+        .expect("failed to execute mint transaction");
+
+        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+        let delta = executed_tx.account_delta().clone();
+
+        let proven_tx = prover
+            .prove(executed_tx)
             .await
-            .unwrap()
-            .into_inner()
-            .block_header;
-        let genesis_block_header: BlockHeader = block_header_from_rpc.unwrap().try_into().unwrap();
+            .expect("failed to prove mint transaction");
 
-        let mut mint_output_notes = vec![];
-        let mut mint_txs = vec![];
-
-        let faucet_id = faucet.id();
-        for index in 0..TOTAL_WALLETS {
-            let note = {
-                let mut rng = rng.lock().unwrap();
-                create_mint_note(faucet_id.clone(), wallets[index as usize].id().clone(), &mut rng)
-            };
-            mint_output_notes.push(note.clone());
-
-            let mint_tx = create_mint_tx(&genesis_block_header, &mut faucet, vec![note]);
-            mint_txs.push(mint_tx);
+        // Evolve the faucet state for the next iteration. The first mint of a
+        // never-before-seen account produces a full-state delta (because the
+        // delta carries the freshly deployed code); subsequent mints produce
+        // partial-state deltas that can be applied incrementally.
+        if delta.is_full_state() {
+            faucet = Account::try_from(&delta)
+                .expect("failed to materialize faucet from full-state delta");
+        } else {
+            faucet
+                .apply_delta(&delta)
+                .expect("failed to apply faucet delta");
         }
-        // 4. Create 1 consume tx per mint
-        let mut consume_txs = vec![];
+        data_store.update_account(faucet.clone());
 
-        for index in 0..TOTAL_WALLETS {
-            let tx = create_consume_tx(
-                &genesis_block_header,
-                &mut wallets[index as usize],
-                mint_output_notes[index as usize].clone(),
-            );
+        mint_txs.push(proven_tx);
+        mint_tx_inputs.push(tx_inputs_bytes);
+        mint_notes.push(note);
 
-            consume_txs.push(tx);
+        if (index + 1) % 10 == 0 || index + 1 == num_transactions {
+            println!("  proved {} / {num_transactions} mint txs", index + 1);
         }
-
-        // Save everything to files
     }
 
-    fn run_benchmark(self) {
-        println!("run_benchmark");
+    // Consume phase — also sequential for now (each tx is one wallet, independent
+    // wallets, so this could be parallelized later with bounded concurrency).
+    println!("Proving {num_transactions} consume transactions (sequential)...");
+    let mut consume_txs: Vec<ProvenTransaction> = Vec::with_capacity(num_transactions as usize);
+    let mut consume_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+
+    for index in 0..num_transactions {
+        let wallet_id = wallets[index as usize].id();
+        let note = mint_notes[index as usize].clone();
+        let input_note = InputNote::Unauthenticated { note };
+        let input_notes = InputNotes::new(vec![input_note])
+            .expect("failed to construct input notes for consume");
+
+        let executor =
+            TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
+
+        let executed_tx = Box::pin(executor.execute_transaction(
+            wallet_id,
+            genesis_header.block_num(),
+            input_notes,
+            TransactionArgs::default(),
+        ))
+        .await
+        .expect("failed to execute consume transaction");
+
+        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+
+        let proven_tx = prover
+            .prove(executed_tx)
+            .await
+            .expect("failed to prove consume transaction");
+
+        consume_txs.push(proven_tx);
+        consume_tx_inputs.push(tx_inputs_bytes);
+
+        if (index + 1) % 10 == 0 || index + 1 == num_transactions {
+            println!("  proved {} / {num_transactions} consume txs", index + 1);
+        }
+    }
+
+    let out_dir = PathBuf::from(PROOFS_DIR);
+    println!("Writing proofs to {}/", out_dir.display());
+    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::write(out_dir.join("faucet.bin"), faucet.to_bytes()).unwrap();
+    std::fs::write(out_dir.join("wallets.bin"), wallets.to_bytes()).unwrap();
+    std::fs::write(out_dir.join("mint_txs.bin"), mint_txs.to_bytes()).unwrap();
+    std::fs::write(out_dir.join("mint_tx_inputs.bin"), mint_tx_inputs.to_bytes()).unwrap();
+    std::fs::write(out_dir.join("consume_txs.bin"), consume_txs.to_bytes()).unwrap();
+    std::fs::write(out_dir.join("consume_tx_inputs.bin"), consume_tx_inputs.to_bytes()).unwrap();
+    println!("Done.");
+}
+
+async fn run_benchmark(rpc_url: Url, concurrency: usize) {
+    let in_dir = PathBuf::from(PROOFS_DIR);
+
+    println!("Loading mint txs from {}", in_dir.join("mint_txs.bin").display());
+    let mint_txs = read_proven_txs(&in_dir.join("mint_txs.bin"));
+    let mint_tx_inputs = read_tx_inputs(&in_dir.join("mint_tx_inputs.bin"));
+    assert_eq!(mint_txs.len(), mint_tx_inputs.len(), "mint tx/inputs length mismatch");
+
+    println!("Loading consume txs from {}", in_dir.join("consume_txs.bin").display());
+    let consume_txs = read_proven_txs(&in_dir.join("consume_txs.bin"));
+    let consume_tx_inputs = read_tx_inputs(&in_dir.join("consume_tx_inputs.bin"));
+    assert_eq!(consume_txs.len(), consume_tx_inputs.len(), "consume tx/inputs length mismatch");
+
+    println!("Connecting to {rpc_url}...");
+    let rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(30))
+        .await
+        .expect("failed to create RPC client");
+
+    let h_start = current_block_height(rpc_client.clone()).await;
+    println!("Chain height at start: {h_start}");
+
+    println!(
+        "Submitting {} mint txs sequentially (each one mutates the shared faucet, so the \
+         submits must be serialized for the mempool to chain them)...",
+        mint_txs.len()
+    );
+    let (mint_ok, mint_err, mint_elapsed) =
+        submit_sequential(rpc_client.clone(), mint_txs, mint_tx_inputs).await;
+    println!(
+        "  mint: ok={mint_ok} err={mint_err} in {:.1}s ({:.2} tx/s)",
+        mint_elapsed.as_secs_f64(),
+        mint_ok as f64 / mint_elapsed.as_secs_f64()
+    );
+
+    println!("Submitting {} consume txs with concurrency={concurrency}...", consume_txs.len());
+    let (consume_ok, consume_err, consume_elapsed) =
+        submit_all(rpc_client.clone(), consume_txs, consume_tx_inputs, concurrency).await;
+    println!(
+        "  consume: ok={consume_ok} err={consume_err} in {:.1}s ({:.0} tx/s)",
+        consume_elapsed.as_secs_f64(),
+        consume_ok as f64 / consume_elapsed.as_secs_f64()
+    );
+
+    println!("Waiting 3 blocks for the last submissions to land...");
+    let h_final = wait_for_n_blocks(rpc_client.clone(), 3).await;
+
+    let total_submitted = mint_ok + consume_ok;
+    let total_submission_secs = (mint_elapsed + consume_elapsed).as_secs_f64();
+    println!();
+    println!("=== Summary ===");
+    println!("Chain height: {h_start} -> {h_final} ({} blocks)", h_final - h_start);
+    println!("Total successful submissions: {total_submitted}");
+    println!("Total submission time: {:.1}s", total_submission_secs);
+    println!("Submission TPS: {:.0}", total_submitted as f64 / total_submission_secs);
+}
+
+fn read_proven_txs(path: &std::path::Path) -> Vec<ProvenTransaction> {
+    let bytes = std::fs::read(path).unwrap_or_else(|_| {
+        panic!(
+            "failed to read {} — run `create-proofs` first",
+            path.display()
+        )
+    });
+    Vec::<ProvenTransaction>::read_from_bytes(&bytes)
+        .unwrap_or_else(|_| panic!("failed to deserialize {}", path.display()))
+}
+
+fn read_tx_inputs(path: &std::path::Path) -> Vec<Vec<u8>> {
+    let bytes = std::fs::read(path).unwrap_or_else(|_| {
+        panic!(
+            "failed to read {} — run `create-proofs` first",
+            path.display()
+        )
+    });
+    Vec::<Vec<u8>>::read_from_bytes(&bytes)
+        .unwrap_or_else(|_| panic!("failed to deserialize {}", path.display()))
+}
+
+async fn submit_all(
+    client: RpcClient,
+    txs: Vec<ProvenTransaction>,
+    tx_inputs: Vec<Vec<u8>>,
+    concurrency: usize,
+) -> (u64, u64, Duration) {
+    /// How many distinct error messages to surface to the console.
+    const MAX_ERRORS_TO_PRINT: u64 = 5;
+
+    let start = Instant::now();
+    let semaphore = Arc::new(Semaphore::new(concurrency));
+    let ok = Arc::new(AtomicU64::new(0));
+    let err = Arc::new(AtomicU64::new(0));
+    let printed = Arc::new(AtomicU64::new(0));
+
+    let mut handles = Vec::with_capacity(txs.len());
+    for (i, (tx, inputs)) in txs.into_iter().zip(tx_inputs.into_iter()).enumerate() {
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let mut client = client.clone();
+        let ok = ok.clone();
+        let err = err.clone();
+        let printed = printed.clone();
+        handles.push(tokio::spawn(async move {
+            let request = proto::transaction::ProvenTransaction {
+                transaction: tx.to_bytes(),
+                transaction_inputs: Some(inputs),
+            };
+            match client.submit_proven_transaction(request).await {
+                Ok(_) => {
+                    ok.fetch_add(1, Ordering::Relaxed);
+                },
+                Err(status) => {
+                    err.fetch_add(1, Ordering::Relaxed);
+                    if printed.fetch_add(1, Ordering::Relaxed) < MAX_ERRORS_TO_PRINT {
+                        eprintln!(
+                            "  tx idx {i} failed: code={:?} message={}",
+                            status.code(),
+                            status.message()
+                        );
+                    }
+                },
+            }
+            drop(permit);
+        }));
+    }
+    for h in handles {
+        let _ = h.await;
+    }
+
+    (ok.load(Ordering::Relaxed), err.load(Ordering::Relaxed), start.elapsed())
+}
+
+/// Submit txs one at a time, awaiting each RPC response before sending the
+/// next. Used for the mint phase, where every tx mutates the shared faucet
+/// and therefore must arrive at the mempool in order — the block-producer's
+/// mempool will reject out-of-order submissions but happily chains in-order
+/// ones against its own pending state, so we only need to serialize the
+/// `submit_proven_transaction` calls themselves, not wait for block
+/// inclusion in between.
+async fn submit_sequential(
+    client: RpcClient,
+    txs: Vec<ProvenTransaction>,
+    tx_inputs: Vec<Vec<u8>>,
+) -> (u64, u64, Duration) {
+    let start = Instant::now();
+    let mut ok: u64 = 0;
+    let mut err: u64 = 0;
+    let total = txs.len();
+
+    for (i, (tx, inputs)) in txs.into_iter().zip(tx_inputs.into_iter()).enumerate() {
+        let request = proto::transaction::ProvenTransaction {
+            transaction: tx.to_bytes(),
+            transaction_inputs: Some(inputs),
+        };
+
+        let mut submit_client = client.clone();
+        match submit_client.submit_proven_transaction(request).await {
+            Ok(_) => ok += 1,
+            Err(e) => {
+                err += 1;
+                eprintln!("  tx {} / {total} failed: {}", i + 1, e);
+            },
+        }
+    }
+
+    println!("  submitted {total} (ok={ok} err={err})");
+    (ok, err, start.elapsed())
+}
+
+async fn current_block_height(mut client: RpcClient) -> u32 {
+    let response = client
+        .get_block_header_by_number(BlockHeaderByNumberRequest {
+            block_num: None,
+            include_mmr_proof: None,
+        })
+        .await
+        .expect("failed to fetch latest block header")
+        .into_inner();
+    let header: BlockHeader = response
+        .block_header
+        .expect("no block header in response")
+        .try_into()
+        .expect("failed to decode block header");
+    header.block_num().as_u32()
+}
+
+/// Wait until the chain has advanced by `n` blocks past whatever the current
+/// height is, then return. Used to give the block-producer time to include
+/// in-flight submissions without falsely waiting forever (the node produces
+/// empty blocks at a steady interval, so "no height change" never fires).
+async fn wait_for_n_blocks(client: RpcClient, n: u32) -> u32 {
+    let start_height = current_block_height(client.clone()).await;
+    let target = start_height + n;
+    let mut last = start_height;
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let h = current_block_height(client.clone()).await;
+        if h != last {
+            println!("  block height: {h}");
+            last = h;
+        }
+        if h >= target {
+            return h;
+        }
     }
 }
 
@@ -152,11 +499,15 @@ pub async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
 ) -> Result<RpcClient> {
-    // First, create a temporary client without genesis metadata to discover the
-    // genesis block header and its commitment.
-    let mut rpc: RpcClient = Builder::new(rpc_url.clone())
-        .with_tls()
-        .context("Failed to configure TLS for RPC client")?
+    let use_tls = rpc_url.scheme() == "https";
+
+    let tls_stage = Builder::new(rpc_url.clone());
+    let timeout_stage = if use_tls {
+        tls_stage.with_tls().context("Failed to configure TLS for RPC client")?
+    } else {
+        tls_stage.without_tls()
+    };
+    let mut rpc: RpcClient = timeout_stage
         .with_timeout(timeout)
         .without_metadata_version()
         .without_metadata_genesis()
@@ -181,11 +532,13 @@ pub async fn create_genesis_aware_rpc_client(
     let genesis_commitment = genesis_header.commitment();
     let genesis = genesis_commitment.to_hex();
 
-    // Rebuild the client, this time including the required genesis metadata so that
-    // write RPCs like SubmitProvenTransaction are accepted by the node.
-    let rpc_client = Builder::new(rpc_url.clone())
-        .with_tls()
-        .context("Failed to configure TLS for RPC client")?
+    let tls_stage = Builder::new(rpc_url.clone());
+    let timeout_stage = if use_tls {
+        tls_stage.with_tls().context("Failed to configure TLS for RPC client")?
+    } else {
+        tls_stage.without_tls()
+    };
+    let rpc_client = timeout_stage
         .with_timeout(timeout)
         .without_metadata_version()
         .with_metadata_genesis(genesis)
@@ -204,8 +557,8 @@ fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
     }
 }
 
-/// Creates a new faucet account.
-fn create_faucet() -> Account {
+/// Creates a new faucet account and returns it alongside its secret key.
+fn create_faucet() -> (Account, SecretKey) {
     let coin_seed: [u64; 4] = rand::rng().random();
     let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
     let key_pair = SecretKey::with_rng(&mut rng);
@@ -220,7 +573,7 @@ fn create_faucet() -> Account {
     )
     .build()
     .unwrap();
-    AccountBuilder::new(init_seed)
+    let faucet = AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
         .with_component(token_metadata)
@@ -235,118 +588,141 @@ fn create_faucet() -> Account {
             AuthScheme::Falcon512Poseidon2,
         ))
         .build()
-        .unwrap()
+        .unwrap();
+    (faucet, key_pair)
 }
 
-/// Creates a new wallet account with a given public key.
-fn create_account(public_key: PublicKey, index: u64, storage_mode: AccountStorageMode) -> Account {
+/// Creates a new wallet account with the given public key, using `index` to vary
+/// the init seed so each wallet ends up with a distinct account ID.
+fn create_wallet(
+    public_key: miden_protocol::crypto::dsa::falcon512_poseidon2::PublicKey,
+    index: u64,
+) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(storage_mode)
+        .storage_mode(AccountStorageMode::Private)
         .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet)
         .build()
         .unwrap()
 }
 
-/// Creates a public P2ID note containing 10 tokens of the fungible asset associated with the
-/// specified `faucet_id` and sent to the specified target account.
-fn create_mint_note(faucet_id: AccountId, target_id: AccountId, rng: &mut RandomCoin) -> Note {
-    let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
-    P2idNote::create(
-        faucet_id,
-        target_id,
-        vec![asset],
-        miden_protocol::note::NoteType::Public,
-        miden_protocol::note::NoteAttachment::default(),
-        rng,
-    )
-    .expect("note creation failed")
+// BENCHMARK DATA STORE
+// ================================================================================================
+
+/// In-memory `DataStore` impl used to feed the [`TransactionExecutor`] when
+/// generating real proofs locally. Modelled on the network-monitor's
+/// `MonitorDataStore`.
+pub struct BenchmarkDataStore {
+    accounts: HashMap<AccountId, Account>,
+    block_header: BlockHeader,
+    partial_block_chain: PartialBlockchain,
+    mast_store: TransactionMastStore,
 }
 
-/// Creates a transaction from the faucet that creates the given output notes.
-/// Updates the faucet account to increase the issuance slot and it's nonce.
-fn create_mint_tx(
-    block_ref: &BlockHeader,
-    faucet: &mut Account,
-    output_notes: Vec<Note>,
-) -> ProvenTransaction {
-    let initial_account_hash = faucet.to_commitment();
+impl BenchmarkDataStore {
+    pub fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+        Self {
+            accounts: HashMap::new(),
+            block_header,
+            partial_block_chain,
+            mast_store: TransactionMastStore::new(),
+        }
+    }
 
-    let metadata_slot_name = TokenMetadata::metadata_slot();
-    let slot = faucet.storage().get_item(metadata_slot_name).unwrap();
-    faucet
-        .storage_mut()
-        .set_item(metadata_slot_name, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
-        .unwrap();
+    pub fn add_account(&mut self, account: Account) {
+        self.mast_store.load_account_code(account.code());
+        self.accounts.insert(account.id(), account);
+    }
 
-    faucet.increment_nonce(ONE).unwrap();
+    pub fn update_account(&mut self, account: Account) {
+        self.add_account(account);
+    }
 
-    let account_update = TxAccountUpdate::new(
-        faucet.id(),
-        initial_account_hash,
-        faucet.to_commitment(),
-        Word::empty(),
-        AccountUpdateDetails::Private,
-    )
-    .unwrap();
-    ProvenTransaction::new(
-        account_update,
-        Vec::<InputNoteCommitment>::new(),
-        output_notes
-            .into_iter()
-            .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
-            .collect::<Vec<OutputNote>>(),
-        block_ref.block_num(),
-        block_ref.commitment(),
-        FungibleAsset::new(
-            block_ref.fee_parameters().fee_faucet_id(),
-            u64::from(block_ref.fee_parameters().verification_base_fee()),
-        )
-        .unwrap(),
-        u32::MAX.into(),
-        ExecutionProof::new_dummy(),
-    )
-    .unwrap()
+    fn get_account(&self, account_id: AccountId) -> Result<&Account, DataStoreError> {
+        self.accounts.get(&account_id).ok_or_else(|| DataStoreError::Other {
+            error_msg: "unknown account".into(),
+            source: None,
+        })
+    }
 }
 
-/// Creates a transaction from the wallet that will the given output note.
-fn create_consume_tx(
-    block_ref: &BlockHeader,
-    wallet: &mut Account,
-    input_note: Note,
-) -> ProvenTransaction {
-    let initial_account_hash = wallet.to_commitment();
+impl DataStore for BenchmarkDataStore {
+    async fn get_transaction_inputs(
+        &self,
+        account_id: AccountId,
+        _block_refs: BTreeSet<BlockNumber>,
+    ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
+        let account = self.get_account(account_id)?;
+        let partial_account = PartialAccount::from(account);
+        Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+    }
 
-    wallet.increment_nonce(ONE).unwrap();
+    async fn get_storage_map_witness(
+        &self,
+        account_id: AccountId,
+        map_root: Word,
+        map_key: StorageMapKey,
+    ) -> Result<miden_protocol::account::StorageMapWitness, DataStoreError> {
+        let account = self.get_account(account_id)?;
+        for slot in account.storage().slots() {
+            if let miden_protocol::account::StorageSlotContent::Map(map) = slot.content() {
+                if map.root() == map_root {
+                    return Ok(map.open(&map_key));
+                }
+            }
+        }
+        Err(DataStoreError::Other {
+            error_msg: format!("no storage map with the requested root in account {account_id}")
+                .into(),
+            source: None,
+        })
+    }
 
-    let account_update = TxAccountUpdate::new(
-        wallet.id(),
-        initial_account_hash,
-        wallet.to_commitment(),
-        Word::empty(),
-        AccountUpdateDetails::Private,
-    )
-    .unwrap();
+    async fn get_foreign_account_inputs(
+        &self,
+        _foreign_account_id: AccountId,
+        _ref_block: BlockNumber,
+    ) -> Result<AccountInputs, DataStoreError> {
+        unimplemented!("foreign account inputs are not needed for the benchmark")
+    }
 
-    let nullifier = input_note.nullifier();
-    let header = input_note.header().clone();
-    let input_note_commitment = InputNoteCommitment::from_parts_unchecked(nullifier, Some(header));
+    async fn get_vault_asset_witnesses(
+        &self,
+        account_id: AccountId,
+        vault_root: Word,
+        vault_keys: BTreeSet<AssetVaultKey>,
+    ) -> Result<Vec<AssetWitness>, DataStoreError> {
+        let account = self.get_account(account_id)?;
 
-    ProvenTransaction::new(
-        account_update,
-        vec![input_note_commitment],
-        Vec::<OutputNote>::new(),
-        block_ref.block_num(),
-        block_ref.commitment(),
-        FungibleAsset::new(
-            block_ref.fee_parameters().fee_faucet_id(),
-            u64::from(block_ref.fee_parameters().verification_base_fee()),
-        )
-        .unwrap(),
-        u32::MAX.into(),
-        ExecutionProof::new_dummy(),
-    )
-    .unwrap()
+        if account.vault().root() != vault_root {
+            return Err(DataStoreError::Other {
+                error_msg: "vault root mismatch".into(),
+                source: None,
+            });
+        }
+
+        Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
+            AssetWitness::new(account.vault().open(vault_key).into()).map_err(|err| {
+                DataStoreError::Other {
+                    error_msg: "failed to open vault asset tree".into(),
+                    source: Some(Box::new(err)),
+                }
+            })
+        }))
+    }
+
+    async fn get_note_script(
+        &self,
+        _script_root: NoteScriptRoot,
+    ) -> Result<Option<NoteScript>, DataStoreError> {
+        Ok(None)
+    }
+}
+
+impl MastForestStore for BenchmarkDataStore {
+    fn get(&self, procedure_hash: &Word) -> Option<Arc<MastForest>> {
+        self.mast_store.get(procedure_hash)
+    }
 }

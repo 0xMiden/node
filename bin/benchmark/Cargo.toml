@@ -23,8 +23,10 @@ miden-node-block-producer = { workspace = true }
 miden-node-proto          = { workspace = true }
 miden-node-store          = { workspace = true }
 miden-node-utils          = { workspace = true }
-miden-protocol            = { workspace = true }
+miden-protocol            = { features = ["std", "testing"], workspace = true }
 miden-standards           = { workspace = true }
+miden-tx                  = { features = ["concurrent", "std"], workspace = true }
 rand                      = { workspace = true }
-url                       = { features = ["serde"], workspace = true }
+rayon                     = { workspace = true }
 tokio                     = { features = ["full"], workspace = true }
+url                       = { features = ["serde"], workspace = true }

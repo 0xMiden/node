@@ -2980,7 +2980,9 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
+ "miden-tx",
  "rand 0.9.2",
+ "rayon",
  "tokio",
  "url",
 ]
