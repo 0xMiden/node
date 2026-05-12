@@ -2974,16 +2974,15 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
- "miden-node-block-producer",
+ "fs-err",
  "miden-node-proto",
- "miden-node-store",
- "miden-node-utils",
  "miden-protocol",
  "miden-standards",
  "miden-tx",
  "rand 0.9.2",
  "rayon",
  "tokio",
+ "tonic",
  "url",
 ]
 

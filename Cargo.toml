@@ -44,7 +44,6 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-benchmark                 = { path = "bin/benchmark", version = "0.15" }
 miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.15" }
 miden-node-block-producer       = { path = "crates/block-producer", version = "0.15" }
 miden-node-db                   = { path = "crates/db", version = "0.15" }
