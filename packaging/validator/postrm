@@ -1,9 +1,9 @@
 #!/bin/bash
 #
 ###############
-# Remove miden-node install
+# Remove miden-validator install
 ##############
-svc=miden-node
+svc=miden-validator
 
 sudo rm -rf "/lib/systemd/system/$svc.service"
 sudo rm -rf "/etc/opt/$svc"

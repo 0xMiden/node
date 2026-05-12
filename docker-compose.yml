@@ -1,6 +1,6 @@
 services:
-  genesis:
-    image: miden-node-image
+  genesis-validator:
+    image: miden-validator
     pull_policy: if_not_present
     profiles:
       - genesis
@@ -12,17 +12,32 @@ services:
         set -e
         mkdir -p /data/genesis /data/store /data/validator /data/accounts /data/ntx-builder
         echo "Bootstrapping validator (creating genesis block)..."
-        miden-node validator bootstrap \
+        miden-validator bootstrap \
           --data-directory /data/validator \
           --genesis-block-directory /data/genesis \
           --accounts-directory /data/accounts
+
+  genesis-store:
+    image: miden-node
+    pull_policy: if_not_present
+    profiles:
+      - genesis
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      genesis-validator:
+        condition: service_completed_successfully
+    command:
+      - |
+        set -e
         echo "Bootstrapping store..."
         miden-node store bootstrap \
           --data-directory /data/store \
           --genesis-block /data/genesis/genesis.dat
 
   store:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     volumes:
       - node-data:/data
@@ -34,9 +49,9 @@ services:
       - miden-node
       - store
       - start
-      - --rpc.url=http://0.0.0.0:50001
-      - --ntx-builder.url=http://0.0.0.0:50002
-      - --block-producer.url=http://0.0.0.0:50003
+      - --rpc.listen=0.0.0.0:50001
+      - --ntx-builder.listen=0.0.0.0:50002
+      - --block-producer.listen=0.0.0.0:50003
       - --data-directory=/data/store
       - --account_tree.rocksdb.max_cache_size=4294967296
       - --account_tree.rocksdb.max_open_fds=512
@@ -48,7 +63,7 @@ services:
       - "50003:50003"
 
   validator:
-    image: miden-node-image
+    image: miden-validator
     pull_policy: if_not_present
     volumes:
       - node-data:/data
@@ -57,16 +72,15 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - OTEL_SERVICE_NAME=validator
     command:
-      - miden-node
-      - validator
+      - miden-validator
       - start
-      - http://0.0.0.0:50101
+      - --listen=0.0.0.0:50101
       - --data-directory=/data/validator
     ports:
       - "50101:50101"
 
   block-producer:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
@@ -76,14 +90,14 @@ services:
       - miden-node
       - block-producer
       - start
-      - http://0.0.0.0:50201
+      - --listen=0.0.0.0:50201
       - --store.url=http://store:50003
       - --validator.url=http://validator:50101
     ports:
       - "50201:50201"
 
   rpc:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
@@ -93,7 +107,7 @@ services:
       - miden-node
       - rpc
       - start
-      - --url=http://0.0.0.0:57291
+      - --listen=0.0.0.0:57291
       - --store.url=http://store:50001
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101
@@ -101,7 +115,7 @@ services:
       - "57291:57291"
 
   ntx-builder:
-    image: miden-node-image
+    image: miden-node
     pull_policy: if_not_present
     volumes:
       - node-data:/data
@@ -113,6 +127,7 @@ services:
       - miden-node
       - ntx-builder
       - start
+      - --listen=0.0.0.0:50301
       - --store.url=http://store:50002
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101

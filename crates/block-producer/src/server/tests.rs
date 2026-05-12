@@ -6,8 +6,8 @@ use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, GenesisState, Store, Store
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee_params;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::testing::random_secret_key::random_secret_key;
+use miden_validator::{Validator, ValidatorSigner};
 use tokio::net::TcpListener;
 use tokio::time::sleep;
 use tokio::{runtime, task};
