@@ -149,6 +149,9 @@ pub struct StorageOptions {
     #[cfg(feature = "rocksdb")]
     #[clap(flatten)]
     pub nullifier_tree: NullifierTreeRocksDbOptions,
+    #[cfg(feature = "rocksdb")]
+    #[clap(flatten)]
+    pub account_state_forest: AccountStateForestRocksDbOptions,
 }
 
 impl StorageOptions {
@@ -168,7 +171,16 @@ impl StorageOptions {
                 cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
                 durability_mode: None,
             };
-            Self { account_tree, nullifier_tree }
+            let account_state_forest = AccountStateForestRocksDbOptions {
+                max_open_fds: BENCH_ROCKSDB_MAX_OPEN_FDS,
+                cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
+                durability_mode: None,
+            };
+            Self {
+                account_tree,
+                nullifier_tree,
+                account_state_forest,
+            }
         }
         #[cfg(not(feature = "rocksdb"))]
         Self::default()

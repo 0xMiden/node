@@ -294,7 +294,25 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request.get_ref());
+        let request_ref = request.get_ref();
+
+        let span = Span::current();
+        span.set_attribute("block_range.from", request_ref.block_from);
+        match request_ref.upper_bound {
+            Some(proto::rpc::sync_chain_mmr_request::UpperBound::BlockNum(block_num)) => {
+                span.set_attribute("block_range.to", block_num);
+            },
+            Some(proto::rpc::sync_chain_mmr_request::UpperBound::ChainTip(chain_tip)) => {
+                let chain_tip = proto::rpc::ChainTip::try_from(chain_tip)
+                    .unwrap_or(proto::rpc::ChainTip::Unspecified);
+                span.set_attribute("sync.target", chain_tip.as_str_name());
+            },
+            None => {
+                span.set_attribute("sync.target", "CHAIN_TIP_COMMITTED");
+            },
+        }
+
+        debug!(target: COMPONENT, request = ?request_ref);
 
         self.store.clone().sync_chain_mmr(request).await
     }
