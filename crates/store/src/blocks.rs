@@ -132,6 +132,47 @@ impl BlockStore {
         }
     }
 
+    // PROVING INPUTS STORAGE
+    // --------------------------------------------------------------------------------------------
+
+    #[instrument(
+        target = COMPONENT,
+        name = "store.block_store.save_proving_inputs",
+        skip_all,
+        err,
+        fields(block.number = block_num.as_u32(), inputs_size = data.len())
+    )]
+    pub async fn save_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+        data: &[u8],
+    ) -> std::io::Result<()> {
+        let (epoch_path, inputs_path) = self.epoch_inputs_path(block_num)?;
+        if !epoch_path.exists() {
+            tokio::fs::create_dir_all(epoch_path).await?;
+        }
+        tokio::fs::write(inputs_path, data).await
+    }
+
+    pub async fn load_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        match tokio::fs::read(self.inputs_path(block_num)).await {
+            Ok(data) => Ok(Some(data)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn delete_proving_inputs(&self, block_num: BlockNumber) -> std::io::Result<()> {
+        match tokio::fs::remove_file(self.inputs_path(block_num)).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
     // HELPER FUNCTIONS
     // --------------------------------------------------------------------------------------------
 
@@ -161,6 +202,20 @@ impl BlockStore {
         let epoch_path = proof_path.parent().ok_or(std::io::Error::from(ErrorKind::NotFound))?;
 
         Ok((epoch_path.to_path_buf(), proof_path))
+    }
+
+    fn inputs_path(&self, block_num: BlockNumber) -> PathBuf {
+        let block_num = block_num.as_u32();
+        let epoch = block_num >> 16;
+        let epoch_dir = self.store_dir.join(format!("{epoch:04x}"));
+        epoch_dir.join(format!("inputs_{block_num:08x}.dat"))
+    }
+
+    fn epoch_inputs_path(&self, block_num: BlockNumber) -> std::io::Result<(PathBuf, PathBuf)> {
+        let inputs_path = self.inputs_path(block_num);
+        let epoch_path = inputs_path.parent().ok_or(std::io::Error::from(ErrorKind::NotFound))?;
+
+        Ok((epoch_path.to_path_buf(), inputs_path))
     }
 
     pub fn display(&self) -> std::path::Display<'_> {

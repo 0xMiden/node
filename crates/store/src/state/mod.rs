@@ -53,7 +53,7 @@ use crate::errors::{
     GetCurrentBlockchainDataError,
     StateInitializationError,
 };
-use crate::proven_tip::ProvenTipWriter;
+use crate::proven_tip::{ProvenTipFile, ProvenTipWriter};
 use crate::{COMPONENT, DataDirectory};
 
 /// Number of recent committed blocks held in the in-memory cache for replica subscriptions.
@@ -153,6 +153,10 @@ pub struct State {
     /// `apply_proof`.
     proven_tip: ProvenTipWriter,
 
+    /// File-backed persistence for the proven tip. Updated alongside `proven_tip` whenever the
+    /// proven-in-sequence tip advances.
+    proven_tip_file: ProvenTipFile,
+
     /// Watch sender fired after each block is committed. Replicas subscribe via
     /// `subscribe_committed_tip()` to be woken when new blocks arrive.
     committed_tip_tx: watch::Sender<BlockNumber>,
@@ -172,14 +176,15 @@ impl State {
 
     /// Loads the state from the data directory.
     ///
-    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler to
-    /// advance the proven tip; callers can subscribe to tip changes via the methods on `Self`.
+    /// Returns `(Self, ProvenTipWriter, ProvenTipFile)`. The `ProvenTipWriter` and `ProvenTipFile`
+    /// are used by the proof scheduler (in block-producer mode) to advance and persist the proven
+    /// tip; callers can subscribe to tip changes via the methods on `Self`.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<(Self, ProvenTipWriter), StateInitializationError> {
+    ) -> Result<(Self, ProvenTipWriter, ProvenTipFile), StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -227,9 +232,10 @@ impl State {
         let writer = Mutex::new(());
         let db = Arc::new(db);
 
-        // Initialize the proven tip from database.
-        let proven_tip_init =
-            db.proven_chain_tip().await.map_err(StateInitializationError::DatabaseError)?;
+        // Initialize the proven tip from the filesystem file.
+        let proven_tip_path = data_directory.proven_tip_path();
+        let (proven_tip_file, proven_tip_init) = ProvenTipFile::load(proven_tip_path)
+            .map_err(StateInitializationError::ProvenTipFileLoadError)?;
         let (proven_tip, _rx) = ProvenTipWriter::new(proven_tip_init);
 
         // Committed-tip watch: fires after each successful apply_block.
@@ -244,17 +250,14 @@ impl State {
                 writer,
                 termination_ask,
                 proven_tip: proven_tip.clone(),
+                proven_tip_file: proven_tip_file.clone(),
                 committed_tip_tx,
                 block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),
                 proof_cache: ProofCache::new(PROOF_CACHE_CAPACITY),
             },
             proven_tip,
+            proven_tip_file,
         ))
-    }
-
-    /// Returns the database.
-    pub(crate) fn db(&self) -> Arc<Db> {
-        Arc::clone(&self.db)
     }
 
     /// Returns the block store.

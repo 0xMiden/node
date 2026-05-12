@@ -63,17 +63,23 @@ impl State {
 
         self.validate_block_header(header, body).await?;
 
-        // Save the block to the block store. In a case of a rolled-back DB transaction, the
-        // in-memory state will be unchanged, but the block might still be written into the
-        // block store. Thus, such block should be considered as block candidates, but not
-        // finalized blocks. So we should check for the latest block when getting block from
-        // the store.
+        // Save the block and proving inputs to the block store. In a case of a rolled-back DB
+        // transaction, the in-memory state will be unchanged, but these files might still be
+        // written. Such blocks should be considered candidates, not finalized blocks.
         let signed_block_bytes = signed_block.to_bytes();
         // Clone before moving into the block-save task so we can cache for replicas at commit.
         let cache_bytes = signed_block_bytes.clone();
+        let inputs_bytes = proving_inputs.as_ref().map(Serializable::to_bytes);
         let store = Arc::clone(&self.block_store);
         let block_save_task = tokio::spawn(
-            async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
+            async move {
+                store.save_block(block_num, &signed_block_bytes).await?;
+                if let Some(bytes) = inputs_bytes {
+                    store.save_proving_inputs(block_num, &bytes).await?;
+                }
+                Ok::<(), std::io::Error>(())
+            }
+            .in_current_span(),
         );
 
         let (
@@ -106,11 +112,8 @@ impl State {
         // spawned.
         let db = Arc::clone(&self.db);
         let db_update_task = tokio::spawn(
-            async move {
-                db.apply_block(allow_acquire, acquire_done, signed_block, notes, proving_inputs)
-                    .await
-            }
-            .in_current_span(),
+            async move { db.apply_block(allow_acquire, acquire_done, signed_block, notes).await }
+                .in_current_span(),
         );
 
         // Wait for the message from the DB update task, that we ready to commit the DB
