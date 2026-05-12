@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteTagLimit,
     QueryParamNullifierPrefixLimit,
 };
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -527,12 +528,12 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
 
     let config = GenesisConfig::default();
     let signer = SecretKey::new();
-    let (genesis_state, _) = config.into_state(signer).unwrap();
+    let (genesis_state, _) = config.into_state(signer.public_key()).unwrap();
     let genesis_block = genesis_state
         .clone()
-        .into_block()
-        .await
+        .into_block(&signer)
         .expect("genesis block should be created");
+    let genesis_commitment = genesis_block.inner().header().commitment();
     Store::bootstrap(genesis_block, data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let store_addr =
@@ -565,18 +566,13 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
         .await
         .expect("store should start serving");
     });
-    (
-        store_runtime,
-        data_directory,
-        genesis_state.into_block().await.unwrap().inner().header().commitment(),
-        store_addr,
-    )
+    (store_runtime, data_directory, genesis_commitment, store_addr)
 }
 
 /// Shuts down the store runtime properly to allow `RocksDB` to flush before the temp directory is
 /// deleted.
 async fn shutdown_store(store_runtime: Runtime) {
-    task::spawn_blocking(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
+    spawn_blocking_in_current_span(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
         .await
         .expect("shutdown should complete");
     // Give RocksDB time to release its lock file after the runtime shutdown

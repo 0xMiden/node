@@ -19,12 +19,12 @@ use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountVaultDetails,
     SlotData,
+    StorageMapEntries,
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
-use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
@@ -38,7 +38,12 @@ use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock, watch};
 use tracing::{Instrument, info, instrument};
 
-use crate::account_state_forest::{AccountStateForest, WitnessError};
+use crate::account_state_forest::{
+    AccountStateForest,
+    AccountStateForestBackend,
+    AccountStorageMapResult,
+    WitnessError,
+};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::models::Page;
@@ -64,12 +69,14 @@ const PROOF_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 mod loader;
 use loader::{
+    ACCOUNT_STATE_FOREST_STORAGE_DIR,
     ACCOUNT_TREE_STORAGE_DIR,
+    AccountForestLoader,
     NULLIFIER_TREE_STORAGE_DIR,
-    StorageLoader,
     TreeStorage,
+    TreeStorageLoader,
     load_mmr,
-    load_smt_forest,
+    verify_account_state_forest_consistency,
     verify_tree_consistency,
 };
 
@@ -140,7 +147,7 @@ pub struct State {
     inner: RwLock<InnerState<TreeStorage>>,
 
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
-    forest: RwLock<AccountStateForest>,
+    forest: RwLock<AccountStateForest<AccountStateForestBackend>>,
 
     /// To allow readers to access the tree data while an update in being performed, and prevent
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
@@ -197,12 +204,15 @@ impl State {
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
 
         #[cfg(feature = "rocksdb")]
-        let (account_storage_config, nullifier_storage_config) =
-            (storage_options.account_tree.into(), storage_options.nullifier_tree.into());
+        let (account_storage_config, nullifier_storage_config, forest_storage_config) = (
+            storage_options.account_tree.into(),
+            storage_options.nullifier_tree.into(),
+            storage_options.account_state_forest.into(),
+        );
         #[cfg(not(feature = "rocksdb"))]
-        let (account_storage_config, nullifier_storage_config) = {
+        let (account_storage_config, nullifier_storage_config, forest_storage_config) = {
             let _ = &storage_options;
-            ((), ())
+            ((), (), ())
         };
         let account_storage =
             TreeStorage::create(data_path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)?;
@@ -219,7 +229,13 @@ impl State {
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
 
-        let forest = load_smt_forest(&mut db, latest_block_num).await?;
+        let forest_backend = AccountStateForestBackend::create(
+            data_path,
+            &forest_storage_config,
+            ACCOUNT_STATE_FOREST_STORAGE_DIR,
+        )?;
+        let forest = forest_backend.load_account_state_forest(&mut db, latest_block_num).await?;
+        verify_account_state_forest_consistency(&forest, &mut db).await?;
 
         let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 
@@ -741,6 +757,65 @@ impl State {
         Ok((block_num, witness))
     }
 
+    /// Returns storage map details from the forest for a specific account and storage slot.
+    ///
+    /// The forest can only be used if all hashed keys in the storage map are known in the
+    /// reverse-key LRU cache. If any hashed key is unknown, the method returns `Ok(None)` to signal
+    /// that the caller should fall back to reconstructing the storage map details from the
+    /// database.
+    #[instrument(target = COMPONENT, skip_all)]
+    async fn get_storage_map_details_from_forest(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<Option<AccountStorageMapDetails>, DatabaseError> {
+        let forest_guard = self
+            .forest
+            .read()
+            .instrument(tracing::info_span!("acquire_forest_for_storage_map_entries"))
+            .await;
+        match forest_guard
+            .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
+            .map_err(DatabaseError::MerkleError)?
+        {
+            AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
+                account_id,
+                slot_name: slot_name.to_string(),
+                block_num,
+            }),
+            AccountStorageMapResult::Details(details) => Ok(Some(details)),
+            AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
+        }
+    }
+
+    /// Returns storage map details by reconstructing the storage map from the database.
+    async fn reconstruct_storage_map_details_from_db(
+        &self,
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Result<AccountStorageMapDetails, DatabaseError> {
+        let details = self
+            .db
+            .reconstruct_storage_map_from_db(
+                account_id,
+                slot_name,
+                block_num,
+                Some(AccountStorageMapDetails::MAX_RETURN_ENTRIES),
+            )
+            .await?;
+
+        if let StorageMapEntries::AllEntries(entries) = &details.entries {
+            self.forest
+                .write()
+                .await
+                .cache_storage_map_keys(entries.iter().map(|(raw_key, _)| *raw_key));
+        }
+
+        Ok(details)
+    }
+
     /// Fetches the account details (code, vault, storage) for a public account at the specified
     /// block.
     ///
@@ -749,7 +824,8 @@ impl State {
     ///
     /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
     /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest to request all entries database.
+    /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
+    /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
     #[expect(clippy::too_many_lines)]
     #[instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
@@ -859,22 +935,17 @@ impl State {
             }
         }
 
-        // TODO parallelize the read requests
         for (index, slot_name) in all_entries_requests {
-            let details = self
-                .db
-                .reconstruct_storage_map_from_db(
-                    account_id,
-                    slot_name.clone(),
-                    block_num,
-                    Some(
-                        // TODO unify this with
-                        // `AccountStorageMapDetails::MAX_RETURN_ENTRIES`
-                        // and accumulated the limits
-                        <QueryParamStorageMapKeyTotalLimit as QueryParamLimiter>::LIMIT,
-                    ),
-                )
-                .await?;
+            let details = match self
+                .get_storage_map_details_from_forest(account_id, slot_name.clone(), block_num)
+                .await?
+            {
+                Some(details) => details,
+                None => {
+                    self.reconstruct_storage_map_details_from_db(account_id, slot_name, block_num)
+                        .await?
+                },
+            };
             storage_map_details_by_index[index] = Some(details);
         }
 
@@ -937,11 +1008,6 @@ impl State {
             return Ok(None);
         }
         self.block_store.load_proof(block_num).await.map_err(Into::into)
-    }
-
-    /// Emits metrics for each database table's size.
-    pub async fn analyze_table_sizes(&self) -> Result<(), DatabaseError> {
-        self.db.analyze_table_sizes().await
     }
 
     /// Returns the network notes for an account that are unconsumed by a specified block number,

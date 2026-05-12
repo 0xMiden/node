@@ -1,4 +1,3 @@
-use miden_node_utils::signer::BlockSigner;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{Account, AccountDelta};
@@ -12,6 +11,7 @@ use miden_protocol::block::{
     FeeParameters,
     SignedBlock,
 };
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signature};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
 use miden_protocol::errors::AccountError;
@@ -25,17 +25,38 @@ pub mod config;
 
 /// Represents the state at genesis, which will be used to derive the genesis block.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GenesisState<S> {
+pub struct GenesisState {
     pub accounts: Vec<Account>,
     pub fee_parameters: FeeParameters,
     pub version: u32,
     pub timestamp: u32,
-    pub block_signer: S,
+    pub validator_key: PublicKey,
 }
 
 /// A type-safety wrapper ensuring that genesis block data can only be created from
 /// [`GenesisState`] or validated from a [`SignedBlock`] via [`GenesisBlock::try_from`].
 pub struct GenesisBlock(SignedBlock);
+
+/// A genesis block with all data except the validator signature.
+pub struct UnsignedGenesisBlock {
+    header: BlockHeader,
+    body: BlockBody,
+}
+
+impl UnsignedGenesisBlock {
+    pub fn header(&self) -> &BlockHeader {
+        &self.header
+    }
+
+    pub fn into_block(self, signature: Signature) -> anyhow::Result<GenesisBlock> {
+        anyhow::ensure!(
+            signature.verify(self.header.commitment(), self.header.validator_key()),
+            "genesis block signature verification failed",
+        );
+
+        Ok(GenesisBlock(SignedBlock::new(self.header, self.body, signature)?))
+    }
+}
 
 impl GenesisBlock {
     pub fn inner(&self) -> &SignedBlock {
@@ -68,27 +89,25 @@ impl TryFrom<SignedBlock> for GenesisBlock {
     }
 }
 
-impl<S> GenesisState<S> {
+impl GenesisState {
     pub fn new(
         accounts: Vec<Account>,
         fee_parameters: FeeParameters,
         version: u32,
         timestamp: u32,
-        signer: S,
+        validator_key: PublicKey,
     ) -> Self {
         Self {
             accounts,
             fee_parameters,
             version,
             timestamp,
-            block_signer: signer,
+            validator_key,
         }
     }
-}
 
-impl<S: BlockSigner> GenesisState<S> {
-    /// Returns the block header and the account SMT.
-    pub async fn into_block(self) -> anyhow::Result<GenesisBlock> {
+    /// Returns the unsigned genesis block.
+    pub fn into_unsigned_block(self) -> anyhow::Result<UnsignedGenesisBlock> {
         let accounts: Vec<BlockAccountUpdate> = self
             .accounts
             .iter()
@@ -139,7 +158,7 @@ impl<S: BlockSigner> GenesisState<S> {
             empty_block_note_tree.root(),
             Word::empty(),
             TransactionKernel.to_commitment(),
-            self.block_signer.public_key(),
+            self.validator_key,
             self.fee_parameters,
             self.timestamp,
         );
@@ -151,11 +170,13 @@ impl<S: BlockSigner> GenesisState<S> {
             empty_transactions,
         );
 
-        // Sign and assert verification for sanity (no mismatch between frontend and backend signing
-        // impls).
-        let signature = self.block_signer.sign(&header).await?;
-        assert!(signature.verify(header.commitment(), &self.block_signer.public_key()));
-        let signed_block = SignedBlock::new(header, body, signature)?;
-        Ok(GenesisBlock(signed_block))
+        Ok(UnsignedGenesisBlock { header, body })
+    }
+
+    /// Builds and signs the genesis block with a local secret key.
+    pub fn into_block(self, signer: &SecretKey) -> anyhow::Result<GenesisBlock> {
+        let unsigned_block = self.into_unsigned_block()?;
+        let signature = signer.sign(unsigned_block.header().commitment());
+        unsigned_block.into_block(signature)
     }
 }

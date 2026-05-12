@@ -2,6 +2,7 @@ mod data_store;
 mod validated_tx;
 
 pub use data_store::TransactionInputsDataStore;
+use miden_node_utils::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{ProvenTransaction, TransactionHeader, TransactionInputs};
 use miden_tx::auth::UnreachableAuth;
@@ -39,23 +40,40 @@ pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
 ) -> Result<ValidatedTransaction, TransactionValidationError> {
-    // First, verify the transaction proof
-    info_span!("verify").in_scope(|| {
-        let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
-        tx_verifier.verify(&proven_tx)
-    })?;
+    // Proof verification is CPU-intensive; run it on a dedicated blocking thread.
+    let proven_tx_clone = proven_tx.clone();
+    spawn_blocking_in_span(
+        move || TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&proven_tx_clone),
+        info_span!("verify"),
+    )
+    .await
+    .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
     // Create a DataStore from the transaction inputs.
     let data_store = TransactionInputsDataStore::new(tx_inputs.clone());
 
-    // Execute the transaction.
+    // VM execution may not yield; run it on a dedicated blocking thread.
     let (account, block_header, _, input_notes, tx_args) = tx_inputs.into_parts();
-    let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
-        TransactionExecutor::new(&data_store);
-    let executed_tx = executor
-        .execute_transaction(account.id(), block_header.block_num(), input_notes, tx_args)
-        .instrument(info_span!("execute"))
-        .await?;
+    let execute_span = info_span!("execute").or_current();
+    let executed_tx = spawn_blocking_in_current_span(move || {
+        let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
+            TransactionExecutor::new(&data_store);
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("failed to build tokio runtime")
+            .block_on(
+                executor
+                    .execute_transaction(
+                        account.id(),
+                        block_header.block_num(),
+                        input_notes,
+                        tx_args,
+                    )
+                    .instrument(execute_span),
+            )
+    })
+    .await
+    .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
     // Validate that the executed transaction matches the submitted transaction.
     let executed_tx_header: TransactionHeader = (&executed_tx).into();
