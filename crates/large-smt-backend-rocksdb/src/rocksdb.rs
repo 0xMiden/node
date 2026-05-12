@@ -306,17 +306,16 @@ impl RocksDbStorage {
     /// Converts a `NodeIndex` (for a subtree root) into a `KeyBytes` for use as a `RocksDB` key.
     /// The `KeyBytes` is a wrapper around a 8-byte value with a variable-length prefix.
     #[inline(always)]
-    fn subtree_db_key(index: NodeIndex) -> KeyBytes {
-        let keep = match index.depth() {
-            24 => 3,
-            32 => 4,
-            40 => 5,
-            48 => 6,
-            56 => 7,
-            d => panic!("unsupported depth {d}"),
-        };
-        KeyBytes::new(index.position(), keep)
-    }
+    fn subtree_db_key(index: NodeIndex) -> Result<KeyBytes, StorageError> {
+    let keep = match index.depth() {
+        32 => 4,
+        40 => 5,
+        48 => 6,
+        56 => 7,
+        d => return Err(StorageError::Unsupported(format!("unsupported depth {d}"))),
+    };
+    Ok(KeyBytes::new(index.position(), keep))
+}
 
     /// Retrieves a handle to a `RocksDB` column family by its name.
     ///
@@ -331,9 +330,10 @@ impl RocksDbStorage {
 
     /* helper: CF handle from NodeIndex ------------------------------------- */
     #[inline(always)]
-    fn subtree_cf(&self, index: NodeIndex) -> &rocksdb::ColumnFamily {
+   fn subtree_cf(&self, index: NodeIndex) -> Result<&rocksdb::ColumnFamily, StorageError> {
         let name = cf_for_depth(index.depth());
-        self.cf_handle(name).expect("CF handle missing")
+self.cf_handle(name)
+    .ok_or_else(|| StorageError::Unsupported(format!("CF handle missing for {name}")))
     }
 }
 
@@ -624,8 +624,8 @@ impl SmtStorage for RocksDbStorage {
     /// - `Ok(...)` if all fetches succeed.
     /// - `Err(StorageError)` if any RocksDB access or deserialization fails.
     fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
-        let cf = self.subtree_cf(index);
-        let key = Self::subtree_db_key(index);
+       let cf = self.subtree_cf(index)?;
+let key = Self::subtree_db_key(index)?;
         match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
             Some(bytes) => {
                 let subtree = Subtree::from_vec(index, &bytes)?;
