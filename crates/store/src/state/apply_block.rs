@@ -42,7 +42,6 @@ impl State {
     ///   use the fresh data.
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
-    ///
     // TODO: This span is logged in a root span, we should connect it to the parent span.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
@@ -64,11 +63,7 @@ impl State {
         let cache_bytes = signed_block_bytes.clone();
         let store = Arc::clone(&self.block_store);
         let block_save_task = tokio::spawn(
-            async move {
-                store.save_block(block_num, &signed_block_bytes).await?;
-                Ok::<(), std::io::Error>(())
-            }
-            .in_current_span(),
+            async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
         );
 
         let (
@@ -188,7 +183,9 @@ impl State {
         block_num: BlockNumber,
         proving_inputs: &BlockProofRequest,
     ) -> std::io::Result<()> {
-        self.block_store.save_proving_inputs(block_num, &proving_inputs.to_bytes()).await
+        self.block_store
+            .save_proving_inputs(block_num, &proving_inputs.to_bytes())
+            .await
     }
 
     /// Validates that the block header is consistent with the block body and the current state.
