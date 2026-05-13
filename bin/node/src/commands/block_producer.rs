@@ -6,6 +6,7 @@ use anyhow::Context;
 use miden_node_block_producer::{
     BlockProducer,
     DEFAULT_BATCH_INTERVAL,
+    DEFAULT_BATCH_WORKERS,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
@@ -22,6 +23,7 @@ const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_TXS_PER_BATCH
 const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_NODE_BLOCK_PRODUCER_MAX_BATCHES_PER_BLOCK";
 const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_BLOCK_PRODUCER_MEMPOOL_TX_CAPACITY";
 const ENV_BATCH_PROVER_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_BATCH_PROVER_URL";
+const ENV_BATCH_WORKERS: &str = "MIDEN_NODE_BLOCK_PRODUCER_BATCH_WORKERS";
 
 // BLOCK PRODUCER COMMAND
 // ================================================================================================
@@ -95,6 +97,7 @@ impl BlockProducerCommand {
             max_batches_per_block: block_producer.max_batches_per_block,
             grpc_options,
             mempool_tx_capacity: block_producer.mempool_tx_capacity,
+            batch_workers: block_producer.batch_workers,
         }
         .serve()
         .await
@@ -132,6 +135,7 @@ mod tests {
                 max_txs_per_batch: 8,
                 max_batches_per_block: miden_protocol::MAX_BATCHES_PER_BLOCK + 1, // Invalid value
                 mempool_tx_capacity: NonZeroUsize::new(1000).unwrap(),
+                batch_workers: NonZeroUsize::new(2).unwrap(),
             },
             enable_otel: false,
             grpc_options: GrpcOptionsInternal::default(),
@@ -157,6 +161,7 @@ mod tests {
                                                                                 * (should fail) */
                 max_batches_per_block: 8,
                 mempool_tx_capacity: NonZeroUsize::new(1000).unwrap(),
+                batch_workers: NonZeroUsize::new(2).unwrap(),
             },
             enable_otel: false,
             grpc_options: GrpcOptionsInternal::default(),
@@ -223,4 +228,16 @@ pub struct BlockProducerConfig {
         value_name = "NUM"
     )]
     mempool_tx_capacity: NonZeroUsize,
+
+    /// Number of concurrent batch-builder workers.
+    ///
+    /// Each worker can prove one batch at a time, so this caps how many batch
+    /// proofs the block-producer keeps in flight.
+    #[arg(
+        long = "batch.workers",
+        env = ENV_BATCH_WORKERS,
+        value_name = "NUM",
+        default_value_t = DEFAULT_BATCH_WORKERS
+    )]
+    pub batch_workers: NonZeroUsize,
 }

@@ -33,7 +33,7 @@ use crate::errors::{BlockProducerError, MempoolSubmissionError, StoreError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
+use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT};
 
 #[cfg(test)]
 mod tests;
@@ -66,6 +66,9 @@ pub struct BlockProducer {
 
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
+
+    /// The number of concurrent batch-builder workers.
+    pub batch_workers: NonZeroUsize,
 }
 
 // BLOCK PRODUCER
@@ -119,7 +122,7 @@ impl BlockProducer {
         let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
             store.clone(),
-            SERVER_NUM_BATCH_BUILDERS,
+            self.batch_workers,
             self.batch_prover_url,
             self.batch_interval,
         );

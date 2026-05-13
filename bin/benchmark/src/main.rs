@@ -479,7 +479,7 @@ fn print_summary(
     println!(
         "Chain height: {h_start} -> {h_final} ({} blocks, of which {} contained at least one of our txs)",
         h_final - h_start,
-        inclusion.blocks_with_our_txs
+        inclusion.per_block_hits.len(),
     );
     println!();
     print_phase_summary("Mint phase (sequential)", mint);
@@ -530,36 +530,71 @@ fn print_inclusion_summary(inclusion: &InclusionResult) {
         "  included = {included} / {submitted} submitted   ({drop} missing, {drop_pct:.1}% drop)",
     );
 
-    if inclusion.blocks_with_our_txs == 0 {
+    let hits = &inclusion.per_block_hits;
+    if hits.is_empty() {
         println!("  no blocks observed containing any of our txs");
         return;
     }
 
-    let txs_per_block: Vec<u32> = inclusion.txs_per_block_when_present.clone();
-    let sum_txs: u32 = txs_per_block.iter().copied().sum();
-    let mean_tpb =
-        f64::from(sum_txs) / f64::from(u32::try_from(txs_per_block.len()).unwrap_or(u32::MAX));
-    let max_tpb = txs_per_block.iter().copied().max().unwrap_or(0);
+    // Per-block aggregates.
+    let counts: Vec<u32> = hits.iter().map(|h| h.hit_count).collect();
+    let sum_counts: u32 = counts.iter().copied().sum();
+    let max_count = counts.iter().copied().max().unwrap_or(0);
+    let n_blocks = u32::try_from(counts.len()).unwrap_or(u32::MAX);
+    let mean_count = f64::from(sum_counts) / f64::from(n_blocks);
+
+    let peak_block = hits.iter().max_by_key(|h| h.hit_count).expect("non-empty hits");
+    let first_block = hits.first().expect("non-empty hits");
+    let last_block = hits.last().expect("non-empty hits");
+
     println!(
-        "  blocks with our txs = {} (mean txs/block when present = {:.1}, max = {})",
-        inclusion.blocks_with_our_txs, mean_tpb, max_tpb
+        "  blocks with our txs = {n_blocks} \
+         (block range {}..={}, mean txs/block when present = {mean_count:.1}, max = {max_count})",
+        first_block.block_num, last_block.block_num,
     );
 
-    let span = u64::from(inclusion.last_inclusion_ts)
-        .saturating_sub(u64::from(inclusion.first_inclusion_ts));
-    if span == 0 {
+    // Derive the block interval from consecutive scanned timestamps.
+    let Some(block_interval) = inclusion.derived_block_interval() else {
         println!(
-            "  inclusion TPS: all {included} txs landed in a single block at timestamp {} \
-             (no usable timespan to divide over)",
-            inclusion.first_inclusion_ts
+            "  block interval: could not derive from {} scanned block(s) \
+             (need >=2 blocks spanning at least one second boundary)",
+            inclusion.scanned_block_count,
         );
+        println!("  throughput metrics skipped; per-block series follows.");
+        print_per_block_series(hits, None);
+        return;
+    };
+
+    println!(
+        "  derived block interval = {} (from {} scanned blocks, span = {}s)",
+        format_duration_secs(block_interval),
+        inclusion.scanned_block_count,
+        inclusion.scanned_last_ts - inclusion.scanned_first_ts,
+    );
+
+    // Throughput. Each block-with-our-txs is treated as `block_interval`
+    // seconds of node work.
+    let interval_secs = block_interval.as_secs_f64();
+    let peak_rate = rate_per_second(u64::from(peak_block.hit_count), block_interval);
+    let mean_rate = if interval_secs > 0.0 {
+        mean_count / interval_secs
     } else {
-        let tps = rate_per_second(included, Duration::from_secs(span));
-        println!(
-            "  inclusion TPS = {included} included / {span}s spanning blocks {}..={}  =>  {tps:.1} tx/s",
-            inclusion.first_inclusion_block, inclusion.last_inclusion_block
-        );
-    }
+        0.0
+    };
+    let window_rate = rate_per_second(included, block_interval.saturating_mul(n_blocks));
+
+    println!(
+        "  peak per-block rate  = {} txs in block {}  =>  {peak_rate:.1} tx/s",
+        peak_block.hit_count, peak_block.block_num,
+    );
+    println!("  mean per-block rate  = {mean_count:.1} txs/block  =>  {mean_rate:.1} tx/s");
+    println!(
+        "  window-average TPS   = {included} included / ({n_blocks} blocks * {}) \
+         =>  {window_rate:.1} tx/s",
+        format_duration_secs(block_interval),
+    );
+
+    print_per_block_series(hits, Some(block_interval));
 
     let mut lats = inclusion.inclusion_latencies.clone();
     if let Some(p) = percentiles(&mut lats) {
@@ -571,6 +606,31 @@ fn print_inclusion_summary(inclusion: &InclusionResult) {
             p99 = format_duration_secs(p.p99),
             max = format_duration_secs(p.max),
         );
+    }
+}
+
+/// Print a compact per-block series so the operator can eyeball the
+/// time-series shape (ramp, plateau, dip). Empty blocks in the scan range
+/// are intentionally omitted. If `block_interval` is `Some`, each line also
+/// shows the equivalent rate; if `None`, only the raw count.
+fn print_per_block_series(hits: &[BlockHit], block_interval: Option<Duration>) {
+    println!("  per-block series:");
+    for hit in hits {
+        match block_interval {
+            Some(interval) => {
+                let rate = rate_per_second(u64::from(hit.hit_count), interval);
+                println!(
+                    "    block {} (ts={}): {} txs   ({rate:.1} tx/s @ block_interval)",
+                    hit.block_num, hit.block_ts, hit.hit_count,
+                );
+            },
+            None => {
+                println!(
+                    "    block {} (ts={}): {} txs",
+                    hit.block_num, hit.block_ts, hit.hit_count,
+                );
+            },
+        }
     }
 }
 
@@ -800,27 +860,59 @@ async fn submit_sequential(
 // INCLUSION CHECK
 // ================================================================================================
 
+/// One scanned block that contained at least one of our txs. Empty blocks
+/// in the scan range are not represented here.
+#[derive(Debug, Clone, Copy)]
+struct BlockHit {
+    /// On-chain block number.
+    block_num: u32,
+    /// Unix-seconds timestamp from the block header.
+    block_ts: u32,
+    /// Number of our txs included in this block.
+    hit_count: u32,
+}
+
 #[derive(Debug)]
 struct InclusionResult {
     submitted_count: u64,
     included_count: u64,
-    /// Block number of the earliest block containing any of our txs.
-    first_inclusion_block: u32,
-    /// Block number of the latest block containing any of our txs.
-    last_inclusion_block: u32,
-    /// Header timestamps (unix seconds) of those two blocks. Used to compute
-    /// inclusion TPS as `included_count / (last_ts - first_ts)`.
-    first_inclusion_ts: u32,
-    last_inclusion_ts: u32,
-    /// Number of blocks in the scanned range that contained at least one of
-    /// our txs (excludes empty blocks and blocks unrelated to this run).
-    blocks_with_our_txs: u32,
-    /// Per-block count of our txs, recorded only for blocks where the count
-    /// is non-zero. Used for mean/max txs-per-block in the summary.
-    txs_per_block_when_present: Vec<u32>,
+    /// One entry per block in the scan range that included any of our txs,
+    /// in scan order. Throughput metrics are derived from this list plus
+    /// the block interval inferred from the scan span (see [`block_interval`]).
+    per_block_hits: Vec<BlockHit>,
     /// For each successfully submitted tx that landed in a block: the
     /// elapsed time from RPC ack to that block's header timestamp.
     inclusion_latencies: Vec<Duration>,
+    /// Number of blocks the inclusion scan successfully read headers for.
+    scanned_block_count: u32,
+    /// Header timestamps of the first and last successfully scanned blocks
+    /// (unix seconds). Together with `scanned_block_count`, used to derive
+    /// the block interval at print time.
+    scanned_first_ts: u32,
+    scanned_last_ts: u32,
+}
+
+impl InclusionResult {
+    /// Derive the average block interval from the scan span. Returns `None`
+    /// when the scan touched fewer than two blocks or when all scanned
+    /// headers share the same 1-second-resolution timestamp (sub-second
+    /// cadence), in which case the bench cannot determine the interval
+    /// from headers alone.
+    fn derived_block_interval(&self) -> Option<Duration> {
+        if self.scanned_block_count < 2 || self.scanned_last_ts <= self.scanned_first_ts {
+            return None;
+        }
+        let span_secs = u64::from(self.scanned_last_ts - self.scanned_first_ts);
+        let intervals = u64::from(self.scanned_block_count - 1);
+        // f64 keeps the fractional seconds when the cadence is finer than 1s
+        // *and* the scan crosses enough one-second boundaries.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "block counts and timestamp deltas are tiny in practice"
+        )]
+        let interval_secs = (span_secs as f64) / (intervals as f64);
+        Some(Duration::from_secs_f64(interval_secs))
+    }
 }
 
 /// Walk every block from `from_block` to `to_block` inclusive, deserialize
@@ -835,25 +927,21 @@ async fn compute_inclusion(
 ) -> InclusionResult {
     let submitted_count = ack_by_id.len() as u64;
     let mut included_count: u64 = 0;
-    let mut first_inclusion_block: u32 = 0;
-    let mut last_inclusion_block: u32 = 0;
-    let mut first_inclusion_ts: u32 = 0;
-    let mut last_inclusion_ts: u32 = 0;
-    let mut blocks_with_our_txs: u32 = 0;
-    let mut txs_per_block_when_present: Vec<u32> = Vec::new();
+    let mut per_block_hits: Vec<BlockHit> = Vec::new();
     let mut inclusion_latencies: Vec<Duration> = Vec::new();
+    let mut scanned_block_count: u32 = 0;
+    let mut scanned_first_ts: u32 = 0;
+    let mut scanned_last_ts: u32 = 0;
 
     if from_block > to_block {
         return InclusionResult {
             submitted_count,
             included_count,
-            first_inclusion_block,
-            last_inclusion_block,
-            first_inclusion_ts,
-            last_inclusion_ts,
-            blocks_with_our_txs,
-            txs_per_block_when_present,
+            per_block_hits,
             inclusion_latencies,
+            scanned_block_count,
+            scanned_first_ts,
+            scanned_last_ts,
         };
     }
 
@@ -884,6 +972,14 @@ async fn compute_inclusion(
 
         let block_ts = signed_block.header().timestamp();
         let block_ts_system = UNIX_EPOCH + Duration::from_secs(u64::from(block_ts));
+
+        // Track scan span so we can derive the block interval at print time.
+        if scanned_block_count == 0 {
+            scanned_first_ts = block_ts;
+        }
+        scanned_last_ts = block_ts;
+        scanned_block_count += 1;
+
         let mut hits_in_this_block: u32 = 0;
 
         for header in signed_block.body().transactions().as_slice() {
@@ -898,27 +994,22 @@ async fn compute_inclusion(
         }
 
         if hits_in_this_block > 0 {
-            if blocks_with_our_txs == 0 {
-                first_inclusion_block = block_num;
-                first_inclusion_ts = block_ts;
-            }
-            last_inclusion_block = block_num;
-            last_inclusion_ts = block_ts;
-            blocks_with_our_txs += 1;
-            txs_per_block_when_present.push(hits_in_this_block);
+            per_block_hits.push(BlockHit {
+                block_num,
+                block_ts,
+                hit_count: hits_in_this_block,
+            });
         }
     }
 
     InclusionResult {
         submitted_count,
         included_count,
-        first_inclusion_block,
-        last_inclusion_block,
-        first_inclusion_ts,
-        last_inclusion_ts,
-        blocks_with_our_txs,
-        txs_per_block_when_present,
+        per_block_hits,
         inclusion_latencies,
+        scanned_block_count,
+        scanned_first_ts,
+        scanned_last_ts,
     }
 }
 
