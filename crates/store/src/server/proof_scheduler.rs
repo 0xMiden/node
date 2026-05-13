@@ -2,7 +2,7 @@
 //!
 //! The [`proof_scheduler`] is spawned as an internal Store task. It:
 //!
-//! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`] and `highest_scheduled` locally.
+//! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`].
 //! 2. Maintains up to `max_concurrent_proofs` in-flight proving jobs via a [`JoinSet`].
 //! 3. Blocks may be proven out of order since proving jobs run concurrently. Completed proofs are
 //!    buffered and committed to the block store in ascending block-number order.
@@ -146,10 +146,9 @@ async fn run(
     // In-flight proving tasks.
     let mut proving_tasks = ProofTaskJoinSet::new();
 
-    // Highest block number that is in-flight or has been proven. Used to avoid re-scheduling
-    // blocks we've already dispatched. Initialized from the proven tip so we skip
+    // Next block number to schedule. Initialized from the proven tip's child so we skip
     // already-proven blocks on restart.
-    let mut highest_scheduled = proven_tip.read();
+    let mut next_to_prove = proven_tip.read().child();
 
     // Completed proofs waiting to be committed in order.
     let mut pending: BTreeMap<BlockNumber, Vec<u8>> = BTreeMap::new();
@@ -157,13 +156,9 @@ async fn run(
     loop {
         // Schedule blocks up to chain_tip that haven't been scheduled yet.
         let chain_tip = *chain_tip_rx.borrow();
-        while proving_tasks.len() < max_concurrent_proofs.get() {
-            let next = highest_scheduled.child();
-            if next > chain_tip {
-                break;
-            }
-            proving_tasks.spawn(&block_store, &block_prover, next);
-            highest_scheduled = next;
+        while proving_tasks.len() < max_concurrent_proofs.get() && next_to_prove <= chain_tip {
+            proving_tasks.spawn(&block_store, &block_prover, next_to_prove);
+            next_to_prove = next_to_prove.child();
         }
 
         // Wait for either a job to complete or the chain tip to advance.
