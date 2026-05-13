@@ -176,9 +176,11 @@ async fn run(
                 // Commit all consecutive proofs in ascending order.
                 let mut next = proven_tip.read().child();
                 while let Some(proof_bytes) = pending.remove(&next) {
+                    // Save the proof and tip file before deleting the proving inputs.
                     block_store.save_proof(next, &proof_bytes).await?;
-                    block_store.delete_proving_inputs(next).await?;
                     proven_tip_file.save(next)?;
+                    block_store.delete_proving_inputs(next).await?;
+                    // Notify subscribers of the proof.
                     proof_cache.push(next, ProofNotification::new(next, proof_bytes));
                     proven_tip.advance(next);
                     next = next.child();
