@@ -375,8 +375,6 @@ impl TryFrom<proto::rpc::sync_chain_mmr_request::UpperBound> for SyncTarget {
 pub enum InvalidBlockRange {
     #[error("start ({start}) greater than end ({end})")]
     StartGreaterThanEnd { start: BlockNumber, end: BlockNumber },
-    #[error("empty range: start ({start})..end ({end})")]
-    EmptyRange { start: BlockNumber, end: BlockNumber },
 }
 
 impl proto::rpc::BlockRange {
@@ -388,14 +386,6 @@ impl proto::rpc::BlockRange {
 
         if block_range.start() > block_range.end() {
             return Err(InvalidBlockRange::StartGreaterThanEnd {
-                start: *block_range.start(),
-                end: *block_range.end(),
-            }
-            .into());
-        }
-
-        if block_range.is_empty() {
-            return Err(InvalidBlockRange::EmptyRange {
                 start: *block_range.start(),
                 end: *block_range.end(),
             }
