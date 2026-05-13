@@ -133,8 +133,14 @@ nohup miden-node store start \
 
 nohup miden-node block-producer start \
   --listen 127.0.0.1:50201 \
-  --store.url     http://127.0.0.1:50003 \
-  --validator.url http://127.0.0.1:50101 \
+  --store.url            http://127.0.0.1:50003 \
+  --validator.url        http://127.0.0.1:50101 \
+  --max-txs-per-batch     1024 \
+  --max-batches-per-block 64 \
+  --block.interval        2s \
+  --batch.interval        100ms \
+  --batch.workers         16 \
+  --mempool.tx-capacity   1000000 \
   > logs/block-producer.log 2>&1 &
 
 nohup miden-node rpc start \
@@ -142,6 +148,11 @@ nohup miden-node rpc start \
   --store.url          http://127.0.0.1:50001 \
   --block-producer.url http://127.0.0.1:50201 \
   --validator.url      http://127.0.0.1:50101 \
+  --grpc.timeout                    24h \
+  --grpc.max_connection_age         24h \
+  --grpc.burst_size                 100000 \
+  --grpc.replenish_n_per_second     100000 \
+  --grpc.max_concurrent_connections 1000000 \
   > logs/rpc.log 2>&1 &
 
 nohup miden-node ntx-builder start \
@@ -199,25 +210,6 @@ Rough sizing:
   service in parallel (i.e. its own worker count). The block-producer
   workers are now mostly waiting on I/O, so the bound is the remote
   prover's capacity, not local CPU.
-
-### Bench-tuned recipe
-
-Replace the `block-producer` invocation in the [Option B](#option-b--running-miden-node-and-miden-validator-directly)
-startup block with:
-
-```sh
-nohup miden-node block-producer start \
-  --listen 127.0.0.1:50201 \
-  --store.url            http://127.0.0.1:50003 \
-  --validator.url        http://127.0.0.1:50101 \
-  --max-txs-per-batch     1024     `# protocol max`        \
-  --max-batches-per-block 64       `# protocol max`        \
-  --block.interval        2s       `# default 3s`          \
-  --batch.interval        100ms    `# default 1s`          \
-  --batch.workers         16       `# default 2`           \
-  --mempool.tx-capacity   1000000  `# default ~1280`       \
-  > logs/block-producer.log 2>&1 &
-```
 
 ## License
 
