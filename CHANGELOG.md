@@ -26,6 +26,8 @@
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
+- Added `miden-benchmark` binary for end-to-end TPS measurements. `create-proofs` generates locally-proven mint/consume transaction pairs bound to the target node's chain tip; `run-benchmark` submits the bundle and reports peak/mean/window-average TPS plus inclusion latency, all derived from block-header data ([#2073](https://github.com/0xMiden/node/pull/2073)).
+- Added `--batch.workers` flag (env `MIDEN_NODE_BLOCK_PRODUCER_BATCH_WORKERS`) to the block-producer to make the previously-hardcoded batch-builder worker pool size configurable; default remains 2 ([#2073](https://github.com/0xMiden/node/pull/2073)).
 
 ## v0.14.10 (2026-05-29)
 
