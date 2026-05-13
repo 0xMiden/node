@@ -1,0 +1,447 @@
+//! The `create-proofs` orchestrator and everything it needs to build the
+//! proven-tx bundle locally:
+//!
+//! - `run` orchestrates the genesis fetch + faucet/wallet construction + mint phase + consume phase
+//!   + final write-out to `./benchmark-proofs/`.
+//! - `create_faucet` / `create_wallet` build the accounts the bench uses.
+//! - `BenchmarkDataStore` is the in-memory `DataStore` impl that feeds the `TransactionExecutor`
+//!   while we generate proofs locally.
+
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
+use miden_protocol::account::{
+    Account,
+    AccountBuilder,
+    AccountId,
+    AccountStorageMode,
+    AccountType,
+    PartialAccount,
+    StorageMapKey,
+};
+use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset, TokenSymbol};
+use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
+use miden_protocol::transaction::{
+    AccountInputs,
+    InputNote,
+    InputNotes,
+    PartialBlockchain,
+    ProvenTransaction,
+    TransactionArgs,
+};
+use miden_protocol::utils::serde::Serializable;
+use miden_protocol::{Felt, MastForest, Word};
+use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::faucets::BasicFungibleFaucet;
+use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
+use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
+use miden_standards::account::policies::{
+    BurnPolicyConfig,
+    MintPolicyConfig,
+    PolicyAuthority,
+    TokenPolicyManager,
+};
+use miden_standards::account::wallets::BasicWallet;
+use miden_standards::note::P2idNote;
+use miden_tx::auth::BasicAuthenticator;
+use miden_tx::{
+    DataStore,
+    DataStoreError,
+    LocalTransactionProver,
+    MastForestStore,
+    TransactionExecutor,
+    TransactionMastStore,
+};
+use rand::Rng;
+use rayon::prelude::*;
+use url::Url;
+
+use crate::rpc_state::{fetch_chain_tip_header, fetch_partial_blockchain};
+use crate::summary::print_proving_summary;
+use crate::{
+    PROOFS_DIR,
+    create_genesis_aware_rpc_client,
+    get_genesis_header_request,
+    write_to_file,
+};
+
+// ORCHESTRATOR
+// ================================================================================================
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "single linear orchestration of genesis fetch + mint phase + consume phase; \
+              splitting would just shuffle locals (faucet, data_store, authenticator) around"
+)]
+pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
+    let mut rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    println!("Fetching genesis block header from {rpc_url}...");
+    let genesis_header_proto = rpc_client
+        .get_block_header_by_number(get_genesis_header_request())
+        .await
+        .unwrap()
+        .into_inner()
+        .block_header
+        .expect("RPC returned no block header");
+    let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
+
+    println!("Fetching chain tip header...");
+    let ref_block_header = fetch_chain_tip_header(&mut rpc_client).await;
+    let ref_block_num = ref_block_header.block_num();
+    println!("  ref block = {ref_block_num} (proofs will bind to this block's chain state)");
+
+    println!("Fetching chain MMR up to ref block...");
+    let partial_blockchain =
+        fetch_partial_blockchain(&mut rpc_client, ref_block_num.as_u32(), &genesis_header).await;
+
+    println!("Creating faucet...");
+    let (mut faucet, faucet_secret_key) = create_faucet();
+
+    let coin_seed: [u64; 4] = rand::rng().random();
+    let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let wallet_secret_key = SecretKey::with_rng(&mut seed_rng);
+    let wallet_public_key = wallet_secret_key.public_key();
+
+    println!("Creating {num_transactions} wallets in parallel...");
+    let wallets: Vec<Account> = (0..num_transactions)
+        .into_par_iter()
+        .map(|index| create_wallet(&wallet_public_key, index))
+        .collect();
+
+    let mut data_store = BenchmarkDataStore::new(ref_block_header.clone(), partial_blockchain);
+    data_store.add_account(faucet.clone());
+    for wallet in &wallets {
+        data_store.add_account(wallet.clone());
+    }
+
+    let authenticator = BasicAuthenticator::new(&[
+        AuthSecretKey::Falcon512Poseidon2(faucet_secret_key),
+        AuthSecretKey::Falcon512Poseidon2(wallet_secret_key),
+    ]);
+
+    let prover = LocalTransactionProver::default();
+    let faucet_id = faucet.id();
+
+    // Mint phase — sequential because each mint mutates the faucet.
+    println!("Proving {num_transactions} mint transactions (sequential)...");
+    let mut mint_txs: Vec<ProvenTransaction> = Vec::with_capacity(num_transactions as usize);
+    let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+    let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
+    let mint_phase_start = Instant::now();
+    let mut mint_exec_total = Duration::ZERO;
+    let mut mint_prove_total = Duration::ZERO;
+
+    for index in 0..num_transactions {
+        let wallet_id = wallets[index as usize].id();
+        let note = {
+            let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+            P2idNote::create(
+                faucet_id,
+                wallet_id,
+                vec![asset],
+                miden_protocol::note::NoteType::Public,
+                miden_protocol::note::NoteAttachment::default(),
+                &mut seed_rng,
+            )
+            .expect("note creation failed")
+        };
+
+        let account_interface = AccountInterface::from_account(&faucet);
+        let script = account_interface
+            .build_send_notes_script(&[note.clone().into()], None)
+            .expect("failed to build mint send-notes script");
+
+        let mut tx_args = TransactionArgs::default().with_tx_script(script);
+        tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
+
+        let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
+
+        let exec_t0 = Instant::now();
+        let executed_tx = Box::pin(executor.execute_transaction(
+            faucet_id,
+            ref_block_num,
+            InputNotes::default(),
+            tx_args,
+        ))
+        .await
+        .expect("failed to execute mint transaction");
+        mint_exec_total += exec_t0.elapsed();
+
+        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+        let delta = executed_tx.account_delta().clone();
+
+        let prove_t0 = Instant::now();
+        let proven_tx = prover.prove(executed_tx).await.expect("failed to prove mint transaction");
+        mint_prove_total += prove_t0.elapsed();
+
+        // Evolve the faucet state for the next iteration. The first mint of a
+        // never-before-seen account produces a full-state delta (because the
+        // delta carries the freshly deployed code); subsequent mints produce
+        // partial-state deltas that can be applied incrementally.
+        if delta.is_full_state() {
+            faucet = Account::try_from(&delta)
+                .expect("failed to materialize faucet from full-state delta");
+        } else {
+            faucet.apply_delta(&delta).expect("failed to apply faucet delta");
+        }
+        data_store.add_account(faucet.clone());
+
+        mint_txs.push(proven_tx);
+        mint_tx_inputs.push(tx_inputs_bytes);
+        mint_notes.push(note);
+
+        if (index + 1) % 10 == 0 || index + 1 == num_transactions {
+            println!("  proved {} / {num_transactions} mint txs", index + 1);
+        }
+    }
+    let mint_phase_elapsed = mint_phase_start.elapsed();
+    print_proving_summary(
+        "Mint",
+        num_transactions,
+        mint_phase_elapsed,
+        mint_exec_total,
+        mint_prove_total,
+    );
+
+    // Consume phase — also sequential for now (each tx is one wallet, independent
+    // wallets, so this could be parallelized later with bounded concurrency).
+    println!("Proving {num_transactions} consume transactions (sequential)...");
+    let mut consume_txs: Vec<ProvenTransaction> = Vec::with_capacity(num_transactions as usize);
+    let mut consume_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+    let consume_phase_start = Instant::now();
+    let mut consume_exec_total = Duration::ZERO;
+    let mut consume_prove_total = Duration::ZERO;
+
+    for index in 0..num_transactions {
+        let wallet_id = wallets[index as usize].id();
+        let note = mint_notes[index as usize].clone();
+        let input_note = InputNote::Unauthenticated { note };
+        let input_notes =
+            InputNotes::new(vec![input_note]).expect("failed to construct input notes for consume");
+
+        let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
+
+        let exec_t0 = Instant::now();
+        let executed_tx = Box::pin(executor.execute_transaction(
+            wallet_id,
+            ref_block_num,
+            input_notes,
+            TransactionArgs::default(),
+        ))
+        .await
+        .expect("failed to execute consume transaction");
+        consume_exec_total += exec_t0.elapsed();
+
+        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+
+        let prove_t0 = Instant::now();
+        let proven_tx =
+            prover.prove(executed_tx).await.expect("failed to prove consume transaction");
+        consume_prove_total += prove_t0.elapsed();
+
+        consume_txs.push(proven_tx);
+        consume_tx_inputs.push(tx_inputs_bytes);
+
+        if (index + 1) % 10 == 0 || index + 1 == num_transactions {
+            println!("  proved {} / {num_transactions} consume txs", index + 1);
+        }
+    }
+    let consume_phase_elapsed = consume_phase_start.elapsed();
+    print_proving_summary(
+        "Consume",
+        num_transactions,
+        consume_phase_elapsed,
+        consume_exec_total,
+        consume_prove_total,
+    );
+
+    let out_dir = PathBuf::from(PROOFS_DIR);
+    println!("Writing proofs to {}/", out_dir.display());
+    fs_err::create_dir_all(&out_dir).unwrap();
+    write_to_file(&out_dir.join("mint_txs.bin"), &mint_txs);
+    write_to_file(&out_dir.join("mint_tx_inputs.bin"), &mint_tx_inputs);
+    write_to_file(&out_dir.join("consume_txs.bin"), &consume_txs);
+    write_to_file(&out_dir.join("consume_tx_inputs.bin"), &consume_tx_inputs);
+    println!("Done.");
+}
+
+// ACCOUNT BUILDERS
+// ================================================================================================
+
+/// Creates a new faucet account and returns it alongside its secret key.
+fn create_faucet() -> (Account, SecretKey) {
+    let coin_seed: [u64; 4] = rand::rng().random();
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let key_pair = SecretKey::with_rng(&mut rng);
+    let init_seed = [0_u8; 32];
+
+    let token_symbol = TokenSymbol::new("TEST").unwrap();
+    let token_metadata = FungibleTokenMetadata::builder(
+        TokenName::new("TEST").unwrap(),
+        token_symbol,
+        2,
+        FungibleAsset::MAX_AMOUNT,
+    )
+    .build()
+    .unwrap();
+    let faucet = AccountBuilder::new(init_seed)
+        .account_type(AccountType::FungibleFaucet)
+        .storage_mode(AccountStorageMode::Private)
+        .with_component(token_metadata)
+        .with_component(BasicFungibleFaucet)
+        .with_components(TokenPolicyManager::new(
+            PolicyAuthority::AuthControlled,
+            MintPolicyConfig::AllowAll,
+            BurnPolicyConfig::AllowAll,
+        ))
+        .with_auth_component(AuthSingleSig::new(
+            key_pair.public_key().into(),
+            AuthScheme::Falcon512Poseidon2,
+        ))
+        .build()
+        .unwrap();
+    (faucet, key_pair)
+}
+
+/// Creates a new wallet account with the given public key, using `index` to vary
+/// the init seed so each wallet ends up with a distinct account ID.
+fn create_wallet(
+    public_key: &miden_protocol::crypto::dsa::falcon512_poseidon2::PublicKey,
+    index: u64,
+) -> Account {
+    let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
+    AccountBuilder::new(init_seed.try_into().unwrap())
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Private)
+        .with_auth_component(AuthSingleSig::new(
+            public_key.clone().into(),
+            AuthScheme::Falcon512Poseidon2,
+        ))
+        .with_component(BasicWallet)
+        .build()
+        .unwrap()
+}
+
+// BENCHMARK DATA STORE
+// ================================================================================================
+
+/// In-memory `DataStore` impl used to feed the [`TransactionExecutor`] when
+/// generating real proofs locally. Modelled on the network-monitor's
+/// `MonitorDataStore`.
+struct BenchmarkDataStore {
+    accounts: HashMap<AccountId, Account>,
+    block_header: BlockHeader,
+    partial_block_chain: PartialBlockchain,
+    mast_store: TransactionMastStore,
+}
+
+impl BenchmarkDataStore {
+    fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+        Self {
+            accounts: HashMap::new(),
+            block_header,
+            partial_block_chain,
+            mast_store: TransactionMastStore::new(),
+        }
+    }
+
+    fn add_account(&mut self, account: Account) {
+        self.mast_store.load_account_code(account.code());
+        self.accounts.insert(account.id(), account);
+    }
+
+    fn get_account(&self, account_id: AccountId) -> Result<&Account, DataStoreError> {
+        self.accounts.get(&account_id).ok_or_else(|| DataStoreError::Other {
+            error_msg: "unknown account".into(),
+            source: None,
+        })
+    }
+}
+
+impl DataStore for BenchmarkDataStore {
+    async fn get_transaction_inputs(
+        &self,
+        account_id: AccountId,
+        _block_refs: BTreeSet<BlockNumber>,
+    ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
+        let account = self.get_account(account_id)?;
+        let partial_account = PartialAccount::from(account);
+        Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+    }
+
+    async fn get_storage_map_witness(
+        &self,
+        account_id: AccountId,
+        map_root: Word,
+        map_key: StorageMapKey,
+    ) -> Result<miden_protocol::account::StorageMapWitness, DataStoreError> {
+        let account = self.get_account(account_id)?;
+        for slot in account.storage().slots() {
+            if let miden_protocol::account::StorageSlotContent::Map(map) = slot.content() {
+                if map.root() == map_root {
+                    return Ok(map.open(&map_key));
+                }
+            }
+        }
+        Err(DataStoreError::Other {
+            error_msg: format!("no storage map with the requested root in account {account_id}")
+                .into(),
+            source: None,
+        })
+    }
+
+    async fn get_foreign_account_inputs(
+        &self,
+        _foreign_account_id: AccountId,
+        _ref_block: BlockNumber,
+    ) -> Result<AccountInputs, DataStoreError> {
+        unimplemented!("foreign account inputs are not needed for the benchmark")
+    }
+
+    async fn get_vault_asset_witnesses(
+        &self,
+        account_id: AccountId,
+        vault_root: Word,
+        vault_keys: BTreeSet<AssetVaultKey>,
+    ) -> Result<Vec<AssetWitness>, DataStoreError> {
+        let account = self.get_account(account_id)?;
+
+        if account.vault().root() != vault_root {
+            return Err(DataStoreError::Other {
+                error_msg: "vault root mismatch".into(),
+                source: None,
+            });
+        }
+
+        Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
+            AssetWitness::new(account.vault().open(vault_key).into()).map_err(|err| {
+                DataStoreError::Other {
+                    error_msg: "failed to open vault asset tree".into(),
+                    source: Some(Box::new(err)),
+                }
+            })
+        }))
+    }
+
+    async fn get_note_script(
+        &self,
+        _script_root: NoteScriptRoot,
+    ) -> Result<Option<NoteScript>, DataStoreError> {
+        Ok(None)
+    }
+}
+
+impl MastForestStore for BenchmarkDataStore {
+    fn get(&self, procedure_hash: &Word) -> Option<Arc<MastForest>> {
+        self.mast_store.get(procedure_hash)
+    }
+}
