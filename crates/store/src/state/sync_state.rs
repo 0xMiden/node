@@ -101,14 +101,14 @@ impl State {
 
         let mut results = Vec::new();
 
-        for note_sync in note_syncs {
-            let mmr_proof = self
-                .inner
-                .read()
-                .await
-                .blockchain
-                .open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
-            results.push((note_sync, mmr_proof));
+        {
+            let inner = self.inner.read().await;
+
+            for note_sync in note_syncs {
+                let mmr_proof =
+                    inner.blockchain.open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
+                results.push((note_sync, mmr_proof));
+            }
         }
 
         // if results is empty, return `block_end` since the sync is complete.
