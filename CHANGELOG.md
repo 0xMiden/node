@@ -24,6 +24,7 @@
 - [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
+- Replaced blocking-in-async LargeSmt and account state forest operations in the store with wrappers using Tokio's `block_in_place()` ([#2076](https://github.com/0xMiden/node/pull/2076)).
 
 ## v0.14.10 (2026-05-29)
 
