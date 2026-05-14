@@ -87,7 +87,7 @@ pub enum AccountStorageMapResult {
 }
 
 /// Container for forest-related state that needs to be updated atomically.
-pub(crate) struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
+pub struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
     /// `LargeSmtForest` for efficient account storage reconstruction.
     /// Populated during block import with storage and vault SMTs.
     forest: LargeSmtForest<B>,
