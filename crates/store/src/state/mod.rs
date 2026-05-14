@@ -36,7 +36,7 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock, watch};
-use tracing::{Instrument, info, instrument};
+use tracing::{Instrument, Span, info, instrument};
 
 use crate::account_state_forest::{
     AccountStateForest,
@@ -109,6 +109,13 @@ pub struct TransactionInputs {
     pub found_unauthenticated_notes: HashSet<Word>,
     pub new_account_id_prefix_is_unique: Option<bool>,
 }
+
+type BlockInputWitnesses = (
+    BlockNumber,
+    BTreeMap<AccountId, AccountWitness>,
+    BTreeMap<Nullifier, NullifierWitness>,
+    PartialMmr,
+);
 
 /// Container for state that needs to be updated atomically.
 struct InnerState<S>
@@ -286,6 +293,34 @@ impl State {
     /// Returns a watch receiver that wakes every time the proven-in-sequence tip advances.
     pub(crate) fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
         self.proven_tip.subscribe()
+    }
+
+    /// Runs a synchronous read-only operation over the inner state on Tokio's blocking path.
+    ///
+    /// The account and nullifier trees may be backed by `RocksDB`, so tree access must not run on
+    /// an async worker thread directly. This helper preserves the current tracing span while
+    /// moving the blocking lock acquisition and closure body into `block_in_place`.
+    fn with_inner_read_blocking<R>(&self, f: impl FnOnce(&InnerState<TreeStorage>) -> R) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let inner = self.inner.blocking_read();
+                f(&inner)
+            })
+        })
+    }
+
+    /// Runs a synchronous mutable operation over the inner state on Tokio's blocking path.
+    ///
+    /// See [`Self::with_inner_read_blocking`] for why this uses `block_in_place`.
+    fn with_inner_write_blocking<R>(&self, f: impl FnOnce(&mut InnerState<TreeStorage>) -> R) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let mut inner = self.inner.blocking_write();
+                f(&mut inner)
+            })
+        })
     }
 
     // STATE ACCESSORS
@@ -501,7 +536,7 @@ impl State {
         blocks.extend(note_proof_reference_blocks);
 
         let (latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr) =
-            self.get_block_inputs_witnesses(&mut blocks, account_ids, nullifiers).await?;
+            self.get_block_inputs_witnesses(&mut blocks, &account_ids, &nullifiers)?;
 
         // Fetch the block headers for all blocks in the partial MMR plus the latest one which will
         // be used as the previous block header of the block being built.
@@ -550,68 +585,60 @@ impl State {
     ///
     /// This method acquires the lock to the inner state and does not access the DB so we release
     /// the lock asap.
-    async fn get_block_inputs_witnesses(
+    fn get_block_inputs_witnesses(
         &self,
         blocks: &mut BTreeSet<BlockNumber>,
-        account_ids: Vec<AccountId>,
-        nullifiers: Vec<Nullifier>,
-    ) -> Result<
-        (
-            BlockNumber,
-            BTreeMap<AccountId, AccountWitness>,
-            BTreeMap<Nullifier, NullifierWitness>,
-            PartialMmr,
-        ),
-        GetBlockInputsError,
-    > {
-        let inner = self.inner.read().await;
+        account_ids: &[AccountId],
+        nullifiers: &[Nullifier],
+    ) -> Result<BlockInputWitnesses, GetBlockInputsError> {
+        self.with_inner_read_blocking(|inner| {
+            let latest_block_number = inner.latest_block_num();
 
-        let latest_block_number = inner.latest_block_num();
+            // If `blocks` is empty, use the latest block number which will never trigger the error.
+            let highest_block_number = blocks.last().copied().unwrap_or(latest_block_number);
+            if highest_block_number > latest_block_number {
+                return Err(GetBlockInputsError::UnknownBatchBlockReference {
+                    highest_block_number,
+                    latest_block_number,
+                });
+            }
 
-        // If `blocks` is empty, use the latest block number which will never trigger the error.
-        let highest_block_number = blocks.last().copied().unwrap_or(latest_block_number);
-        if highest_block_number > latest_block_number {
-            return Err(GetBlockInputsError::UnknownBatchBlockReference {
-                highest_block_number,
-                latest_block_number,
-            });
-        }
+            // The latest block is not yet in the chain MMR, so we can't (and don't need to) prove
+            // its inclusion in the chain.
+            blocks.remove(&latest_block_number);
 
-        // The latest block is not yet in the chain MMR, so we can't (and don't need to) prove its
-        // inclusion in the chain.
-        blocks.remove(&latest_block_number);
+            // Fetch the partial MMR at the state of the latest block with authentication paths for
+            // the provided set of blocks.
+            //
+            // SAFETY:
+            // - The latest block num was retrieved from the inner blockchain from which we will
+            //   also retrieve the proofs, so it is guaranteed to exist in that chain.
+            // - We have checked that no block number in the blocks set is greater than latest block
+            //   number *and* latest block num was removed from the set. Therefore only block
+            //   numbers smaller than latest block num remain in the set. Therefore all the block
+            //   numbers are guaranteed to exist in the chain state at latest block num.
+            let partial_mmr =
+                inner.blockchain.partial_mmr_from_blocks(blocks, latest_block_number).expect(
+                    "latest block num should exist and all blocks in set should be < than latest block",
+                );
 
-        // Fetch the partial MMR at the state of the latest block with authentication paths for the
-        // provided set of blocks.
-        //
-        // SAFETY:
-        // - The latest block num was retrieved from the inner blockchain from which we will also
-        //   retrieve the proofs, so it is guaranteed to exist in that chain.
-        // - We have checked that no block number in the blocks set is greater than latest block
-        //   number *and* latest block num was removed from the set. Therefore only block numbers
-        //   smaller than latest block num remain in the set. Therefore all the block numbers are
-        //   guaranteed to exist in the chain state at latest block num.
-        let partial_mmr =
-            inner.blockchain.partial_mmr_from_blocks(blocks, latest_block_number).expect(
-                "latest block num should exist and all blocks in set should be < than latest block",
-            );
+            // Fetch witnesses for all accounts.
+            let account_witnesses = account_ids
+                .iter()
+                .copied()
+                .map(|account_id| (account_id, inner.account_tree.open_latest(account_id)))
+                .collect::<BTreeMap<AccountId, AccountWitness>>();
 
-        // Fetch witnesses for all accounts.
-        let account_witnesses = account_ids
-            .iter()
-            .copied()
-            .map(|account_id| (account_id, inner.account_tree.open_latest(account_id)))
-            .collect::<BTreeMap<AccountId, AccountWitness>>();
+            // Fetch witnesses for all nullifiers. We don't check whether the nullifiers are spent
+            // or not as this is done as part of proposing the block.
+            let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> = nullifiers
+                .iter()
+                .copied()
+                .map(|nullifier| (nullifier, inner.nullifier_tree.open(&nullifier)))
+                .collect();
 
-        // Fetch witnesses for all nullifiers. We don't check whether the nullifiers are spent or
-        // not as this is done as part of proposing the block.
-        let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> = nullifiers
-            .iter()
-            .copied()
-            .map(|nullifier| (nullifier, inner.nullifier_tree.open(&nullifier)))
-            .collect();
-
-        Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
+            Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
+        })
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
@@ -624,9 +651,7 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let (account_commitment, nullifiers, new_account_id_prefix_is_unique) = {
-            let inner = self.inner.read().await;
-
+        let tree_inputs = self.with_inner_read_blocking(|inner| {
             let account_commitment = inner.account_tree.get_latest_commitment(account_id);
 
             let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
@@ -637,7 +662,7 @@ impl State {
 
             // Non-unique account Id prefixes for new accounts are not allowed.
             if let Some(false) = new_account_id_prefix_is_unique {
-                return Ok(TransactionInputs {
+                return Err(TransactionInputs {
                     new_account_id_prefix_is_unique,
                     ..Default::default()
                 });
@@ -651,7 +676,11 @@ impl State {
                 })
                 .collect();
 
-            (account_commitment, nullifiers, new_account_id_prefix_is_unique)
+            Ok((account_commitment, nullifiers, new_account_id_prefix_is_unique))
+        });
+        let (account_commitment, nullifiers, new_account_id_prefix_is_unique) = match tree_inputs {
+            Ok(inputs) => inputs,
+            Err(inputs) => return Ok(inputs),
         };
 
         let found_unauthenticated_notes = self
@@ -736,30 +765,31 @@ impl State {
         block_num: Option<BlockNumber>,
         account_id: AccountId,
     ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
-        let inner_state =
-            self.inner.read().instrument(tracing::info_span!("acquire_inner_state")).await;
+        self.with_inner_read_blocking(|inner_state| {
+            // Determine which block to query
+            let (block_num, witness) = if let Some(requested_block) = block_num {
+                // Historical query: use the account tree with history
+                let witness = inner_state
+                    .account_tree
+                    .open_at(account_id, requested_block)
+                    .ok_or_else(|| {
+                        let latest_block = inner_state.account_tree.block_number_latest();
+                        if requested_block > latest_block {
+                            GetAccountError::UnknownBlock(requested_block)
+                        } else {
+                            GetAccountError::BlockPruned(requested_block)
+                        }
+                    })?;
+                (requested_block, witness)
+            } else {
+                // Latest query: use the latest state
+                let block_num = inner_state.account_tree.block_number_latest();
+                let witness = inner_state.account_tree.open_latest(account_id);
+                (block_num, witness)
+            };
 
-        // Determine which block to query
-        let (block_num, witness) = if let Some(requested_block) = block_num {
-            // Historical query: use the account tree with history
-            let witness =
-                inner_state.account_tree.open_at(account_id, requested_block).ok_or_else(|| {
-                    let latest_block = inner_state.account_tree.block_number_latest();
-                    if requested_block > latest_block {
-                        GetAccountError::UnknownBlock(requested_block)
-                    } else {
-                        GetAccountError::BlockPruned(requested_block)
-                    }
-                })?;
-            (requested_block, witness)
-        } else {
-            // Latest query: use the latest state
-            let block_num = inner_state.account_tree.block_number_latest();
-            let witness = inner_state.account_tree.open_latest(account_id);
-            (block_num, witness)
-        };
-
-        Ok((block_num, witness))
+            Ok((block_num, witness))
+        })
     }
 
     /// Returns storage map details from the forest for a specific account and storage slot.
