@@ -449,3 +449,57 @@ fn intra_batch_unauthenticated_note() {
     assert!(batch.transactions().contains(&tx_a));
     assert!(batch.transactions().contains(&tx_b));
 }
+
+/// A transaction whose unauthenticated input note's producer has been pruned from the mempool
+/// (because the producer's block aged out of `state_retention`) must still be selectable for a
+/// batch. The producer's output notes are committed on-chain at that point, so descendants must
+/// stop treating them as unauthenticated.
+#[test]
+fn unauthenticated_note_remains_valid_after_producer_is_pruned() {
+    let (mut uut, _) = Mempool::for_tests();
+
+    // tx_a produces note 3; tx_b consumes it as unauthenticated, on a different account.
+    let tx_a = MockProvenTxBuilder::with_account_index(0)
+        .private_notes_created_range(3..4)
+        .build();
+    let tx_a = Arc::new(AuthenticatedTransaction::from_inner(tx_a));
+
+    let tx_b = MockProvenTxBuilder::with_account_index(1)
+        .unauthenticated_notes_range(3..4)
+        .build();
+    let tx_b = Arc::new(AuthenticatedTransaction::from_inner(tx_b));
+
+    // Land tx_a alone in batch_a so the batch graph records note 3 as a produced output.
+    uut.add_transaction(tx_a.clone()).unwrap();
+    let batch_a = uut.select_batch().unwrap();
+    assert_eq!(batch_a.transactions(), std::slice::from_ref(&tx_a));
+
+    // tx_b joins as a child of tx_a. Its `notes_authenticated_by_store` is empty (tx_a is still
+    // in-flight), so its frozen view treats note 3 as unauthenticated.
+    uut.add_transaction(tx_b.clone()).unwrap();
+
+    // Walk batch_a through proof → block → commit so it lands on chain.
+    uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
+        tx_a.raw_proven_transaction(),
+    ])));
+    let block = uut.select_block();
+    let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+    uut.commit_block(header);
+
+    // Commit `state_retention` further empty blocks so the block containing tx_a is pruned. Both
+    // graphs forget note 3 — yet tx_b still claims it as an unauthenticated input.
+    for _ in 0..uut.config.state_retention.get() {
+        let block = uut.select_block();
+        let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+        uut.commit_block(header);
+    }
+
+    let batch_b = uut.select_batch().expect("tx_b should be selectable");
+    let batch_txs = batch_b.transactions();
+    assert_eq!(batch_txs.len(), 1);
+    assert_eq!(batch_txs[0].id(), tx_b.id());
+    // Note 3 was produced by tx_a — now that tx_a has been pruned (i.e. its block has aged past
+    // state_retention), note 3 is committed on-chain and should no longer appear in the batch's
+    // unauthenticated set.
+    assert_eq!(batch_b.unauthenticated_note_commitments().count(), 0);
+}
