@@ -295,6 +295,9 @@ impl State {
         self.proven_tip.subscribe()
     }
 
+    // HELPER FUNCTIONS TO AVOID BLOCKING CALLS IN ASYNC CONTEXT
+    // --------------------------------------------------------------------------------------------
+
     /// Runs a synchronous read-only operation over the inner state on Tokio's blocking path.
     ///
     /// The account and nullifier trees may be backed by `RocksDB`, so tree access must not run on
@@ -319,6 +322,40 @@ impl State {
             span.in_scope(|| {
                 let mut inner = self.inner.blocking_write();
                 f(&mut inner)
+            })
+        })
+    }
+
+    /// Runs a synchronous read-only operation over the account state forest on Tokio's blocking
+    /// path.
+    ///
+    /// The forest may be backed by `RocksDB`, so accesses to the underlying `LargeSmtForest` must
+    /// not run directly on an async worker thread.
+    fn with_forest_read_blocking<R>(
+        &self,
+        f: impl FnOnce(&AccountStateForest<AccountStateForestBackend>) -> R,
+    ) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let forest = self.forest.blocking_read();
+                f(&forest)
+            })
+        })
+    }
+
+    /// Runs a synchronous mutable operation over the account state forest on Tokio's blocking path.
+    ///
+    /// See [`Self::with_forest_read_blocking`] for why this uses `block_in_place`.
+    fn with_forest_write_blocking<R>(
+        &self,
+        f: impl FnOnce(&mut AccountStateForest<AccountStateForestBackend>) -> R,
+    ) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let mut forest = self.forest.blocking_write();
+                f(&mut forest)
             })
         })
     }
@@ -799,29 +836,26 @@ impl State {
     /// that the caller should fall back to reconstructing the storage map details from the
     /// database.
     #[instrument(target = COMPONENT, skip_all)]
-    async fn get_storage_map_details_from_forest(
+    fn get_storage_map_details_from_forest(
         &self,
         account_id: AccountId,
-        slot_name: StorageSlotName,
+        slot_name: &StorageSlotName,
         block_num: BlockNumber,
     ) -> Result<Option<AccountStorageMapDetails>, DatabaseError> {
-        let forest_guard = self
-            .forest
-            .read()
-            .instrument(tracing::info_span!("acquire_forest_for_storage_map_entries"))
-            .await;
-        match forest_guard
-            .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
-            .map_err(DatabaseError::MerkleError)?
-        {
-            AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
-                account_id,
-                slot_name: slot_name.to_string(),
-                block_num,
-            }),
-            AccountStorageMapResult::Details(details) => Ok(Some(details)),
-            AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
-        }
+        self.with_forest_read_blocking(|forest| {
+            match forest
+                .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
+                .map_err(DatabaseError::MerkleError)?
+            {
+                AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
+                    account_id,
+                    slot_name: slot_name.to_string(),
+                    block_num,
+                }),
+                AccountStorageMapResult::Details(details) => Ok(Some(details)),
+                AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
+            }
+        })
     }
 
     /// Returns storage map details by reconstructing the storage map from the database.
@@ -910,17 +944,13 @@ impl State {
             Some(commitment) if commitment == account_header.vault_root() => {
                 AccountVaultDetails::empty()
             },
-            Some(_) => self
-                .forest
-                .read()
-                .instrument(tracing::info_span!("acquire_forest_for_vault"))
-                .await
-                .get_vault_details(account_id, block_num)
-                .map_err(|err| {
+            Some(_) => self.with_forest_read_blocking(|forest| {
+                forest.get_vault_details(account_id, block_num).map_err(|err| {
                     DatabaseError::DataCorrupted(format!(
                         "failed to reconstruct vault for account {account_id} at block {block_num}: {err}"
                     ))
-                })?,
+                })
+            })?,
             None => AccountVaultDetails::empty(),
         };
 
@@ -947,33 +977,30 @@ impl State {
         let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
 
         if !map_keys_requests.is_empty() {
-            let forest_guard = self
-                .forest
-                .read()
-                .instrument(tracing::info_span!("acquire_forest_for_storage_map"))
-                .await;
-            for (index, slot_name, keys) in map_keys_requests {
-                let details = forest_guard
-                    .get_storage_map_details_for_keys(
-                        account_id,
-                        slot_name.clone(),
-                        block_num,
-                        &keys,
-                    )
-                    .ok_or_else(|| DatabaseError::StorageRootNotFound {
-                        account_id,
-                        slot_name: slot_name.to_string(),
-                        block_num,
-                    })?
-                    .map_err(DatabaseError::MerkleError)?;
-                storage_map_details_by_index[index] = Some(details);
-            }
+            self.with_forest_read_blocking(|forest| {
+                for (index, slot_name, keys) in map_keys_requests {
+                    let details = forest
+                        .get_storage_map_details_for_keys(
+                            account_id,
+                            slot_name.clone(),
+                            block_num,
+                            &keys,
+                        )
+                        .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                            account_id,
+                            slot_name: slot_name.to_string(),
+                            block_num,
+                        })?
+                        .map_err(DatabaseError::MerkleError)?;
+                    storage_map_details_by_index[index] = Some(details);
+                }
+                Ok::<(), DatabaseError>(())
+            })?;
         }
 
         for (index, slot_name) in all_entries_requests {
             let details = match self
-                .get_storage_map_details_from_forest(account_id, slot_name.clone(), block_num)
-                .await?
+                .get_storage_map_details_from_forest(account_id, &slot_name, block_num)?
             {
                 Some(details) => details,
                 None => {
@@ -1065,18 +1092,15 @@ impl State {
     }
 
     /// Returns vault asset witnesses for the specified account and block number.
-    pub async fn get_vault_asset_witnesses(
+    pub fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
         vault_keys: BTreeSet<AssetVaultKey>,
     ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let witnesses = self
-            .forest
-            .read()
-            .await
-            .get_vault_asset_witnesses(account_id, block_num, vault_keys)?;
-        Ok(witnesses)
+        self.with_forest_read_blocking(|forest| {
+            forest.get_vault_asset_witnesses(account_id, block_num, vault_keys)
+        })
     }
 
     /// Returns a storage map witness for the specified account and storage entry at the block
@@ -1084,18 +1108,15 @@ impl State {
     ///
     /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
     /// get the actual key into the storage map.
-    pub async fn get_storage_map_witness(
+    pub fn get_storage_map_witness(
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
         raw_key: StorageMapKey,
     ) -> Result<StorageMapWitness, WitnessError> {
-        let witness = self
-            .forest
-            .read()
-            .await
-            .get_storage_map_witness(account_id, slot_name, block_num, raw_key)?;
-        Ok(witness)
+        self.with_forest_read_blocking(|forest| {
+            forest.get_storage_map_witness(account_id, slot_name, block_num, raw_key)
+        })
     }
 }

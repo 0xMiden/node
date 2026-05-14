@@ -163,11 +163,9 @@ impl State {
             Ok(())
         })?;
 
-        self.forest
-            .write()
-            .instrument(info_span!(target: COMPONENT, "acquire_forest_write_lock"))
-            .await
-            .apply_block_updates(block_num, account_deltas)?;
+        self.with_forest_write_blocking(|forest| {
+            forest.apply_block_updates(block_num, account_deltas)
+        })?;
 
         // Push to cache and notify replica subscribers.
         self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
