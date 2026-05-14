@@ -355,16 +355,13 @@ impl Db {
     }
 
     /// Search for a [`BlockHeader`] and its [`Signature`] from the database by its `block_num`.
-    ///
-    /// When `block_number` is [None], the latest block header is returned.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_block_header_and_signature_by_block_num(
         &self,
-        maybe_block_number: Option<BlockNumber>,
+        block_number: BlockNumber,
     ) -> Result<Option<(BlockHeader, Signature)>> {
         self.transact("block headers and signature by block number", move |conn| {
-            let val =
-                queries::select_block_header_and_signature_by_block_num(conn, maybe_block_number)?;
+            let val = queries::select_block_header_and_signature_by_block_num(conn, block_number)?;
             Ok(val)
         })
         .await

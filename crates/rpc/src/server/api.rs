@@ -298,9 +298,7 @@ impl api_server::Api for RpcService {
 
         let span = Span::current();
         span.set_attribute("current_block_height", request_ref.current_block_height);
-        let finality_level = proto::rpc::FinalityLevel::try_from(request_ref.finality_level)
-            .unwrap_or(proto::rpc::FinalityLevel::Unspecified);
-        span.set_attribute("finality_level", finality_level.as_str_name());
+        span.set_attribute("finality_level", request_ref.finality_level().as_str_name());
 
         debug!(target: COMPONENT, request = ?request_ref);
 

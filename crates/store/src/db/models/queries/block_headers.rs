@@ -85,21 +85,13 @@ pub(crate) fn select_block_header_by_block_num(
 /// ```
 pub(crate) fn select_block_header_and_signature_by_block_num(
     conn: &mut SqliteConnection,
-    maybe_block_num: Option<BlockNumber>,
+    block_number: BlockNumber,
 ) -> Result<Option<(BlockHeader, Signature)>, DatabaseError> {
     let sel = SelectDsl::select(schema::block_headers::table, BlockHeaderRawRow::as_select());
-    let row = if let Some(block_num) = maybe_block_num {
-        sel.filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
-            .get_result::<BlockHeaderRawRow>(conn)
-            .optional()?
-        // invariant: only one block exists with the given block header, so the length is
-        // always zero or one
-    } else {
-        sel.order(schema::block_headers::block_num.desc())
-            .limit(1)
-            .get_result::<BlockHeaderRawRow>(conn)
-            .optional()?
-    };
+    let row = sel
+        .filter(schema::block_headers::block_num.eq(block_number.to_raw_sql()))
+        .get_result::<BlockHeaderRawRow>(conn)
+        .optional()?;
     row.map(std::convert::TryInto::try_into).transpose()
 }
 

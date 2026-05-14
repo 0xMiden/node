@@ -39,7 +39,7 @@ impl State {
         // proven block) by the caller, so it must exist in the database.
         let (block_header, signature) = self
             .db
-            .select_block_header_and_signature_by_block_num(Some(block_to))
+            .select_block_header_and_signature_by_block_num(block_to)
             .await?
             .expect("block_to should exist in the database");
 
