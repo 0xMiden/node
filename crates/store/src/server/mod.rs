@@ -22,7 +22,7 @@ use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::ApplyBlockError;
 use crate::genesis::GenesisBlock;
-use crate::proven_tip::{ProvenTipFile, ProvenTipWriter};
+use crate::proven_tip::ProvenTipWriter;
 use crate::server::replica_sync::{BlockReplicaSync, ProofReplicaSync};
 use crate::state::{ProofCache, State};
 use crate::{BlockProver, COMPONENT};
@@ -104,11 +104,6 @@ impl Store {
             })?;
         tracing::info!(target=COMPONENT, path=%block_store.display(), "Block store created");
 
-        let proven_tip_path = data_directory.proven_tip_path();
-        ProvenTipFile::bootstrap(proven_tip_path.clone()).with_context(|| {
-            format!("failed to bootstrap proven tip file at {}", proven_tip_path.display())
-        })?;
-
         // Create the genesis block and insert it into the database.
         let database_filepath = data_directory.database_path();
         Db::bootstrap(database_filepath.clone(), genesis).with_context(|| {
@@ -129,7 +124,7 @@ impl Store {
 
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
-        let (state, tx_proven_tip, proven_tip_file) =
+        let (state, tx_proven_tip) =
             State::load(&self.data_directory, self.storage_options, termination_ask)
                 .await
                 .context("failed to load state")?;
@@ -148,7 +143,6 @@ impl Store {
                     block_prover_url,
                     max_concurrent_proofs,
                     tx_proven_tip,
-                    proven_tip_file,
                     self.grpc_options,
                     self.rpc_listener,
                 )
@@ -187,7 +181,6 @@ impl Store {
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
         tx_proven_tip: ProvenTipWriter,
-        proven_tip_file: ProvenTipFile,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
     ) -> anyhow::Result<ModeSetup> {
@@ -202,7 +195,6 @@ impl Store {
             block_prover_url,
             max_concurrent_proofs,
             tx_proven_tip,
-            proven_tip_file,
             proof_cache,
         )
         .await;
@@ -265,7 +257,6 @@ impl Store {
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
         proven_tip: ProvenTipWriter,
-        proven_tip_file: ProvenTipFile,
         proof_cache: ProofCache,
     ) -> (
         tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -285,7 +276,6 @@ impl Store {
             state.block_store(),
             chain_tip_rx,
             proven_tip,
-            proven_tip_file,
             max_concurrent_proofs,
             proof_cache,
         );
@@ -429,10 +419,6 @@ impl DataDirectory {
 
     pub fn database_path(&self) -> PathBuf {
         self.0.join("miden-store.sqlite3")
-    }
-
-    pub fn proven_tip_path(&self) -> PathBuf {
-        self.0.join("proven_tip")
     }
 
     pub fn display(&self) -> std::path::Display<'_> {

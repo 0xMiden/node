@@ -30,7 +30,7 @@ use tracing::{Instrument, info, instrument};
 use crate::COMPONENT;
 use crate::blocks::BlockStore;
 use crate::errors::ProofSchedulerError;
-use crate::proven_tip::{ProvenTipFile, ProvenTipWriter};
+use crate::proven_tip::ProvenTipWriter;
 use crate::server::block_prover_client::{BlockProver, StoreProverError};
 use crate::state::{ProofCache, ProofNotification};
 
@@ -107,7 +107,6 @@ pub fn spawn(
     block_store: Arc<BlockStore>,
     chain_tip_rx: watch::Receiver<BlockNumber>,
     proven_tip: ProvenTipWriter,
-    proven_tip_file: ProvenTipFile,
     max_concurrent_proofs: NonZeroUsize,
     proof_cache: ProofCache,
 ) -> JoinHandle<anyhow::Result<()>> {
@@ -116,7 +115,6 @@ pub fn spawn(
         block_store,
         chain_tip_rx,
         proven_tip,
-        proven_tip_file,
         max_concurrent_proofs,
         proof_cache,
     ))
@@ -137,7 +135,6 @@ async fn run(
     block_store: Arc<BlockStore>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     proven_tip: ProvenTipWriter,
-    proven_tip_file: ProvenTipFile,
     max_concurrent_proofs: NonZeroUsize,
     proof_cache: ProofCache,
 ) -> anyhow::Result<()> {
@@ -168,14 +165,11 @@ async fn run(
                 let (block_num, proof_bytes) = proving_result?;
                 pending.insert(block_num, proof_bytes);
 
-                // Commit all consecutive proofs in ascending order.
+                // Drain completed proofs in ascending order so the proven tip advances
+                // without gaps.
                 let mut next = proven_tip.read().child();
                 while let Some(proof_bytes) = pending.remove(&next) {
-                    // Save the proof and tip file before deleting the proving inputs.
-                    block_store.save_proof(next, &proof_bytes).await?;
-                    proven_tip_file.save(next)?;
-                    block_store.delete_proving_inputs(next).await?;
-                    // Notify subscribers of the proof.
+                    block_store.commit_proof(next, &proof_bytes).await?;
                     proof_cache.push(next, ProofNotification::new(next, proof_bytes));
                     proven_tip.advance(next);
                     next = next.child();
