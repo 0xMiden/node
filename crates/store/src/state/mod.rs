@@ -333,7 +333,6 @@ impl State {
         &self,
         block_num: Option<BlockNumber>,
     ) -> Result<Option<(BlockHeader, MmrPeaks)>, GetCurrentBlockchainDataError> {
-        let blockchain = &self.inner.read().await.blockchain;
         if let Some(number) = block_num
             && number == self.chain_tip(Finality::Committed).await
         {
@@ -348,6 +347,8 @@ impl State {
             .await
             .map_err(GetCurrentBlockchainDataError::ErrorRetrievingBlockHeader)?
             .unwrap();
+
+        let blockchain = &self.inner.read().await.blockchain;
         let peaks = blockchain
             .peaks_at(block_header.block_num())
             .map_err(GetCurrentBlockchainDataError::InvalidPeaks)?;
@@ -623,31 +624,35 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let inner = self.inner.read().await;
+        let (account_commitment, nullifiers, new_account_id_prefix_is_unique) = {
+            let inner = self.inner.read().await;
 
-        let account_commitment = inner.account_tree.get_latest_commitment(account_id);
+            let account_commitment = inner.account_tree.get_latest_commitment(account_id);
 
-        let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
-            Some(!inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
-        } else {
-            None
+            let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
+                Some(!inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
+            } else {
+                None
+            };
+
+            // Non-unique account Id prefixes for new accounts are not allowed.
+            if let Some(false) = new_account_id_prefix_is_unique {
+                return Ok(TransactionInputs {
+                    new_account_id_prefix_is_unique,
+                    ..Default::default()
+                });
+            }
+
+            let nullifiers = nullifiers
+                .iter()
+                .map(|nullifier| NullifierInfo {
+                    nullifier: *nullifier,
+                    block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
+                })
+                .collect();
+
+            (account_commitment, nullifiers, new_account_id_prefix_is_unique)
         };
-
-        // Non-unique account Id prefixes for new accounts are not allowed.
-        if let Some(false) = new_account_id_prefix_is_unique {
-            return Ok(TransactionInputs {
-                new_account_id_prefix_is_unique,
-                ..Default::default()
-            });
-        }
-
-        let nullifiers = nullifiers
-            .iter()
-            .map(|nullifier| NullifierInfo {
-                nullifier: *nullifier,
-                block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
-            })
-            .collect();
 
         let found_unauthenticated_notes = self
             .db

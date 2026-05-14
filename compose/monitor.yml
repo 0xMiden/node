@@ -1,6 +1,6 @@
 services:
   monitor:
-    image: miden-network-monitor-image
+    image: miden-network-monitor
     pull_policy: if_not_present
     command:
       - miden-network-monitor

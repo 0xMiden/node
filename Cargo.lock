@@ -3233,7 +3233,6 @@ dependencies = [
  "fs-err",
  "humantime",
  "miden-node-block-producer",
- "miden-node-ntx-builder",
  "miden-node-rpc",
  "miden-node-store",
  "miden-node-utils",
@@ -3293,37 +3292,6 @@ version = "0.15.0"
 dependencies = [
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "miden-node-ntx-builder"
-version = "0.15.0"
-dependencies = [
- "anyhow",
- "build-rs",
- "diesel",
- "diesel_migrations",
- "futures",
- "libsqlite3-sys",
- "miden-node-db",
- "miden-node-proto",
- "miden-node-proto-build",
- "miden-node-utils",
- "miden-protocol",
- "miden-remote-prover-client",
- "miden-standards",
- "miden-tx",
- "rand_chacha",
- "rstest",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-reflection",
- "tower-http",
- "tracing",
- "url",
 ]
 
 [[package]]
@@ -3504,6 +3472,39 @@ dependencies = [
  "tracing-forest",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "miden-ntx-builder"
+version = "0.15.0"
+dependencies = [
+ "anyhow",
+ "build-rs",
+ "clap",
+ "diesel",
+ "diesel_migrations",
+ "futures",
+ "humantime",
+ "libsqlite3-sys",
+ "miden-node-db",
+ "miden-node-proto",
+ "miden-node-proto-build",
+ "miden-node-utils",
+ "miden-protocol",
+ "miden-remote-prover-client",
+ "miden-standards",
+ "miden-tx",
+ "rand_chacha",
+ "rstest",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-reflection",
+ "tower-http",
+ "tracing",
  "url",
 ]
 

@@ -1,11 +1,12 @@
 [package]
-description            = "Miden node's network transaction builder component"
+authors.workspace      = true
+description            = "Miden network transaction builder"
 edition.workspace      = true
 homepage.workspace     = true
-keywords               = ["miden", "node"]
+keywords               = ["miden", "ntx-builder"]
 license.workspace      = true
-name                   = "miden-node-ntx-builder"
-readme                 = "README.md"
+name                   = "miden-ntx-builder"
+readme.workspace       = true
 repository.workspace   = true
 rust-version.workspace = true
 version.workspace      = true
@@ -18,9 +19,11 @@ doctest = false
 
 [dependencies]
 anyhow                     = { workspace = true }
+clap                       = { features = ["env", "string"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
+humantime                  = { workspace = true }
 libsqlite3-sys             = { workspace = true }
 miden-node-db              = { workspace = true }
 miden-node-proto           = { workspace = true }
@@ -31,7 +34,7 @@ miden-remote-prover-client = { features = ["tx-prover"], workspace = true }
 miden-standards            = { workspace = true }
 miden-tx                   = { features = ["concurrent"], workspace = true }
 thiserror                  = { workspace = true }
-tokio                      = { features = ["rt-multi-thread"], workspace = true }
+tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream               = { features = ["net"], workspace = true }
 tonic                      = { workspace = true }
 tonic-reflection           = { workspace = true }
