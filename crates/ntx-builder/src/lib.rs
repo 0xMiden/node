@@ -67,14 +67,13 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
-/// Default initial sleep applied at the actor level after an infrastructure-classified failure
-/// (downed prover, transport error, validator/block-producer crash). Doubles on each consecutive
-/// infra failure up to [`DEFAULT_INFRA_FAILURE_BACKOFF_MAX`]. Resets on the next successful
-/// transaction.
-const DEFAULT_INFRA_FAILURE_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+/// Default initial sleep applied between per-request retries on transient infrastructure failures
+/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles
+/// on each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 
-/// Default upper bound on the actor-level infra-failure backoff sleep.
-const DEFAULT_INFRA_FAILURE_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// Default upper bound on the per-request retry backoff sleep.
+const DEFAULT_REQUEST_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// Default maximum number of VM execution cycles allowed for a network transaction.
 ///
@@ -140,14 +139,14 @@ pub struct NtxBuilderConfig {
     /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
-    /// Initial actor-level sleep after an infrastructure-classified failure (e.g. prover
-    /// unreachable, validator/block-producer crash, transport error). Doubles on each consecutive
-    /// infra failure up to [`Self::infra_failure_backoff_max`] and resets on success. Per-note
-    /// `attempt_count` is *not* advanced for infra failures.
-    pub infra_failure_backoff_initial: Duration,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures
+    /// (e.g. prover unreachable, validator/block-producer crash, transport error, store gRPC
+    /// hiccup). Doubles on each retry up to [`Self::request_backoff_max`]. Per-note
+    /// `attempt_count` is *not* advanced while retries are in progress.
+    pub request_backoff_initial: Duration,
 
-    /// Upper bound on the actor-level infra-failure backoff sleep.
-    pub infra_failure_backoff_max: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
 
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
@@ -174,8 +173,8 @@ impl NtxBuilderConfig {
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
-            infra_failure_backoff_initial: DEFAULT_INFRA_FAILURE_BACKOFF_INITIAL,
-            infra_failure_backoff_max: DEFAULT_INFRA_FAILURE_BACKOFF_MAX,
+            request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
+            request_backoff_max: DEFAULT_REQUEST_BACKOFF_MAX,
             database_filepath,
         }
     }
@@ -264,11 +263,12 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the actor-level infra-failure backoff bounds (initial sleep and cap).
+    /// Sets the per-request retry backoff bounds (initial sleep and cap) used when retrying
+    /// transient infrastructure failures inside a single transaction attempt.
     #[must_use]
-    pub fn with_infra_failure_backoff(mut self, initial: Duration, max: Duration) -> Self {
-        self.infra_failure_backoff_initial = initial;
-        self.infra_failure_backoff_max = max;
+    pub fn with_request_backoff(mut self, initial: Duration, max: Duration) -> Self {
+        self.request_backoff_initial = initial;
+        self.request_backoff_max = max;
         self
     }
 
@@ -335,8 +335,8 @@ impl NtxBuilderConfig {
             db: db.clone(),
             request_tx,
             max_cycles: self.max_cycles,
-            infra_failure_backoff_initial: self.infra_failure_backoff_initial,
-            infra_failure_backoff_max: self.infra_failure_backoff_max,
+            request_backoff_initial: self.request_backoff_initial,
+            request_backoff_max: self.request_backoff_max,
         };
 
         Ok(NetworkTransactionBuilder::new(

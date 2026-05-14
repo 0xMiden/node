@@ -6,14 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
-use miden_protocol::account::{Account, AccountDelta, AccountId};
+use miden_protocol::account::{Account, AccountDelta};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
@@ -23,11 +22,9 @@ use tokio::sync::{Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::NoteError;
-use crate::actor::execute::ErrorKind;
 use crate::chain_state::{ChainState, SharedChainState};
 use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use crate::db::Db;
-use crate::inflight_note::InflightNetworkNote;
 
 // ACTOR REQUESTS
 // ================================================================================================
@@ -80,11 +77,12 @@ pub struct AccountActorContext {
     pub request_tx: mpsc::Sender<ActorRequest>,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
-    /// Initial actor-level sleep after an infrastructure-classified failure. Doubles on each
-    /// consecutive infra failure up to [`Self::infra_failure_backoff_max`] and resets on success.
-    pub infra_failure_backoff_initial: Duration,
-    /// Upper bound on the actor-level infra-failure backoff sleep.
-    pub infra_failure_backoff_max: Duration,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures
+    /// (prover unreachable, validator/block-producer transport error, store gRPC hiccup). Doubles
+    /// each retry up to [`Self::request_backoff_max`].
+    pub request_backoff_initial: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
 }
 
 #[cfg(test)]
@@ -120,8 +118,8 @@ impl AccountActorContext {
             db: db.clone(),
             request_tx,
             max_cycles: 1 << 18,
-            infra_failure_backoff_initial: Duration::from_millis(1),
-            infra_failure_backoff_max: Duration::from_millis(10),
+            request_backoff_initial: Duration::from_millis(1),
+            request_backoff_max: Duration::from_millis(10),
         }
     }
 }
@@ -177,22 +175,14 @@ enum ActorMode {
 }
 
 /// Outcome of an `execute_transactions` call.
-///
-/// Distinguishes infrastructure failures (caller should sleep with backoff and retry the same
-/// notes without penalising them) from intrinsic failures (notes were marked failed and the
-/// caller should idle until something changes) and successful submission.
 #[derive(Debug)]
 enum ExecutionOutcome {
     /// Transaction was submitted, the actor should wait for mempool confirmation.
     Inflight(TransactionId),
-    /// The transaction batch is intrinsically bad (notes failed consumability, executor or local
-    /// prover rejected the witness, validator/block-producer rejected the content). Notes have
-    /// already been marked failed and the actor should idle.
-    IntrinsicFailure,
-    /// An infrastructure-level component failed (prover unreachable, validator/block-producer
-    /// transport error, our own checker erroring). Notes were *not* penalised and the actor should
-    /// sleep for the configured backoff and retry the same candidate.
-    InfrastructureFailure,
+    /// Transaction execution failed. Transient infrastructure failures have already been retried
+    /// inside `execute_transaction`, so any error reaching the actor is terminal for this
+    /// candidate.
+    Failure,
 }
 
 // ACCOUNT ACTOR
@@ -250,15 +240,10 @@ pub struct AccountActor {
     request_tx: mpsc::Sender<ActorRequest>,
     /// Maximum number of VM execution cycles for network transactions.
     max_cycles: u32,
-    /// Initial sleep after an infrastructure-classified failure. Used to rebuild the backoff
-    /// iterator on success.
-    infra_failure_backoff_initial: Duration,
-    /// Upper bound on the actor-level infra-failure backoff sleep.
-    infra_failure_backoff_max: Duration,
-    /// Exponential backoff applied at the actor level after consecutive infrastructure-classified
-    /// failures. Rebuilt on every successful submission / intrinsic failure so the next infra
-    /// outage starts from `infra_failure_backoff_initial` again.
-    infra_backoff: ExponentialBackoff,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures.
+    request_backoff_initial: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    request_backoff_max: Duration,
 }
 
 impl AccountActor {
@@ -286,12 +271,8 @@ impl AccountActor {
             idle_timeout: actor_context.idle_timeout,
             request_tx: actor_context.request_tx.clone(),
             max_cycles: actor_context.max_cycles,
-            infra_failure_backoff_initial: actor_context.infra_failure_backoff_initial,
-            infra_failure_backoff_max: actor_context.infra_failure_backoff_max,
-            infra_backoff: build_infra_backoff(
-                actor_context.infra_failure_backoff_initial,
-                actor_context.infra_failure_backoff_max,
-            ),
+            request_backoff_initial: actor_context.request_backoff_initial,
+            request_backoff_max: actor_context.request_backoff_max,
         }
     }
 
@@ -373,24 +354,12 @@ impl AccountActor {
                     if let Some(tx_candidate) = tx_candidate {
                         match self.execute_transactions(account_id, tx_candidate).await {
                             ExecutionOutcome::Inflight(tx_id) => {
-                                self.reset_infra_backoff();
                                 self.mode = ActorMode::TransactionInflight(tx_id);
                             },
-                            ExecutionOutcome::IntrinsicFailure => {
-                                self.reset_infra_backoff();
-                                self.mode = ActorMode::NoViableNotes;
-                            },
-                            ExecutionOutcome::InfrastructureFailure => {
-                                let sleep = self
-                                    .infra_backoff
-                                    .next()
-                                    .unwrap_or(self.infra_failure_backoff_max);
-                                tracing::warn!(
-                                    %account_id,
-                                    sleep_ms = sleep.as_millis() as u64,
-                                    "sleeping after infrastructure failure before retrying",
-                                );
-                                tokio::time::sleep(sleep).await;
+                            // The batch failed terminally: offending notes have been marked
+                            // failed; let the next loop iteration re-query the DB to decide
+                            // whether anything remains to consume for this account.
+                            ExecutionOutcome::Failure => {
                                 self.mode = ActorMode::NotesAvailable;
                             },
                         }
@@ -444,9 +413,10 @@ impl AccountActor {
 
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
-    /// Returns an [`ExecutionOutcome`] which the caller maps to the next [`ActorMode`].
-    /// Infrastructure failures do *not* mark notes as failed and request the caller to sleep
-    /// before retrying the same candidate.
+    /// Transient infrastructure failures (prover unreachable, validator/block-producer transport
+    /// hiccup, store gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
+    /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
+    /// are marked failed and the actor moves on.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &mut self,
@@ -464,6 +434,8 @@ impl AccountActor {
             self.script_cache.clone(),
             self.db.clone(),
             self.max_cycles,
+            self.request_backoff_initial,
+            self.request_backoff_max,
         );
 
         let notes = tx_candidate.notes.clone();
@@ -492,24 +464,38 @@ impl AccountActor {
                 }
                 ExecutionOutcome::Inflight(tx_id)
             },
-            Err(err) => match classify_failure(account_id, &notes, err) {
-                FailureOutcome::Infrastructure => ExecutionOutcome::InfrastructureFailure,
-                FailureOutcome::Intrinsic(failed_notes) => {
-                    if !failed_notes.is_empty() {
-                        self.mark_notes_failed(&failed_notes, block_num).await;
-                    }
-                    ExecutionOutcome::IntrinsicFailure
-                },
+            Err(err) => {
+                let error_msg = err.as_report();
+                tracing::error!(
+                    %account_id,
+                    ?note_ids,
+                    err = %error_msg,
+                    "network transaction failed",
+                );
+                let failed_notes: Vec<_> = match err {
+                    execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
+                    other => {
+                        let error: NoteError = Arc::new(other);
+                        notes
+                            .iter()
+                            .map(|note| {
+                                tracing::info!(
+                                    note.id = %note.to_inner().as_note().id(),
+                                    nullifier = %note.nullifier(),
+                                    err = %error_msg,
+                                    "note failed: transaction execution error",
+                                );
+                                (note.nullifier(), error.clone())
+                            })
+                            .collect()
+                    },
+                };
+                if !failed_notes.is_empty() {
+                    self.mark_notes_failed(&failed_notes, block_num).await;
+                }
+                ExecutionOutcome::Failure
             },
         }
-    }
-
-    /// Rebuilds the actor-local infra-failure backoff iterator so the next infra outage starts
-    /// from `infra_failure_backoff_initial`. Called after any successful submission or any
-    /// intrinsic failure.
-    fn reset_infra_backoff(&mut self) {
-        self.infra_backoff =
-            build_infra_backoff(self.infra_failure_backoff_initial, self.infra_failure_backoff_max);
     }
 
     /// Sends requests to the coordinator to cache note scripts fetched from the remote store.
@@ -567,193 +553,4 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
             (f.note.nullifier(), Arc::new(f.error) as NoteError)
         })
         .collect()
-}
-
-/// What the actor should do with a failed [`execute::NtxError`].
-#[derive(Debug)]
-enum FailureOutcome {
-    /// An infrastructure-level component failed (prover unreachable, validator/block-producer
-    /// transport error, our own checker erroring). Notes are *not* penalised and caller should
-    /// sleep for the configured backoff and retry the same candidate.
-    Infrastructure,
-    /// The transaction batch is intrinsically bad (notes failed consumability, executor or local
-    /// prover rejected the witness, validator/block-producer rejected the content). Caller should
-    /// mark the carried notes failed and idle.
-    Intrinsic(Vec<(Nullifier, NoteError)>),
-}
-
-/// Decides what to do with a failed [`execute::NtxError`]: which notes to mark failed, and the
-/// resulting [`FailureOutcome`].
-///
-/// - Infrastructure errors return `Infrastructure`: caller sleeps and retries.
-/// - Intrinsic `AllNotesFailed` returns per-note errors carried in the variant.
-/// - Any other intrinsic variant attributes the wrapped batch-level error to every note in the
-///   batch.
-fn classify_failure(
-    account_id: AccountId,
-    notes: &[InflightNetworkNote],
-    err: execute::NtxError,
-) -> FailureOutcome {
-    let error_msg = err.as_report();
-    let note_ids: Vec<_> = notes.iter().map(|n| n.to_inner().as_note().id()).collect();
-    match err.kind() {
-        ErrorKind::Infrastructure => {
-            tracing::warn!(
-                %account_id,
-                ?note_ids,
-                err = %error_msg,
-                "network transaction failed due to infrastructure error; notes not penalised, \
-                 will retry after backoff",
-            );
-            FailureOutcome::Infrastructure
-        },
-        ErrorKind::Intrinsic => {
-            tracing::error!(
-                %account_id,
-                ?note_ids,
-                err = %error_msg,
-                "network transaction failed",
-            );
-            let failed_notes: Vec<_> = match err {
-                execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
-                other => {
-                    let error: NoteError = Arc::new(other);
-                    notes
-                        .iter()
-                        .map(|note| {
-                            tracing::info!(
-                                note.id = %note.to_inner().as_note().id(),
-                                nullifier = %note.nullifier(),
-                                err = %error_msg,
-                                "note failed: transaction execution error",
-                            );
-                            (note.nullifier(), error.clone())
-                        })
-                        .collect()
-                },
-            };
-            FailureOutcome::Intrinsic(failed_notes)
-        },
-    }
-}
-
-/// Builds the [`ExponentialBackoff`] used at the actor level after infrastructure-classified
-/// failures.
-fn build_infra_backoff(initial: Duration, max: Duration) -> ExponentialBackoff {
-    ExponentialBuilder::default()
-        .with_min_delay(initial)
-        .with_max_delay(max)
-        .with_factor(2.0)
-        .without_max_times()
-        .with_jitter()
-        .build()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use miden_tx::{TransactionExecutorError, TransactionProverError};
-
-    use super::{FailureOutcome, build_infra_backoff, classify_failure, execute};
-    use crate::inflight_note::InflightNetworkNote;
-    use crate::test_utils::{mock_network_account_id, mock_single_target_note};
-
-    #[test]
-    fn infra_backoff_is_bounded_and_unbounded_in_length() {
-        let initial = Duration::from_secs(1);
-        let max = Duration::from_secs(30);
-        let upper_with_jitter = max.saturating_mul(2);
-        let mut backoff = build_infra_backoff(initial, max);
-
-        for _ in 0..50 {
-            let delay = backoff.next().expect("backoff should be unbounded");
-            assert!(
-                delay <= upper_with_jitter,
-                "delay {delay:?} exceeds {upper_with_jitter:?} (max + jitter)",
-            );
-        }
-    }
-
-    /// Returns 3 distinct mock notes targeting the same account.
-    fn mock_notes() -> Vec<InflightNetworkNote> {
-        let account = mock_network_account_id();
-        (0u8..3)
-            .map(|seed| InflightNetworkNote::new(mock_single_target_note(account, seed)))
-            .collect()
-    }
-
-    fn mock_account_id() -> miden_protocol::account::AccountId {
-        mock_network_account_id().inner()
-    }
-
-    /// Infrastructure errors return `Infrastructure`, no notes are penalised.
-    #[test]
-    fn classify_failure_infra_skips_marking_notes() {
-        let notes = mock_notes();
-        let cases: Vec<execute::NtxError> = vec![
-            execute::NtxError::Submission(tonic::Status::unavailable("bp down")),
-            execute::NtxError::Submission(tonic::Status::deadline_exceeded("timeout")),
-            execute::NtxError::Submission(tonic::Status::internal("internal")),
-            execute::NtxError::Proving(TransactionProverError::other("remote prover unreachable")),
-            execute::NtxError::NoteFilter(miden_tx::NoteCheckerError::InputNoteCountOutOfRange(0)),
-            execute::NtxError::InputNotes(
-                miden_protocol::errors::TransactionInputError::TooManyInputNotes(usize::MAX),
-            ),
-        ];
-        for err in cases {
-            let display = format!("{err:?}");
-            let outcome = classify_failure(mock_account_id(), &notes, err);
-            assert!(
-                matches!(outcome, FailureOutcome::Infrastructure),
-                "expected Infrastructure for `{display}`, got {outcome:?}",
-            );
-        }
-    }
-
-    /// `Submission` with a content-rejection code (`InvalidArgument`) is intrinsic, every note
-    /// in the batch is marked failed with the same wrapped error.
-    #[test]
-    fn classify_failure_submission_invalid_argument_marks_all_notes() {
-        let notes = mock_notes();
-        let err = execute::NtxError::Submission(tonic::Status::invalid_argument("bad tx"));
-        let outcome = classify_failure(mock_account_id(), &notes, err);
-        let FailureOutcome::Intrinsic(failed) = outcome else {
-            panic!("expected Intrinsic, got {outcome:?}");
-        };
-        assert_eq!(failed.len(), notes.len(), "all notes should be marked failed");
-        for note in &notes {
-            assert!(
-                failed.iter().any(|(n, _)| *n == note.nullifier()),
-                "missing nullifier {} in failed list",
-                note.nullifier(),
-            );
-        }
-    }
-
-    /// A structured (non-`Other`) `Execution` variant is intrinsic, the local execution rejected
-    /// the batch, so all notes are marked failed.
-    #[test]
-    fn classify_failure_local_execution_marks_all_notes() {
-        let notes = mock_notes();
-        let err = execute::NtxError::Execution(TransactionExecutorError::FeeAssetMustBeFungible);
-        let outcome = classify_failure(mock_account_id(), &notes, err);
-        let FailureOutcome::Intrinsic(failed) = outcome else {
-            panic!("expected Intrinsic, got {outcome:?}");
-        };
-        assert_eq!(failed.len(), notes.len());
-    }
-
-    /// `AllNotesFailed` carries its own per-note attribution, so an empty per-note vec produces
-    /// no DB updates while still being intrinsic.
-    #[test]
-    fn classify_failure_all_notes_failed_uses_per_note_attribution() {
-        let notes = mock_notes();
-        let err = execute::NtxError::AllNotesFailed(Vec::new());
-        let outcome = classify_failure(mock_account_id(), &notes, err);
-        let FailureOutcome::Intrinsic(failed) = outcome else {
-            panic!("expected Intrinsic, got {outcome:?}");
-        };
-        assert!(failed.is_empty());
-    }
 }
