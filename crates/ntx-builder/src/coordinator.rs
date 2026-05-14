@@ -289,14 +289,9 @@ impl Coordinator {
     ///
     /// This must be called BEFORE sending notifications to actors. Returns a [`WriteEventResult`]
     /// with the accounts to notify and cancel.
-    ///
-    /// `advance_next_block_to_sync` is forwarded to `handle_block_committed` so the builder can
-    /// defer advancing `next_block_to_sync` while startup catch-up is still running. It has no
-    /// effect for non-`BlockCommitted` events.
     pub async fn write_event(
         &self,
         event: &MempoolEvent,
-        advance_next_block_to_sync: bool,
     ) -> Result<WriteEventResult, DatabaseError> {
         match event {
             MempoolEvent::TransactionAdded {
@@ -322,7 +317,6 @@ impl Coordinator {
                         txs.clone(),
                         header.block_num(),
                         header.as_ref().clone(),
-                        advance_next_block_to_sync,
                     )
                     .await?;
                 Ok(WriteEventResult { accounts_to_notify: affected_accounts })

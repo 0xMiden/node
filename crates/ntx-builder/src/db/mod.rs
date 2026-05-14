@@ -138,34 +138,21 @@ impl Db {
             .await
     }
 
-    /// Handles a `BlockCommitted` mempool event by committing transaction effects.
+    /// Handles a `BlockCommitted` mempool event by committing transaction effects and advancing
+    /// both the chain tip and `next_block_to_sync` (set to `block_num + 1`).
     ///
     /// Returns the list of affected account IDs that should be notified.
-    ///
-    /// `advance_next_block_to_sync` controls whether `next_block_to_sync` is advanced alongside
-    /// the chain tip.
-    ///
-    /// During startup catch-up the caller passes `false`. If we advanced it here and then
-    /// crashed mid-catch-up, the next restart would treat blocks we never actually pulled from
-    /// the store as already synced and skip fetching their unconsumed-notes delta. Catch-up
-    /// advances it explicitly once it completes successfully.
-    ///
-    /// In steady-state the caller passes `true`: the mempool stream is the source of truth for
-    /// new blocks, so `next_block_to_sync` can follow the chain tip, storing `block_num + 1`.
     pub async fn handle_block_committed(
         &self,
         txs: Vec<TransactionId>,
         block_num: BlockNumber,
         header: BlockHeader,
-        advance_next_block_to_sync: bool,
     ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("handle_block_committed", move |conn| {
                 let affected = queries::commit_block_effects(conn, &txs)?;
                 queries::upsert_chain_state(conn, block_num, &header)?;
-                if advance_next_block_to_sync {
-                    queries::set_next_block_to_sync(conn, block_num.child())?;
-                }
+                queries::set_next_block_to_sync(conn, block_num.child())?;
                 Ok(affected)
             })
             .await
@@ -317,34 +304,10 @@ mod tests {
     use super::*;
     use crate::test_utils::mock_block_header;
 
-    /// `handle_block_committed` advances the chain tip but NOT `next_block_to_sync` when
-    /// `advance_next_block_to_sync=false`.
+    /// `handle_block_committed` advances both the chain tip AND `next_block_to_sync`
+    /// (set to `block_num + 1`).
     #[tokio::test]
-    async fn handle_block_committed_does_not_advance_next_block_to_sync_when_gated() {
-        let (db, _dir) = Db::test_setup().await;
-
-        // Seed chain_state at block 0 so the row exists.
-        let zero = BlockNumber::from(0u32);
-        db.upsert_chain_state(zero, mock_block_header(zero)).await.unwrap();
-
-        let block_num = BlockNumber::from(5u32);
-        let header = mock_block_header(block_num);
-        db.handle_block_committed(vec![], block_num, header, false).await.unwrap();
-
-        let next_to_sync = db.read_next_block_to_sync().await.unwrap();
-        assert_eq!(
-            next_to_sync,
-            BlockNumber::GENESIS,
-            "next_block_to_sync must remain at GENESIS while catch-up is gated; got {next_to_sync}",
-        );
-    }
-
-    /// `handle_block_committed` advances both the chain tip AND `next_block_to_sync` when
-    /// `advance_next_block_to_sync=true`. This is the steady-state path: the mempool stream is
-    /// delivering all the data we'd otherwise need from the store, so `next_block_to_sync` can
-    /// follow the chain tip (set to `block_num + 1` which is the next block to sync).
-    #[tokio::test]
-    async fn handle_block_committed_advances_next_block_to_sync_when_caught_up() {
+    async fn handle_block_committed_advances_next_block_to_sync() {
         let (db, _dir) = Db::test_setup().await;
 
         let zero = BlockNumber::from(0u32);
@@ -352,43 +315,9 @@ mod tests {
 
         let block_num = BlockNumber::from(5u32);
         let header = mock_block_header(block_num);
-        db.handle_block_committed(vec![], block_num, header, true).await.unwrap();
+        db.handle_block_committed(vec![], block_num, header).await.unwrap();
 
         let next_to_sync = db.read_next_block_to_sync().await.unwrap();
         assert_eq!(next_to_sync, block_num.child());
-    }
-
-    /// Going from gated → caught-up → gated again, `next_block_to_sync` should advance only when
-    /// the flag is true and never regress when it's false.
-    #[tokio::test]
-    async fn handle_block_committed_next_block_to_sync_is_monotone_across_modes() {
-        let (db, _dir) = Db::test_setup().await;
-
-        let zero = BlockNumber::from(0u32);
-        db.upsert_chain_state(zero, mock_block_header(zero)).await.unwrap();
-
-        // Gated: chain tip moves to 5, next_block_to_sync stays at GENESIS.
-        db.handle_block_committed(vec![], BlockNumber::from(5u32), mock_block_header(zero), false)
-            .await
-            .unwrap();
-        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::GENESIS);
-
-        // Caught up: next_block_to_sync advances to 8 (= 7.child()).
-        db.handle_block_committed(vec![], BlockNumber::from(7u32), mock_block_header(zero), true)
-            .await
-            .unwrap();
-        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::from(7u32).child(),);
-
-        // Gated again (shouldn't normally happen, but the guard must hold): stays at 8.
-        db.handle_block_committed(vec![], BlockNumber::from(9u32), mock_block_header(zero), false)
-            .await
-            .unwrap();
-        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::from(7u32).child(),);
-
-        // Caught up at higher block.
-        db.handle_block_committed(vec![], BlockNumber::from(10u32), mock_block_header(zero), true)
-            .await
-            .unwrap();
-        assert_eq!(db.read_next_block_to_sync().await.unwrap(), BlockNumber::from(10u32).child(),);
     }
 }

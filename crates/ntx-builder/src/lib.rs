@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use actor::AccountActorContext;
 use anyhow::Context;
-use builder::{CatchUpState, MempoolEventStream};
+use builder::{CatchUpInputs, MempoolEventStream};
 use chain_state::SharedChainState;
 use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
@@ -353,7 +353,7 @@ impl NtxBuilderConfig {
             actor_context,
             mempool_events,
             actor_request_rx,
-            CatchUpState::new(next_block_to_sync, inflight_affected),
+            CatchUpInputs::new(next_block_to_sync, inflight_affected),
         ))
     }
 }
