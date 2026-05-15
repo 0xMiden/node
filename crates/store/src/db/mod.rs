@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use diesel::{Connection, SqliteConnection};
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
@@ -348,6 +349,19 @@ impl Db {
     ) -> Result<Option<BlockHeader>> {
         self.transact("block headers by block number", move |conn| {
             let val = queries::select_block_header_by_block_num(conn, maybe_block_number)?;
+            Ok(val)
+        })
+        .await
+    }
+
+    /// Search for a [`BlockHeader`] and its [`Signature`] from the database by its `block_num`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_block_header_and_signature_by_block_num(
+        &self,
+        block_number: BlockNumber,
+    ) -> Result<Option<(BlockHeader, Signature)>> {
+        self.transact("block headers and signature by block number", move |conn| {
+            let val = queries::select_block_header_and_signature_by_block_num(conn, block_number)?;
             Ok(val)
         })
         .await

@@ -95,11 +95,7 @@ pub enum Endpoint {
         block_range: u32,
     },
     #[command(name = "sync-chain-mmr")]
-    SyncChainMmr {
-        /// Block range size for each request (number of blocks to query).
-        #[arg(short, long, value_name = "BLOCK_RANGE", default_value = "1000")]
-        block_range: u32,
-    },
+    SyncChainMmr,
     #[command(name = "load-state")]
     LoadState,
     #[command(name = "get-account")]
@@ -158,8 +154,8 @@ async fn main() {
                 )
                 .await;
             },
-            Endpoint::SyncChainMmr { block_range } => {
-                bench_sync_chain_mmr(data_directory, iterations, concurrency, block_range).await;
+            Endpoint::SyncChainMmr => {
+                bench_sync_chain_mmr(data_directory, iterations, concurrency).await;
             },
             Endpoint::LoadState => {
                 load_state(&data_directory).await;
