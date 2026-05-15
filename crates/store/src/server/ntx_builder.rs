@@ -116,7 +116,9 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             // SAFETY: Network notes are filtered in the database, so they should have details;
             // otherwise the state would be corrupted
             let (assets, recipient) = note.details.unwrap().into_parts();
-            let note = Note::new(assets, note.metadata, recipient);
+            let partial_metadata = *note.metadata.partial_metadata();
+            let note =
+                Note::with_attachments(assets, partial_metadata, recipient, note.attachments);
             network_notes.push(note.into());
         }
 

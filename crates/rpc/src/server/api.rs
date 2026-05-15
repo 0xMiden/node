@@ -297,20 +297,8 @@ impl api_server::Api for RpcService {
         let request_ref = request.get_ref();
 
         let span = Span::current();
-        span.set_attribute("block_range.from", request_ref.block_from);
-        match request_ref.upper_bound {
-            Some(proto::rpc::sync_chain_mmr_request::UpperBound::BlockNum(block_num)) => {
-                span.set_attribute("block_range.to", block_num);
-            },
-            Some(proto::rpc::sync_chain_mmr_request::UpperBound::ChainTip(chain_tip)) => {
-                let chain_tip = proto::rpc::ChainTip::try_from(chain_tip)
-                    .unwrap_or(proto::rpc::ChainTip::Unspecified);
-                span.set_attribute("sync.target", chain_tip.as_str_name());
-            },
-            None => {
-                span.set_attribute("sync.target", "CHAIN_TIP_COMMITTED");
-            },
-        }
+        span.set_attribute("current_block_height", request_ref.current_block_height);
+        span.set_attribute("finality_level", request_ref.finality_level().as_str_name());
 
         debug!(target: COMPONENT, request = ?request_ref);
 

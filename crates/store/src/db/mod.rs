@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use diesel::{Connection, SqliteConnection};
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
@@ -15,6 +16,7 @@ use miden_protocol::asset::{Asset, AssetVaultKey};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
+    NoteAttachments,
     NoteDetails,
     NoteId,
     NoteInclusionProof,
@@ -170,7 +172,7 @@ impl TransactionRecord {
                 initial_state_commitment: Some(self.header.initial_state_commitment().into()),
                 final_state_commitment: Some(self.header.final_state_commitment().into()),
                 input_notes: self.header.input_notes().iter().cloned().map(Into::into).collect(),
-                output_notes: self.header.output_notes().iter().cloned().map(Into::into).collect(),
+                output_notes: self.header.output_notes().iter().copied().map(Into::into).collect(),
                 fee: Some(Asset::from(self.header.fee()).into()),
             }),
             block_num: self.block_num.as_u32(),
@@ -187,6 +189,7 @@ pub struct NoteRecord {
     pub note_commitment: Word,
     pub metadata: NoteMetadata,
     pub details: Option<NoteDetails>,
+    pub attachments: NoteAttachments,
     pub inclusion_path: SparseMerklePath,
 }
 
@@ -201,6 +204,7 @@ impl From<NoteRecord> for proto::note::CommittedNote {
         let note = Some(proto::note::Note {
             metadata: Some(note.metadata.into()),
             details: note.details.map(|details| details.to_bytes()),
+            attachments: note.attachments.to_bytes(),
         });
         Self { inclusion_proof, note }
     }
@@ -223,14 +227,14 @@ pub struct NoteSyncRecord {
 
 impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
     fn from(note: NoteSyncRecord) -> Self {
-        let metadata_header = Some(note.metadata.to_header().into());
+        let metadata = Some(note.metadata.into());
         let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
             note_id: Some(note.note_id.into()),
             block_num: note.block_num.as_u32(),
             note_index_in_block: note.note_index.leaf_index_value().into(),
             inclusion_path: Some(note.inclusion_path.into()),
         });
-        Self { metadata_header, inclusion_proof }
+        Self { metadata, inclusion_proof }
     }
 }
 
@@ -345,6 +349,19 @@ impl Db {
     ) -> Result<Option<BlockHeader>> {
         self.transact("block headers by block number", move |conn| {
             let val = queries::select_block_header_by_block_num(conn, maybe_block_number)?;
+            Ok(val)
+        })
+        .await
+    }
+
+    /// Search for a [`BlockHeader`] and its [`Signature`] from the database by its `block_num`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_block_header_and_signature_by_block_num(
+        &self,
+        block_number: BlockNumber,
+    ) -> Result<Option<(BlockHeader, Signature)>> {
+        self.transact("block headers and signature by block number", move |conn| {
+            let val = queries::select_block_header_and_signature_by_block_num(conn, block_number)?;
             Ok(val)
         })
         .await
