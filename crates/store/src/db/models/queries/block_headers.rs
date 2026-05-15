@@ -63,6 +63,30 @@ pub(crate) fn select_block_header_by_block_num(
     row.map(std::convert::TryInto::try_into).transpose()
 }
 
+/// Select a [`BlockHeader`] and its [`Signature`] from the DB by its `block_num` using the given
+/// [`SqliteConnection`].
+///
+/// # Returns
+///
+/// The block header with the given block height and its validator signature is returned.
+///
+/// ```sql
+/// SELECT block_num, block_header, signature
+/// FROM block_headers
+/// WHERE block_num = ?1
+/// ```
+pub(crate) fn select_block_header_and_signature_by_block_num(
+    conn: &mut SqliteConnection,
+    block_number: BlockNumber,
+) -> Result<Option<(BlockHeader, Signature)>, DatabaseError> {
+    let sel = SelectDsl::select(schema::block_headers::table, BlockHeaderRawRow::as_select());
+    let row = sel
+        .filter(schema::block_headers::block_num.eq(block_number.to_raw_sql()))
+        .get_result::<BlockHeaderRawRow>(conn)
+        .optional()?;
+    row.map(std::convert::TryInto::try_into).transpose()
+}
+
 /// Select block headers for the given block numbers.
 ///
 /// # Parameters
@@ -175,6 +199,7 @@ pub struct BlockHeaderRawRow {
     pub signature: Vec<u8>,
     pub commitment: Vec<u8>,
 }
+
 impl TryInto<BlockHeader> for BlockHeaderRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<BlockHeader, Self::Error> {
