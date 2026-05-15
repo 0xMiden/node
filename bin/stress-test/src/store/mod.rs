@@ -645,10 +645,10 @@ pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, co
 /// - the response.
 async fn sync_chain_mmr(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    current_block_height: u32,
+    current_client_block_height: u32,
 ) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
-        current_block_height,
+        current_client_block_height,
         finality_level: proto::rpc::FinalityLevel::Committed.into(),
     };
 

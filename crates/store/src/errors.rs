@@ -276,7 +276,7 @@ pub enum SyncChainMmrError {
     #[error("start block is not known")]
     FutureBlock {
         chain_tip: BlockNumber,
-        current_block_height: BlockNumber,
+        current_client_block_height: BlockNumber,
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),

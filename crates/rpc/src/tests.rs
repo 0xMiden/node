@@ -685,7 +685,7 @@ async fn sync_chain_mmr_returns_delta() {
     let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
 
     let request = proto::rpc::SyncChainMmrRequest {
-        current_block_height: 0,
+        current_client_block_height: 0,
         finality_level: proto::rpc::FinalityLevel::Committed.into(),
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");

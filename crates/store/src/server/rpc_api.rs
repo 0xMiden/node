@@ -144,7 +144,7 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         let request = request.into_inner();
 
-        let current_block_height = BlockNumber::from(request.current_block_height);
+        let current_client_block_height = BlockNumber::from(request.current_client_block_height);
 
         // Determine finality level of the tip to sync to or default to the committed tip.
         let sync_target = match request.finality_level() {
@@ -154,13 +154,13 @@ impl rpc_server::Rpc for StoreApi {
             proto::rpc::FinalityLevel::Proven => self.state.chain_tip(Finality::Proven).await,
         };
 
-        if current_block_height > sync_target {
+        if current_client_block_height > sync_target {
             Err(SyncChainMmrError::FutureBlock {
                 chain_tip: sync_target,
-                current_block_height,
+                current_client_block_height,
             })?;
         }
-        let block_range = current_block_height..=sync_target;
+        let block_range = current_client_block_height..=sync_target;
         let (mmr_delta, block_header, block_signature) =
             self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;
 
