@@ -16,17 +16,25 @@ use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
     AccountBuilder,
+    AccountComponent,
     AccountId,
     AccountStorageMode,
     AccountType,
     PartialAccount,
     StorageMapKey,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{
+    Asset,
+    AssetAmount,
+    AssetVaultKey,
+    AssetWitness,
+    FungibleAsset,
+    TokenSymbol,
+};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
+use miden_protocol::note::{Note, NoteAttachments, NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{
     AccountInputs,
     InputNote,
@@ -38,9 +46,8 @@ use miden_protocol::transaction::{
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{Felt, MastForest, Word};
 use miden_standards::account::auth::AuthSingleSig;
-use miden_standards::account::faucets::BasicFungibleFaucet;
+use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
-use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
@@ -193,7 +200,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
                 wallet_id,
                 vec![asset],
                 miden_protocol::note::NoteType::Public,
-                miden_protocol::note::NoteAttachment::default(),
+                NoteAttachments::empty(),
                 &mut seed_rng,
             )
             .expect("note creation failed")
@@ -335,20 +342,19 @@ fn create_faucet() -> (Account, SecretKey) {
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed = [0_u8; 32];
 
-    let token_symbol = TokenSymbol::new("TEST").unwrap();
-    let token_metadata = FungibleTokenMetadata::builder(
-        TokenName::new("TEST").unwrap(),
-        token_symbol,
-        2,
-        FungibleAsset::MAX_AMOUNT,
-    )
-    .build()
-    .unwrap();
+    let fungible_faucet: AccountComponent = FungibleFaucet::builder()
+        .name(TokenName::new("BENCHMARK").unwrap())
+        .symbol(TokenSymbol::new("BCM").unwrap())
+        .decimals(2)
+        .max_supply(AssetAmount::new(FungibleAsset::MAX_AMOUNT).unwrap())
+        .build()
+        .unwrap()
+        .into();
+
     let faucet = AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
-        .with_component(token_metadata)
-        .with_component(BasicFungibleFaucet)
+        .with_component(fungible_faucet)
         .with_components(TokenPolicyManager::new(
             PolicyAuthority::AuthControlled,
             MintPolicyConfig::AllowAll,

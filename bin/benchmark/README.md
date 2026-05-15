@@ -153,6 +153,8 @@ Start each component. The example below backgrounds them with `nohup` and captur
 ```sh
 mkdir -p logs
 
+DATA=./node-data
+
 nohup miden-validator start \
   --listen 127.0.0.1:50101 \
   --data-directory "$DATA/validator" \

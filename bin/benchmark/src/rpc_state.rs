@@ -8,8 +8,11 @@
 //! generation.
 
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::rpc::sync_chain_mmr_request::UpperBound;
-use miden_node_proto::generated::rpc::{BlockHeaderByNumberRequest, SyncChainMmrRequest};
+use miden_node_proto::generated::rpc::{
+    BlockHeaderByNumberRequest,
+    FinalityLevel,
+    SyncChainMmrRequest,
+};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::{MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::transaction::PartialBlockchain;
@@ -68,9 +71,10 @@ pub(crate) async fn fetch_partial_blockchain(
 
     if tip_block_num >= 2 {
         let request = SyncChainMmrRequest {
-            block_from: 0,
-            upper_bound: Some(UpperBound::BlockNum(tip_block_num)),
+            current_client_block_height: 0,
+            finality_level: FinalityLevel::Committed.into(),
         };
+
         let response = client
             .sync_chain_mmr(request)
             .await
