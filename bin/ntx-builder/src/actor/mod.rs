@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use candidate::TransactionCandidate;
+pub use execute::compile_expiration_tx_script;
 use futures::FutureExt;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
@@ -14,7 +15,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::TransactionScript;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::FailedNote;
 use tokio::sync::{Notify, Semaphore, mpsc};
@@ -71,7 +72,7 @@ pub struct State {
 }
 
 /// Per-actor configuration knobs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ActorConfig {
     /// Maximum number of notes per transaction.
     pub max_notes_per_tx: NonZeroUsize,
@@ -81,6 +82,9 @@ pub struct ActorConfig {
     pub idle_timeout: Duration,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
+    /// Pre-compiled tx script that sets each submitted transaction's expiration block delta.
+    /// Built once at builder startup and shared by all actors.
+    pub expiration_script: TransactionScript,
 }
 
 // ACCOUNT ACTOR CONTEXT
@@ -133,6 +137,7 @@ impl AccountActorContext {
                 max_note_attempts: 1,
                 idle_timeout: Duration::from_secs(60),
                 max_cycles: 1 << 18,
+                expiration_script: crate::actor::compile_expiration_tx_script(5),
             },
             request_tx,
         }
@@ -147,7 +152,10 @@ impl AccountActorContext {
 enum ActorMode {
     NoViableNotes,
     NotesAvailable,
-    TransactionInflight(TransactionId),
+    /// The actor has just submitted a transaction and is waiting for the next coordinator
+    /// notification (a committed block) before doing any more work for this account. This avoids
+    /// busy-looping with the same notes between submit and block commit.
+    WaitForNextBlock,
 }
 
 // ACCOUNT ACTOR
@@ -211,7 +219,7 @@ impl AccountActor {
             account_id,
             clients: actor_context.clients.clone(),
             state: actor_context.state.clone(),
-            config: actor_context.config,
+            config: actor_context.config.clone(),
             notify,
             request: actor_context.request_tx.clone(),
         }
@@ -251,7 +259,7 @@ impl AccountActor {
             // Enable or disable transaction execution based on actor mode.
             let tx_permit_acquisition = match mode {
                 // Disable transaction execution.
-                ActorMode::NoViableNotes | ActorMode::TransactionInflight(_) => {
+                ActorMode::NoViableNotes | ActorMode::WaitForNextBlock => {
                     std::future::pending().boxed()
                 },
                 // Enable transaction execution.
@@ -268,23 +276,7 @@ impl AccountActor {
             tokio::select! {
                 // Handle coordinator notifications. On notification, re-evaluate state from DB.
                 _ = self.notify.notified() => {
-                    match mode {
-                        ActorMode::TransactionInflight(awaited_id) => {
-                            // Check DB: is the inflight tx still pending?
-                            let exists = self
-                                .state
-                                .db
-                                .transaction_exists(awaited_id)
-                                .await
-                                .context("failed to check transaction status")?;
-                            if exists {
-                                mode = ActorMode::NotesAvailable;
-                            }
-                        },
-                        _ => {
-                            mode = ActorMode::NotesAvailable;
-                        }
-                    }
+                    mode = ActorMode::NotesAvailable;
                 },
                 // Execute transactions.
                 permit = tx_permit_acquisition => {
@@ -418,6 +410,7 @@ impl AccountActor {
             self.state.script_cache.clone(),
             self.state.db.clone(),
             self.config.max_cycles,
+            self.config.expiration_script.clone(),
         );
 
         let notes = tx_candidate.notes.clone();
@@ -444,7 +437,7 @@ impl AccountActor {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                ActorMode::TransactionInflight(tx_id)
+                ActorMode::WaitForNextBlock
             },
             // Transaction execution failed.
             Err(err) => {

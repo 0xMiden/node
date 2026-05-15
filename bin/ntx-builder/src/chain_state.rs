@@ -49,19 +49,6 @@ impl ChainState {
 
     /// Updates the chain tip and prunes old blocks from the MMR.
     fn update_chain_tip(&mut self, tip: BlockHeader, max_block_count: usize) {
-        // Skip blocks already reflected in the chain state. A `BlockCommitted` event may arrive
-        // for a block whose state was already loaded from the store during startup: the mempool
-        // subscription is established first and then the chain tip is fetched, so any block
-        // committed in that window produces an event for state we have already ingested.
-        if tip.block_num() <= self.chain_tip_header.block_num() {
-            tracing::debug!(
-                event_block = %tip.block_num(),
-                current_tip = %self.chain_tip_header.block_num(),
-                "skipping BlockCommitted event for block already in chain state",
-            );
-            return;
-        }
-
         // Update MMR which lags by one block.
         let mmr_tip = self.chain_tip_header.clone();
         Arc::make_mut(&mut self.chain_mmr).add_block(&mmr_tip, true);

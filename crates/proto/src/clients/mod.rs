@@ -116,6 +116,8 @@ type GeneratedStoreClientForNtxBuilder =
 type GeneratedStoreClientForBlockProducer =
     generated::store::block_producer_client::BlockProducerClient<InterceptedChannel>;
 type GeneratedStoreClientForRpc = generated::store::rpc_client::RpcClient<InterceptedChannel>;
+type GeneratedStoreReplicaClient =
+    generated::store::store_replica_client::StoreReplicaClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
@@ -135,6 +137,8 @@ pub struct StoreNtxBuilderClient(GeneratedStoreClientForNtxBuilder);
 pub struct StoreBlockProducerClient(GeneratedStoreClientForBlockProducer);
 #[derive(Debug, Clone)]
 pub struct StoreRpcClient(GeneratedStoreClientForRpc);
+#[derive(Debug, Clone)]
+pub struct StoreReplicaClient(GeneratedStoreReplicaClient);
 #[derive(Debug, Clone)]
 pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
 #[derive(Debug, Clone)]
@@ -208,6 +212,20 @@ impl DerefMut for StoreRpcClient {
 
 impl Deref for StoreRpcClient {
     type Target = GeneratedStoreClientForRpc;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for StoreReplicaClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Deref for StoreReplicaClient {
+    type Target = GeneratedStoreReplicaClient;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -311,6 +329,12 @@ impl GrpcClient for StoreBlockProducerClient {
 impl GrpcClient for StoreRpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedStoreClientForRpc::new(InterceptedService::new(channel, interceptor)))
+    }
+}
+
+impl GrpcClient for StoreReplicaClient {
+    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
+        Self(GeneratedStoreReplicaClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 

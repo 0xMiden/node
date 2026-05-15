@@ -30,9 +30,11 @@ use miden_protocol::transaction::{
     TransactionArgs,
     TransactionId,
     TransactionInputs,
+    TransactionScript,
 };
 use miden_protocol::vm::FutureMaybeSend;
 use miden_remote_prover_client::RemoteTransactionProver;
+use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::AccountTargetNetworkNote;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
@@ -74,6 +76,19 @@ pub enum NtxError {
 
 type NtxResult<T> = Result<T, NtxError>;
 
+/// Compiles the tx script that sets the expiration block delta on every network transaction.
+///
+/// Called once at builder startup; the resulting [`TransactionScript`] is shared across actors
+/// and cloned cheaply (`Arc<MastForest>` internally).
+pub fn compile_expiration_tx_script(tx_expiration_delta: u16) -> TransactionScript {
+    let script_src = format!(
+        "begin\n    push.{tx_expiration_delta}\n    exec.::miden::protocol::tx::update_expiration_block_delta\nend",
+    );
+    CodeBuilder::new()
+        .compile_tx_script(script_src.as_str())
+        .expect("expiration tx script should compile")
+}
+
 /// The result of a successful transaction execution.
 ///
 /// Contains the transaction ID, any notes that failed during filtering, and note scripts fetched
@@ -109,10 +124,15 @@ pub struct NtxContext {
 
     /// Maximum number of VM execution cycles for network transactions.
     max_cycles: u32,
+
+    /// Pre-compiled tx script that sets each submitted transaction's expiration block delta.
+    /// Built once at builder startup and reused for every transaction.
+    expiration_script: TransactionScript,
 }
 
 impl NtxContext {
     /// Creates a new [`NtxContext`] instance.
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         block_producer: BlockProducerClient,
         validator: ValidatorClient,
@@ -121,6 +141,7 @@ impl NtxContext {
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
         max_cycles: u32,
+        expiration_script: TransactionScript,
     ) -> Self {
         Self {
             block_producer,
@@ -130,6 +151,7 @@ impl NtxContext {
             script_cache,
             db,
             max_cycles,
+            expiration_script,
         }
     }
 
@@ -198,6 +220,10 @@ impl NtxContext {
                 let notes =
                     notes.into_iter().map(AccountTargetNetworkNote::into_note).collect::<Vec<_>>();
 
+                // The expiration script is pre-compiled at builder startup; cloning is cheap as
+                // TransactionScript wraps an Arc<MastForest>.
+                let expiration_script = self.expiration_script.clone();
+
                 // VM execution (note filtering + transaction execution) is CPU-intensive and may
                 // not yield between await points. Run it on a dedicated blocking thread while using
                 // the parent runtime handle to drive async store callbacks.
@@ -219,8 +245,12 @@ impl NtxContext {
                             async {
                                 let (successful_notes, failed_notes) =
                                     ctx.filter_notes(&data_store, notes).await?;
-                                let executed_tx =
-                                    Box::pin(ctx.execute(&data_store, successful_notes)).await?;
+                                let executed_tx = Box::pin(ctx.execute(
+                                    &data_store,
+                                    successful_notes,
+                                    expiration_script,
+                                ))
+                                .await?;
                                 let scripts_to_cache = data_store.take_fetched_scripts();
                                 Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
                             }
@@ -317,14 +347,16 @@ impl NtxContext {
         &self,
         data_store: &NtxDataStore,
         notes: InputNotes<InputNote>,
+        expiration_script: TransactionScript,
     ) -> NtxResult<ExecutedTransaction> {
         let executor = self.create_executor(data_store);
+        let tx_args = TransactionArgs::default().with_tx_script(expiration_script);
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),
             data_store.reference_block.block_num(),
             notes,
-            TransactionArgs::default(),
+            tx_args,
         ))
         .await
         .map_err(NtxError::Execution)

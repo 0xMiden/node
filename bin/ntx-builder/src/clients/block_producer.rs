@@ -1,13 +1,7 @@
-use std::time::Duration;
-
-use futures::{TryStream, TryStreamExt};
 use miden_node_proto::clients::{BlockProducerClient as InnerBlockProducerClient, Builder};
-use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_proto::generated::{self as proto};
-use miden_node_utils::FlattenResult;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Serializable;
-use tokio_stream::StreamExt;
 use tonic::Status;
 use tracing::{info, instrument};
 use url::Url;
@@ -55,46 +49,5 @@ impl BlockProducerClient {
         self.client.clone().submit_proven_transaction(request).await?;
 
         Ok(())
-    }
-
-    #[instrument(target = COMPONENT, name = "ntx.block_producer.client.subscribe_to_mempool", skip_all, err)]
-    pub async fn subscribe_to_mempool_with_retry(
-        &self,
-    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
-        let mut retry_counter = 0;
-        loop {
-            match self.subscribe_to_mempool().await {
-                Err(err) if err.code() == tonic::Code::Unavailable => {
-                    // Exponential backoff with base 500ms and max 30s.
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retry_counter.min(6))
-                        .min(Duration::from_secs(30));
-
-                    tracing::warn!(
-                        ?backoff,
-                        %retry_counter,
-                        %err,
-                        "connection failed while subscribing to the mempool, retrying"
-                    );
-
-                    retry_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-                result => return result,
-            }
-        }
-    }
-
-    async fn subscribe_to_mempool(
-        &self,
-    ) -> Result<impl TryStream<Ok = MempoolEvent, Error = Status> + Send + 'static, Status> {
-        let stream = self.client.clone().mempool_subscription(()).await?;
-
-        let stream = stream
-            .into_inner()
-            .map_ok(MempoolEvent::try_from)
-            .map(FlattenResult::flatten_result);
-
-        Ok(stream)
     }
 }

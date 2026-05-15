@@ -6,7 +6,6 @@ use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
-use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 // SERIALIZATION (domain → DB)
@@ -22,10 +21,6 @@ pub fn block_header_to_bytes(header: &BlockHeader) -> Vec<u8> {
 
 pub fn network_account_id_to_bytes(id: NetworkAccountId) -> Vec<u8> {
     id.inner().to_bytes()
-}
-
-pub fn transaction_id_to_bytes(id: &TransactionId) -> Vec<u8> {
-    id.to_bytes()
 }
 
 pub fn nullifier_to_bytes(nullifier: &Nullifier) -> Vec<u8> {
@@ -72,4 +67,9 @@ pub fn note_script_to_bytes(script: &NoteScript) -> Vec<u8> {
 
 pub fn note_script_from_bytes(bytes: &[u8]) -> Result<NoteScript, DatabaseError> {
     NoteScript::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("note script", e))
+}
+
+pub fn block_header_from_bytes(bytes: &[u8]) -> Result<BlockHeader, DatabaseError> {
+    BlockHeader::read_from_bytes(bytes)
+        .map_err(|e| DatabaseError::deserialization("block header", e))
 }

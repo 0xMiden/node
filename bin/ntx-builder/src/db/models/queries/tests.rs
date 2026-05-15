@@ -8,6 +8,7 @@ use miden_protocol::block::BlockNumber;
 
 use super::*;
 use crate::NoteError;
+use crate::committed_block::CommittedBlockEffects;
 use crate::db::models::conv as conversions;
 use crate::db::{Db, schema};
 use crate::test_utils::*;
@@ -30,344 +31,110 @@ fn count_notes(conn: &mut SqliteConnection) -> i64 {
     schema::notes::table.count().get_result(conn).unwrap()
 }
 
-/// Counts the total number of rows in the `accounts` table.
-fn count_accounts(conn: &mut SqliteConnection) -> i64 {
-    schema::accounts::table.count().get_result(conn).unwrap()
-}
-
-/// Counts inflight account rows.
-fn count_inflight_accounts(conn: &mut SqliteConnection) -> i64 {
-    schema::accounts::table
-        .filter(schema::accounts::transaction_id.is_not_null())
-        .count()
-        .get_result(conn)
-        .unwrap()
-}
-
-/// Counts committed account rows.
-fn count_committed_accounts(conn: &mut SqliteConnection) -> i64 {
-    schema::accounts::table
-        .filter(schema::accounts::transaction_id.is_null())
-        .count()
-        .get_result(conn)
-        .unwrap()
-}
-
-// PURGE INFLIGHT TESTS
+// APPLY COMMITTED BLOCK TESTS
 // ================================================================================================
 
 #[test]
-fn purge_inflight_clears_all_inflight_state() {
+fn apply_committed_block_inserts_notes_and_advances_chain_state() {
     let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
-    let tx_id = mock_tx_id(1);
     let note = mock_single_target_note(account_id, 10);
 
-    // Insert committed account.
-    upsert_committed_account(conn, account_id, &mock_account(account_id)).unwrap();
-
-    // Insert a transaction (creates inflight account row + note + consumption).
-    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
-
-    assert!(count_inflight_accounts(conn) == 0); // No account delta, so no inflight account.
-    assert_eq!(count_notes(conn), 1);
-
-    // Mark note as consumed by another tx.
-    let tx_id2 = mock_tx_id(2);
-    add_transaction(conn, &tx_id2, None, &[], &[note.as_note().nullifier()]).unwrap();
-
-    // Verify consumed_by is set.
-    let consumed_count: i64 = schema::notes::table
-        .filter(schema::notes::consumed_by.is_not_null())
-        .count()
-        .get_result(conn)
-        .unwrap();
-    assert_eq!(consumed_count, 1);
-
-    // Purge inflight state.
-    purge_inflight(conn).unwrap();
-
-    // Inflight accounts should be gone.
-    assert_eq!(count_inflight_accounts(conn), 0);
-    // Committed account should remain.
-    assert_eq!(count_committed_accounts(conn), 1);
-    // Inflight-created notes should be gone.
-    assert_eq!(count_notes(conn), 0);
-}
-
-// HANDLE TRANSACTION ADDED TESTS
-// ================================================================================================
-
-#[test]
-fn transaction_added_inserts_notes_and_marks_consumed() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let tx_id = mock_tx_id(1);
-    let note1 = mock_single_target_note(account_id, 10);
-    let note2 = mock_single_target_note(account_id, 20);
-
-    // Insert committed note first (to test consumption).
-    insert_committed_notes(conn, std::slice::from_ref(&note1)).unwrap();
-    assert_eq!(count_notes(conn), 1);
-
-    // Add transaction that creates note2 and consumes note1.
-    add_transaction(
-        conn,
-        &tx_id,
-        None,
-        std::slice::from_ref(&note2),
-        &[note1.as_note().nullifier()],
-    )
-    .unwrap();
-
-    // Should now have 2 notes total.
-    assert_eq!(count_notes(conn), 2);
-
-    // note1 should be consumed.
-    let consumed: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note1.as_note().nullifier()))
-        .select(schema::notes::consumed_by)
-        .first(conn)
-        .unwrap();
-    assert!(consumed.is_some());
-
-    // note2 should have created_by set.
-    let created: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note2.as_note().nullifier()))
-        .select(schema::notes::created_by)
-        .first(conn)
-        .unwrap();
-    assert!(created.is_some());
-}
-
-#[test]
-fn transaction_added_is_idempotent_for_notes() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let tx_id = mock_tx_id(1);
-    let note = mock_single_target_note(account_id, 10);
-
-    // Insert the same transaction twice.
-    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
-    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
-
-    // Should only have one note (INSERT OR IGNORE).
-    assert_eq!(count_notes(conn), 1);
-}
-
-// HANDLE BLOCK COMMITTED TESTS
-// ================================================================================================
-
-#[test]
-fn block_committed_promotes_inflight_notes_to_committed() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let tx_id = mock_tx_id(1);
-    let note = mock_single_target_note(account_id, 10);
     let block_num = BlockNumber::from(1u32);
-    let header = mock_block_header(block_num);
+    let effects = CommittedBlockEffects {
+        header: mock_block_header(block_num),
+        network_notes: vec![note.clone()],
+        nullifiers: vec![],
+        network_account_updates: vec![],
+    };
 
-    // Add a transaction that creates a note.
-    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
+    let affected = apply_committed_block(conn, &effects).unwrap();
 
-    // Verify created_by is set.
-    let created: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
-        .select(schema::notes::created_by)
-        .first(conn)
-        .unwrap();
-    assert!(created.is_some());
+    // Note inserted; note's target account is reported as affected.
+    assert_eq!(count_notes(conn), 1);
+    assert!(affected.contains(&account_id));
 
-    // Commit the block.
-    commit_block(conn, &[tx_id], block_num, &header).unwrap();
-
-    // created_by should now be NULL (promoted to committed).
-    let created: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
-        .select(schema::notes::created_by)
-        .first(conn)
-        .unwrap();
-    assert!(created.is_none());
+    // Chain state singleton updated.
+    let stored = select_chain_state(conn).unwrap().unwrap();
+    assert_eq!(stored.0, block_num);
 }
 
 #[test]
-fn block_committed_marks_consumed_notes_as_committed() {
+fn apply_committed_block_marks_nullifiers_consumed() {
     let (conn, _dir) = &mut test_conn();
 
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 10);
     let note_id = note.as_note().id();
+    let nullifier = note.as_note().nullifier();
 
-    // Insert a committed note.
-    insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
-    assert_eq!(count_notes(conn), 1);
+    // First block: create note.
+    let block_num1 = BlockNumber::from(1u32);
+    apply_committed_block(
+        conn,
+        &CommittedBlockEffects {
+            header: mock_block_header(block_num1),
+            network_notes: vec![note.clone()],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+        },
+    )
+    .unwrap();
 
-    // Consume it via a transaction.
-    let tx_id = mock_tx_id(1);
-    add_transaction(conn, &tx_id, None, &[], &[note.as_note().nullifier()]).unwrap();
+    // Second block: consume note.
+    let block_num2 = BlockNumber::from(2u32);
+    let affected = apply_committed_block(
+        conn,
+        &CommittedBlockEffects {
+            header: mock_block_header(block_num2),
+            network_notes: vec![],
+            nullifiers: vec![nullifier],
+            network_account_updates: vec![],
+        },
+    )
+    .unwrap();
 
-    // Commit the block.
-    let block_num = BlockNumber::from(1u32);
-    let header = mock_block_header(block_num);
-    commit_block(conn, &[tx_id], block_num, &header).unwrap();
-
-    // Note should still exist but be marked as committed.
-    assert_eq!(count_notes(conn), 1);
+    // Note should be marked committed at block 2 (consumed).
     let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
         .unwrap()
         .unwrap();
-    assert_eq!(row.committed_at, Some(conversions::block_num_to_i64(block_num)));
-    assert!(row.consumed_by.is_some());
-}
+    assert_eq!(row.committed_at, Some(conversions::block_num_to_i64(block_num2)));
 
-#[test]
-fn block_committed_promotes_inflight_account_to_committed() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let account = mock_account(account_id);
-
-    // Insert committed account.
-    upsert_committed_account(conn, account_id, &account).unwrap();
-    assert_eq!(count_committed_accounts(conn), 1);
-
-    // Insert inflight row.
-    let tx_id = mock_tx_id(1);
-    let row = AccountInsert {
-        account_id: conversions::network_account_id_to_bytes(account_id),
-        transaction_id: Some(conversions::transaction_id_to_bytes(&tx_id)),
-        account_data: conversions::account_to_bytes(&account),
-    };
-    diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
-
-    assert_eq!(count_inflight_accounts(conn), 1);
-    assert_eq!(count_committed_accounts(conn), 1);
-
-    // Commit the block.
-    let block_num = BlockNumber::from(1u32);
-    let header = mock_block_header(block_num);
-    commit_block(conn, &[tx_id], block_num, &header).unwrap();
-
-    // Should have 1 committed and 0 inflight.
-    assert_eq!(count_committed_accounts(conn), 1);
-    assert_eq!(count_inflight_accounts(conn), 0);
-}
-
-// GET COMMITTED ACCOUNT TESTS
-// ================================================================================================
-
-#[test]
-fn get_committed_account_ignores_inflight() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let account = mock_account(account_id);
-
-    // Insert only an inflight account row (simulating account creation).
-    let tx_id = mock_tx_id(1);
-    let row = AccountInsert {
-        account_id: conversions::network_account_id_to_bytes(account_id),
-        transaction_id: Some(conversions::transaction_id_to_bytes(&tx_id)),
-        account_data: conversions::account_to_bytes(&account),
-    };
-    diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
-
-    // get_committed_account should return None (only inflight exists).
-    let result = get_committed_account(conn, account_id).unwrap();
-    assert!(result.is_none());
-
-    // Commit the block to promote inflight to committed.
-    let block_num = BlockNumber::from(1u32);
-    let header = mock_block_header(block_num);
-    commit_block(conn, &[tx_id], block_num, &header).unwrap();
-
-    // Now get_committed_account should return the account.
-    let result = get_committed_account(conn, account_id).unwrap();
-    assert!(result.is_some());
-}
-
-// HANDLE TRANSACTIONS REVERTED TESTS
-// ================================================================================================
-
-#[test]
-fn transactions_reverted_restores_consumed_notes() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let note = mock_single_target_note(account_id, 10);
-
-    // Insert committed note.
-    insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
-
-    // Consume it via a transaction.
-    let tx_id = mock_tx_id(1);
-    add_transaction(conn, &tx_id, None, &[], &[note.as_note().nullifier()]).unwrap();
-
-    // Verify consumed.
-    let consumed: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
-        .select(schema::notes::consumed_by)
-        .first(conn)
-        .unwrap();
-    assert!(consumed.is_some());
-
-    // Revert the transaction.
-    revert_transaction(conn, &[tx_id]).unwrap();
-
-    // Note should be un-consumed.
-    let consumed: Option<Vec<u8>> = schema::notes::table
-        .find(conversions::nullifier_to_bytes(&note.as_note().nullifier()))
-        .select(schema::notes::consumed_by)
-        .first(conn)
-        .unwrap();
-    assert!(consumed.is_none());
-}
-
-#[test]
-fn transactions_reverted_deletes_inflight_created_notes() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let tx_id = mock_tx_id(1);
-    let note = mock_single_target_note(account_id, 10);
-
-    // Add transaction that creates a note.
-    add_transaction(conn, &tx_id, None, std::slice::from_ref(&note), &[]).unwrap();
-    assert_eq!(count_notes(conn), 1);
-
-    // Revert the transaction.
-    revert_transaction(conn, &[tx_id]).unwrap();
-
-    // Inflight-created note should be deleted.
-    assert_eq!(count_notes(conn), 0);
-}
-
-#[test]
-fn transactions_reverted_reports_reverted_account_creations() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let account = mock_account(account_id);
-    let tx_id = mock_tx_id(1);
-
-    // Insert an inflight account row (simulating account creation by tx).
-    let row = AccountInsert {
-        account_id: conversions::network_account_id_to_bytes(account_id),
-        transaction_id: Some(conversions::transaction_id_to_bytes(&tx_id)),
-        account_data: conversions::account_to_bytes(&account),
-    };
-    diesel::insert_into(schema::accounts::table).values(&row).execute(conn).unwrap();
-
-    // Revert the transaction, account should be included in affected accounts.
-    let affected = revert_transaction(conn, &[tx_id]).unwrap();
+    // Account whose note was consumed should be in affected list.
     assert!(affected.contains(&account_id));
+}
 
-    // Account should be gone.
-    assert_eq!(count_accounts(conn), 0);
+#[test]
+fn apply_committed_block_advances_chain_state() {
+    let (conn, _dir) = &mut test_conn();
+
+    let block_num1 = BlockNumber::from(1u32);
+    let block_num2 = BlockNumber::from(2u32);
+
+    apply_committed_block(
+        conn,
+        &CommittedBlockEffects {
+            header: mock_block_header(block_num1),
+            network_notes: vec![],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+        },
+    )
+    .unwrap();
+    apply_committed_block(
+        conn,
+        &CommittedBlockEffects {
+            header: mock_block_header(block_num2),
+            network_notes: vec![],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+        },
+    )
+    .unwrap();
+
+    let stored = select_chain_state(conn).unwrap().unwrap();
+    assert_eq!(stored.0, block_num2);
 }
 
 // AVAILABLE NOTES TESTS
@@ -386,36 +153,30 @@ fn available_notes_filters_consumed_and_exceeded_attempts() {
     insert_committed_notes(conn, &[note_good.clone(), note_consumed.clone(), note_failed.clone()])
         .unwrap();
 
-    // Consume one note.
-    let tx_id = mock_tx_id(1);
-    add_transaction(conn, &tx_id, None, &[], &[note_consumed.as_note().nullifier()]).unwrap();
+    // Mark one as consumed by setting committed_at directly (simulates a later block).
+    diesel::update(
+        schema::notes::table
+            .find(conversions::nullifier_to_bytes(&note_consumed.as_note().nullifier())),
+    )
+    .set(schema::notes::committed_at.eq(Some(1i64)))
+    .execute(conn)
+    .unwrap();
 
     // Mark one note as failed many times (exceed max_attempts=3).
     let block_num = BlockNumber::from(100u32);
-    notes_failed(
-        conn,
-        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
-        block_num,
-    )
-    .unwrap();
-    notes_failed(
-        conn,
-        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
-        block_num,
-    )
-    .unwrap();
-    notes_failed(
-        conn,
-        &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
-        block_num,
-    )
-    .unwrap();
+    for _ in 0..3 {
+        notes_failed(
+            conn,
+            &[(note_failed.as_note().nullifier(), test_note_error("test error"))],
+            block_num,
+        )
+        .unwrap();
+    }
 
     // Query available notes with max_attempts=3.
     let result = available_notes(conn, account_id, block_num, 3).unwrap();
 
-    // Only note_good should be available (note_consumed is consumed, note_failed exceeded
-    // attempts).
+    // Only note_good should be available.
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].as_note().nullifier(), note_good.as_note().nullifier());
 }
@@ -490,20 +251,21 @@ fn get_note_status_returns_latest_error() {
     insert_committed_notes(conn, std::slice::from_ref(&note)).unwrap();
 
     // Initially no error, not consumed.
-    let result = get_note_status(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
-    assert!(result.is_some());
-    let row = result.unwrap();
+    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
+        .unwrap()
+        .unwrap();
     assert!(row.last_error.is_none());
     assert_eq!(row.attempt_count, 0);
-    assert!(row.consumed_by.is_none());
+    assert!(row.committed_at.is_none());
 
     // Mark as failed.
     let block_num = BlockNumber::from(5u32);
     notes_failed(conn, &[(note.as_note().nullifier(), test_note_error("first error"))], block_num)
         .unwrap();
 
-    let result = get_note_status(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
-    let row = result.unwrap();
+    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
+        .unwrap()
+        .unwrap();
     assert_eq!(row.last_error.as_deref(), Some("first error"));
     assert_eq!(row.attempt_count, 1);
 
@@ -515,8 +277,9 @@ fn get_note_status_returns_latest_error() {
     )
     .unwrap();
 
-    let result = get_note_status(conn, &conversions::note_id_to_bytes(&note_id)).unwrap();
-    let row = result.unwrap();
+    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
+        .unwrap()
+        .unwrap();
     assert_eq!(row.last_error.as_deref(), Some("second error"));
     assert_eq!(row.attempt_count, 2);
 }
@@ -528,39 +291,6 @@ fn get_note_status_returns_none_for_unknown_note() {
     let unknown_id = vec![0u8; 32];
     let result = get_note_status(conn, &unknown_id).unwrap();
     assert!(result.is_none());
-}
-
-#[test]
-fn get_note_status_includes_consumed_by() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let note = mock_single_target_note(account_id, 10);
-    let note_id = note.as_note().id();
-
-    // Insert as committed note.
-    insert_committed_notes(conn, &[note]).unwrap();
-
-    // Initially consumed_by is NULL.
-    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
-        .unwrap()
-        .unwrap();
-    assert!(row.consumed_by.is_none());
-
-    // Simulate consumption by setting consumed_by to a dummy transaction ID.
-    let dummy_tx_id = vec![42u8; 32];
-    diesel::update(
-        schema::notes::table
-            .filter(schema::notes::note_id.eq(conversions::note_id_to_bytes(&note_id))),
-    )
-    .set(schema::notes::consumed_by.eq(Some(&dummy_tx_id)))
-    .execute(conn)
-    .unwrap();
-
-    let row = get_note_status(conn, &conversions::note_id_to_bytes(&note_id))
-        .unwrap()
-        .unwrap();
-    assert_eq!(row.consumed_by, Some(dummy_tx_id));
 }
 
 // CHAIN STATE TESTS
@@ -584,11 +314,16 @@ fn upsert_chain_state_updates_singleton() {
     assert_eq!(row_count, 1);
 
     // Should have the latest block number.
-    let stored_block_num: i64 = schema::chain_state::table
-        .select(schema::chain_state::block_num)
-        .first(conn)
-        .unwrap();
-    assert_eq!(stored_block_num, conversions::block_num_to_i64(block_num_2));
+    let stored = select_chain_state(conn).unwrap().unwrap();
+    assert_eq!(stored.0, block_num_2);
+}
+
+#[test]
+fn select_chain_state_returns_none_for_empty_db() {
+    let (conn, _dir) = &mut test_conn();
+
+    let result = select_chain_state(conn).unwrap();
+    assert!(result.is_none());
 }
 
 // NOTE SCRIPT TESTS

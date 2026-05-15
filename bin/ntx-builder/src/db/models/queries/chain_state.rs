@@ -20,6 +20,14 @@ pub struct ChainStateInsert {
     pub block_header: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = schema::chain_state)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ChainStateRow {
+    pub block_num: i64,
+    pub block_header: Vec<u8>,
+}
+
 // QUERIES
 // ================================================================================================
 
@@ -43,4 +51,28 @@ pub fn upsert_chain_state(
     };
     diesel::replace_into(schema::chain_state::table).values(&row).execute(conn)?;
     Ok(())
+}
+
+/// Reads the singleton chain state row, if any.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT block_num, block_header FROM chain_state WHERE id = 0
+/// ```
+pub fn select_chain_state(
+    conn: &mut SqliteConnection,
+) -> Result<Option<(BlockNumber, BlockHeader)>, DatabaseError> {
+    let row: Option<ChainStateRow> = schema::chain_state::table
+        .find(0i32)
+        .select(ChainStateRow::as_select())
+        .first(conn)
+        .optional()?;
+
+    row.map(|row| {
+        let block_num = conversions::block_num_from_i64(row.block_num);
+        let header = conversions::block_header_from_bytes(&row.block_header)?;
+        Ok((block_num, header))
+    })
+    .transpose()
 }
