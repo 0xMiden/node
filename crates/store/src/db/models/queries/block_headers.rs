@@ -68,20 +68,12 @@ pub(crate) fn select_block_header_by_block_num(
 ///
 /// # Returns
 ///
-/// When `block_num` is [None], the latest block header and its signature is returned. Otherwise,
-/// the block with the given block height is returned.
+/// The block header with the given block height and its validator signature is returned.
 ///
 /// ```sql
-/// -- with argument
 /// SELECT block_num, block_header, signature
 /// FROM block_headers
 /// WHERE block_num = ?1
-///
-/// -- without argument
-/// SELECT block_num, block_header, signature
-/// FROM block_headers
-/// ORDER BY block_num DESC
-/// LIMIT 1
 /// ```
 pub(crate) fn select_block_header_and_signature_by_block_num(
     conn: &mut SqliteConnection,
