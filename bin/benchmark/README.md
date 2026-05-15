@@ -7,11 +7,13 @@ A binary for measuring transaction throughput on a Miden node by submitting loca
 End-to-end benchmarking is split into two phases because of proof generation is expensive and shouldn't be on the critical path of the throughput measurement:
 
 1. **`create-proofs`**: Generates a faucet, N wallets, and `2 * N` proven
-   transactions (one mint and one consume per wallet). Each proof is produced
-   locally with `LocalTransactionProver` and is bound to the chain state of
-   the target node at the moment of generation (genesis commitment, reference
-   block, initial account commitments, input note nullifiers). The bundle is
-   written to `./benchmark-proofs/` as serialized blobs.
+   transactions (one mint and one consume per wallet). By default each proof
+   is produced locally with `LocalTransactionProver`; pass
+   `--remote-prover-url` to offload proving to a remote prover (see [Using a
+   remote prover](#using-a-remote-prover)). Each proof is bound to the chain
+   state of the target node at the moment of generation (genesis commitment,
+   reference block, initial account commitments, input note nullifiers). The
+   bundle is written to `./benchmark-proofs/` as serialized blobs.
 2. **`run-benchmark`**: Loads the bundle from disk and submits it to the
    node's RPC. Mints are submitted sequentially (each mutates the shared
    faucet, so order matters) and consumes are submitted with bounded
@@ -52,6 +54,38 @@ miden-benchmark run-benchmark \
 ```
 
 Mints go in sequentially, then consumes with the requested concurrency, then the run waits `--wait-blocks` blocks before scanning for inclusion. Per-phase ack rate, RPC latency percentiles, inclusion rate, and inclusion TPS are printed at the end.
+
+### Using a remote prover
+
+Pass `--remote-prover-url` to `create-proofs` to offload STARK proving to a
+remote prover instead of producing proofs locally:
+
+```sh
+miden-benchmark create-proofs \
+  --rpc-url           http://127.0.0.1:57291 \
+  --num-transactions  100 \
+  --remote-prover-url http://prover.example.com:50051
+```
+
+The benchmark paces proving requests so that an autoscaling prover fleet has
+time to spin up additional workers before being saturated:
+
+- Dispatch starts at **1 req/s** and bumps by 1 req/s every **3 minutes**, up
+  to **10 req/s**, and then holds at 10 req/s for the rest of the run.
+- Up to **64** proving requests may be in flight at once (independent of the
+  rate cap).
+- A retryable gRPC error from the prover (`ResourceExhausted`,
+  `Unavailable`, `DeadlineExceeded`, or any transport-level failure) **freezes
+  the ramp** at the current step for the rest of the run, and the failing
+  request is retried with exponential backoff (500ms x 2**n, capped at 30s, up
+  to 10 attempts).
+- If the prover URL is unreachable or a non-retryable error is returned,
+  `create-proofs` exits with a non-zero status after the retry budget is
+  exhausted.
+
+Mint executions remain sequential (each mint mutates the shared faucet, so
+ordering matters), but proving runs concurrently under the rate limiter.
+Consume executions are also serial today, with concurrent proving.
 
 ## Re-using proofs across runs
 

@@ -53,7 +53,6 @@ use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{
     DataStore,
     DataStoreError,
-    LocalTransactionProver,
     MastForestStore,
     TransactionExecutor,
     TransactionMastStore,
@@ -62,6 +61,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use url::Url;
 
+use crate::prover::BenchmarkProver;
 use crate::rpc_state::{fetch_chain_tip_header, fetch_partial_blockchain};
 use crate::summary::print_proving_summary;
 use crate::{
@@ -71,6 +71,42 @@ use crate::{
     write_to_file,
 };
 
+// PROVING TASK HELPERS
+// ================================================================================================
+
+/// Result of a single spawned proving task: the proof attempt and the wall
+/// time that task spent (which, for the remote path, includes rate-limit and
+/// retry waits).
+type ProveOutcome = (anyhow::Result<ProvenTransaction>, Duration);
+
+/// Await every spawned proving task in spawn order, returning the proofs in
+/// that same order plus the summed per-task wall time. If any task fails (or
+/// panics) we print the error and exit with a non-zero status. Proven txs
+/// later in the bundle reference earlier ones, so a single failure means the
+/// bundle is unusable anyway.
+async fn collect_proofs(
+    label: &str,
+    tasks: Vec<tokio::task::JoinHandle<ProveOutcome>>,
+) -> (Vec<ProvenTransaction>, Duration) {
+    let mut proofs = Vec::with_capacity(tasks.len());
+    let mut total = Duration::ZERO;
+    for (i, handle) in tasks.into_iter().enumerate() {
+        let (result, elapsed) = handle.await.unwrap_or_else(|err| {
+            eprintln!("{label} proving task {i} panicked: {err}");
+            std::process::exit(1);
+        });
+        total += elapsed;
+        match result {
+            Ok(tx) => proofs.push(tx),
+            Err(err) => {
+                eprintln!("{label} proving failed for tx {i}: {err:#}");
+                std::process::exit(1);
+            },
+        }
+    }
+    (proofs, total)
+}
+
 // ORCHESTRATOR
 // ================================================================================================
 
@@ -79,7 +115,7 @@ use crate::{
     reason = "single linear orchestration of genesis fetch + mint phase + consume phase; \
               splitting would just shuffle locals (faucet, data_store, authenticator) around"
 )]
-pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
+pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: Option<String>) {
     let mut rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(10))
         .await
         .unwrap();
@@ -128,17 +164,25 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
         AuthSecretKey::Falcon512Poseidon2(wallet_secret_key),
     ]);
 
-    let prover = LocalTransactionProver::default();
+    let prover = Arc::new(match remote_prover_url {
+        Some(url) => {
+            println!("Using remote prover at {url} (rate-limited ramp from 1 to 10 req/s).");
+            BenchmarkProver::remote(url)
+        },
+        None => BenchmarkProver::local(),
+    });
     let faucet_id = faucet.id();
 
-    // Mint phase — sequential because each mint mutates the faucet.
-    println!("Proving {num_transactions} mint transactions (sequential)...");
-    let mut mint_txs: Vec<ProvenTransaction> = Vec::with_capacity(num_transactions as usize);
+    // Mint phase: executions are sequential (each mutates the shared faucet),
+    // but proving runs concurrently on the prover (under the rate limiter when
+    // remote).
+    println!("Executing {num_transactions} mint transactions (sequential)...");
+    let mut mint_tasks: Vec<tokio::task::JoinHandle<ProveOutcome>> =
+        Vec::with_capacity(num_transactions as usize);
     let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
     let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
     let mint_phase_start = Instant::now();
     let mut mint_exec_total = Duration::ZERO;
-    let mut mint_prove_total = Duration::ZERO;
 
     for index in 0..num_transactions {
         let wallet_id = wallets[index as usize].id();
@@ -179,14 +223,11 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
         let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
         let delta = executed_tx.account_delta().clone();
 
-        let prove_t0 = Instant::now();
-        let proven_tx = prover.prove(executed_tx).await.expect("failed to prove mint transaction");
-        mint_prove_total += prove_t0.elapsed();
-
-        // Evolve the faucet state for the next iteration. The first mint of a
-        // never-before-seen account produces a full-state delta (because the
-        // delta carries the freshly deployed code); subsequent mints produce
-        // partial-state deltas that can be applied incrementally.
+        // Evolve the faucet state for the next iteration before we hand the
+        // executed tx off for proving. The first mint of a never-before-seen
+        // account produces a full-state delta (because the delta carries the
+        // freshly deployed code); subsequent mints produce partial-state
+        // deltas that can be applied incrementally.
         if delta.is_full_state() {
             faucet = Account::try_from(&delta)
                 .expect("failed to materialize faucet from full-state delta");
@@ -195,14 +236,22 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
         }
         data_store.add_account(faucet.clone());
 
-        mint_txs.push(proven_tx);
+        let prover = Arc::clone(&prover);
+        mint_tasks.push(tokio::spawn(async move {
+            let prove_t0 = Instant::now();
+            let result = prover.prove(executed_tx).await;
+            (result, prove_t0.elapsed())
+        }));
         mint_tx_inputs.push(tx_inputs_bytes);
         mint_notes.push(note);
 
         if (index + 1) % 10 == 0 || index + 1 == num_transactions {
-            println!("  proved {} / {num_transactions} mint txs", index + 1);
+            println!("  executed {} / {num_transactions} mint txs", index + 1);
         }
     }
+
+    println!("Awaiting {num_transactions} mint proofs...");
+    let (mint_txs, mint_prove_total) = collect_proofs("mint", mint_tasks).await;
     let mint_phase_elapsed = mint_phase_start.elapsed();
     print_proving_summary(
         "Mint",
@@ -212,14 +261,13 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
         mint_prove_total,
     );
 
-    // Consume phase — also sequential for now (each tx is one wallet, independent
-    // wallets, so this could be parallelized later with bounded concurrency).
-    println!("Proving {num_transactions} consume transactions (sequential)...");
-    let mut consume_txs: Vec<ProvenTransaction> = Vec::with_capacity(num_transactions as usize);
+    // Consume phase — same shape: sequential executions, concurrent proving.
+    println!("Executing {num_transactions} consume transactions (sequential)...");
+    let mut consume_tasks: Vec<tokio::task::JoinHandle<ProveOutcome>> =
+        Vec::with_capacity(num_transactions as usize);
     let mut consume_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
     let consume_phase_start = Instant::now();
     let mut consume_exec_total = Duration::ZERO;
-    let mut consume_prove_total = Duration::ZERO;
 
     for index in 0..num_transactions {
         let wallet_id = wallets[index as usize].id();
@@ -243,18 +291,21 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64) {
 
         let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
 
-        let prove_t0 = Instant::now();
-        let proven_tx =
-            prover.prove(executed_tx).await.expect("failed to prove consume transaction");
-        consume_prove_total += prove_t0.elapsed();
-
-        consume_txs.push(proven_tx);
+        let prover = Arc::clone(&prover);
+        consume_tasks.push(tokio::spawn(async move {
+            let prove_t0 = Instant::now();
+            let result = prover.prove(executed_tx).await;
+            (result, prove_t0.elapsed())
+        }));
         consume_tx_inputs.push(tx_inputs_bytes);
 
         if (index + 1) % 10 == 0 || index + 1 == num_transactions {
-            println!("  proved {} / {num_transactions} consume txs", index + 1);
+            println!("  executed {} / {num_transactions} consume txs", index + 1);
         }
     }
+
+    println!("Awaiting {num_transactions} consume proofs...");
+    let (consume_txs, consume_prove_total) = collect_proofs("consume", consume_tasks).await;
     let consume_phase_elapsed = consume_phase_start.elapsed();
     print_proving_summary(
         "Consume",

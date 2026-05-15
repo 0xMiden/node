@@ -18,6 +18,7 @@ use url::Url;
 
 mod create_proofs;
 mod inclusion;
+mod prover;
 mod rpc_state;
 mod submit;
 mod summary;
@@ -49,6 +50,14 @@ pub enum Command {
         /// pair takes seconds of real STARK proving, so start small.
         #[arg(long, default_value_t = 10)]
         num_transactions: u64,
+        /// If set, proofs are produced by the remote prover at this URL
+        /// instead of locally. Dispatch is rate-limited: starts at 1 req/s,
+        /// bumps by 1 req/s every 3 minutes up to 10 req/s, and freezes at
+        /// the current step if the prover returns a retryable error
+        /// (resource-exhausted, unavailable, or deadline-exceeded). If unset,
+        /// proving runs locally with `LocalTransactionProver`.
+        #[arg(long)]
+        remote_prover_url: Option<String>,
     },
     RunBenchmark {
         /// RPC endpoint of the target miden node.
@@ -76,8 +85,12 @@ async fn main() {
 impl Cli {
     async fn run(self) {
         match self.command {
-            Command::CreateProofs { rpc_url, num_transactions } => {
-                create_proofs::run(rpc_url, num_transactions).await;
+            Command::CreateProofs {
+                rpc_url,
+                num_transactions,
+                remote_prover_url,
+            } => {
+                create_proofs::run(rpc_url, num_transactions, remote_prover_url).await;
             },
             Command::RunBenchmark { rpc_url, concurrency, wait_blocks } => {
                 submit::run(rpc_url, concurrency, wait_blocks).await;
