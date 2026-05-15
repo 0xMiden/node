@@ -611,7 +611,6 @@ async fn sync_transactions_paginated(
 /// - `data_directory`: directory that contains the database dump file.
 /// - `iterations`: number of requests to send.
 /// - `concurrency`: number of requests to send in parallel.
-/// - `block_range_size`: number of blocks to include per request.
 pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, concurrency: usize) {
     let (store_client, _) = start_store(data_directory).await;
 
@@ -646,10 +645,10 @@ pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, co
 /// - the response.
 async fn sync_chain_mmr(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    current_block_height: u32,
+    current_client_block_height: u32,
 ) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
-        current_block_height,
+        current_client_block_height,
         finality_level: proto::rpc::FinalityLevel::Committed.into(),
     };
 
