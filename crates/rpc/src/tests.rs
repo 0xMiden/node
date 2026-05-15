@@ -76,7 +76,7 @@ fn build_test_proven_tx(
 ) -> ProvenTransaction {
     let account_id = AccountId::dummy(
         [0; 15],
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
     );

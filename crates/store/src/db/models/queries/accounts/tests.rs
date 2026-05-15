@@ -139,7 +139,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
     // Create a simple public account with one value storage slot
     let account_id = AccountId::dummy(
         [1u8; 15],
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
     );
@@ -323,7 +323,7 @@ fn test_select_account_header_at_block_returns_none_for_nonexistent() {
 
     let account_id = AccountId::dummy(
         [99u8; 15],
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
     );
@@ -609,7 +609,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     // Create account with 3 storage slots
     let account_id = AccountId::dummy(
         [2u8; 15],
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
     );
@@ -688,7 +688,7 @@ fn test_upsert_accounts_with_empty_storage() {
     // Create account with no component storage slots (only auth slot)
     let account_id = AccountId::dummy(
         [3u8; 15],
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
     );

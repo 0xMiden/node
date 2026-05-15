@@ -21,11 +21,12 @@ use miden_protocol::note::{
     Note,
     NoteAssets,
     NoteAttachment,
-    NoteMetadata,
+    NoteAttachments,
     NoteRecipient,
     NoteScript,
     NoteStorage,
     NoteType,
+    PartialNoteMetadata,
 };
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -945,9 +946,9 @@ fn create_network_note(
     let target = NetworkAccountTarget::new(counter_account.id(), NoteExecutionHint::Always)
         .context("Failed to create NetworkAccountTarget for counter account")?;
     let attachment: NoteAttachment = target.into();
+    let attachments = NoteAttachments::from(attachment);
 
-    let metadata =
-        NoteMetadata::new(wallet_account.id(), NoteType::Public).with_attachment(attachment);
+    let partial_metadata = PartialNoteMetadata::new(wallet_account.id(), NoteType::Public);
 
     let serial_num = Word::new([
         Felt::new(rng.random()),
@@ -958,7 +959,12 @@ fn create_network_note(
 
     let recipient = NoteRecipient::new(serial_num, script, NoteStorage::new(vec![])?);
 
-    let network_note = Note::new(NoteAssets::new(vec![])?, metadata, recipient.clone());
+    let network_note = Note::with_attachments(
+        NoteAssets::new(vec![])?,
+        partial_metadata,
+        recipient.clone(),
+        attachments,
+    );
     Ok((network_note, recipient))
 }
 

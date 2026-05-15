@@ -25,6 +25,7 @@
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
 - Compile the network monitor counter account and note script from Rust sources via the Miden Rust compiler ([#1831](https://github.com/0xMiden/node/issues/1831)).
+- [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
 
 ## v0.14.10 (2026-05-29)
 
