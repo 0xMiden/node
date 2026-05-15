@@ -7,12 +7,12 @@ use miden_protocol::account::AccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, Nullifier};
+use miden_protocol::note::{Note, NoteAttachments, Nullifier};
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
     OutputNote,
-    PrivateNoteHeader,
+    PrivateOutputNote,
     ProvenTransaction,
     TxAccountUpdate,
 };
@@ -134,7 +134,9 @@ impl MockProvenTxBuilder {
             .map(|note_index| {
                 let note = Note::mock_noop(Word::from([0, 0, 0, note_index]));
 
-                OutputNote::Private(PrivateNoteHeader::new(note.header().clone()).unwrap())
+                OutputNote::Private(
+                    PrivateOutputNote::new(*note.header(), NoteAttachments::empty()).unwrap(),
+                )
             })
             .collect();
 

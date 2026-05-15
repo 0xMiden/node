@@ -61,7 +61,7 @@ impl From<InputNoteCommitment> for proto::transaction::InputNoteCommitment {
     fn from(value: InputNoteCommitment) -> Self {
         Self {
             nullifier: Some(value.nullifier().into()),
-            header: value.header().cloned().map(Into::into),
+            header: value.header().copied().map(Into::into),
         }
     }
 }
