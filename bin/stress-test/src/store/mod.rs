@@ -611,7 +611,6 @@ async fn sync_transactions_paginated(
 /// - `data_directory`: directory that contains the database dump file.
 /// - `iterations`: number of requests to send.
 /// - `concurrency`: number of requests to send in parallel.
-/// - `block_range_size`: number of blocks to include per request.
 pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, concurrency: usize) {
     let (store_client, _) = start_store(data_directory).await;
 
