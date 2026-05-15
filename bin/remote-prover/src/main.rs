@@ -3,7 +3,6 @@ use clap::Parser;
 use miden_node_utils::logging::{OpenTelemetry, setup_tracing};
 use tracing::info;
 
-mod generated;
 mod server;
 
 const COMPONENT: &str = "miden-prover";

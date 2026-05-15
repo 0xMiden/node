@@ -1,4 +1,4 @@
-use crate::generated as proto;
+use miden_node_proto::generated::remote_prover as proto;
 
 /// Specifies the type of proof supported by the remote prover.
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]

@@ -1,12 +1,11 @@
 use std::num::NonZeroUsize;
 
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
 use tracing::instrument;
 
+use crate::COMPONENT;
 use crate::server::proof_kind::ProofKind;
 use crate::server::prover::Prover;
-use crate::{COMPONENT, generated as proto};
 
 pub struct ProverService {
     permits: tokio::sync::Semaphore,
@@ -21,61 +20,19 @@ impl ProverService {
         Self { permits, prover, kind }
     }
 
-    fn is_supported(&self, kind: ProofKind) -> bool {
+    pub(super) fn is_supported(&self, kind: ProofKind) -> bool {
         self.kind == kind
     }
 
     #[instrument(target=COMPONENT, skip_all, err)]
-    fn acquire_permit(&self) -> Result<SemaphorePermit<'_>, tonic::Status> {
+    pub(super) fn acquire_permit(&self) -> Result<SemaphorePermit<'_>, tonic::Status> {
         self.permits
             .try_acquire()
             .map_err(|_| tonic::Status::resource_exhausted("proof queue is full"))
     }
 
     #[instrument(target=COMPONENT, skip_all)]
-    async fn acquire_prover(&self) -> MutexGuard<'_, Prover> {
+    pub(super) async fn acquire_prover(&self) -> MutexGuard<'_, Prover> {
         self.prover.lock().await
-    }
-}
-
-#[async_trait::async_trait]
-impl proto::api_server::Api for ProverService {
-    async fn prove(
-        &self,
-        request: tonic::Request<proto::ProofRequest>,
-    ) -> Result<tonic::Response<proto::Proof>, tonic::Status> {
-        // Record X-Request-ID header for trace correlation
-        let request_id = request
-            .metadata()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        tracing::Span::current().set_attribute("request.id", request_id);
-
-        // Check that the proof type is supported.
-        let request = request.into_inner();
-        // Protobuf enums return a default value if the enum is set to an unknown value.
-        // This round trip checks that the value is valid.
-        if request.proof_type() as i32 != request.proof_type {
-            return Err(tonic::Status::invalid_argument("unknown proof_type value"));
-        }
-        let proof_kind = ProofKind::from(request.proof_type());
-        tracing::Span::current().set_attribute("request.kind", proof_kind);
-
-        // Reject unsupported proof types early so they don't clog the queue.
-        if !self.is_supported(proof_kind) {
-            return Err(tonic::Status::invalid_argument("unsupported proof type"));
-        }
-
-        // This semaphore acts like a queue, but with a fixed capacity.
-        //
-        // We need to hold this until our request is processed to ensure that the queue capacity is
-        // not exceeded.
-        let _permit = self.acquire_permit()?;
-
-        // This mutex is fair and uses FIFO ordering.
-        let prover = self.acquire_prover().await;
-
-        prover.prove(request).await.map(tonic::Response::new)
     }
 }
