@@ -18,7 +18,7 @@ miden = "0.12"
 package = "miden:monitor-counter-contract"
 
 [package.metadata.miden]
-project-kind = "account"
+project-kind    = "account"
 supported-types = ["RegularAccountUpdatableCode"]
 
 [profile.release]

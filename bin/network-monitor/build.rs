@@ -51,7 +51,7 @@ fn main() {
 fn compile_miden_project(project_dir: &Path, package_name: &str) -> PathBuf {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let output = Command::new(cargo)
-        .current_dir(&project_dir)
+        .current_dir(project_dir)
         .args(["miden", "build", "--release"])
         .output()
         .unwrap_or_else(|err| {
