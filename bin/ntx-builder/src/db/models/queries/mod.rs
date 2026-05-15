@@ -5,14 +5,9 @@ use std::collections::HashSet;
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::Serializable;
-use miden_standards::note::AccountTargetNetworkNote;
 
 use super::account_effect::NetworkAccountEffect;
+use crate::committed_block::CommittedBlockEffects;
 use crate::db::models::conv as conversions;
 use crate::db::schema;
 
@@ -31,34 +26,38 @@ pub use notes::*;
 #[cfg(test)]
 mod tests;
 
-// STARTUP QUERIES
+// LEGACY CLEANUP
 // ================================================================================================
 
-/// Purges all inflight state. Called on startup to get a clean state.
+/// Removes any leftover "inflight" rows from a previous run of the ntx-builder under the old
+/// mempool-subscription model.
 ///
-/// - Deletes account rows with `transaction_id IS NOT NULL`.
-/// - Deletes note rows with `created_by IS NOT NULL`.
-/// - Sets `consumed_by = NULL` on notes consumed by inflight transactions.
+/// The new committed-block model never writes inflight state (`transaction_id`, `created_by`,
+/// `consumed_by`), but those columns still exist on the schema and pre-existing rows from an
+/// in-place upgrade would otherwise be returned by `get_account` and skew availability queries.
+/// Idempotent and cheap on a clean DB.
 ///
 /// # Raw SQL
 ///
 /// ```sql
 /// DELETE FROM accounts WHERE transaction_id IS NOT NULL
 ///
-/// DELETE FROM notes WHERE created_by IS NOT NULL
+/// DELETE FROM notes WHERE created_by IS NOT NULL AND committed_at IS NULL
 ///
-/// UPDATE notes SET consumed_by = NULL WHERE consumed_by IS NOT NULL AND committed_at IS NULL
+/// UPDATE notes SET consumed_by = NULL
+/// WHERE consumed_by IS NOT NULL AND committed_at IS NULL
 /// ```
-pub fn purge_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
-    // Delete inflight account rows.
+pub fn purge_legacy_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
     diesel::delete(schema::accounts::table.filter(schema::accounts::transaction_id.is_not_null()))
         .execute(conn)?;
 
-    // Delete inflight-created notes.
-    diesel::delete(schema::notes::table.filter(schema::notes::created_by.is_not_null()))
-        .execute(conn)?;
+    diesel::delete(
+        schema::notes::table
+            .filter(schema::notes::created_by.is_not_null())
+            .filter(schema::notes::committed_at.is_null()),
+    )
+    .execute(conn)?;
 
-    // Un-nullify notes consumed by inflight transactions (skip committed notes).
     diesel::update(
         schema::notes::table
             .filter(schema::notes::consumed_by.is_not_null())
@@ -70,270 +69,86 @@ pub fn purge_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> 
     Ok(())
 }
 
-// MEMPOOL EVENT HANDLERS
+// COMMITTED BLOCK HANDLER
 // ================================================================================================
 
-/// Handles a `TransactionAdded` event by writing effects to the DB.
+/// Applies the network-relevant effects of a committed block to the local DB.
 ///
-/// # Raw SQL
+/// In a single transaction:
+/// - Updates or creates network account state from the block's account updates.
+/// - Inserts newly created network notes.
+/// - Marks notes consumed by the block's nullifiers as committed at this block.
+/// - Updates the chain state singleton to point at this block.
 ///
-/// For account updates (applies delta to latest state and inserts inflight row):
-///
-/// ```sql
-/// -- Fetch latest account (see latest_account)
-/// INSERT INTO accounts (account_id, transaction_id, account_data)
-/// VALUES (?1, ?2, ?3)
-/// ```
-///
-/// Per note (idempotent via `INSERT OR IGNORE`):
-///
-/// ```sql
-/// INSERT OR IGNORE INTO notes
-///     (nullifier, account_id, note_data, attempt_count, last_attempt, created_by, consumed_by)
-/// VALUES (?1, ?2, ?3, 0, NULL, ?4, NULL)
-/// ```
-///
-/// Per nullifier (marks notes as consumed):
-///
-/// ```sql
-/// UPDATE notes
-/// SET consumed_by = ?1
-/// WHERE nullifier = ?2 AND consumed_by IS NULL
-/// ```
-pub fn add_transaction(
+/// Returns the set of network account IDs whose state changed and whose active actors (if any)
+/// should be notified to re-evaluate their work.
+pub fn apply_committed_block(
     conn: &mut SqliteConnection,
-    tx_id: &TransactionId,
-    account_delta: Option<&AccountUpdateDetails>,
-    notes: &[AccountTargetNetworkNote],
-    nullifiers: &[Nullifier],
-) -> Result<(), DatabaseError> {
-    let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
+    effects: &CommittedBlockEffects,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let block_num = effects.header.block_num();
+    let mut affected_accounts: HashSet<NetworkAccountId> = HashSet::new();
 
-    // Process account delta.
-    if let Some(update) = account_delta.and_then(NetworkAccountEffect::from_protocol) {
-        let account_id = update.network_account_id();
-        match update {
-            NetworkAccountEffect::Updated(ref account_delta) => {
-                // Query latest_account, apply delta, insert inflight row.
-                let current_account =
-                    get_account(conn, account_id)?.expect("account must exist to apply delta");
-                let mut updated = current_account;
-                updated.apply_delta(account_delta).expect(
-                    "network account delta should apply since it was accepted by the mempool",
-                );
-
-                let insert = AccountInsert {
-                    account_id: conversions::network_account_id_to_bytes(account_id),
-                    transaction_id: Some(tx_id_bytes.clone()),
-                    account_data: conversions::account_to_bytes(&updated),
-                };
-                diesel::insert_into(schema::accounts::table).values(&insert).execute(conn)?;
+    // Apply account updates.
+    for (network_id, details) in &effects.network_account_updates {
+        let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
+            continue;
+        };
+        match effect {
+            NetworkAccountEffect::Created(account) => {
+                upsert_committed_account(conn, *network_id, &account)?;
             },
-            NetworkAccountEffect::Created(ref account) => {
-                let insert = AccountInsert {
-                    account_id: conversions::network_account_id_to_bytes(account_id),
-                    transaction_id: Some(tx_id_bytes.clone()),
-                    account_data: conversions::account_to_bytes(account),
-                };
-                diesel::insert_into(schema::accounts::table).values(&insert).execute(conn)?;
+            NetworkAccountEffect::Updated(delta) => {
+                let mut account = get_account(conn, *network_id)?.ok_or_else(|| {
+                    DatabaseError::Io(std::io::Error::other(format!(
+                        "account {network_id} must exist to apply committed delta from block \
+                         {block_num}"
+                    )))
+                })?;
+                account
+                    .apply_delta(&delta)
+                    .expect("committed account delta should apply cleanly");
+                upsert_committed_account(conn, *network_id, &account)?;
             },
         }
+        affected_accounts.insert(*network_id);
     }
 
-    // Insert notes with created_by = tx_id.
-    // Uses INSERT OR IGNORE to make this idempotent if the same event is delivered twice
-    // (the nullifier PK would otherwise cause a constraint violation).
-    for note in notes {
-        let insert = NoteInsert {
-            nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
-            account_id: conversions::network_account_id_to_bytes(
-                note.target_account_id()
-                    .try_into()
-                    .expect("network note's target account must be a network account"),
-            ),
-            note_data: note.as_note().to_bytes(),
-            note_id: Some(conversions::note_id_to_bytes(&note.as_note().id())),
-            attempt_count: 0,
-            last_attempt: None,
-            last_error: None,
-            created_by: Some(tx_id_bytes.clone()),
-            consumed_by: None,
-            committed_at: None,
-        };
-        diesel::insert_or_ignore_into(schema::notes::table)
-            .values(&insert)
-            .execute(conn)?;
+    // Insert newly created network notes.
+    if !effects.network_notes.is_empty() {
+        for note in &effects.network_notes {
+            let target_id = NetworkAccountId::try_from(note.target_account_id())
+                .expect("network note's target account must be a network account");
+            affected_accounts.insert(target_id);
+        }
+        insert_committed_notes(conn, &effects.network_notes)?;
     }
 
-    // Mark consumed notes: set consumed_by = tx_id for matching nullifiers.
-    for nullifier in nullifiers {
+    // Mark consumed notes as committed.
+    let block_num_val = conversions::block_num_to_i64(block_num);
+    for nullifier in &effects.nullifiers {
         let nullifier_bytes = conversions::nullifier_to_bytes(nullifier);
+        // Collect affected account ids for matching notes before updating.
+        let matched_accounts: Vec<Vec<u8>> = schema::notes::table
+            .filter(schema::notes::nullifier.eq(&nullifier_bytes))
+            .filter(schema::notes::committed_at.is_null())
+            .select(schema::notes::account_id)
+            .load(conn)?;
+        for account_id_bytes in &matched_accounts {
+            affected_accounts.insert(conversions::network_account_id_from_bytes(account_id_bytes)?);
+        }
 
-        // Only mark notes that are not already consumed.
         diesel::update(
             schema::notes::table
                 .find(&nullifier_bytes)
-                .filter(schema::notes::consumed_by.is_null()),
+                .filter(schema::notes::committed_at.is_null()),
         )
-        .set(schema::notes::consumed_by.eq(Some(&tx_id_bytes)))
+        .set(schema::notes::committed_at.eq(Some(block_num_val)))
         .execute(conn)?;
     }
 
-    Ok(())
-}
-
-/// Handles a `BlockCommitted` event by committing transaction effects.
-///
-/// # Raw SQL
-///
-/// Per committed transaction:
-///
-/// ```sql
-/// -- Find inflight accounts for this tx
-/// SELECT account_id FROM accounts WHERE transaction_id = ?1
-///
-/// -- Delete old committed row
-/// DELETE FROM accounts WHERE account_id = ?1 AND transaction_id IS NULL
-///
-/// -- Promote inflight row to committed
-/// UPDATE accounts SET transaction_id = NULL
-/// WHERE account_id = ?1 AND transaction_id = ?2
-///
-/// -- Mark consumed notes as committed
-/// UPDATE notes SET committed_at = ?block_num WHERE consumed_by = ?1
-///
-/// -- Promote inflight-created notes to committed
-/// UPDATE notes SET created_by = NULL WHERE created_by = ?1
-/// ```
-///
-/// Finally updates chain state (see [`upsert_chain_state`]).
-pub fn commit_block(
-    conn: &mut SqliteConnection,
-    tx_ids: &[TransactionId],
-    block_num: BlockNumber,
-    block_header: &BlockHeader,
-) -> Result<Vec<NetworkAccountId>, DatabaseError> {
-    let mut affected_accounts = HashSet::new();
-
-    for tx_id in tx_ids {
-        let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
-
-        // Promote inflight account rows: delete old committed, set transaction_id = NULL.
-        // Find accounts that have an inflight row for this tx.
-        let inflight_account_ids: Vec<Vec<u8>> = schema::accounts::table
-            .filter(schema::accounts::transaction_id.eq(&tx_id_bytes))
-            .select(schema::accounts::account_id)
-            .load(conn)?;
-
-        for account_id_bytes in &inflight_account_ids {
-            affected_accounts.insert(conversions::network_account_id_from_bytes(account_id_bytes)?);
-
-            // Delete the old committed row for this account.
-            diesel::delete(
-                schema::accounts::table
-                    .filter(schema::accounts::account_id.eq(account_id_bytes))
-                    .filter(schema::accounts::transaction_id.is_null()),
-            )
-            .execute(conn)?;
-
-            // Promote the inflight row to committed (set transaction_id = NULL).
-            // Only promote the row for this specific tx.
-            diesel::update(
-                schema::accounts::table
-                    .filter(schema::accounts::account_id.eq(account_id_bytes))
-                    .filter(schema::accounts::transaction_id.eq(&tx_id_bytes)),
-            )
-            .set(schema::accounts::transaction_id.eq(None::<Vec<u8>>))
-            .execute(conn)?;
-        }
-
-        // Collect accounts of notes consumed by this tx.
-        let consumed_note_accounts: Vec<Vec<u8>> = schema::notes::table
-            .filter(schema::notes::consumed_by.eq(&tx_id_bytes))
-            .select(schema::notes::account_id)
-            .load(conn)?;
-        for account_id_bytes in &consumed_note_accounts {
-            affected_accounts.insert(conversions::network_account_id_from_bytes(account_id_bytes)?);
-        }
-
-        // Mark consumed notes as committed (set committed_at = block_num).
-        let block_num_val = conversions::block_num_to_i64(block_num);
-        diesel::update(schema::notes::table.filter(schema::notes::consumed_by.eq(&tx_id_bytes)))
-            .set(schema::notes::committed_at.eq(Some(block_num_val)))
-            .execute(conn)?;
-
-        // Promote inflight-created notes to committed (set created_by = NULL).
-        diesel::update(schema::notes::table.filter(schema::notes::created_by.eq(&tx_id_bytes)))
-            .set(schema::notes::created_by.eq(None::<Vec<u8>>))
-            .execute(conn)?;
-    }
-
-    // Update chain state.
-    upsert_chain_state(conn, block_num, block_header)?;
+    // Update chain state singleton.
+    upsert_chain_state(conn, block_num, &effects.header)?;
 
     Ok(affected_accounts.into_iter().collect())
-}
-
-/// Handles a `TransactionsReverted` event by undoing transaction effects.
-///
-/// Returns all affected account IDs (for notification). Accounts whose creation was fully
-/// reverted are included.
-///
-/// # Raw SQL
-///
-/// Per reverted transaction:
-///
-/// ```sql
-/// DELETE FROM accounts WHERE transaction_id = ?1 RETURNING account_id
-///
-/// DELETE FROM notes WHERE created_by = ?1
-///
-/// UPDATE notes SET consumed_by = NULL WHERE consumed_by = ?1 RETURNING account_id
-/// ```
-pub fn revert_transaction(
-    conn: &mut SqliteConnection,
-    tx_ids: &[TransactionId],
-) -> Result<Vec<NetworkAccountId>, DatabaseError> {
-    use diesel::sql_types::Binary;
-
-    let mut affected_accounts = HashSet::new();
-
-    for tx_id in tx_ids {
-        let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
-
-        // Delete inflight account rows and collect affected account IDs.
-        let deleted_accounts: Vec<AccountIdRow> = diesel::sql_query(
-            "DELETE FROM accounts WHERE transaction_id = ?1 RETURNING account_id",
-        )
-        .bind::<Binary, _>(&tx_id_bytes)
-        .load(conn)?;
-
-        for row in &deleted_accounts {
-            affected_accounts.insert(conversions::network_account_id_from_bytes(&row.account_id)?);
-        }
-
-        // Delete inflight-created notes (created_by = tx_id).
-        diesel::delete(schema::notes::table.filter(schema::notes::created_by.eq(&tx_id_bytes)))
-            .execute(conn)?;
-
-        // Restore consumed notes and collect affected account IDs.
-        let restored_accounts: Vec<AccountIdRow> = diesel::sql_query(
-            "UPDATE notes SET consumed_by = NULL WHERE consumed_by = ?1 RETURNING account_id",
-        )
-        .bind::<Binary, _>(&tx_id_bytes)
-        .load(conn)?;
-
-        for row in &restored_accounts {
-            affected_accounts.insert(conversions::network_account_id_from_bytes(&row.account_id)?);
-        }
-    }
-
-    Ok(affected_accounts.into_iter().collect())
-}
-
-/// Helper row type for `RETURNING account_id` queries.
-#[derive(diesel::QueryableByName)]
-struct AccountIdRow {
-    #[diesel(sql_type = diesel::sql_types::Binary)]
-    account_id: Vec<u8>,
 }

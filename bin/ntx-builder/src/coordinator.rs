@@ -3,19 +3,18 @@ use std::sync::Arc;
 
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::actor::{AccountActor, AccountActorContext};
+use crate::committed_block::CommittedBlockEffects;
 use crate::db::Db;
 
-// WRITE EVENT RESULT
+// APPLY BLOCK RESULT
 // ================================================================================================
 
-/// Result of writing a mempool event to the database.
-pub struct WriteEventResult {
+/// Result of applying a committed block to the database.
+pub struct ApplyBlockResult {
     /// Accounts that should be notified of state changes.
     pub accounts_to_notify: Vec<NetworkAccountId>,
 }
@@ -94,7 +93,7 @@ impl ActorHandle {
 ///
 /// The coordinator operates in an event-driven manner:
 /// 1. Network accounts are registered and actors spawned as needed.
-/// 2. Mempool events are written to DB, then actors are notified.
+/// 2. Committed block effects are written to DB, then actors are notified.
 /// 3. Actor completion/failure events are monitored and handled.
 /// 4. Failed or completed actors are cleaned up from the registry.
 pub struct Coordinator {
@@ -209,6 +208,17 @@ impl Coordinator {
         }
     }
 
+    /// Notifies every active actor that a new block has been applied.
+    ///
+    /// Called once per committed block so that actors waiting on their own submitted transaction
+    /// (in [`ActorMode::WaitForNextBlock`](crate::actor::ActorMode)) reliably wake up even when
+    /// the block did not touch their account.
+    pub fn notify_all(&self) {
+        for handle in self.actor_registry.values() {
+            handle.notify();
+        }
+    }
+
     /// Waits for the next actor to complete and handles the outcome.
     ///
     /// This method monitors the join set for actor task completion and handles
@@ -256,47 +266,39 @@ impl Coordinator {
         }
     }
 
-    /// Notifies account actors that are affected by a `TransactionAdded` event.
+    /// Notifies account actors affected by newly created network notes or account updates in a
+    /// committed block.
     ///
-    /// Only actors that are currently active are notified. Since event effects are already
-    /// persisted in the DB by `write_event()`, actors that spawn later read their state from the
-    /// DB and do not need predating events.
+    /// Only actors that are currently active are notified. Since the block effects are already
+    /// persisted in the DB by `apply_block()`, actors that spawn later read their state from the
+    /// DB and do not need to replay predating blocks.
     ///
     /// Returns account IDs of note targets that do not have active actors (e.g. previously
     /// deactivated due to sterility). The caller can use this to re-activate actors for those
     /// accounts.
-    pub fn send_targeted(&self, event: &MempoolEvent) -> Vec<NetworkAccountId> {
+    pub fn send_targeted(&self, effects: &CommittedBlockEffects) -> Vec<NetworkAccountId> {
         let mut target_account_ids = HashSet::new();
         let mut inactive_targets = Vec::new();
 
-        if let MempoolEvent::TransactionAdded { network_notes, account_delta, .. } = event {
-            // We need to inform the account if it was updated. This lets it know that its own
-            // transaction has been applied, and in the future also resolves race conditions with
-            // external network transactions (once these are allowed).
-            if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
-                let account_id = delta.id();
-                if account_id.is_network() {
-                    let network_account_id =
-                        account_id.try_into().expect("account is network account");
-                    if self.actor_registry.contains_key(&network_account_id) {
-                        target_account_ids.insert(network_account_id);
-                    }
-                }
-            }
-
-            // Determine target actors for each note.
-            for note in network_notes {
-                let account = note.target_account_id();
-                let account = NetworkAccountId::try_from(account)
-                    .expect("network note target account should be a network account");
-
-                if self.actor_registry.contains_key(&account) {
-                    target_account_ids.insert(account);
-                } else {
-                    inactive_targets.push(account);
-                }
+        // Notify any active actor whose network account was updated in this block.
+        for (account_id, _details) in &effects.network_account_updates {
+            if self.actor_registry.contains_key(account_id) {
+                target_account_ids.insert(*account_id);
             }
         }
+
+        // Determine target actors for each newly created network note.
+        for note in &effects.network_notes {
+            let account = NetworkAccountId::try_from(note.target_account_id())
+                .expect("network note target account should be a network account");
+
+            if self.actor_registry.contains_key(&account) {
+                target_account_ids.insert(account);
+            } else {
+                inactive_targets.push(account);
+            }
+        }
+
         // Notify target actors.
         for account_id in &target_account_ids {
             if let Some(handle) = self.actor_registry.get(account_id) {
@@ -307,48 +309,16 @@ impl Coordinator {
         inactive_targets
     }
 
-    /// Writes mempool event effects to the database.
+    /// Applies a committed block's effects to the database.
     ///
-    /// This must be called BEFORE sending notifications to actors. Returns a [`WriteEventResult`]
-    /// with the accounts to notify and cancel.
-    pub async fn write_event(
+    /// This must be called BEFORE sending notifications to actors. Returns an [`ApplyBlockResult`]
+    /// with the accounts that should be notified.
+    pub async fn apply_block(
         &self,
-        event: &MempoolEvent,
-    ) -> Result<WriteEventResult, DatabaseError> {
-        match event {
-            MempoolEvent::TransactionAdded {
-                id,
-                nullifiers,
-                network_notes,
-                account_delta,
-            } => {
-                self.db
-                    .handle_transaction_added(
-                        *id,
-                        account_delta.clone(),
-                        network_notes.clone(),
-                        nullifiers.clone(),
-                    )
-                    .await?;
-                Ok(WriteEventResult { accounts_to_notify: Vec::new() })
-            },
-            MempoolEvent::BlockCommitted { header, txs } => {
-                let affected_accounts = self
-                    .db
-                    .handle_block_committed(
-                        txs.clone(),
-                        header.block_num(),
-                        header.as_ref().clone(),
-                    )
-                    .await?;
-                Ok(WriteEventResult { accounts_to_notify: affected_accounts })
-            },
-            MempoolEvent::TransactionsReverted(tx_ids) => {
-                let affected_accounts =
-                    self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await?;
-                Ok(WriteEventResult { accounts_to_notify: affected_accounts })
-            },
-        }
+        effects: &CommittedBlockEffects,
+    ) -> Result<ApplyBlockResult, DatabaseError> {
+        let affected_accounts = self.db.apply_committed_block(effects.clone()).await?;
+        Ok(ApplyBlockResult { accounts_to_notify: affected_accounts })
     }
 }
 
@@ -363,7 +333,7 @@ impl Coordinator {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::domain::mempool::MempoolEvent;
+    use miden_protocol::block::BlockNumber;
 
     use super::*;
     use crate::actor::AccountActorContext;
@@ -392,14 +362,14 @@ mod tests {
         let note_active = mock_single_target_note(active_id, 10);
         let note_inactive = mock_single_target_note(inactive_id, 20);
 
-        let event = MempoolEvent::TransactionAdded {
-            id: mock_tx_id(1),
-            nullifiers: vec![],
+        let effects = CommittedBlockEffects {
+            header: mock_block_header(BlockNumber::from(1)),
             network_notes: vec![note_active, note_inactive],
-            account_delta: None,
+            nullifiers: vec![],
+            network_account_updates: vec![],
         };
 
-        let inactive_targets = coordinator.send_targeted(&event);
+        let inactive_targets = coordinator.send_targeted(&effects);
 
         assert_eq!(inactive_targets.len(), 1);
         assert_eq!(inactive_targets[0], inactive_id);

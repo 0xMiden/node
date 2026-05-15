@@ -31,6 +31,7 @@
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- Switched the network transaction builder from mempool subscription to the store's committed-block subscription: on startup it resumes from its persisted block, catches up to the chain tip before spawning any account actors, and applies committed network-account updates, notes, and nullifiers from each block. Submitted transactions now carry a configurable expiration delta (default 5 blocks).
 
 ## v0.14.10 (2026-05-29)
 

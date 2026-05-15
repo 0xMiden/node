@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
+use futures::{Stream, StreamExt};
+use miden_node_proto::clients::{Builder, StoreNtxBuilderClient, StoreReplicaClient};
 use miden_node_proto::decode::ConversionResultExt;
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
 use miden_node_proto::errors::ConversionError;
@@ -22,7 +23,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{AssetVaultKey, AssetWitness, PartialVault};
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteScript;
@@ -476,6 +477,85 @@ pub enum StoreError {
     DeserializationError(#[from] ConversionError),
     #[error("missing details: {0}")]
     MissingDetails(String),
+}
+
+// STORE REPLICA CLIENT
+// =================================================================================================
+
+/// Client for the store's replica streaming API.
+///
+/// This is a separate gRPC service from the ntx-builder API: it serves the committed-block
+/// subscription stream used to drive the ntx-builder's state forward.
+#[derive(Clone, Debug)]
+pub struct StoreReplicaStreamClient {
+    inner: StoreReplicaClient,
+}
+
+impl StoreReplicaStreamClient {
+    /// Creates a new store replica client with a lazy connection.
+    pub fn new(store_url: Url) -> Self {
+        info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store replica client");
+
+        let inner = Builder::new(store_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<StoreReplicaClient>();
+
+        Self { inner }
+    }
+
+    /// Opens a block subscription stream starting from `block_from` (inclusive).
+    ///
+    /// On `Unavailable` errors the connection is retried with exponential backoff. The returned
+    /// stream yields decoded [`SignedBlock`]s as they arrive.
+    #[instrument(target = COMPONENT, name = "store.client.block_subscription_with_retry", skip_all, err)]
+    pub async fn block_subscription_with_retry(
+        &self,
+        block_from: BlockNumber,
+    ) -> Result<impl Stream<Item = Result<SignedBlock, StoreError>> + Send + 'static, StoreError>
+    {
+        let mut retry_counter = 0u32;
+        loop {
+            match self.block_subscription(block_from).await {
+                Err(StoreError::GrpcClientError(err)) if err.code() == tonic::Code::Unavailable => {
+                    let backoff = Duration::from_millis(500)
+                        .saturating_mul(1 << retry_counter.min(6))
+                        .min(Duration::from_secs(30));
+
+                    tracing::warn!(
+                        ?backoff,
+                        %retry_counter,
+                        %err,
+                        "store connection failed while subscribing to blocks, retrying"
+                    );
+
+                    retry_counter += 1;
+                    tokio::time::sleep(backoff).await;
+                },
+                result => return result,
+            }
+        }
+    }
+
+    async fn block_subscription(
+        &self,
+        block_from: BlockNumber,
+    ) -> Result<impl Stream<Item = Result<SignedBlock, StoreError>> + Send + 'static, StoreError>
+    {
+        let request = proto::store::BlockSubscriptionRequest { block_from: block_from.as_u32() };
+
+        let stream = self.inner.clone().block_subscription(request).await?.into_inner();
+
+        Ok(stream.map(|res| {
+            let signed = res.map_err(StoreError::GrpcClientError)?;
+            SignedBlock::read_from_bytes(&signed.block).map_err(|err| {
+                StoreError::DeserializationError(ConversionError::from(err).context("SignedBlock"))
+            })
+        }))
+    }
 }
 
 // HELPERS

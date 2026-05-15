@@ -1,4 +1,3 @@
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{Account, AccountDelta, AccountId};
 
@@ -26,11 +25,6 @@ impl NetworkAccountEffect {
         };
 
         update.protocol_account_id().is_network().then_some(update)
-    }
-
-    pub fn network_account_id(&self) -> NetworkAccountId {
-        // SAFETY: This is a network account by construction.
-        self.protocol_account_id().try_into().unwrap()
     }
 
     fn protocol_account_id(&self) -> AccountId {
