@@ -144,11 +144,8 @@ pub struct NtxContext {
     /// Maximum number of VM execution cycles for network transactions.
     max_cycles: u32,
 
-    /// Initial sleep applied to per-request retry backoff for transient infrastructure failures.
-    request_backoff_initial: Duration,
-
-    /// Cap on the per-request retry backoff sleep.
-    request_backoff_max: Duration,
+    /// [`ExponentialBuilder`] used to back off retries on transient request failures.
+    request_backoff: ExponentialBuilder,
 }
 
 impl NtxContext {
@@ -165,6 +162,7 @@ impl NtxContext {
         request_backoff_initial: Duration,
         request_backoff_max: Duration,
     ) -> Self {
+        let request_backoff = request_backoff(request_backoff_initial, request_backoff_max);
         Self {
             block_producer,
             validator,
@@ -173,14 +171,13 @@ impl NtxContext {
             script_cache,
             db,
             max_cycles,
-            request_backoff_initial,
-            request_backoff_max,
+            request_backoff,
         }
     }
 
     /// Returns the [`ExponentialBuilder`] used for per-request retry backoff.
     fn request_backoff(&self) -> ExponentialBuilder {
-        request_backoff(self.request_backoff_initial, self.request_backoff_max)
+        self.request_backoff
     }
 
     /// Creates a [`TransactionExecutor`] configured with the network transaction cycle limit.
@@ -264,8 +261,7 @@ impl NtxContext {
                             ctx.store.clone(),
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
-                            ctx.request_backoff_initial,
-                            ctx.request_backoff_max,
+                            ctx.request_backoff,
                         );
                         handle.block_on(
                             async {
@@ -491,14 +487,12 @@ struct NtxDataStore {
     fetched_scripts: Arc<FetchedNoteScripts>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     storage_slots: Arc<StorageSlotRegistry>,
-    /// Per-request retry backoff bounds for transient store failures.
-    request_backoff_initial: Duration,
-    request_backoff_max: Duration,
+    /// Per-request retry backoff for transient store failures.
+    request_backoff: ExponentialBuilder,
 }
 
 impl NtxDataStore {
     /// Creates a new `NtxDataStore` with default cache size.
-    #[expect(clippy::too_many_arguments)]
     fn new(
         account: Account,
         reference_block: BlockHeader,
@@ -506,8 +500,7 @@ impl NtxDataStore {
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
-        request_backoff_initial: Duration,
-        request_backoff_max: Duration,
+        request_backoff: ExponentialBuilder,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
@@ -522,14 +515,13 @@ impl NtxDataStore {
             db,
             fetched_scripts: Arc::new(FetchedNoteScripts::new()),
             storage_slots: Arc::new(StorageSlotRegistry::new()),
-            request_backoff_initial,
-            request_backoff_max,
+            request_backoff,
         }
     }
 
     /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the store.
     fn store_backoff(&self) -> ExponentialBuilder {
-        request_backoff(self.request_backoff_initial, self.request_backoff_max)
+        self.request_backoff
     }
 
     /// Returns the list of note scripts fetched from the remote store during execution.

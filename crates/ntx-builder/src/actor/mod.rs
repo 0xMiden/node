@@ -174,17 +174,6 @@ enum ActorMode {
     TransactionInflight(TransactionId),
 }
 
-/// Outcome of an `execute_transactions` call.
-#[derive(Debug)]
-enum ExecutionOutcome {
-    /// Transaction was submitted, the actor should wait for mempool confirmation.
-    Inflight(TransactionId),
-    /// Transaction execution failed. Transient infrastructure failures have already been retried
-    /// inside `execute_transaction`, so any error reaching the actor is terminal for this
-    /// candidate.
-    Failure,
-}
-
 // ACCOUNT ACTOR
 // ================================================================================================
 
@@ -353,13 +342,13 @@ impl AccountActor {
 
                     if let Some(tx_candidate) = tx_candidate {
                         match self.execute_transactions(account_id, tx_candidate).await {
-                            ExecutionOutcome::Inflight(tx_id) => {
+                            Ok(tx_id) => {
                                 self.mode = ActorMode::TransactionInflight(tx_id);
                             },
                             // The batch failed terminally: offending notes have been marked
                             // failed; let the next loop iteration re-query the DB to decide
                             // whether anything remains to consume for this account.
-                            ExecutionOutcome::Failure => {
+                            Err(_) => {
                                 self.mode = ActorMode::NotesAvailable;
                             },
                         }
@@ -422,7 +411,7 @@ impl AccountActor {
         &mut self,
         account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
-    ) -> ExecutionOutcome {
+    ) -> Result<TransactionId, ()> {
         let block_num = tx_candidate.chain_tip_header.block_num();
 
         // Execute the selected transaction.
@@ -462,7 +451,7 @@ impl AccountActor {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                ExecutionOutcome::Inflight(tx_id)
+                Ok(tx_id)
             },
             Err(err) => {
                 let error_msg = err.as_report();
@@ -493,7 +482,7 @@ impl AccountActor {
                 if !failed_notes.is_empty() {
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                ExecutionOutcome::Failure
+                Err(())
             },
         }
     }
