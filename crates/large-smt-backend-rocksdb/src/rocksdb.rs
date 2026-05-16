@@ -1088,18 +1088,18 @@ struct RocksDbDirectLeafIterator<'a> {
 }
 
 impl Iterator for RocksDbDirectLeafIterator<'_> {
-    type Item = Result<(u64, SmtLeaf), StorageError>;
+    type Item = (u64, SmtLeaf);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.find_map(|result| {
             let (key_bytes, value_bytes) = match result {
                 Ok(entry) => entry,
-                Err(err) => return Some(Err(map_rocksdb_err(err))),
+                Err(_) => return None,
             };
 
             let leaf_idx = match index_from_key_bytes(&key_bytes) {
-                Ok(index) => index,
-                Err(err) => return Some(Err(err)),
+                Ok(idx) => idx,
+                Err(_) => return None,
             };
 
             let leaf = match SmtLeaf::read_from_bytes_with_budget(
@@ -1107,10 +1107,10 @@ impl Iterator for RocksDbDirectLeafIterator<'_> {
                 value_bytes.len(),
             ) {
                 Ok(leaf) => leaf,
-                Err(err) => return Some(Err(StorageError::SmtLeafDeserialization(err))),
+                Err(_) => return None,
             };
 
-            Some(Ok((leaf_idx, leaf)))
+            Some((leaf_idx, leaf))
         })
     }
 }
