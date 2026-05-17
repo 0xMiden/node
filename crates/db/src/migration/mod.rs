@@ -3,27 +3,10 @@ use std::marker::PhantomData;
 
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, Transaction};
-use sha2::{Digest, Sha256};
 
-/// A schema hash computed from normalized SQL entries in `sqlite_master`.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct SchemaHash([u8; 32]);
+mod schema_hash;
 
-impl SchemaHash {
-    /// Returns the raw hash bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl fmt::Display for SchemaHash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
-    }
-}
+pub use schema_hash::SchemaHash;
 
 /// A pure SQL migration used to bootstrap new databases.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,10 +77,12 @@ pub struct MigratorBuilder<Phase = BaseMigrationPhase> {
 
 impl MigratorBuilder<BaseMigrationPhase> {
     /// Adds a pure SQL base migration.
-    #[must_use]
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
         let version = self.schema_hashes.len() + 1;
-        let hash = Self::apply_migration(&mut self.reference, version, |tx| tx.execute(sql, []).map(|_| ()).map_err(Into::into)).with_context(|| format!("failed to apply code migration {version}: {name}"))?;
+        let hash = Self::apply_migration(&mut self.reference, version, |tx| {
+            tx.execute_batch(sql).map_err(Into::into)
+        })
+        .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
 
         self.base_migrations.push(BaseMigration { name, sql });
         self.schema_hashes.push(hash);
@@ -106,14 +91,14 @@ impl MigratorBuilder<BaseMigrationPhase> {
 }
 
 impl<T> MigratorBuilder<T> {
-    #[must_use]
     pub fn push_code(
         mut self,
         name: &'static str,
         apply: CodeMigrationFn,
     ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
         let version = self.schema_hashes.len() + 1;
-        let hash = Self::apply_migration(&mut self.reference, version, &apply).with_context(|| format!("failed to apply code migration {version}: {name}"))?;
+        let hash = Self::apply_migration(&mut self.reference, version, apply)
+            .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
         self.code_migrations.push(CodeMigration { name, apply });
         self.schema_hashes.push(hash);
@@ -136,11 +121,15 @@ impl<T> MigratorBuilder<T> {
         }
     }
 
-    fn apply_migration(conn: &mut Connection, version: usize, migration_fn: impl FnOnce(&Transaction) -> Result<()>) -> Result<SchemaHash> {
-        let mut tx = conn.transaction().context("failed to begin transaction")?;
-        migration_fn(&mut tx).context("failed to execute migration function")?;
-        set_user_version(&mut tx, version).context("failed to set `user_version`")?;
-        let hash = schema_hash(&tx).context("failed to compute schema hash")?;
+    fn apply_migration(
+        conn: &mut Connection,
+        version: usize,
+        migration_fn: impl FnOnce(&Transaction) -> Result<()>,
+    ) -> Result<SchemaHash> {
+        let tx = conn.transaction().context("failed to begin transaction")?;
+        migration_fn(&tx).context("failed to execute migration function")?;
+        set_user_version(&tx, version).context("failed to set `user_version`")?;
+        let hash = SchemaHash::new(&tx).context("failed to compute schema hash")?;
         tx.commit().context("failed to commit transaction")?;
 
         Ok(hash)
@@ -272,7 +261,7 @@ impl Migrator {
     fn verify_current_schema(&self, conn: &Connection, version: usize) -> Result<()> {
         let name = self.migration_name(version).unwrap_or("<unknown>");
         let expected = self.expected_schema_hashes[version - 1];
-        let actual = schema_hash(conn).with_context(|| {
+        let actual = SchemaHash::new(conn).with_context(|| {
             format!("failed to compute schema hash at database version {version} {name:?}")
         })?;
 
@@ -291,7 +280,7 @@ impl Migrator {
         name: &'static str,
     ) -> Result<()> {
         let expected = self.expected_schema_hashes[version - 1];
-        let actual = schema_hash(conn).with_context(|| {
+        let actual = SchemaHash::new(conn).with_context(|| {
             format!("failed to compute schema hash after migration {version} {name:?}")
         })?;
 
@@ -316,46 +305,6 @@ impl Migrator {
             .get(version - self.base_migrations.len() - 1)
             .map(CodeMigration::name)
     }
-}
-
-/// Computes the schema hash for `conn`.
-pub fn schema_hash(conn: &Connection) -> Result<SchemaHash> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT sql FROM sqlite_master \
-             WHERE sql IS NOT NULL \
-             AND name NOT LIKE 'sqlite_%'",
-        )
-        .context("failed to prepare sqlite_master schema query")?;
-
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .context("failed to query sqlite_master schema rows")?;
-
-    let mut normalized_sql = rows
-        .map(|row| row.map(|sql| normalize_sql(&sql)))
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .context("failed to read sqlite_master schema rows")?;
-    normalized_sql.sort_unstable();
-
-    let mut hasher = Sha256::new();
-    for sql in normalized_sql {
-        hasher.update(sql.as_bytes());
-        hasher.update(b"\0");
-    }
-
-    let digest = hasher.finalize();
-    let mut hash = [0_u8; 32];
-    hash.copy_from_slice(&digest);
-    Ok(SchemaHash(hash))
-}
-
-fn normalize_sql(sql: &str) -> String {
-    sql.trim_end()
-        .trim_end_matches(';')
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn read_user_version(conn: &Connection) -> Result<usize> {
