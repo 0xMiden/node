@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, Transaction};
@@ -68,39 +69,61 @@ impl fmt::Debug for CodeMigration {
     }
 }
 
+/// Builder phase which allows adding base migrations.
+pub enum BaseMigrationPhase {}
+
+/// Builder phase after code migrations have started.
+pub enum CodeMigrationPhase {}
+
 /// Builds a [`Migrator`] while computing expected schema hashes on an in-memory database.
-pub struct MigratorBuilder {
+pub struct MigratorBuilder<Phase = BaseMigrationPhase> {
+    /// Connection to an in-memory SQLite database used to verify the migrations as they are added.
     reference: Connection,
+    /// List of base migrations added so far.
+    ///
+    /// New base migrations cannot be added after code migrations have started.
     base_migrations: Vec<BaseMigration>,
+    /// List of code migrations added so far.
     code_migrations: Vec<CodeMigration>,
-    expected_schema_hashes: Vec<SchemaHash>,
+    /// Chronological list of computed schema hashes for each migration.
+    ///
+    /// The length of this list should always match the number of migrations added so far.
+    schema_hashes: Vec<SchemaHash>,
+    _phase: PhantomData<Phase>,
 }
 
-impl MigratorBuilder {
+impl MigratorBuilder<BaseMigrationPhase> {
     /// Adds a pure SQL base migration.
+    #[must_use]
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
-        ensure!(
-            self.code_migrations.is_empty(),
-            "base migration {} {name:?} cannot be added after code migrations",
-            self.next_version()?
-        );
-
-        let version = self.next_version()?;
-        let hash = apply_base_and_hash(&mut self.reference, version, name, sql)?;
+        let version = self.schema_hashes.len() + 1;
+        let hash = Self::apply_migration(&mut self.reference, version, |tx| tx.execute(sql, []).map(|_| ()).map_err(Into::into)).with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
         self.base_migrations.push(BaseMigration { name, sql });
-        self.expected_schema_hashes.push(hash);
+        self.schema_hashes.push(hash);
         Ok(self)
     }
+}
 
-    /// Adds a Rust code migration.
-    pub fn push_code(mut self, name: &'static str, apply: CodeMigrationFn) -> Result<Self> {
-        let version = self.next_version()?;
-        let hash = apply_code_and_hash(&mut self.reference, version, name, apply)?;
+impl<T> MigratorBuilder<T> {
+    #[must_use]
+    pub fn push_code(
+        mut self,
+        name: &'static str,
+        apply: CodeMigrationFn,
+    ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
+        let version = self.schema_hashes.len() + 1;
+        let hash = Self::apply_migration(&mut self.reference, version, &apply).with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
         self.code_migrations.push(CodeMigration { name, apply });
-        self.expected_schema_hashes.push(hash);
-        Ok(self)
+        self.schema_hashes.push(hash);
+        Ok(MigratorBuilder {
+            reference: self.reference,
+            base_migrations: self.base_migrations,
+            code_migrations: self.code_migrations,
+            schema_hashes: self.schema_hashes,
+            _phase: PhantomData,
+        })
     }
 
     /// Returns a migrator containing all migrations and their expected schema hashes.
@@ -109,14 +132,18 @@ impl MigratorBuilder {
         Migrator {
             base_migrations: self.base_migrations,
             code_migrations: self.code_migrations,
-            expected_schema_hashes: self.expected_schema_hashes,
+            expected_schema_hashes: self.schema_hashes,
         }
     }
 
-    fn next_version(&self) -> Result<usize> {
-        let version = self.expected_schema_hashes.len() + 1;
-        version_to_user_version(version)?;
-        Ok(version)
+    fn apply_migration(conn: &mut Connection, version: usize, migration_fn: impl FnOnce(&Transaction) -> Result<()>) -> Result<SchemaHash> {
+        let mut tx = conn.transaction().context("failed to begin transaction")?;
+        migration_fn(&mut tx).context("failed to execute migration function")?;
+        set_user_version(&mut tx, version).context("failed to set `user_version`")?;
+        let hash = schema_hash(&tx).context("failed to compute schema hash")?;
+        tx.commit().context("failed to commit transaction")?;
+
+        Ok(hash)
     }
 }
 
@@ -138,7 +165,8 @@ impl Migrator {
             reference,
             base_migrations: Vec::new(),
             code_migrations: Vec::new(),
-            expected_schema_hashes: Vec::new(),
+            schema_hashes: Vec::new(),
+            _phase: PhantomData,
         })
     }
 
@@ -322,54 +350,6 @@ pub fn schema_hash(conn: &Connection) -> Result<SchemaHash> {
     Ok(SchemaHash(hash))
 }
 
-fn apply_base_and_hash(
-    conn: &mut Connection,
-    version: usize,
-    name: &'static str,
-    sql: &'static str,
-) -> Result<SchemaHash> {
-    let tx = conn.transaction().with_context(|| {
-        format!("failed to start reference transaction for migration {version} {name:?}")
-    })?;
-
-    tx.execute_batch(sql)
-        .with_context(|| format!("failed to apply reference migration {version} {name:?}"))?;
-    let hash = schema_hash(&tx).with_context(|| {
-        format!("failed to compute reference schema hash for migration {version} {name:?}")
-    })?;
-    set_user_version(&tx, version).with_context(|| {
-        format!("failed to update reference user_version for migration {version} {name:?}")
-    })?;
-    tx.commit()
-        .with_context(|| format!("failed to commit reference migration {version} {name:?}"))?;
-
-    Ok(hash)
-}
-
-fn apply_code_and_hash(
-    conn: &mut Connection,
-    version: usize,
-    name: &'static str,
-    apply: CodeMigrationFn,
-) -> Result<SchemaHash> {
-    let tx = conn.transaction().with_context(|| {
-        format!("failed to start reference transaction for migration {version} {name:?}")
-    })?;
-
-    apply(&tx)
-        .with_context(|| format!("failed to apply reference migration {version} {name:?}"))?;
-    let hash = schema_hash(&tx).with_context(|| {
-        format!("failed to compute reference schema hash for migration {version} {name:?}")
-    })?;
-    set_user_version(&tx, version).with_context(|| {
-        format!("failed to update reference user_version for migration {version} {name:?}")
-    })?;
-    tx.commit()
-        .with_context(|| format!("failed to commit reference migration {version} {name:?}"))?;
-
-    Ok(hash)
-}
-
 fn normalize_sql(sql: &str) -> String {
     sql.trim_end()
         .trim_end_matches(';')
@@ -410,11 +390,6 @@ mod tests {
         Ok(())
     }
 
-    fn noop(tx: &Transaction<'_>) -> Result<()> {
-        tx.execute_batch("")?;
-        Ok(())
-    }
-
     fn create_extra_table_when_items_exist(tx: &Transaction<'_>) -> Result<()> {
         let item_count: i64 = tx.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))?;
         if item_count > 0 {
@@ -444,19 +419,6 @@ mod tests {
 
         assert_eq!(read_user_version(&conn)?, 2);
         conn.execute("INSERT INTO items (id, value, height) VALUES (1, 'a', 10)", [])?;
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_base_migration_after_code_migration() -> Result<()> {
-        let result = Migrator::builder()?
-            .push_code("no schema change", noop)?
-            .push_base("late base", "CREATE TABLE late (id INTEGER PRIMARY KEY);");
-        let Err(err) = result else {
-            panic!("migration builder should reject base migrations after code migrations");
-        };
-
-        assert!(err.to_string().contains("cannot be added after code migrations"));
         Ok(())
     }
 
