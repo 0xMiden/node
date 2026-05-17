@@ -49,7 +49,7 @@ it is also possible to perform proving in-process. This is useful when running a
 
 The network transaction builder monitors the mempool for network notes, and creates transactions consuming these.
 We call these network transactions and at present this is the only entity that is allowed to create such transactions.
-This restriction is will be lifted in the future, but for now this component _must_ be enabled to have support for
+This restriction will be lifted in the future, but for now this component _must_ be enabled to have support for
 network transactions.
 
 The mempool is monitored via a gRPC event stream served by the block-producer.
