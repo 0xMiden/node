@@ -42,6 +42,7 @@ use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
+    NoteAttachments,
     NoteDetails,
     NoteHeader,
     NoteId,
@@ -49,6 +50,7 @@ use miden_protocol::note::{
     NoteTag,
     NoteType,
     Nullifier,
+    PartialNoteMetadata,
 };
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
@@ -208,7 +210,7 @@ pub fn create_note(account_id: AccountId) -> Note {
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 10).unwrap(),
         )],
         NoteType::Public,
-        NoteAttachment::default(),
+        NoteAttachments::empty(),
         &mut *rng,
     )
     .expect("Failed to create note")
@@ -240,8 +242,9 @@ fn sql_select_notes() {
             note_index: BlockNoteIndex::new(0, i.try_into().unwrap()).unwrap(),
             note_id: num_to_word(u64::try_from(i).unwrap()),
             note_commitment: num_to_word(u64::try_from(i).unwrap()),
-            metadata: new_note.metadata().clone(),
+            metadata: *new_note.metadata(),
             details: Some(NoteDetails::from(&new_note)),
+            attachments: new_note.attachments().clone(),
             inclusion_path: SparseMerklePath::default(),
         };
         state.push(note.clone());
@@ -284,8 +287,9 @@ fn sql_select_note_script_by_root() {
         note_index: BlockNoteIndex::new(0, 0.try_into().unwrap()).unwrap(),
         note_id: num_to_word(0),
         note_commitment: num_to_word(0),
-        metadata: new_note.metadata().clone(),
+        metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
+        attachments: new_note.attachments().clone(),
         inclusion_path: SparseMerklePath::default(),
     };
     state.push(note.clone());
@@ -355,14 +359,19 @@ fn sql_unconsumed_network_notes() {
 
     // Create an unconsumed note in each block.
     let notes = Vec::from_iter((0..2).map(|i: u32| {
+        let attachments = NoteAttachments::from(attachment.clone());
+        let metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(account_note.0, NoteType::Public),
+            &attachments,
+        );
         let note = NoteRecord {
             block_num: 0.into(), // Created on same block.
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
             note_id: num_to_word(i.into()),
             note_commitment: num_to_word(i.into()),
-            metadata: NoteMetadata::new(account_note.0, NoteType::Public)
-                .with_attachment(attachment.clone()),
+            metadata,
             details: None,
+            attachments,
             inclusion_path: SparseMerklePath::default(),
         };
         (note, Some(num_to_nullifier(i.into())))
@@ -432,7 +441,7 @@ fn sql_select_accounts() {
     for i in 0..10u8 {
         let account_id = AccountId::dummy(
             [i; 15],
-            AccountIdVersion::Version0,
+            AccountIdVersion::Version1,
             AccountType::RegularAccountImmutableCode,
             AccountStorageMode::Private,
         );
@@ -817,9 +826,13 @@ fn notes() {
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 2).unwrap();
     let tag = 5u32;
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
+    let note_metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+        &NoteAttachments::default(),
+    );
 
-    let values = [(note_index, new_note.id(), &note_metadata)];
+    let note_header = NoteHeader::new(new_note.id(), note_metadata);
+    let values = [(note_index, &note_header)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
     let inclusion_path = notes_db.open(note_index);
 
@@ -828,8 +841,9 @@ fn notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+        metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
+        attachments: NoteAttachments::default(),
         inclusion_path: inclusion_path.clone(),
     };
 
@@ -858,8 +872,9 @@ fn notes() {
         note_index: note.note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: note.metadata.clone(),
+        metadata: note.metadata,
         details: None,
+        attachments: NoteAttachments::default(),
         inclusion_path: inclusion_path.clone(),
     };
 
@@ -918,8 +933,12 @@ fn note_sync_across_multiple_blocks() {
         .unwrap();
 
         let new_note = create_note(sender);
-        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
-        let values = [(note_index, new_note.id(), &note_metadata)];
+        let note_metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+            &NoteAttachments::default(),
+        );
+        let note_header = NoteHeader::new(new_note.id(), note_metadata);
+        let values = [(note_index, &note_header)];
         let notes_db = BlockNoteTree::with_entries(values).unwrap();
         let inclusion_path = notes_db.open(note_index);
 
@@ -930,6 +949,7 @@ fn note_sync_across_multiple_blocks() {
             note_commitment: new_note.commitment(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
+            attachments: NoteAttachments::default(),
             inclusion_path,
         };
         queries::insert_scripts(conn, [&note]).unwrap();
@@ -995,8 +1015,12 @@ fn note_sync_multi_respects_payload_limit() {
         .unwrap();
 
         let new_note = create_note(sender);
-        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
-        let values = [(note_index, new_note.id(), &note_metadata)];
+        let note_metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+            &NoteAttachments::default(),
+        );
+        let note_header = NoteHeader::new(new_note.id(), note_metadata);
+        let values = [(note_index, &note_header)];
         let notes_db = BlockNoteTree::with_entries(values).unwrap();
         let inclusion_path = notes_db.open(note_index);
 
@@ -1007,6 +1031,7 @@ fn note_sync_multi_respects_payload_limit() {
             note_commitment: new_note.commitment(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
+            attachments: NoteAttachments::default(),
             inclusion_path,
         };
         queries::insert_scripts(conn, [&note]).unwrap();
@@ -1048,8 +1073,12 @@ fn note_sync_no_matching_tags() {
     // Insert a note with tag 10.
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 0).unwrap();
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into());
-    let values = [(note_index, new_note.id(), &note_metadata)];
+    let note_metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into()),
+        &NoteAttachments::default(),
+    );
+    let note_header = NoteHeader::new(new_note.id(), note_metadata);
+    let values = [(note_index, &note_header)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
     let inclusion_path = notes_db.open(note_index);
 
@@ -1060,6 +1089,7 @@ fn note_sync_no_matching_tags() {
         note_commitment: new_note.commitment(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
+        attachments: NoteAttachments::default(),
         inclusion_path,
     };
     queries::insert_scripts(conn, [&note]).unwrap();
@@ -1716,7 +1746,11 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
             Word::try_from([num, num, 0, 0]).unwrap(),
             Word::try_from([0, 0, num, num]).unwrap(),
         ),
-        NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
+        NoteMetadata::new(
+            PartialNoteMetadata::new(account_id, NoteType::Public)
+                .with_tag(NoteTag::new(num as u32)),
+            &NoteAttachments::default(),
+        ),
     )];
 
     let fee = test_fee();
@@ -1971,9 +2005,10 @@ async fn genesis_with_account_assets() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
-    let genesis_block = genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2026,9 +2061,10 @@ async fn genesis_with_account_storage_map() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
-    let genesis_block = genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2079,9 +2115,10 @@ async fn genesis_with_account_assets_and_storage() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
-    let genesis_block = genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2170,14 +2207,15 @@ async fn genesis_with_multiple_accounts() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state = GenesisState::new(
         vec![account1, account2, account3],
         test_fee_params(),
         1,
         0,
-        random_secret_key(),
+        signer.public_key(),
     );
-    let genesis_block = genesis_state.into_block().await.unwrap();
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2336,7 +2374,10 @@ fn serialization_symmetry_note_metadata() {
     // Use a tag that roundtrips properly - NoteTag::LocalAny stores the full u32 including type
     // bits
     let tag = NoteTag::with_account_target(sender);
-    let metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag);
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag),
+        &NoteAttachments::default(),
+    );
 
     let bytes = metadata.to_bytes();
     let restored = NoteMetadata::read_from_bytes(&bytes).unwrap();
@@ -2475,8 +2516,9 @@ fn db_roundtrip_notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: new_note.metadata().clone(),
+        metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
+        attachments: new_note.attachments().clone(),
         inclusion_path: SparseMerklePath::default(),
     };
 
@@ -2724,16 +2766,18 @@ fn db_roundtrip_note_metadata_attachment() {
     let attachment: NoteAttachment = target.into();
 
     // Create NoteMetadata with the attachment
+    let attachments = NoteAttachments::from(attachment.clone());
     let metadata =
-        NoteMetadata::new(account_id, NoteType::Public).with_attachment(attachment.clone());
+        NoteMetadata::new(PartialNoteMetadata::new(account_id, NoteType::Public), &attachments);
 
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0).unwrap(),
         note_id: num_to_word(1),
         note_commitment: num_to_word(1),
-        metadata: metadata.clone(),
+        metadata,
         details: None,
+        attachments: attachments.clone(),
         inclusion_path: SparseMerklePath::default(),
     };
 
@@ -2746,15 +2790,14 @@ fn db_roundtrip_note_metadata_attachment() {
 
     assert_eq!(retrieved.len(), 1, "Should retrieve exactly one note");
 
-    let retrieved_metadata = &retrieved[0].metadata;
+    let retrieved_attachments = &retrieved[0].attachments;
     assert_eq!(
-        retrieved_metadata.attachment(),
-        metadata.attachment(),
-        "Attachment should be preserved after DB roundtrip"
+        retrieved_attachments, &attachments,
+        "Attachments should be preserved after DB roundtrip"
     );
 
-    let retrieved_target = NetworkAccountTarget::try_from(retrieved_metadata.attachment())
-        .expect("Should be able to parse NetworkAccountTarget from retrieved attachment");
+    let retrieved_target = NetworkAccountTarget::try_from(retrieved_attachments)
+        .expect("Should be able to parse NetworkAccountTarget from retrieved attachments");
     assert_eq!(
         retrieved_target.target_id(),
         account_id,
@@ -3569,8 +3612,9 @@ fn db_roundtrip_transactions() {
                     note_index: BlockNoteIndex::new(0, idx).unwrap(),
                     note_id: note.id().as_word(),
                     note_commitment: note.to_commitment(),
-                    metadata: note.metadata().clone(),
+                    metadata: *note.metadata(),
                     details: None,
+                    attachments: NoteAttachments::default(),
                     inclusion_path: SparseMerklePath::default(),
                 },
                 None,
@@ -3593,7 +3637,7 @@ fn db_roundtrip_transactions() {
             block_num,
             note_index: BlockNoteIndex::new(0, idx).unwrap(),
             note_id: note.id().as_word(),
-            metadata: note.metadata().clone(),
+            metadata: *note.metadata(),
             inclusion_path: SparseMerklePath::default(),
         })
         .collect();
@@ -3618,7 +3662,7 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: tx.output_notes().iter().copied().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
         output_note_proofs: expected_sync_records

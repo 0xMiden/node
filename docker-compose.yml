@@ -115,7 +115,7 @@ services:
       - "57291:57291"
 
   ntx-builder:
-    image: miden-node
+    image: miden-ntx-builder
     pull_policy: if_not_present
     volumes:
       - node-data:/data
@@ -124,8 +124,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - OTEL_SERVICE_NAME=ntx-builder
     command:
-      - miden-node
-      - ntx-builder
+      - miden-ntx-builder
       - start
       - --listen=0.0.0.0:50301
       - --store.url=http://store:50002

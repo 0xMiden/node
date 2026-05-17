@@ -5,7 +5,6 @@ use miden_node_proto::decode::{
     read_block_range,
     read_root,
 };
-use miden_node_proto::domain::block::SyncTarget;
 use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::limiter::{
@@ -145,29 +144,24 @@ impl rpc_server::Rpc for StoreApi {
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
         let request = request.into_inner();
 
-        let block_from = BlockNumber::from(request.block_from);
+        let current_client_block_height = BlockNumber::from(request.current_client_block_height);
 
-        // Determine upper bound to sync to or default to last committed block.
-        let sync_target = request
-            .upper_bound
-            .map(SyncTarget::try_from)
-            .transpose()
-            .map_err(SyncChainMmrError::DeserializationFailed)?
-            .unwrap_or(SyncTarget::CommittedChainTip);
-
-        let block_to = match sync_target {
-            SyncTarget::BlockNumber(block_num) => {
-                block_num.min(self.state.chain_tip(Finality::Committed).await)
+        // Determine finality level of the tip to sync to or default to the committed tip.
+        let sync_target = match request.finality_level() {
+            proto::rpc::FinalityLevel::Committed | proto::rpc::FinalityLevel::Unspecified => {
+                self.state.chain_tip(Finality::Committed).await
             },
-            SyncTarget::CommittedChainTip => self.state.chain_tip(Finality::Committed).await,
-            SyncTarget::ProvenChainTip => self.state.chain_tip(Finality::Proven).await,
+            proto::rpc::FinalityLevel::Proven => self.state.chain_tip(Finality::Proven).await,
         };
 
-        if block_from > block_to {
-            Err(SyncChainMmrError::FutureBlock { chain_tip: block_to, block_from })?;
+        if current_client_block_height > sync_target {
+            Err(SyncChainMmrError::FutureBlock {
+                chain_tip: sync_target,
+                current_client_block_height,
+            })?;
         }
-        let block_range = block_from..=block_to;
-        let (mmr_delta, block_header) =
+        let block_range = current_client_block_height..=sync_target;
+        let (mmr_delta, block_header, block_signature) =
             self.state.sync_chain_mmr(block_range.clone()).await.map_err(internal_error)?;
 
         Ok(Response::new(proto::rpc::SyncChainMmrResponse {
@@ -177,6 +171,7 @@ impl rpc_server::Rpc for StoreApi {
             }),
             mmr_delta: Some(mmr_delta.into()),
             block_header: Some(block_header.into()),
+            block_signature: Some(block_signature.into()),
         }))
     }
 

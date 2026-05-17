@@ -5,6 +5,7 @@ set -euo pipefail
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
 BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
+NTX_BUILDER_BINARY="${MIDEN_NTX_BUILDER_BIN:-./target/debug/miden-ntx-builder}"
 KMS_KEY_ID="${KMS_KEY_ID:-}"
 if [[ -n "$KMS_KEY_ID" ]]; then
     AWS_REGION="${AWS_REGION:?error: AWS_REGION environment variable must be set when KMS_KEY_ID is set}"
@@ -175,7 +176,7 @@ $BINARY rpc start \
 PIDS+=($!)
 
 echo "Starting network transaction builder..."
-$BINARY ntx-builder start \
+$NTX_BUILDER_BINARY start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
     --store.url "http://127.0.0.1:$STORE_NTX_BUILDER_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \

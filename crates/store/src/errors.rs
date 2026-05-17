@@ -120,6 +120,8 @@ pub enum StateInitializationError {
     AccountTreeIoError(String),
     #[error("nullifier tree IO error: {0}")]
     NullifierTreeIoError(String),
+    #[error("account state forest IO error: {0}")]
+    AccountStateForestIoError(String),
     #[error("database error")]
     DatabaseError(#[from] DatabaseError),
     #[error("failed to create nullifier tree")]
@@ -146,6 +148,17 @@ pub enum StateInitializationError {
         block_num: BlockNumber,
         tree_root: Word,
         block_root: Word,
+    },
+    #[error(
+        "account state forest root ({forest_root}) does not match SQLite root \
+         ({database_root}) for account {account_id}, slot {slot_name:?}. Delete the account \
+         state forest storage directory and restart the node to rebuild from the database."
+    )]
+    AccountStateForestStorageDiverged {
+        account_id: AccountId,
+        slot_name: Option<String>,
+        forest_root: Word,
+        database_root: Word,
     },
     #[error("public account {0} is missing details in database")]
     PublicAccountMissingDetails(AccountId),
@@ -265,7 +278,7 @@ pub enum SyncChainMmrError {
     #[error("start block is not known")]
     FutureBlock {
         chain_tip: BlockNumber,
-        block_from: BlockNumber,
+        current_client_block_height: BlockNumber,
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),

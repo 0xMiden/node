@@ -35,6 +35,9 @@ jobs:
           - component: validator
             bin: miden-validator
             port: 50101
+          - component: ntx-builder
+            bin: miden-ntx-builder
+            port: 50301
     name: Publish ${{ matrix.component }} ${{ inputs.version }}
     steps:
       - name: Checkout repo

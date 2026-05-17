@@ -7,7 +7,7 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
-use miden_protocol::note::{NoteDetails, Nullifier};
+use miden_protocol::note::{NoteAttachments, NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
@@ -325,11 +325,13 @@ impl State {
         let notes = body
             .output_notes()
             .map(|(note_index, note)| {
-                let (details, nullifier) = match note {
-                    OutputNote::Public(note) => {
-                        (Some(NoteDetails::from(note.as_note())), Some(note.as_note().nullifier()))
-                    },
-                    OutputNote::Private(_) => (None, None),
+                let (details, attachments, nullifier) = match note {
+                    OutputNote::Public(public) => (
+                        Some(NoteDetails::from(public.as_note())),
+                        public.as_note().attachments().clone(),
+                        Some(public.as_note().nullifier()),
+                    ),
+                    OutputNote::Private(_) => (None, NoteAttachments::empty(), None),
                 };
 
                 let inclusion_path = note_tree.open(note_index);
@@ -339,8 +341,9 @@ impl State {
                     note_index,
                     note_id: note.id().as_word(),
                     note_commitment: note.to_commitment(),
-                    metadata: note.metadata().clone(),
+                    metadata: *note.metadata(),
                     details,
+                    attachments,
                     inclusion_path,
                 };
 

@@ -10,6 +10,7 @@ on:
         options:
           - network-monitor
           - node
+          - ntx-builder
           - prover
           - validator
       version:

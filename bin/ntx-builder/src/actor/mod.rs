@@ -17,10 +17,10 @@ use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_tx::FailedNote;
-use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
+use tokio::sync::{Notify, Semaphore, mpsc};
 
 use crate::NoteError;
-use crate::chain_state::ChainState;
+use crate::chain_state::{ChainState, SharedChainState};
 use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use crate::db::Db;
 
@@ -65,7 +65,7 @@ pub struct State {
     /// Local database for account state, notes, and transaction tracking.
     pub db: Db,
     /// The latest chain state. A single chain state is shared among all actors.
-    pub chain: Arc<RwLock<ChainState>>,
+    pub chain: Arc<SharedChainState>,
     /// Shared LRU cache for storing retrieved note scripts to avoid repeated store calls.
     pub script_cache: LruCache<Word, NoteScript>,
 }
@@ -104,17 +104,16 @@ impl AccountActorContext {
     /// but this is sufficient for testing coordinator logic (registry, deactivation, etc.).
     pub fn test(db: &crate::db::Db) -> Self {
         use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
-        use tokio::sync::RwLock;
         use url::Url;
 
-        use crate::chain_state::ChainState;
+        use crate::chain_state::SharedChainState;
         use crate::clients::StoreClient;
         use crate::test_utils::mock_block_header;
 
         let url = Url::parse("http://127.0.0.1:1").unwrap();
         let block_header = mock_block_header(0_u32.into());
         let chain_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
-        let chain_state = Arc::new(RwLock::new(ChainState::new(block_header, chain_mmr)));
+        let chain_state = Arc::new(SharedChainState::new(block_header, chain_mmr));
         let (request_tx, _request_rx) = mpsc::channel(1);
 
         Self {
@@ -234,7 +233,7 @@ impl AccountActor {
         }
 
         // Determine initial mode by checking DB for available notes.
-        let block_num = self.state.chain.read().await.chain_tip_header.block_num();
+        let block_num = self.state.chain.chain_tip_block_number();
         let has_notes = self
             .state
             .db
@@ -292,7 +291,7 @@ impl AccountActor {
                     let _permit = permit.context("semaphore closed")?;
 
                     // Read the chain state.
-                    let chain_state = self.state.chain.read().await.clone();
+                    let chain_state = self.state.chain.get_cloned();
 
                     // Query DB for latest account and available notes.
                     let tx_candidate = self.select_candidate_from_db(

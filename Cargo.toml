@@ -3,6 +3,7 @@ members = [
   "bin/genesis",
   "bin/network-monitor",
   "bin/node",
+  "bin/ntx-builder",
   "bin/remote-prover",
   "bin/stress-test",
   "bin/validator",
@@ -10,7 +11,6 @@ members = [
   "crates/db",
   "crates/grpc-error-macro",
   "crates/large-smt-backend-rocksdb",
-  "crates/ntx-builder",
   "crates/proto",
   "crates/remote-prover-client",
   "crates/rocksdb-cxx-linkage-fix",
@@ -47,7 +47,6 @@ miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", v
 miden-node-block-producer       = { path = "crates/block-producer", version = "0.15" }
 miden-node-db                   = { path = "crates/db", version = "0.15" }
 miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.15" }
-miden-node-ntx-builder          = { path = "crates/ntx-builder", version = "0.15" }
 miden-node-proto                = { path = "crates/proto", version = "0.15" }
 miden-node-proto-build          = { path = "proto", version = "0.15" }
 miden-node-rpc                  = { path = "crates/rpc", version = "0.15" }

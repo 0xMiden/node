@@ -294,7 +294,13 @@ impl api_server::Api for RpcService {
         &self,
         request: Request<proto::rpc::SyncChainMmrRequest>,
     ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
-        debug!(target: COMPONENT, request = ?request.get_ref());
+        let request_ref = request.get_ref();
+
+        let span = Span::current();
+        span.set_attribute("current_client_block_height", request_ref.current_client_block_height);
+        span.set_attribute("finality_level", request_ref.finality_level().as_str_name());
+
+        debug!(target: COMPONENT, request = ?request_ref);
 
         self.store.clone().sync_chain_mmr(request).await
     }

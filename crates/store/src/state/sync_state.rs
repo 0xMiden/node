@@ -1,5 +1,6 @@
 use std::ops::RangeInclusive;
 
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
@@ -30,15 +31,15 @@ impl State {
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(MmrDelta, BlockHeader), StateSyncError> {
+    ) -> Result<(MmrDelta, BlockHeader, Signature), StateSyncError> {
         let block_from = *block_range.start();
         let block_to = *block_range.end();
 
         // SAFETY: block_to has been validated to be <= the effective tip (chain tip or latest
         // proven block) by the caller, so it must exist in the database.
-        let block_header = self
+        let (block_header, signature) = self
             .db
-            .select_block_header_by_block_num(Some(block_to))
+            .select_block_header_and_signature_by_block_num(block_to)
             .await?
             .expect("block_to should exist in the database");
 
@@ -49,6 +50,7 @@ impl State {
                     data: vec![],
                 },
                 block_header,
+                signature,
             ));
         }
 
@@ -73,7 +75,7 @@ impl State {
             .get_delta(Forest::new(from_forest), Forest::new(to_forest))
             .map_err(StateSyncError::FailedToBuildMmrDelta)?;
 
-        Ok((mmr_delta, block_header))
+        Ok((mmr_delta, block_header, signature))
     }
 
     /// Loads data to synchronize a client's notes.
@@ -101,14 +103,14 @@ impl State {
 
         let mut results = Vec::new();
 
-        for note_sync in note_syncs {
-            let mmr_proof = self
-                .inner
-                .read()
-                .await
-                .blockchain
-                .open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
-            results.push((note_sync, mmr_proof));
+        {
+            let inner = self.inner.read().await;
+
+            for note_sync in note_syncs {
+                let mmr_proof =
+                    inner.blockchain.open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
+                results.push((note_sync, mmr_proof));
+            }
         }
 
         // if results is empty, return `block_end` since the sync is complete.
