@@ -1,6 +1,7 @@
 mod conv;
 mod errors;
 mod manager;
+pub mod migration;
 
 use std::path::Path;
 
