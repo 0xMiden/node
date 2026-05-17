@@ -27,9 +27,9 @@ pub async fn bootstrap(
         .transpose()?
         .unwrap_or_default();
 
-    for directory in [accounts_directory, genesis_block_directory] {
-        ensure_empty_directory(directory)?;
-    }
+    for directory in [accounts_directory, genesis_block_directory, data_directory] {
+    ensure_empty_directory(directory)?;
+}
 
     let signer = validator_key.into_signer().await?;
     build_and_write_genesis(
