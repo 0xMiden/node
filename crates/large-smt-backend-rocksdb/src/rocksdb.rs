@@ -513,10 +513,12 @@ impl SmtStorage for RocksDbStorage {
         let key = Self::index_db_key(index);
         match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
             Some(bytes) => {
-                let leaf = SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?;
-                Ok(Some(leaf))
-            },
-            None => Ok(None),
+                let Ok(leaf) = SmtLeaf::read_from_bytes_with_budget(
+    &value_bytes,
+    value_bytes.len(),
+) else {
+    return None;
+};
         }
     }
 
