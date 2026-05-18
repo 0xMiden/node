@@ -132,6 +132,8 @@ pub enum StateInitializationError {
     DataDirectoryLoadError(#[source] std::io::Error),
     #[error("failed to load block store")]
     BlockStoreLoadError(#[source] std::io::Error),
+    #[error("failed to load proven tip")]
+    ProvenTipLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
     DatabaseLoadError(#[source] DatabaseError),
     #[error("account state forest error")]
