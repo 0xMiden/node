@@ -1,149 +1,59 @@
-use std::marker::PhantomData;
-
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use rusqlite::Connection;
 
-use super::{
-    CodeMigration, CodeMigrationFn, Migration, MigrationRef, Migrator, SchemaHash, SqlMigration,
-    schema,
-};
-
-/// Builder phase before any migrations have been added.
-pub enum EmptyMigrationPhase {}
-
-/// Builder phase which allows adding more base migrations.
-pub enum BaseMigrationPhase {}
-
-/// Builder phase after code migrations have started.
-pub enum CodeMigrationPhase {}
+use super::{CodeMigrationFn, Migration, MigrationRef, Migrator, SchemaHash, schema};
 
 /// Builds a [`Migrator`] while computing expected schema hashes on an in-memory database.
-pub struct MigratorBuilder<Phase = EmptyMigrationPhase> {
+pub struct MigratorBuilder {
     /// Connection to an in-memory SQLite database used to verify the migrations as they are added.
     reference: Connection,
-    /// List of base migrations added so far.
-    ///
-    /// New base migrations cannot be added after code migrations have started.
-    base_migrations: Vec<SqlMigration>,
-    /// List of code migrations added so far.
-    code_migrations: Vec<CodeMigration>,
-    /// Chronological list of computed schema hashes for each migration.
-    ///
-    /// The length of this list should always match the number of migrations added so far.
-    schema_hashes: Vec<SchemaHash>,
-    _phase: PhantomData<Phase>,
+    /// Migrator being built.
+    migrator: Migrator,
 }
 
-impl MigratorBuilder<EmptyMigrationPhase> {
+impl MigratorBuilder {
     pub(super) fn new() -> Result<Self> {
         let reference = Connection::open_in_memory()
             .context("failed to create in-memory migration database")?;
 
-        Ok(Self {
-            reference,
-            base_migrations: Vec::new(),
-            code_migrations: Vec::new(),
-            schema_hashes: Vec::new(),
-            _phase: PhantomData,
-        })
+        Ok(Self { reference, migrator: Migrator::empty() })
     }
 
-    /// Adds a pure SQL base migration.
-    pub fn push_base(
-        mut self,
-        name: &'static str,
-        sql: &'static str,
-    ) -> Result<MigratorBuilder<BaseMigrationPhase>> {
-        self.apply_base(name, sql)?;
-        Ok(self.into_phase())
-    }
-
-    /// Adds a Rust migration function.
-    pub fn push_code(
-        mut self,
-        name: &'static str,
-        apply: CodeMigrationFn,
-    ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
-        self.apply_code(name, apply)?;
-        Ok(self.into_phase())
-    }
-}
-
-impl MigratorBuilder<BaseMigrationPhase> {
     /// Adds a pure SQL base migration.
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
-        self.apply_base(name, sql)?;
-        Ok(self)
-    }
-
-    /// Adds a Rust migration function.
-    pub fn push_code(
-        mut self,
-        name: &'static str,
-        apply: CodeMigrationFn,
-    ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
-        self.apply_code(name, apply)?;
-        Ok(self.into_phase())
-    }
-}
-
-impl MigratorBuilder<CodeMigrationPhase> {
-    /// Adds a Rust migration function.
-    pub fn push_code(mut self, name: &'static str, apply: CodeMigrationFn) -> Result<Self> {
-        self.apply_code(name, apply)?;
-        Ok(self)
-    }
-}
-
-impl MigratorBuilder<BaseMigrationPhase> {
-    /// Returns a migrator containing all migrations and their expected schema hashes.
-    #[must_use]
-    pub fn build(self) -> Migrator {
-        Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
-    }
-}
-
-impl MigratorBuilder<CodeMigrationPhase> {
-    /// Returns a migrator containing all migrations and their expected schema hashes.
-    #[must_use]
-    pub fn build(self) -> Migrator {
-        Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
-    }
-}
-
-impl<T> MigratorBuilder<T> {
-    fn apply_base(&mut self, name: &'static str, sql: &'static str) -> Result<()> {
-        let version = self.schema_hashes.len() + 1;
+        assert!(
+            self.migrator.code_migrations.is_empty(),
+            "cannot add base migration after code migrations have started"
+        );
+        let version = self.migrator.expected_schema_hashes.len() + 1;
         let migration = Migration::base(name, sql);
         let hash =
             Self::apply_migration(&mut self.reference, version, MigrationRef::Sql(&migration))
                 .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
 
-        self.base_migrations.push(migration);
-        self.schema_hashes.push(hash);
-        Ok(())
+        self.migrator.base_migrations.push(migration);
+        self.migrator.expected_schema_hashes.push(hash);
+        Ok(self)
     }
 
-    fn apply_code(&mut self, name: &'static str, apply: CodeMigrationFn) -> Result<()> {
-        let version = self.schema_hashes.len() + 1;
+    /// Adds a Rust migration function.
+    pub fn push_code(mut self, name: &'static str, apply: CodeMigrationFn) -> Result<Self> {
+        let version = self.migrator.expected_schema_hashes.len() + 1;
         let migration = Migration::code(name, apply);
         let hash =
             Self::apply_migration(&mut self.reference, version, MigrationRef::Code(&migration))
                 .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
-        self.code_migrations.push(migration);
-        self.schema_hashes.push(hash);
-        Ok(())
+        self.migrator.code_migrations.push(migration);
+        self.migrator.expected_schema_hashes.push(hash);
+        Ok(self)
     }
 
-    fn into_phase<Next>(self) -> MigratorBuilder<Next> {
-        MigratorBuilder {
-            reference: self.reference,
-            base_migrations: self.base_migrations,
-            code_migrations: self.code_migrations,
-            schema_hashes: self.schema_hashes,
-            _phase: PhantomData,
-        }
+    /// Returns a migrator containing all migrations and their expected schema hashes.
+    pub fn build(self) -> Result<Migrator> {
+        ensure!(!self.migrator.is_empty(), "cannot build migrator without migrations");
+        self.migrator.assert_invariants();
+        Ok(self.migrator)
     }
 
     fn apply_migration(

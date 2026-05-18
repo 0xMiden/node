@@ -232,7 +232,7 @@ fn render_migrator(
         source.push_str("::migrate)?");
     }
 
-    source.push_str("\n        .build();\n    Ok(migrator)\n}\n");
+    source.push_str("\n        .build()?;\n    Ok(migrator)\n}\n");
     Ok(source)
 }
 

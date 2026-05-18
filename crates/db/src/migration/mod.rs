@@ -9,8 +9,6 @@ mod migrator;
 pub mod schema;
 
 pub use builder::MigratorBuilder;
-#[doc(hidden)]
-pub use builder::{BaseMigrationPhase, CodeMigrationPhase, EmptyMigrationPhase};
 pub use migrator::Migrator;
 pub use schema::SchemaHash;
 
@@ -116,7 +114,7 @@ mod tests {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
             .push_code("add item height", add_item_height)?
-            .build();
+            .build()?;
 
         let mut conn = Connection::open_in_memory()?;
         migrator.migrate(&mut conn)?;
@@ -128,7 +126,8 @@ mod tests {
 
     #[test]
     fn migrates_new_database_with_code_only_migration() -> Result<()> {
-        let migrator = Migrator::builder()?.push_code("create items", create_items_table)?.build();
+        let migrator =
+            Migrator::builder()?.push_code("create items", create_items_table)?.build()?;
 
         let mut conn = Connection::open_in_memory()?;
         migrator.migrate(&mut conn)?;
@@ -136,6 +135,23 @@ mod tests {
         assert_eq!(schema::get_version(&conn)?, 1);
         conn.execute("INSERT INTO items (id, value) VALUES (1, 'a')", [])?;
         Ok(())
+    }
+
+    #[test]
+    fn empty_builder_returns_error() -> Result<()> {
+        let err = Migrator::builder()?.build().expect_err("empty builder should fail");
+        assert!(err.to_string().contains("cannot build migrator without migrations"));
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot add base migration after code migrations have started")]
+    fn panics_when_adding_base_after_code() {
+        let _builder = Migrator::builder()
+            .expect("builder should be created")
+            .push_code("create items", create_items_table)
+            .expect("code migration should be added")
+            .push_base("add notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);");
     }
 
     #[test]
@@ -149,7 +165,7 @@ mod tests {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
             .push_code("add item height", add_item_height)?
-            .build();
+            .build()?;
 
         assert_eq!(migrator.schema_hashes(), &[base_hash, final_hash]);
         assert_eq!(migrator.final_schema_hash(), final_hash);
@@ -161,7 +177,7 @@ mod tests {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
             .push_code("index item values", add_items_index)?
-            .build();
+            .build()?;
 
         let mut conn = Connection::open_in_memory()?;
         conn.execute_batch(
@@ -181,7 +197,7 @@ mod tests {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
             .push_base("create notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);")?
-            .build();
+            .build()?;
 
         let mut conn = Connection::open_in_memory()?;
         conn.execute_batch(
@@ -198,7 +214,7 @@ mod tests {
     fn verifies_current_schema_before_applying_missing_migrations() -> Result<()> {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
-            .build();
+            .build()?;
 
         let mut conn = Connection::open_in_memory()?;
         migrator.migrate(&mut conn)?;
@@ -214,7 +230,7 @@ mod tests {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
             .push_code("conditionally create extra", create_extra_table_when_items_exist)?
-            .build();
+            .build()?;
 
         let mut conn = Connection::open_in_memory()?;
         conn.execute_batch(

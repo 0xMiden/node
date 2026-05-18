@@ -8,37 +8,40 @@ use super::{
 /// Applies base migrations to new databases and code migrations to existing databases.
 #[derive(Debug)]
 pub struct Migrator {
-    base_migrations: Vec<SqlMigration>,
-    code_migrations: Vec<CodeMigration>,
-    expected_schema_hashes: Vec<SchemaHash>,
+    pub(super) base_migrations: Vec<SqlMigration>,
+    pub(super) code_migrations: Vec<CodeMigration>,
+    pub(super) expected_schema_hashes: Vec<SchemaHash>,
 }
 
 impl Migrator {
-    pub(super) fn new(
-        base_migrations: Vec<SqlMigration>,
-        code_migrations: Vec<CodeMigration>,
-        expected_schema_hashes: Vec<SchemaHash>,
-    ) -> Self {
-        let migration_count = base_migrations.len() + code_migrations.len();
-        assert!(
-            !expected_schema_hashes.is_empty(),
-            "migrator must contain at least one migration"
-        );
-        assert_eq!(
-            expected_schema_hashes.len(),
-            migration_count,
-            "migrator schema hash count must match migration count"
-        );
+    pub(super) fn empty() -> Self {
         Self {
-            base_migrations,
-            code_migrations,
-            expected_schema_hashes,
+            base_migrations: Vec::new(),
+            code_migrations: Vec::new(),
+            expected_schema_hashes: Vec::new(),
         }
     }
 
     /// Creates a migration builder backed by an in-memory SQLite database.
     pub fn builder() -> Result<MigratorBuilder> {
         MigratorBuilder::new()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.expected_schema_hashes.is_empty()
+    }
+
+    pub(super) fn assert_invariants(&self) {
+        let migration_count = self.base_migrations.len() + self.code_migrations.len();
+        assert!(
+            !self.expected_schema_hashes.is_empty(),
+            "migrator must contain at least one migration"
+        );
+        assert_eq!(
+            self.expected_schema_hashes.len(),
+            migration_count,
+            "migrator schema hash count must match migration count"
+        );
     }
 
     /// Returns the schema hash expected after all migrations have been applied.
