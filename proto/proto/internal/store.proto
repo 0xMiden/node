@@ -287,6 +287,13 @@ message BlockProof {
 
 // Store API for the network transaction builder component
 service NtxBuilder {
+    // Streams committed blocks starting from the given block number (inclusive).
+    //
+    // Same semantics as StoreReplica.BlockSubscription (which actual store replicas use); declared
+    // on this service so the ntx-builder can drive its committed-block subscription through a
+    // single client.
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream SignedBlock) {}
+
     // Returns a paginated list of unconsumed network notes.
     rpc GetUnconsumedNetworkNotes(UnconsumedNetworkNotesRequest) returns (UnconsumedNetworkNotes) {}
 
