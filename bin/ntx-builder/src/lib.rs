@@ -296,12 +296,6 @@ impl NtxBuilderConfig {
         )
         .await?;
 
-        // One-shot cleanup for DBs upgraded from the old mempool-subscription model. Safe to run
-        // every startup; no-op on a clean DB.
-        db.purge_legacy_inflight()
-            .await
-            .context("failed to purge legacy inflight state")?;
-
         let script_cache = LruCache::new(self.script_cache_size);
         let coordinator =
             Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());

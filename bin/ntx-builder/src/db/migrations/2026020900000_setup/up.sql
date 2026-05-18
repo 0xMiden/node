@@ -11,32 +11,15 @@ CREATE TABLE chain_state (
     CONSTRAINT chain_state_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );
 
--- Account states: both committed and inflight.
--- Committed rows have transaction_id = NULL. Inflight rows have transaction_id set.
--- The auto-incrementing order_id preserves insertion order (VecDeque semantics).
+-- Network account states, one row per network account.
 CREATE TABLE accounts (
-    -- Auto-incrementing ID preserves insertion order.
-    order_id        INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     -- AccountId serialized bytes (8 bytes).
-    account_id      BLOB    NOT NULL,
+    account_id      BLOB    PRIMARY KEY,
     -- Serialized Account state.
-    account_data    BLOB    NOT NULL,
-    -- NULL if this is the committed state; transaction ID if inflight.
-    transaction_id  BLOB
-);
+    account_data    BLOB    NOT NULL
+) WITHOUT ROWID;
 
--- At most one committed row per account.
-CREATE UNIQUE INDEX idx_accounts_committed ON accounts(account_id) WHERE transaction_id IS NULL;
--- At most one inflight row per (account, transaction) pair.
-CREATE UNIQUE INDEX idx_accounts_inflight ON accounts(account_id, transaction_id)
-    WHERE transaction_id IS NOT NULL;
-CREATE INDEX idx_accounts_account ON accounts(account_id);
-CREATE INDEX idx_accounts_tx ON accounts(transaction_id) WHERE transaction_id IS NOT NULL;
-
--- Notes: committed, inflight, and nullified — all in one table.
--- created_by = NULL means committed note; non-NULL means created by inflight tx.
--- consumed_by = NULL means unconsumed; non-NULL means consumed by inflight tx.
--- committed_at = block number when the consuming transaction was committed on-chain.
+-- Network notes received from committed blocks, keyed by nullifier.
 CREATE TABLE notes (
     -- Nullifier bytes (32 bytes). Primary key.
     nullifier       BLOB    PRIMARY KEY,
@@ -52,12 +35,8 @@ CREATE TABLE notes (
     last_attempt    INTEGER,
     -- Latest execution error message. NULL if no error recorded.
     last_error      TEXT,
-    -- NULL if the note came from a committed block; transaction ID if created by inflight tx.
-    created_by      BLOB,
-    -- NULL if unconsumed; transaction ID of the consuming inflight tx.
-    consumed_by     BLOB,
     -- Block number at which the note's consuming transaction was committed.
-    -- NULL while the note is still pending or in-flight; set on block commit.
+    -- NULL while the note is still pending; set on block commit.
     committed_at    INTEGER,
 
     CONSTRAINT notes_attempt_count_non_negative CHECK (attempt_count >= 0),
@@ -66,8 +45,6 @@ CREATE TABLE notes (
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_notes_account ON notes(account_id);
-CREATE INDEX idx_notes_created_by ON notes(created_by) WHERE created_by IS NOT NULL;
-CREATE INDEX idx_notes_consumed_by ON notes(consumed_by) WHERE consumed_by IS NOT NULL;
 CREATE INDEX idx_notes_note_id ON notes(note_id) WHERE note_id IS NOT NULL;
 
 -- Persistent cache of note scripts, keyed by script root hash.
