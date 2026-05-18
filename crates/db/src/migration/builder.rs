@@ -25,7 +25,7 @@ impl MigratorBuilder {
         let version = self.migrator.next_version();
         let migration = SqlMigration::new(name, sql);
         let hash: SchemaHash = apply_migration(&mut self.reference, version, &migration)
-            .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
+            .with_context(|| format!("failed to apply base migration {version} \"{name}\""))?;
 
         self.migrator.push_base_unchecked(migration, hash);
         Ok(self)
@@ -36,7 +36,7 @@ impl MigratorBuilder {
         let version = self.migrator.next_version();
         let migration = CodeMigration::new(name, apply);
         let hash: SchemaHash = apply_migration(&mut self.reference, version, &migration)
-            .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
+            .with_context(|| format!("failed to apply code migration {version} \"{name}\""))?;
 
         self.migrator.push_code_unchecked(migration, hash);
         Ok(self)

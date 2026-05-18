@@ -88,13 +88,8 @@ pub(super) fn apply_migration_and_verify_schema(
     migration: &impl MigrationEntry,
     expected: SchemaHash,
 ) -> Result<()> {
-    let name = migration.name();
     apply_migration_transaction(conn, version, migration, |actual| {
-        ensure!(
-            actual == expected,
-            "schema hash mismatch after migration {version} \"{name}\": expected {expected}, got \
-             {actual}"
-        );
+        ensure!(actual == expected, "schema hash mismatch: expected {expected}, got {actual}");
         Ok(())
     })
 }
@@ -105,23 +100,13 @@ fn apply_migration_transaction<T>(
     migration: &impl MigrationEntry,
     verify_hash: impl FnOnce(SchemaHash) -> Result<T>,
 ) -> Result<T> {
-    let name = migration.name();
-    let tx = conn.transaction().with_context(|| {
-        format!("failed to start transaction for migration {version} \"{name}\"")
-    })?;
+    let tx = conn.transaction().context("failed to start transaction")?;
 
-    migration
-        .execute_migration(&tx)
-        .with_context(|| format!("failed to apply migration {version} \"{name}\""))?;
-    let schema_hash = SchemaHash::new(&tx).with_context(|| {
-        format!("failed to compute schema hash after migration {version} \"{name}\"")
-    })?;
+    migration.execute_migration(&tx).context("failed to execute migration")?;
+    let schema_hash = SchemaHash::new(&tx).context("failed to compute schema hash")?;
     let result = verify_hash(schema_hash)?;
-    schema::set_version(&tx, version).with_context(|| {
-        format!("failed to update user_version for migration {version} \"{name}\"")
-    })?;
-    tx.commit()
-        .with_context(|| format!("failed to commit migration {version} \"{name}\""))?;
+    schema::set_version(&tx, version).context("failed to update user_version")?;
+    tx.commit().context("failed to commit transaction")?;
 
     Ok(result)
 }

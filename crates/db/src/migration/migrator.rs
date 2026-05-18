@@ -2,10 +2,7 @@ use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
 use super::entry::{
-    CodeMigration,
-    MigrationEntry,
-    SqlMigration,
-    apply_migration_and_verify_schema,
+    CodeMigration, MigrationEntry, SqlMigration, apply_migration_and_verify_schema,
 };
 use super::{MigratorBuilder, SchemaHash, schema};
 
@@ -184,8 +181,10 @@ impl Migrator {
         version: usize,
         migration: &impl MigrationEntry,
     ) -> Result<()> {
+        let name = migration.name();
         let expected = self.expected_schema_hashes[version - 1];
         apply_migration_and_verify_schema(conn, version, migration, expected)
+            .with_context(|| format!("failed to apply migration {version} \"{name}\""))
     }
 
     /// Verifies that an existing database still matches the schema hash for its `user_version`.
@@ -355,7 +354,8 @@ mod tests {
         )?;
 
         let err = migrator.migrate(&mut conn).expect_err("migration should fail");
-        assert!(err.to_string().contains("schema hash mismatch after migration 2"));
+        assert!(err.to_string().contains("failed to apply migration 2"));
+        assert!(err.chain().any(|cause| cause.to_string().contains("schema hash mismatch")));
         assert_eq!(schema::get_version(&conn)?, 1);
         assert!(!object_exists(&conn, "unexpected")?);
         Ok(())
