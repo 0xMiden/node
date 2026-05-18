@@ -21,14 +21,14 @@ The monitor application supports configuration through both command-line argumen
 miden-network-monitor --help
 
 # Common usage examples
-miden-network-monitor start --port 8080 --rpc-url http://localhost:50051
+miden-network-monitor start --port 8080 --rpc.listen http://localhost:50051
 miden-network-monitor start --remote-prover-urls http://prover1.com:50052,http://prover2.com:50053
 miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 ```
 
 **Available Options:**
 - `--network-name`: Display name of the network shown on the dashboard (default: `Localhost`)
-- `--rpc-url`: RPC service URL (default: `http://localhost:50051`)
+- `--rpc.listen`: RPC service URL (default: `http://localhost:50051`)
 - `--remote-prover-urls`: Comma-separated list of remote prover URLs. If omitted or empty, prover tasks are disabled.
 - `--faucet-url`: Faucet service URL for testing. If omitted, faucet testing is disabled.
 - `--explorer-url`: Explorer service GraphQL endpoint. If omitted, explorer checks are disabled.
@@ -92,7 +92,9 @@ Starts the network monitoring service with the web dashboard. RPC status is alwa
 miden-network-monitor start
 
 # Start with custom configuration
-miden-network-monitor start --port 8080 --rpc-url http://localhost:50051
+ miden-network-monitor start \
+  --port 8080 \
+  --rpc.url "http://localhost:50051"
 
 # Enable network transaction service (both increment and tracking) with custom account file paths
 miden-network-monitor start \
