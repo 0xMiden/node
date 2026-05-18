@@ -1,11 +1,9 @@
 use std::marker::PhantomData;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, Transaction};
+use rusqlite::Connection;
 
-use super::{
-    BaseMigration, CodeMigration, CodeMigrationFn, Migrator, SchemaHash, set_user_version,
-};
+use super::{CodeMigrationFn, Migration, Migrator, SchemaHash, set_user_version};
 
 /// Builder phase which allows adding base migrations.
 pub enum BaseMigrationPhase {}
@@ -20,9 +18,9 @@ pub struct MigratorBuilder<Phase = BaseMigrationPhase> {
     /// List of base migrations added so far.
     ///
     /// New base migrations cannot be added after code migrations have started.
-    base_migrations: Vec<BaseMigration>,
+    base_migrations: Vec<Migration>,
     /// List of code migrations added so far.
-    code_migrations: Vec<CodeMigration>,
+    code_migrations: Vec<Migration>,
     /// Chronological list of computed schema hashes for each migration.
     ///
     /// The length of this list should always match the number of migrations added so far.
@@ -47,12 +45,11 @@ impl MigratorBuilder<BaseMigrationPhase> {
     /// Adds a pure SQL base migration.
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
         let version = self.schema_hashes.len() + 1;
-        let hash = Self::apply_migration(&mut self.reference, version, |tx| {
-            tx.execute_batch(sql).map_err(Into::into)
-        })
-        .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
+        let migration = Migration::base(name, sql);
+        let hash = Self::apply_migration(&mut self.reference, version, &migration)
+            .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
 
-        self.base_migrations.push(BaseMigration { name, sql });
+        self.base_migrations.push(migration);
         self.schema_hashes.push(hash);
         Ok(self)
     }
@@ -65,10 +62,11 @@ impl<T> MigratorBuilder<T> {
         apply: CodeMigrationFn,
     ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
         let version = self.schema_hashes.len() + 1;
-        let hash = Self::apply_migration(&mut self.reference, version, apply)
+        let migration = Migration::code(name, apply);
+        let hash = Self::apply_migration(&mut self.reference, version, &migration)
             .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
-        self.code_migrations.push(CodeMigration { name, apply });
+        self.code_migrations.push(migration);
         self.schema_hashes.push(hash);
         Ok(MigratorBuilder {
             reference: self.reference,
@@ -92,10 +90,10 @@ impl<T> MigratorBuilder<T> {
     fn apply_migration(
         conn: &mut Connection,
         version: usize,
-        migration_fn: impl FnOnce(&Transaction) -> Result<()>,
+        migration: &Migration,
     ) -> Result<SchemaHash> {
         let tx = conn.transaction().context("failed to begin transaction")?;
-        migration_fn(&tx).context("failed to execute migration function")?;
+        migration.apply(&tx).context("failed to execute migration function")?;
         set_user_version(&tx, version).context("failed to set `user_version`")?;
         let hash = SchemaHash::new(&tx).context("failed to compute schema hash")?;
         tx.commit().context("failed to commit transaction")?;

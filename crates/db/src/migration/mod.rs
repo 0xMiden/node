@@ -9,55 +9,50 @@ mod schema_hash;
 pub use builder::{BaseMigrationPhase, CodeMigrationPhase, MigratorBuilder};
 pub use schema_hash::SchemaHash;
 
-/// A pure SQL migration used to bootstrap new databases.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BaseMigration {
+type MigrationFn = dyn for<'conn> Fn(&Transaction<'conn>) -> Result<()> + Send + Sync + 'static;
+
+/// A migration with a name and executable body.
+pub struct Migration {
     name: &'static str,
-    sql: &'static str,
+    apply: Box<MigrationFn>,
 }
 
-impl BaseMigration {
+impl Migration {
+    pub(super) fn base(name: &'static str, sql: &'static str) -> Self {
+        Self {
+            name,
+            apply: Box::new(move |tx| tx.execute_batch(sql).map_err(Into::into)),
+        }
+    }
+
+    pub(super) fn code(name: &'static str, apply: CodeMigrationFn) -> Self {
+        Self { name, apply: Box::new(apply) }
+    }
+
     /// Returns the migration name.
     pub fn name(&self) -> &'static str {
         self.name
     }
 
-    /// Returns the SQL executed by this migration.
-    pub fn sql(&self) -> &'static str {
-        self.sql
+    pub(super) fn apply(&self, tx: &Transaction<'_>) -> Result<()> {
+        (self.apply)(tx)
+    }
+}
+
+impl fmt::Debug for Migration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Migration").field("name", &self.name).finish_non_exhaustive()
     }
 }
 
 /// A Rust migration function executed inside a SQLite transaction.
 pub type CodeMigrationFn = for<'conn> fn(&Transaction<'conn>) -> Result<()>;
 
-/// A migration implemented in Rust.
-#[derive(Clone, Copy)]
-pub struct CodeMigration {
-    name: &'static str,
-    apply: CodeMigrationFn,
-}
-
-impl CodeMigration {
-    /// Returns the migration name.
-    pub fn name(&self) -> &'static str {
-        self.name
-    }
-}
-
-impl fmt::Debug for CodeMigration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CodeMigration")
-            .field("name", &self.name)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Applies base migrations to new databases and code migrations to existing databases.
 #[derive(Debug)]
 pub struct Migrator {
-    base_migrations: Vec<BaseMigration>,
-    code_migrations: Vec<CodeMigration>,
+    base_migrations: Vec<Migration>,
+    code_migrations: Vec<Migration>,
     expected_schema_hashes: Vec<SchemaHash>,
 }
 
@@ -94,7 +89,7 @@ impl Migrator {
         if applied_version == 0 {
             for (idx, migration) in self.base_migrations.iter().enumerate() {
                 let version = idx + 1;
-                self.apply_base(conn, version, migration)?;
+                self.apply_migration(conn, version, migration)?;
                 applied_version = version;
             }
         }
@@ -102,7 +97,7 @@ impl Migrator {
         let code_start = applied_version.saturating_sub(base_versions);
         for (idx, migration) in self.code_migrations.iter().enumerate().skip(code_start) {
             let version = base_versions + idx + 1;
-            self.apply_code(conn, version, migration)?;
+            self.apply_migration(conn, version, migration)?;
         }
 
         Ok(())
@@ -110,13 +105,13 @@ impl Migrator {
 
     /// Returns the base migrations.
     #[must_use]
-    pub fn base_migrations(&self) -> &[BaseMigration] {
+    pub fn base_migrations(&self) -> &[Migration] {
         &self.base_migrations
     }
 
     /// Returns the code migrations.
     #[must_use]
-    pub fn code_migrations(&self) -> &[CodeMigration] {
+    pub fn code_migrations(&self) -> &[Migration] {
         &self.code_migrations
     }
 
@@ -126,37 +121,18 @@ impl Migrator {
         &self.expected_schema_hashes
     }
 
-    fn apply_base(
+    fn apply_migration(
         &self,
         conn: &mut Connection,
         version: usize,
-        migration: &BaseMigration,
+        migration: &Migration,
     ) -> Result<()> {
         let tx = conn.transaction().with_context(|| {
             format!("failed to start transaction for migration {version} {:?}", migration.name)
         })?;
 
-        tx.execute_batch(migration.sql)
-            .with_context(|| format!("failed to apply migration {version} {:?}", migration.name))?;
-        self.verify_migration_schema(&tx, version, migration.name)?;
-        set_user_version(&tx, version).with_context(|| {
-            format!("failed to update user_version for migration {version} {:?}", migration.name)
-        })?;
-        tx.commit()
-            .with_context(|| format!("failed to commit migration {version} {:?}", migration.name))
-    }
-
-    fn apply_code(
-        &self,
-        conn: &mut Connection,
-        version: usize,
-        migration: &CodeMigration,
-    ) -> Result<()> {
-        let tx = conn.transaction().with_context(|| {
-            format!("failed to start transaction for migration {version} {:?}", migration.name)
-        })?;
-
-        (migration.apply)(&tx)
+        migration
+            .apply(&tx)
             .with_context(|| format!("failed to apply migration {version} {:?}", migration.name))?;
         self.verify_migration_schema(&tx, version, migration.name)?;
         set_user_version(&tx, version).with_context(|| {
@@ -211,7 +187,7 @@ impl Migrator {
 
         self.code_migrations
             .get(version - self.base_migrations.len() - 1)
-            .map(CodeMigration::name)
+            .map(Migration::name)
     }
 }
 
