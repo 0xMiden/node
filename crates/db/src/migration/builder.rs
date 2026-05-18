@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::{
-    CodeMigrationFn, Migration, MigrationBodyRef, Migrator, SchemaHash, apply_migration_transaction,
-};
+use super::entry::{CodeMigration, CodeMigrationFn, SqlMigration, apply_migration};
+use super::{Migrator, SchemaHash};
 
 /// Builds a [`Migrator`] while computing expected schema hashes on an in-memory database.
 pub struct MigratorBuilder {
@@ -24,14 +23,9 @@ impl MigratorBuilder {
     /// Adds a pure SQL base migration.
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
         let version = self.migrator.next_version();
-        let migration = Migration::base(name, sql);
-        let hash: SchemaHash = apply_migration_transaction(
-            &mut self.reference,
-            version,
-            MigrationBodyRef::Sql(&migration),
-            Ok::<SchemaHash, anyhow::Error>,
-        )
-        .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
+        let migration = SqlMigration::new(name, sql);
+        let hash: SchemaHash = apply_migration(&mut self.reference, version, &migration)
+            .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
 
         self.migrator.push_base_unchecked(migration, hash);
         Ok(self)
@@ -40,14 +34,9 @@ impl MigratorBuilder {
     /// Adds a Rust migration function.
     pub fn push_code(mut self, name: &'static str, apply: CodeMigrationFn) -> Result<Self> {
         let version = self.migrator.next_version();
-        let migration = Migration::code(name, apply);
-        let hash: SchemaHash = apply_migration_transaction(
-            &mut self.reference,
-            version,
-            MigrationBodyRef::Code(&migration),
-            Ok::<SchemaHash, anyhow::Error>,
-        )
-        .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
+        let migration = CodeMigration::new(name, apply);
+        let hash: SchemaHash = apply_migration(&mut self.reference, version, &migration)
+            .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
         self.migrator.push_code_unchecked(migration, hash);
         Ok(self)
@@ -57,5 +46,57 @@ impl MigratorBuilder {
     pub fn build(self) -> Result<Migrator> {
         self.migrator.validate()?;
         Ok(self.migrator)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use rusqlite::{Connection, Transaction};
+
+    use super::super::{Migrator, SchemaHash};
+
+    fn add_item_height(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
+        Ok(())
+    }
+
+    fn create_items_table(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+        Ok(())
+    }
+
+    #[test]
+    fn empty_builder_returns_error() -> Result<()> {
+        let err = Migrator::builder()?.build().expect_err("empty builder should fail");
+        assert!(err.to_string().contains("cannot build migrator without migrations"));
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot add base migration after code migrations have started")]
+    fn panics_when_adding_base_after_code() {
+        let _builder = Migrator::builder()
+            .expect("builder should be created")
+            .push_code("create items", create_items_table)
+            .expect("code migration should be added")
+            .push_base("add notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);");
+    }
+
+    #[test]
+    fn exposes_schema_hashes() -> Result<()> {
+        let reference = Connection::open_in_memory()?;
+        reference.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+        let base_hash = SchemaHash::new(&reference)?;
+        reference.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
+        let final_hash = SchemaHash::new(&reference)?;
+
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_code("add item height", add_item_height)?
+            .build()?;
+
+        assert_eq!(migrator.schema_hashes(), &[base_hash, final_hash]);
+        Ok(())
     }
 }

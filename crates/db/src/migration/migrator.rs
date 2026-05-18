@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
-use super::{
-    CodeMigration, Migration, MigrationBodyRef, MigratorBuilder, SchemaHash, SqlMigration,
-    apply_migration_transaction, schema,
+use super::entry::{
+    CodeMigration, MigrationEntry, SqlMigration, apply_migration_and_verify_schema,
 };
+use super::{MigratorBuilder, SchemaHash, schema};
 
 /// Applies versioned database migrations.
 ///
@@ -129,7 +129,7 @@ impl Migrator {
         if applied_version == 0 {
             for (idx, migration) in self.base_migrations.iter().enumerate() {
                 let version = idx + 1;
-                self.apply_migration(conn, version, MigrationBodyRef::Sql(migration))?;
+                self.apply_migration(conn, version, migration)?;
                 applied_version = version;
             }
         }
@@ -137,7 +137,7 @@ impl Migrator {
         let code_start = applied_version.saturating_sub(base_versions);
         for (idx, migration) in self.code_migrations.iter().enumerate().skip(code_start) {
             let version = base_versions + idx + 1;
-            self.apply_migration(conn, version, MigrationBodyRef::Code(migration))?;
+            self.apply_migration(conn, version, migration)?;
         }
 
         Ok(())
@@ -179,12 +179,10 @@ impl Migrator {
         &self,
         conn: &mut Connection,
         version: usize,
-        migration: MigrationBodyRef<'_>,
+        migration: &impl MigrationEntry,
     ) -> Result<()> {
-        let name = migration.name();
-        apply_migration_transaction(conn, version, migration, |actual| {
-            self.verify_migration_schema_hash(actual, version, name)
-        })
+        let expected = self.expected_schema_hashes[version - 1];
+        apply_migration_and_verify_schema(conn, version, migration, expected)
     }
 
     /// Verifies that an existing database still matches the schema hash for its `user_version`.
@@ -203,23 +201,6 @@ impl Migrator {
         Ok(())
     }
 
-    /// Verifies that a freshly applied migration produced the expected schema hash.
-    fn verify_migration_schema_hash(
-        &self,
-        actual: SchemaHash,
-        version: usize,
-        name: &'static str,
-    ) -> Result<()> {
-        let expected = self.expected_schema_hashes[version - 1];
-
-        ensure!(
-            actual == expected,
-            "schema hash mismatch after migration {version} \"{name}\": expected {expected}, got \
-             {actual}"
-        );
-        Ok(())
-    }
-
     /// Returns the migration name for a one-based migration version.
     fn migration_name(&self, version: usize) -> Option<&'static str> {
         if version == 0 {
@@ -227,11 +208,153 @@ impl Migrator {
         }
 
         if version <= self.base_migrations.len() {
-            return Some(self.base_migrations[version - 1].name);
+            return Some(self.base_migrations[version - 1].name());
         }
 
         self.code_migrations
             .get(version - self.base_migrations.len() - 1)
-            .map(Migration::name)
+            .map(MigrationEntry::name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use rusqlite::{Connection, Transaction};
+
+    use super::super::{Migrator, schema};
+
+    fn add_items_index(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch("CREATE INDEX idx_items_value ON items(value);")?;
+        Ok(())
+    }
+
+    fn add_item_height(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
+        Ok(())
+    }
+
+    fn create_extra_table_when_items_exist(tx: &Transaction<'_>) -> Result<()> {
+        let item_count: i64 = tx.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))?;
+        if item_count > 0 {
+            tx.execute_batch("CREATE TABLE unexpected (id INTEGER PRIMARY KEY);")?;
+        }
+        Ok(())
+    }
+
+    fn create_items_table(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+        Ok(())
+    }
+
+    fn object_exists(conn: &Connection, name: &str) -> Result<bool> {
+        let exists = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)",
+            [name],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(exists)
+    }
+
+    #[test]
+    fn migrates_new_database_through_base_and_code() -> Result<()> {
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_code("add item height", add_item_height)?
+            .build()?;
+
+        let mut conn = Connection::open_in_memory()?;
+        migrator.migrate(&mut conn)?;
+
+        assert_eq!(schema::get_version(&conn)?, 2);
+        conn.execute("INSERT INTO items (id, value, height) VALUES (1, 'a', 10)", [])?;
+        Ok(())
+    }
+
+    #[test]
+    fn migrates_new_database_with_code_only_migration() -> Result<()> {
+        let migrator =
+            Migrator::builder()?.push_code("create items", create_items_table)?.build()?;
+
+        let mut conn = Connection::open_in_memory()?;
+        migrator.migrate(&mut conn)?;
+
+        assert_eq!(schema::get_version(&conn)?, 1);
+        conn.execute("INSERT INTO items (id, value) VALUES (1, 'a')", [])?;
+        Ok(())
+    }
+
+    #[test]
+    fn applies_missing_code_migrations_to_existing_database() -> Result<()> {
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_code("index item values", add_items_index)?
+            .build()?;
+
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);
+             PRAGMA user_version = 1;",
+        )?;
+
+        migrator.migrate(&mut conn)?;
+
+        assert_eq!(schema::get_version(&conn)?, 2);
+        assert!(object_exists(&conn, "idx_items_value")?);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_existing_database_inside_base_migration_range() -> Result<()> {
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
+            .push_base("create notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);")?
+            .build()?;
+
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY);
+             PRAGMA user_version = 1;",
+        )?;
+
+        let err = migrator.migrate(&mut conn).expect_err("migration should fail");
+        assert!(err.to_string().contains("inside the base migration range"));
+        Ok(())
+    }
+
+    #[test]
+    fn verifies_current_schema_before_applying_missing_migrations() -> Result<()> {
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
+            .build()?;
+
+        let mut conn = Connection::open_in_memory()?;
+        migrator.migrate(&mut conn)?;
+        conn.execute_batch("CREATE TABLE tampered (id INTEGER PRIMARY KEY);")?;
+
+        let err = migrator.migrate(&mut conn).expect_err("migration should fail");
+        assert!(err.to_string().contains("schema hash mismatch at database version 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn rolls_back_code_migration_when_schema_hash_mismatches() -> Result<()> {
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
+            .push_code("conditionally create extra", create_extra_table_when_items_exist)?
+            .build()?;
+
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY);
+             INSERT INTO items (id) VALUES (1);
+             PRAGMA user_version = 1;",
+        )?;
+
+        let err = migrator.migrate(&mut conn).expect_err("migration should fail");
+        assert!(err.to_string().contains("schema hash mismatch after migration 2"));
+        assert_eq!(schema::get_version(&conn)?, 1);
+        assert!(!object_exists(&conn, "unexpected")?);
+        Ok(())
     }
 }
