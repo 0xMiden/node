@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Configuration
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
 NTX_BUILDER_BINARY="${MIDEN_NTX_BUILDER_BIN:-./target/debug/miden-ntx-builder}"
@@ -108,11 +109,12 @@ fi
 echo "=== Starting components ==="
 
 echo "Starting store (block-producer mode)..."
-$BINARY store start \
+OTEL_SERVICE_NAME=miden-store-primary $BINARY store start \
     --rpc.listen "0.0.0.0:$STORE_RPC_PORT" \
     --ntx-builder.listen "0.0.0.0:$STORE_NTX_BUILDER_PORT" \
     --block-producer.listen "0.0.0.0:$STORE_BLOCK_PRODUCER_PORT" \
-    --data-directory "$STORE_DIR" &
+    --data-directory "$STORE_DIR" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 KMS_START_ARGS=()
@@ -121,8 +123,9 @@ if [[ -n "$KMS_KEY_ID" ]]; then
 fi
 
 echo "Starting validator..."
-$VALIDATOR_BINARY start --listen "0.0.0.0:$VALIDATOR_PORT" \
+OTEL_SERVICE_NAME=miden-validator $VALIDATOR_BINARY start --listen "0.0.0.0:$VALIDATOR_PORT" \
     --data-directory "$VALIDATOR_DIR" \
+    $EXTRA_ARGS \
     "${KMS_START_ARGS[@]+"${KMS_START_ARGS[@]}"}" &
 PIDS+=($!)
 
@@ -131,57 +134,64 @@ sleep 2
 
 # Replica 1 syncs from the primary store.
 echo "Starting store replica 1 (upstream: primary store at 127.0.0.1:$STORE_RPC_PORT)..."
-$BINARY store start-replica \
+OTEL_SERVICE_NAME=miden-store-replica-1 $BINARY store start-replica \
     --rpc.listen "0.0.0.0:$STORE_REPLICA_1_RPC_PORT" \
     --upstream-store.url "http://127.0.0.1:$STORE_RPC_PORT" \
-    --data-directory "$STORE_REPLICA_1_DIR" &
+    --data-directory "$STORE_REPLICA_1_DIR" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 # Replica 2 syncs from replica 1, proving replicas can act as upstreams.
 echo "Starting store replica 2 (upstream: replica 1 at 127.0.0.1:$STORE_REPLICA_1_RPC_PORT)..."
-$BINARY store start-replica \
+OTEL_SERVICE_NAME=miden-store-replica-2 $BINARY store start-replica \
     --rpc.listen "0.0.0.0:$STORE_REPLICA_2_RPC_PORT" \
     --upstream-store.url "http://127.0.0.1:$STORE_REPLICA_1_RPC_PORT" \
-    --data-directory "$STORE_REPLICA_2_DIR" &
+    --data-directory "$STORE_REPLICA_2_DIR" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 echo "Starting block producer..."
-$BINARY block-producer start --listen "0.0.0.0:$BLOCK_PRODUCER_PORT" \
+OTEL_SERVICE_NAME=miden-block-producer $BINARY block-producer start --listen "0.0.0.0:$BLOCK_PRODUCER_PORT" \
     --store.url "http://127.0.0.1:$STORE_BLOCK_PRODUCER_PORT" \
-    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 echo "Starting RPC server (primary store)..."
-$BINARY rpc start \
+OTEL_SERVICE_NAME=miden-rpc-primary $BINARY rpc start \
     --listen "0.0.0.0:$RPC_PORT" \
     --store.url "http://127.0.0.1:$STORE_RPC_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
-    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 echo "Starting RPC server (replica 1)..."
-$BINARY rpc start \
+OTEL_SERVICE_NAME=miden-rpc-replica-1 $BINARY rpc start \
     --listen "0.0.0.0:$RPC_REPLICA_1_PORT" \
     --store.url "http://127.0.0.1:$STORE_REPLICA_1_RPC_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
-    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 echo "Starting RPC server (replica 2)..."
-$BINARY rpc start \
+OTEL_SERVICE_NAME=miden-rpc-replica-2 $BINARY rpc start \
     --listen "0.0.0.0:$RPC_REPLICA_2_PORT" \
     --store.url "http://127.0.0.1:$STORE_REPLICA_2_RPC_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
-    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" &
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 echo "Starting network transaction builder..."
-$NTX_BUILDER_BINARY start \
+OTEL_SERVICE_NAME=miden-ntx-builder $NTX_BUILDER_BINARY start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
     --store.url "http://127.0.0.1:$STORE_NTX_BUILDER_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
-    --data-directory "$NTX_BUILDER_DIR" &
+    --data-directory "$NTX_BUILDER_DIR" \
+    $EXTRA_ARGS &
 PIDS+=($!)
 
 echo "=== All components running. Ctrl+C to stop. ==="
