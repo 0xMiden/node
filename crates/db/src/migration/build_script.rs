@@ -5,47 +5,51 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use fs_err as fs;
 
+use super::Migrator;
+
 pub const GENERATED_MIGRATOR_FILE: &str = "db_migrator.rs";
 pub const CODE_MIGRATION_FILE: &str = "migration.rs";
 
-/// Generates Rust source for a migrator from a migration directory.
-///
-/// Call this from a `build.rs`, then include the generated file in the crate:
-///
-/// ```ignore
-/// // build.rs
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     miden_node_db::migration::build_script::generate_migrator("migrations")?;
-///     Ok(())
-/// }
-///
-/// // src/lib.rs
-/// include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
-/// ```
-///
-/// The expected layout is:
-///
-/// ```text
-/// migrations/
-///   base/
-///     001_initial.sql
-///     002_indexes.sql
-///   code/
-///     003_backfill/
-///       migration.rs
-/// ```
-///
-/// Base migrations are loaded from lexicographically sorted `.sql` files in `base`; the migration
-/// name is the file stem. Code migrations are loaded from lexicographically sorted folders in
-/// `code`; the migration name is the folder name. Each code folder must contain
-/// [`CODE_MIGRATION_FILE`] and that file must expose a `pub fn migrate(...)` matching
-/// [`super::CodeMigrationFn`].
-pub fn generate_migrator(migration_dir: impl AsRef<Path>) -> Result<PathBuf> {
-    generate_migrator_to(migration_dir, GENERATED_MIGRATOR_FILE)
+impl Migrator {
+    /// Generates Rust source for a migrator from a migration directory.
+    ///
+    /// Call this from a `build.rs`, then include the generated file in the crate:
+    ///
+    /// ```ignore
+    /// // build.rs
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     miden_node_db::migration::Migrator::generate("migrations")?;
+    ///     Ok(())
+    /// }
+    ///
+    /// // src/lib.rs
+    /// include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
+    /// ```
+    ///
+    /// The expected layout is:
+    ///
+    /// ```text
+    /// migrations/
+    ///   base/
+    ///     001_initial.sql
+    ///     002_indexes.sql
+    ///   code/
+    ///     003_backfill/
+    ///       migration.rs
+    /// ```
+    ///
+    /// Base migrations are loaded from lexicographically sorted `.sql` files in `base`; the
+    /// migration name is the file stem. Code migrations are loaded from lexicographically sorted
+    /// folders in `code`; the migration name is the folder name. Each code folder must contain
+    /// [`CODE_MIGRATION_FILE`] and that file must expose a `pub fn migrate(...)` matching
+    /// [`super::CodeMigrationFn`].
+    pub fn generate(migration_dir: impl AsRef<Path>) -> Result<PathBuf> {
+        generate_migrator_to(migration_dir, GENERATED_MIGRATOR_FILE)
+    }
 }
 
 /// Generates Rust source for a migrator into a specific file name under `OUT_DIR`.
-pub fn generate_migrator_to(
+pub(super) fn generate_migrator_to(
     migration_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
 ) -> Result<PathBuf> {
