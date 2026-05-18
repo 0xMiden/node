@@ -242,7 +242,7 @@ impl NetworkTransactionBuilder {
         // Skip accounts already populated by the catch-up phase.
         if self
             .db
-            .has_committed_account(account_id)
+            .has_account(account_id)
             .await
             .context("failed to check for committed account")?
         {

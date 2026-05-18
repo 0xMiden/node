@@ -26,49 +26,6 @@ pub use notes::*;
 #[cfg(test)]
 mod tests;
 
-// LEGACY CLEANUP
-// ================================================================================================
-
-/// Removes any leftover "inflight" rows from a previous run of the ntx-builder under the old
-/// mempool-subscription model.
-///
-/// The new committed-block model never writes inflight state (`transaction_id`, `created_by`,
-/// `consumed_by`), but those columns still exist on the schema and pre-existing rows from an
-/// in-place upgrade would otherwise be returned by `get_account` and skew availability queries.
-/// Idempotent and cheap on a clean DB.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// DELETE FROM accounts WHERE transaction_id IS NOT NULL
-///
-/// DELETE FROM notes WHERE created_by IS NOT NULL AND committed_at IS NULL
-///
-/// UPDATE notes SET consumed_by = NULL
-/// WHERE consumed_by IS NOT NULL AND committed_at IS NULL
-/// ```
-pub fn purge_legacy_inflight(conn: &mut SqliteConnection) -> Result<(), DatabaseError> {
-    diesel::delete(schema::accounts::table.filter(schema::accounts::transaction_id.is_not_null()))
-        .execute(conn)?;
-
-    diesel::delete(
-        schema::notes::table
-            .filter(schema::notes::created_by.is_not_null())
-            .filter(schema::notes::committed_at.is_null()),
-    )
-    .execute(conn)?;
-
-    diesel::update(
-        schema::notes::table
-            .filter(schema::notes::consumed_by.is_not_null())
-            .filter(schema::notes::committed_at.is_null()),
-    )
-    .set(schema::notes::consumed_by.eq(None::<Vec<u8>>))
-    .execute(conn)?;
-
-    Ok(())
-}
-
 // COMMITTED BLOCK HANDLER
 // ================================================================================================
 
@@ -96,7 +53,7 @@ pub fn apply_committed_block(
         };
         match effect {
             NetworkAccountEffect::Created(account) => {
-                upsert_committed_account(conn, *network_id, &account)?;
+                upsert_account(conn, *network_id, &account)?;
             },
             NetworkAccountEffect::Updated(delta) => {
                 let mut account = get_account(conn, *network_id)?.ok_or_else(|| {
@@ -108,7 +65,7 @@ pub fn apply_committed_block(
                 account
                     .apply_delta(&delta)
                     .expect("committed account delta should apply cleanly");
-                upsert_committed_account(conn, *network_id, &account)?;
+                upsert_account(conn, *network_id, &account)?;
             },
         }
         affected_accounts.insert(*network_id);

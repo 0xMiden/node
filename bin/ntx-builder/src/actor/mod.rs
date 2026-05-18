@@ -160,11 +160,15 @@ enum ActorMode {
     /// expire before doing any more work for this account. This avoids busy-looping with the same
     /// notes between submit and block commit.
     ///
-    /// Carries the nullifiers of the submitted notes and the chain tip at submission time so we
-    /// can detect on each wake-up whether the tx landed (any nullifier became committed) or
-    /// definitely won't (the chain has advanced past the expiration window).
+    /// Carries the commitment of the account state we executed against and the chain tip at
+    /// submission time, so on each wake-up we can detect cheaply whether the tx landed (the
+    /// committed account commitment in the DB has moved) or definitely won't (the chain has
+    /// advanced past the expiration window).
+    ///
+    /// Network accounts are only ever updated by ntx-builder transactions, so a commitment change
+    /// here is equivalent to "some submission for this account has been included in a block."
     WaitForNextBlock {
-        nullifiers: Vec<Nullifier>,
+        submitted_commitment: Word,
         submitted_at: BlockNumber,
     },
 }
@@ -294,25 +298,15 @@ impl AccountActor {
                 permit = tx_permit_acquisition => {
                     let _permit = permit.context("semaphore closed")?;
 
-                    // Read the chain state.
+                    // Read the chain state and query the DB for an executable candidate.
                     let chain_state = self.state.chain.get_cloned();
-                    let submitted_at = chain_state.chain_tip_header.block_num();
-
-                    // Query DB for latest account and available notes.
                     let tx_candidate = self.select_candidate_from_db(
                         account_id,
                         chain_state,
                     ).await?;
 
                     if let Some(tx_candidate) = tx_candidate {
-                        let nullifiers: Vec<Nullifier> = tx_candidate
-                            .notes
-                            .iter()
-                            .map(|n| n.as_note().nullifier())
-                            .collect();
-                        mode = self
-                            .execute_transactions(account_id, tx_candidate, nullifiers, submitted_at)
-                            .await;
+                        mode = self.execute_transactions(account_id, tx_candidate).await;
                     } else {
                         // No transactions to execute, wait for events.
                         mode = ActorMode::NoViableNotes;
@@ -330,7 +324,8 @@ impl AccountActor {
     /// Decides the next mode when a coordinator notification arrives.
     ///
     /// If we are in [`ActorMode::WaitForNextBlock`], we only transition out once either:
-    /// - one of our submitted nullifiers has been recorded as committed in the local DB, or
+    /// - the committed account commitment in the DB no longer matches the one we executed against,
+    ///   which means some network transaction for this account has been included in a block, or
     /// - the chain has advanced past the expiration window, in which case the submission must be
     ///   considered dropped.
     ///
@@ -338,7 +333,7 @@ impl AccountActor {
     /// re-submit the same notes every block. In any other mode we move to
     /// [`ActorMode::NotesAvailable`] so the next loop iteration re-queries the DB.
     async fn on_notified(&self, mode: ActorMode) -> anyhow::Result<ActorMode> {
-        let ActorMode::WaitForNextBlock { nullifiers, submitted_at } = mode else {
+        let ActorMode::WaitForNextBlock { submitted_commitment, submitted_at } = mode else {
             return Ok(ActorMode::NotesAvailable);
         };
 
@@ -351,17 +346,19 @@ impl AccountActor {
             return Ok(ActorMode::NotesAvailable);
         }
 
-        let landed = self
+        let current = self
             .state
             .db
-            .any_nullifier_committed(nullifiers.clone())
+            .account_commitment(self.account_id)
             .await
-            .context("failed to check if submitted notes were committed")?;
+            .context("failed to read account commitment")?;
 
-        if landed {
-            Ok(ActorMode::NotesAvailable)
+        // The account row goes away only if the network account was removed entirely. Treat that
+        // as "something changed" so the next iteration re-evaluates (and almost certainly idles).
+        if current == Some(submitted_commitment) {
+            Ok(ActorMode::WaitForNextBlock { submitted_commitment, submitted_at })
         } else {
-            Ok(ActorMode::WaitForNextBlock { nullifiers, submitted_at })
+            Ok(ActorMode::NotesAvailable)
         }
     }
 
@@ -416,7 +413,7 @@ impl AccountActor {
         if self
             .state
             .db
-            .has_committed_account(account_id)
+            .has_account(account_id)
             .await
             .context("failed to check for committed account")?
         {
@@ -429,7 +426,7 @@ impl AccountActor {
                     if self
                         .state
                         .db
-                        .has_committed_account(account_id)
+                        .has_account(account_id)
                         .await
                         .context("failed to check for committed account")?
                     {
@@ -451,18 +448,17 @@ impl AccountActor {
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Returns the new actor mode based on the execution result.
-    #[tracing::instrument(
-        name = "ntx.actor.execute_transactions",
-        skip(self, tx_candidate, submitted_nullifiers)
-    )]
+    #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
         account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
-        submitted_nullifiers: Vec<Nullifier>,
-        submitted_at: BlockNumber,
     ) -> ActorMode {
-        let block_num = tx_candidate.chain_tip_header.block_num();
+        // Captured before execution so that `WaitForNextBlock` records the state the tx was run
+        // against even though `tx_candidate` is moved into the executor below.
+        let submitted_commitment = tx_candidate.account.to_commitment();
+        let submitted_at = tx_candidate.chain_tip_header.block_num();
+        let block_num = submitted_at;
 
         // Execute the selected transaction.
         let context = execute::NtxContext::new(
@@ -500,10 +496,7 @@ impl AccountActor {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                ActorMode::WaitForNextBlock {
-                    nullifiers: submitted_nullifiers,
-                    submitted_at,
-                }
+                ActorMode::WaitForNextBlock { submitted_commitment, submitted_at }
             },
             // Transaction execution failed.
             Err(err) => {

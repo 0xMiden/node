@@ -11,16 +11,13 @@ use crate::db::schema;
 // MODELS
 // ================================================================================================
 
-/// Row for inserting into the unified `accounts` table.
-///
-/// `transaction_id = None` means committed; `Some(tx_id_bytes)` means inflight.
+/// Row for inserting into the `accounts` table.
 #[derive(Debug, Clone, Insertable)]
 #[diesel(table_name = schema::accounts)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct AccountInsert {
     pub account_id: Vec<u8>,
     pub account_data: Vec<u8>,
-    pub transaction_id: Option<Vec<u8>>,
 }
 
 /// Row read from `accounts`.
@@ -34,54 +31,32 @@ pub struct AccountRow {
 // QUERIES
 // ================================================================================================
 
-/// Inserts or replaces the committed account state (`transaction_id = NULL`).
-///
-/// Deletes any existing committed row first, then inserts a fresh one.
+/// Inserts or replaces the account state.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// DELETE FROM accounts WHERE account_id = ?1 AND transaction_id IS NULL
-///
-/// INSERT INTO accounts (account_id, account_data, transaction_id)
-/// VALUES (?1, ?2, NULL)
+/// INSERT OR REPLACE INTO accounts (account_id, account_data) VALUES (?1, ?2)
 /// ```
-pub fn upsert_committed_account(
+pub fn upsert_account(
     conn: &mut SqliteConnection,
     account_id: NetworkAccountId,
     account: &Account,
 ) -> Result<(), DatabaseError> {
-    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
-
-    // Delete the existing committed row (if any).
-    diesel::delete(
-        schema::accounts::table
-            .filter(schema::accounts::account_id.eq(&account_id_bytes))
-            .filter(schema::accounts::transaction_id.is_null()),
-    )
-    .execute(conn)?;
-
-    // Insert the new committed row.
     let row = AccountInsert {
-        account_id: account_id_bytes,
+        account_id: conversions::network_account_id_to_bytes(account_id),
         account_data: conversions::account_to_bytes(account),
-        transaction_id: None,
     };
-    diesel::insert_into(schema::accounts::table).values(&row).execute(conn)?;
+    diesel::replace_into(schema::accounts::table).values(&row).execute(conn)?;
     Ok(())
 }
 
-/// Returns the latest account state: last inflight row (highest `order_id`), or committed if
-/// none.
+/// Returns the account state, or `None` if no row exists.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT account_data
-/// FROM accounts
-/// WHERE account_id = ?1
-/// ORDER BY order_id DESC
-/// LIMIT 1
+/// SELECT account_data FROM accounts WHERE account_id = ?1 LIMIT 1
 /// ```
 pub fn get_account(
     conn: &mut SqliteConnection,
@@ -89,37 +64,8 @@ pub fn get_account(
 ) -> Result<Option<Account>, DatabaseError> {
     let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
 
-    // ORDER BY order_id DESC returns the latest inflight first, then committed.
     let row: Option<AccountRow> = schema::accounts::table
         .filter(schema::accounts::account_id.eq(&account_id_bytes))
-        .order(schema::accounts::order_id.desc())
-        .select(AccountRow::as_select())
-        .first(conn)
-        .optional()?;
-
-    row.map(|AccountRow { account_data, .. }| conversions::account_from_bytes(&account_data))
-        .transpose()
-}
-
-/// Returns the committed account state (`transaction_id IS NULL`), ignoring any inflight rows.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT account_data
-/// FROM accounts
-/// WHERE account_id = ?1 AND transaction_id IS NULL
-/// LIMIT 1
-/// ```
-pub fn get_committed_account(
-    conn: &mut SqliteConnection,
-    account_id: NetworkAccountId,
-) -> Result<Option<Account>, DatabaseError> {
-    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
-
-    let row: Option<AccountRow> = schema::accounts::table
-        .filter(schema::accounts::account_id.eq(&account_id_bytes))
-        .filter(schema::accounts::transaction_id.is_null())
         .select(AccountRow::as_select())
         .first(conn)
         .optional()?;

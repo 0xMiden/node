@@ -25,7 +25,7 @@ pub struct NoteRow {
     pub last_attempt: Option<i64>,
 }
 
-/// Row for inserting into the unified `notes` table.
+/// Row for inserting into the `notes` table.
 #[derive(Debug, Clone, Insertable)]
 #[diesel(table_name = schema::notes)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -37,8 +37,6 @@ pub struct NoteInsert {
     pub attempt_count: i32,
     pub last_attempt: Option<i64>,
     pub last_error: Option<String>,
-    pub created_by: Option<Vec<u8>>,
-    pub consumed_by: Option<Vec<u8>>,
     pub committed_at: Option<i64>,
 }
 
@@ -51,14 +49,13 @@ pub struct NoteStatusRow {
     pub last_error: Option<String>,
     pub attempt_count: i32,
     pub last_attempt: Option<i64>,
-    pub consumed_by: Option<Vec<u8>>,
     pub committed_at: Option<i64>,
 }
 
 // QUERIES
 // ================================================================================================
 
-/// Batch inserts committed notes (`created_by = NULL`, `consumed_by = NULL`).
+/// Batch inserts notes received from a committed block.
 ///
 /// # Raw SQL
 ///
@@ -67,8 +64,8 @@ pub struct NoteStatusRow {
 /// ```sql
 /// INSERT OR REPLACE INTO notes
 ///     (nullifier, account_id, note_data, note_id, attempt_count, last_attempt, last_error,
-///      created_by, consumed_by)
-/// VALUES (?1, ?2, ?3, ?4, 0, NULL, NULL, NULL, NULL)
+///      committed_at)
+/// VALUES (?1, ?2, ?3, ?4, 0, NULL, NULL, NULL)
 /// ```
 pub fn insert_committed_notes(
     conn: &mut SqliteConnection,
@@ -86,8 +83,6 @@ pub fn insert_committed_notes(
             attempt_count: 0,
             last_attempt: None,
             last_error: None,
-            created_by: None,
-            consumed_by: None,
             committed_at: None,
         };
         diesel::replace_into(schema::notes::table).values(&row).execute(conn)?;
@@ -97,8 +92,8 @@ pub fn insert_committed_notes(
 
 /// Returns notes available for consumption by a given account.
 ///
-/// Queries unconsumed notes (`consumed_by IS NULL`) for the account that have not exceeded the
-/// maximum attempt count, then applies backoff and execution hint filtering in Rust.
+/// Queries uncommitted notes for the account that have not exceeded the maximum attempt count,
+/// then applies backoff and execution hint filtering in Rust.
 ///
 /// # Raw SQL
 ///
@@ -107,7 +102,6 @@ pub fn insert_committed_notes(
 /// FROM notes
 /// WHERE
 ///     account_id = ?1
-///     AND consumed_by IS NULL
 ///     AND committed_at IS NULL
 ///     AND attempt_count < ?2
 /// ```
@@ -120,11 +114,8 @@ pub fn available_notes(
 ) -> Result<Vec<AccountTargetNetworkNote>, DatabaseError> {
     let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
 
-    // Get unconsumed, uncommitted notes for this account that haven't exceeded the max
-    // attempt count.
     let rows: Vec<NoteRow> = schema::notes::table
         .filter(schema::notes::account_id.eq(&account_id_bytes))
-        .filter(schema::notes::consumed_by.is_null())
         .filter(schema::notes::committed_at.is_null())
         .filter(schema::notes::attempt_count.lt(max_attempts as i32))
         .select(NoteRow::as_select())
@@ -144,36 +135,6 @@ pub fn available_notes(
     }
 
     Ok(result)
-}
-
-/// Returns `true` if any of the supplied nullifiers has been committed
-/// (i.e. has a non-null `committed_at`).
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT 1 FROM notes
-/// WHERE nullifier IN (?1, ?2, ...)
-///   AND committed_at IS NOT NULL
-/// LIMIT 1
-/// ```
-pub fn any_nullifier_committed(
-    conn: &mut SqliteConnection,
-    nullifiers: &[Nullifier],
-) -> Result<bool, DatabaseError> {
-    if nullifiers.is_empty() {
-        return Ok(false);
-    }
-    let nullifier_bytes: Vec<Vec<u8>> =
-        nullifiers.iter().map(conversions::nullifier_to_bytes).collect();
-
-    let hit: Option<i32> = schema::notes::table
-        .filter(schema::notes::nullifier.eq_any(&nullifier_bytes))
-        .filter(schema::notes::committed_at.is_not_null())
-        .select(diesel::dsl::sql::<diesel::sql_types::Integer>("1"))
-        .first(conn)
-        .optional()?;
-    Ok(hit.is_some())
 }
 
 /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
@@ -215,7 +176,7 @@ pub fn notes_failed(
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT note_id, last_error, attempt_count, last_attempt, consumed_by
+/// SELECT note_id, last_error, attempt_count, last_attempt, committed_at
 /// FROM notes
 /// WHERE note_id = ?1
 /// ```

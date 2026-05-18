@@ -75,12 +75,10 @@ impl Db {
             .await
     }
 
-    /// Returns `true` if a committed account state exists for the given account.
-    pub async fn has_committed_account(&self, account_id: NetworkAccountId) -> Result<bool> {
+    /// Returns `true` if a row exists for the given account.
+    pub async fn has_account(&self, account_id: NetworkAccountId) -> Result<bool> {
         self.inner
-            .query("has_committed_account", move |conn| {
-                Ok(queries::get_committed_account(conn, account_id)?.is_some())
-            })
+            .query("has_account", move |conn| Ok(queries::get_account(conn, account_id)?.is_some()))
             .await
     }
 
@@ -101,14 +99,15 @@ impl Db {
             .await
     }
 
-    /// Returns `true` if any of the supplied nullifiers has been committed on-chain.
+    /// Returns the commitment of the stored account state, or `None` if no row exists.
     ///
-    /// Used by an account actor to decide whether its previously submitted transaction has been
-    /// included in a block.
-    pub async fn any_nullifier_committed(&self, nullifiers: Vec<Nullifier>) -> Result<bool> {
+    /// Used by an account actor in `WaitForNextBlock` to detect when its in-flight submission has
+    /// been included in a block, at which point the on-chain account commitment differs from the
+    /// one the tx was executed against.
+    pub async fn account_commitment(&self, account_id: NetworkAccountId) -> Result<Option<Word>> {
         self.inner
-            .query("any_nullifier_committed", move |conn| {
-                queries::any_nullifier_committed(conn, &nullifiers)
+            .query("account_commitment", move |conn| {
+                Ok(queries::get_account(conn, account_id)?.map(|a| a.to_commitment()))
             })
             .await
     }
@@ -149,14 +148,6 @@ impl Db {
             .await
     }
 
-    /// Clears any leftover inflight rows persisted by a previous run of the ntx-builder under
-    /// the old mempool-subscription model. No-op when the DB is already clean.
-    pub async fn purge_legacy_inflight(&self) -> Result<()> {
-        self.inner
-            .transact("purge_legacy_inflight", queries::purge_legacy_inflight)
-            .await
-    }
-
     /// Reads the singleton chain state row, returning the last synced block number and its header
     /// if any block has been applied locally.
     pub async fn get_chain_state(&self) -> Result<Option<(BlockNumber, BlockHeader)>> {
@@ -185,7 +176,7 @@ impl Db {
     ) -> Result<()> {
         self.inner
             .transact("sync_account_from_store", move |conn| {
-                queries::upsert_committed_account(conn, account_id, &account)?;
+                queries::upsert_account(conn, account_id, &account)?;
                 queries::insert_committed_notes(conn, &notes)?;
                 Ok(())
             })

@@ -106,51 +106,6 @@ fn apply_committed_block_marks_nullifiers_consumed() {
 }
 
 #[test]
-fn any_nullifier_committed_reports_committed_and_pending() {
-    let (conn, _dir) = &mut test_conn();
-
-    let account_id = mock_network_account_id();
-    let note_a = mock_single_target_note(account_id, 1);
-    let note_b = mock_single_target_note(account_id, 2);
-    let null_a = note_a.as_note().nullifier();
-    let null_b = note_b.as_note().nullifier();
-
-    // Insert both notes via a committed block.
-    apply_committed_block(
-        conn,
-        &CommittedBlockEffects {
-            header: mock_block_header(BlockNumber::from(1u32)),
-            network_notes: vec![note_a.clone(), note_b.clone()],
-            nullifiers: vec![],
-            network_account_updates: vec![],
-        },
-    )
-    .unwrap();
-
-    // Neither has been consumed yet.
-    assert!(!any_nullifier_committed(conn, &[null_a, null_b]).unwrap());
-
-    // Commit only `null_a` in the next block.
-    apply_committed_block(
-        conn,
-        &CommittedBlockEffects {
-            header: mock_block_header(BlockNumber::from(2u32)),
-            network_notes: vec![],
-            nullifiers: vec![null_a],
-            network_account_updates: vec![],
-        },
-    )
-    .unwrap();
-
-    // Mixed set now reports `true`.
-    assert!(any_nullifier_committed(conn, &[null_a, null_b]).unwrap());
-    // Pending-only set still reports `false`.
-    assert!(!any_nullifier_committed(conn, &[null_b]).unwrap());
-    // Empty input short-circuits to `false`.
-    assert!(!any_nullifier_committed(conn, &[]).unwrap());
-}
-
-#[test]
 fn apply_committed_block_advances_chain_state() {
     let (conn, _dir) = &mut test_conn();
 
