@@ -305,8 +305,9 @@ fn rust_path(path: &Path) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::env;
+
+    use super::*;
 
     #[test]
     fn renders_migrations_in_lexicographic_order() -> Result<()> {

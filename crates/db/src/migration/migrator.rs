@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
 use super::entry::{
-    CodeMigration, MigrationEntry, SqlMigration, apply_migration_and_verify_schema,
+    CodeMigration,
+    MigrationEntry,
+    SqlMigration,
+    apply_migration_and_verify_schema,
 };
 use super::{MigratorBuilder, SchemaHash, schema};
 
