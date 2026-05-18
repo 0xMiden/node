@@ -1,7 +1,7 @@
 use std::fmt;
 
-use anyhow::Result;
-use rusqlite::Transaction;
+use anyhow::{Context, Result};
+use rusqlite::{Connection, Transaction};
 
 mod build_script;
 mod builder;
@@ -41,12 +41,12 @@ impl<Body> Migration<Body> {
 }
 
 #[derive(Clone, Copy)]
-enum MigrationRef<'a> {
+enum MigrationBodyRef<'a> {
     Sql(&'a SqlMigration),
     Code(&'a CodeMigration),
 }
 
-impl MigrationRef<'_> {
+impl MigrationBodyRef<'_> {
     pub(super) fn name(&self) -> &'static str {
         match self {
             Self::Sql(migration) => migration.name(),
@@ -60,6 +60,33 @@ impl MigrationRef<'_> {
             Self::Code(migration) => (migration.body)(tx),
         }
     }
+}
+
+fn apply_migration_transaction<T>(
+    conn: &mut Connection,
+    version: usize,
+    migration: MigrationBodyRef<'_>,
+    verify_hash: impl FnOnce(SchemaHash) -> Result<T>,
+) -> Result<T> {
+    let name = migration.name();
+    let tx = conn.transaction().with_context(|| {
+        format!("failed to start transaction for migration {version} \"{name}\"")
+    })?;
+
+    migration
+        .apply(&tx)
+        .with_context(|| format!("failed to apply migration {version} \"{name}\""))?;
+    let schema_hash = SchemaHash::new(&tx).with_context(|| {
+        format!("failed to compute schema hash after migration {version} \"{name}\"")
+    })?;
+    let result = verify_hash(schema_hash)?;
+    schema::set_version(&tx, version).with_context(|| {
+        format!("failed to update user_version for migration {version} \"{name}\"")
+    })?;
+    tx.commit()
+        .with_context(|| format!("failed to commit migration {version} \"{name}\""))?;
+
+    Ok(result)
 }
 
 impl<Body> fmt::Debug for Migration<Body> {
@@ -168,7 +195,6 @@ mod tests {
             .build()?;
 
         assert_eq!(migrator.schema_hashes(), &[base_hash, final_hash]);
-        assert_eq!(migrator.final_schema_hash(), final_hash);
         Ok(())
     }
 

@@ -42,7 +42,7 @@ impl SchemaHash {
         let rows = stmt
             .query_map([], |row| {
                 Ok(SchemaEntry {
-                    kind: row.get(0)?,
+                    object_type: row.get(0)?,
                     name: row.get(1)?,
                     table_name: row.get(2)?,
                     sql: normalize_sql(&row.get::<_, String>(3)?),
@@ -57,7 +57,7 @@ impl SchemaHash {
         let mut hasher = Sha256::new();
         hash_field(&mut hasher, "schema-hash-v1");
         for entry in schema_entries {
-            hash_field(&mut hasher, &entry.kind);
+            hash_field(&mut hasher, &entry.object_type);
             hash_field(&mut hasher, &entry.name);
             hash_field(&mut hasher, &entry.table_name);
             hash_field(&mut hasher, &entry.sql);
@@ -76,7 +76,7 @@ impl SchemaHash {
 }
 
 struct SchemaEntry {
-    kind: String,
+    object_type: String,
     name: String,
     table_name: String,
     sql: String,
@@ -161,6 +161,18 @@ mod tests {
         )?;
 
         assert_eq!(SchemaHash::new(&left)?, SchemaHash::new(&right)?);
+        Ok(())
+    }
+
+    #[test]
+    fn schema_hash_changes_for_object_identity() -> Result<()> {
+        let left = Connection::open_in_memory()?;
+        left.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+
+        let right = Connection::open_in_memory()?;
+        right.execute_batch("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT);")?;
+
+        assert_ne!(SchemaHash::new(&left)?, SchemaHash::new(&right)?);
         Ok(())
     }
 

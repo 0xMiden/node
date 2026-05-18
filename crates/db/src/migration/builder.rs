@@ -1,7 +1,9 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::{CodeMigrationFn, Migration, MigrationRef, Migrator, SchemaHash, schema};
+use super::{
+    CodeMigrationFn, Migration, MigrationBodyRef, Migrator, SchemaHash, apply_migration_transaction,
+};
 
 /// Builds a [`Migrator`] while computing expected schema hashes on an in-memory database.
 pub struct MigratorBuilder {
@@ -21,52 +23,40 @@ impl MigratorBuilder {
 
     /// Adds a pure SQL base migration.
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
-        assert!(
-            self.migrator.code_migrations.is_empty(),
-            "cannot add base migration after code migrations have started"
-        );
-        let version = self.migrator.expected_schema_hashes.len() + 1;
+        self.migrator.assert_can_push_base();
+        let version = self.migrator.next_version();
         let migration = Migration::base(name, sql);
-        let hash =
-            Self::apply_migration(&mut self.reference, version, MigrationRef::Sql(&migration))
-                .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
+        let hash: SchemaHash = apply_migration_transaction(
+            &mut self.reference,
+            version,
+            MigrationBodyRef::Sql(&migration),
+            Ok::<SchemaHash, anyhow::Error>,
+        )
+        .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
 
-        self.migrator.base_migrations.push(migration);
-        self.migrator.expected_schema_hashes.push(hash);
+        self.migrator.push_base(migration, hash);
         Ok(self)
     }
 
     /// Adds a Rust migration function.
     pub fn push_code(mut self, name: &'static str, apply: CodeMigrationFn) -> Result<Self> {
-        let version = self.migrator.expected_schema_hashes.len() + 1;
+        let version = self.migrator.next_version();
         let migration = Migration::code(name, apply);
-        let hash =
-            Self::apply_migration(&mut self.reference, version, MigrationRef::Code(&migration))
-                .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
+        let hash: SchemaHash = apply_migration_transaction(
+            &mut self.reference,
+            version,
+            MigrationBodyRef::Code(&migration),
+            Ok::<SchemaHash, anyhow::Error>,
+        )
+        .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
-        self.migrator.code_migrations.push(migration);
-        self.migrator.expected_schema_hashes.push(hash);
+        self.migrator.push_code(migration, hash);
         Ok(self)
     }
 
     /// Returns a migrator containing all migrations and their expected schema hashes.
     pub fn build(self) -> Result<Migrator> {
-        ensure!(!self.migrator.is_empty(), "cannot build migrator without migrations");
-        self.migrator.assert_invariants();
+        self.migrator.validate()?;
         Ok(self.migrator)
-    }
-
-    fn apply_migration(
-        conn: &mut Connection,
-        version: usize,
-        migration: MigrationRef<'_>,
-    ) -> Result<SchemaHash> {
-        let tx = conn.transaction().context("failed to begin transaction")?;
-        migration.apply(&tx).context("failed to execute migration function")?;
-        schema::set_version(&tx, version).context("failed to set `user_version`")?;
-        let hash = SchemaHash::new(&tx).context("failed to compute schema hash")?;
-        tx.commit().context("failed to commit transaction")?;
-
-        Ok(hash)
     }
 }

@@ -2,15 +2,16 @@ use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
 use super::{
-    CodeMigration, Migration, MigrationRef, MigratorBuilder, SchemaHash, SqlMigration, schema,
+    CodeMigration, Migration, MigrationBodyRef, MigratorBuilder, SchemaHash, SqlMigration,
+    apply_migration_transaction, schema,
 };
 
 /// Applies base migrations to new databases and code migrations to existing databases.
 #[derive(Debug)]
 pub struct Migrator {
-    pub(super) base_migrations: Vec<SqlMigration>,
-    pub(super) code_migrations: Vec<CodeMigration>,
-    pub(super) expected_schema_hashes: Vec<SchemaHash>,
+    base_migrations: Vec<SqlMigration>,
+    code_migrations: Vec<CodeMigration>,
+    expected_schema_hashes: Vec<SchemaHash>,
 }
 
 impl Migrator {
@@ -27,29 +28,40 @@ impl Migrator {
         MigratorBuilder::new()
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.expected_schema_hashes.is_empty()
+    pub(super) fn next_version(&self) -> usize {
+        self.expected_schema_hashes.len() + 1
     }
 
-    pub(super) fn assert_invariants(&self) {
-        let migration_count = self.base_migrations.len() + self.code_migrations.len();
+    pub(super) fn assert_can_push_base(&self) {
         assert!(
-            !self.expected_schema_hashes.is_empty(),
-            "migrator must contain at least one migration"
-        );
-        assert_eq!(
-            self.expected_schema_hashes.len(),
-            migration_count,
-            "migrator schema hash count must match migration count"
+            self.code_migrations.is_empty(),
+            "cannot add base migration after code migrations have started"
         );
     }
 
-    /// Returns the schema hash expected after all migrations have been applied.
-    pub fn final_schema_hash(&self) -> SchemaHash {
-        *self
-            .expected_schema_hashes
-            .last()
-            .expect("migrator must contain at least one schema hash")
+    pub(super) fn push_base(&mut self, migration: SqlMigration, schema_hash: SchemaHash) {
+        self.assert_can_push_base();
+        self.base_migrations.push(migration);
+        self.expected_schema_hashes.push(schema_hash);
+    }
+
+    pub(super) fn push_code(&mut self, migration: CodeMigration, schema_hash: SchemaHash) {
+        self.code_migrations.push(migration);
+        self.expected_schema_hashes.push(schema_hash);
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        let migration_count = self.base_migrations.len() + self.code_migrations.len();
+        ensure!(
+            !self.expected_schema_hashes.is_empty(),
+            "cannot build migrator without migrations"
+        );
+        ensure!(
+            self.expected_schema_hashes.len() == migration_count,
+            "migrator schema hash count {} must match migration count {migration_count}",
+            self.expected_schema_hashes.len()
+        );
+        Ok(())
     }
 
     /// Returns the schema hashes expected after each migration.
@@ -66,7 +78,7 @@ impl Migrator {
         if applied_version == 0 {
             for (idx, migration) in self.base_migrations.iter().enumerate() {
                 let version = idx + 1;
-                self.apply_migration(conn, version, MigrationRef::Sql(migration))?;
+                self.apply_migration(conn, version, MigrationBodyRef::Sql(migration))?;
                 applied_version = version;
             }
         }
@@ -74,7 +86,7 @@ impl Migrator {
         let code_start = applied_version.saturating_sub(base_versions);
         for (idx, migration) in self.code_migrations.iter().enumerate().skip(code_start) {
             let version = base_versions + idx + 1;
-            self.apply_migration(conn, version, MigrationRef::Code(migration))?;
+            self.apply_migration(conn, version, MigrationBodyRef::Code(migration))?;
         }
 
         Ok(())
@@ -110,22 +122,12 @@ impl Migrator {
         &self,
         conn: &mut Connection,
         version: usize,
-        migration: MigrationRef<'_>,
+        migration: MigrationBodyRef<'_>,
     ) -> Result<()> {
         let name = migration.name();
-        let tx = conn.transaction().with_context(|| {
-            format!("failed to start transaction for migration {version} \"{name}\"")
-        })?;
-
-        migration
-            .apply(&tx)
-            .with_context(|| format!("failed to apply migration {version} \"{name}\""))?;
-        self.verify_migration_schema(&tx, version, name)?;
-        schema::set_version(&tx, version).with_context(|| {
-            format!("failed to update user_version for migration {version} \"{name}\"")
-        })?;
-        tx.commit()
-            .with_context(|| format!("failed to commit migration {version} \"{name}\""))
+        apply_migration_transaction(conn, version, migration, |actual| {
+            self.verify_migration_schema_hash(actual, version, name)
+        })
     }
 
     fn verify_current_schema(&self, conn: &Connection, version: usize) -> Result<()> {
@@ -143,16 +145,13 @@ impl Migrator {
         Ok(())
     }
 
-    fn verify_migration_schema(
+    fn verify_migration_schema_hash(
         &self,
-        conn: &Connection,
+        actual: SchemaHash,
         version: usize,
         name: &'static str,
     ) -> Result<()> {
         let expected = self.expected_schema_hashes[version - 1];
-        let actual = SchemaHash::new(conn).with_context(|| {
-            format!("failed to compute schema hash after migration {version} \"{name}\"")
-        })?;
 
         ensure!(
             actual == expected,

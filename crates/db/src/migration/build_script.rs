@@ -345,6 +345,7 @@ mod tests {
         assert!(indexes < backfill);
         assert!(rendered.contains("include_str!("));
         assert!(rendered.contains("migration_003_backfill::migrate"));
+        assert!(rendered.contains(".build()?;"));
 
         fs::remove_dir_all(root)?;
         Ok(())
