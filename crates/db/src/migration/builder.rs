@@ -80,11 +80,7 @@ impl<T> MigratorBuilder<T> {
     /// Returns a migrator containing all migrations and their expected schema hashes.
     #[must_use]
     pub fn build(self) -> Migrator {
-        Migrator {
-            base_migrations: self.base_migrations,
-            code_migrations: self.code_migrations,
-            expected_schema_hashes: self.schema_hashes,
-        }
+        Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
     }
 
     fn apply_migration(
