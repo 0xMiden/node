@@ -7,7 +7,7 @@ use actor::{AccountActorContext, ActorConfig, GrpcClients, State};
 use anyhow::Context;
 use builder::BlockStream;
 use chain_state::SharedChainState;
-use clients::{BlockProducerClient, StoreClient, StoreReplicaStreamClient, ValidatorClient};
+use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
 use db::Db;
 use miden_node_utils::ErrorReport;
@@ -301,7 +301,6 @@ impl NtxBuilderConfig {
             Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
 
         let store = StoreClient::new(self.store_url.clone());
-        let store_replica = StoreReplicaStreamClient::new(self.store_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
@@ -336,7 +335,7 @@ impl NtxBuilderConfig {
             "ntx-builder opening block subscription"
         );
 
-        let block_stream_inner = store_replica
+        let block_stream_inner = store
             .block_subscription_with_retry(block_from)
             .await
             .map_err(|err| anyhow::anyhow!(err))

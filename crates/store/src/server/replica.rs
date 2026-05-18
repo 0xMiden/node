@@ -42,34 +42,29 @@ impl<S: Stream> Stream for GuardedStream<S> {
 // STORE REPLICA API
 // ================================================================================================
 
-#[tonic::async_trait]
-impl store_replica_server::StoreReplica for StoreApi {
-    type BlockSubscriptionStream = Pin<
-        Box<
-            dyn tonic::codegen::tokio_stream::Stream<Item = Result<SignedBlock, Status>>
-                + Send
-                + 'static,
-        >,
-    >;
+/// Boxed, pinned stream of committed blocks. Shared concrete type behind both
+/// [`store_replica_server::StoreReplica::BlockSubscriptionStream`] and
+/// [`ntx_builder_server::NtxBuilder::BlockSubscriptionStream`].
+pub(super) type BlockSubscriptionStream = Pin<
+    Box<
+        dyn tonic::codegen::tokio_stream::Stream<Item = Result<SignedBlock, Status>>
+            + Send
+            + 'static,
+    >,
+>;
 
-    type ProofSubscriptionStream = Pin<
-        Box<
-            dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockProof, Status>>
-                + Send
-                + 'static,
-        >,
-    >;
-
-    /// Streams committed blocks to a replica starting from `from_block_number`.
+impl StoreApi {
+    /// Shared implementation for the `BlockSubscription` RPC, used by both the `StoreReplica` and
+    /// `NtxBuilder` gRPC services.
     ///
     /// Subscribes to the committed-tip watch channel and maintains a sequential counter. On each
     /// tip advance it emits all blocks from the current position up to the new tip, falling back to
     /// the block store for any entry not in the in-memory cache. The stream closes only when the
     /// client disconnects or the server shuts down.
-    async fn block_subscription(
+    pub(super) fn block_subscription_inner(
         &self,
         request: Request<BlockSubscriptionRequest>,
-    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+    ) -> Result<Response<BlockSubscriptionStream>, Status> {
         let permit = Arc::clone(&self.block_subscription_semaphore)
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
@@ -83,6 +78,26 @@ impl store_replica_server::StoreReplica for StoreApi {
             Arc::clone(&self.state),
         );
         Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
+    }
+}
+
+#[tonic::async_trait]
+impl store_replica_server::StoreReplica for StoreApi {
+    type BlockSubscriptionStream = BlockSubscriptionStream;
+
+    type ProofSubscriptionStream = Pin<
+        Box<
+            dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockProof, Status>>
+                + Send
+                + 'static,
+        >,
+    >;
+
+    async fn block_subscription(
+        &self,
+        request: Request<BlockSubscriptionRequest>,
+    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+        self.block_subscription_inner(request)
     }
 
     /// Streams block proofs to a replica starting from `from_block_number`.

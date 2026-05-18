@@ -7,7 +7,7 @@ use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
-use miden_node_proto::generated::store::ntx_builder_server;
+use miden_node_proto::generated::store::{BlockSubscriptionRequest, ntx_builder_server};
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::{StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetVaultKey;
@@ -25,6 +25,7 @@ use crate::errors::{
     GetWitnessesError,
 };
 use crate::server::api::{StoreApi, internal_error, invalid_argument};
+use crate::server::replica::BlockSubscriptionStream;
 use crate::state::Finality;
 
 // NTX BUILDER ENDPOINTS
@@ -32,6 +33,18 @@ use crate::state::Finality;
 
 #[tonic::async_trait]
 impl ntx_builder_server::NtxBuilder for StoreApi {
+    type BlockSubscriptionStream = BlockSubscriptionStream;
+
+    /// See [`StoreApi::block_subscription_inner`] — same semantics as
+    /// `StoreReplica::BlockSubscription`. Declared on this service so the ntx-builder can drive
+    /// its committed-block subscription through a single client.
+    async fn block_subscription(
+        &self,
+        request: Request<BlockSubscriptionRequest>,
+    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+        self.block_subscription_inner(request)
+    }
+
     /// Returns the chain tip's header and MMR peaks corresponding to that header.
     /// If there are N blocks, the peaks will represent the MMR at block `N - 1`.
     ///
