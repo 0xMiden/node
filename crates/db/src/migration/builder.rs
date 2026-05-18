@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::{CodeMigrationFn, Migration, Migrator, SchemaHash, set_user_version};
+use super::{CodeMigrationFn, Migration, Migrator, SchemaHash, schema};
 
 /// Builder phase which allows adding base migrations.
 pub enum BaseMigrationPhase {}
@@ -94,7 +94,7 @@ impl<T> MigratorBuilder<T> {
     ) -> Result<SchemaHash> {
         let tx = conn.transaction().context("failed to begin transaction")?;
         migration.apply(&tx).context("failed to execute migration function")?;
-        set_user_version(&tx, version).context("failed to set `user_version`")?;
+        schema::set_version(&tx, version).context("failed to set `user_version`")?;
         let hash = SchemaHash::new(&tx).context("failed to compute schema hash")?;
         tx.commit().context("failed to commit transaction")?;
 

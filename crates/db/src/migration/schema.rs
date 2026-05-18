@@ -1,6 +1,6 @@
 use std::fmt;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
@@ -62,4 +62,22 @@ fn normalize_sql(sql: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub fn get_version(conn: &Connection) -> Result<usize> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    ensure!(version >= 0, "database user_version is negative: {version}");
+    usize::try_from(version).context("database user_version does not fit into usize")
+}
+
+pub fn set_version(conn: &Connection, version: usize) -> Result<()> {
+    let version = version_to_user_version(version)?;
+    conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
+    Ok(())
+}
+
+fn version_to_user_version(version: usize) -> Result<i32> {
+    i32::try_from(version).with_context(|| {
+        format!("migration version {version} exceeds SQLite user_version i32 range")
+    })
 }

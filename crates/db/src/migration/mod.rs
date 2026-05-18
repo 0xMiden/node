@@ -4,15 +4,15 @@ use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, Transaction};
 
 mod builder;
-mod schema_hash;
+pub mod schema;
 
 pub use builder::{BaseMigrationPhase, CodeMigrationPhase, MigratorBuilder};
-pub use schema_hash::SchemaHash;
+pub use schema::SchemaHash;
 
 type MigrationFn = dyn for<'conn> Fn(&Transaction<'conn>) -> Result<()> + Send + Sync + 'static;
 
 /// A migration with a name and executable body.
-pub struct Migration {
+struct Migration {
     name: &'static str,
     apply: Box<MigrationFn>,
 }
@@ -30,7 +30,7 @@ impl Migration {
     }
 
     /// Returns the migration name.
-    pub fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         self.name
     }
 
@@ -64,26 +64,8 @@ impl Migrator {
 
     /// Applies missing migrations to `conn`.
     pub fn migrate(&self, conn: &mut Connection) -> Result<()> {
-        let current_version = read_user_version(conn).context("failed to read database version")?;
-        let total_versions = self.expected_schema_hashes.len();
-
-        ensure!(
-            current_version <= total_versions,
-            "database version {current_version} is newer than migrator version {total_versions}"
-        );
-
+        let current_version = self.version_check(conn)?;
         let base_versions = self.base_migrations.len();
-        if current_version > 0 && current_version < base_versions {
-            let name = self.migration_name(current_version).unwrap_or("<unknown>");
-            bail!(
-                "database version {current_version} {name:?} is inside the base migration range; \
-                 base migrations are only supported for new databases"
-            );
-        }
-
-        if current_version > 0 {
-            self.verify_current_schema(conn, current_version)?;
-        }
 
         let mut applied_version = current_version;
         if applied_version == 0 {
@@ -103,22 +85,30 @@ impl Migrator {
         Ok(())
     }
 
-    /// Returns the base migrations.
-    #[must_use]
-    pub fn base_migrations(&self) -> &[Migration] {
-        &self.base_migrations
-    }
+    fn version_check(&self, conn: &Connection) -> Result<usize> {
+        let current_version =
+            schema::get_version(conn).context("failed to read database version")?;
+        let total_versions = self.expected_schema_hashes.len();
 
-    /// Returns the code migrations.
-    #[must_use]
-    pub fn code_migrations(&self) -> &[Migration] {
-        &self.code_migrations
-    }
+        ensure!(
+            current_version <= total_versions,
+            "database version {current_version} is newer than migrator version {total_versions}"
+        );
 
-    /// Returns the expected schema hash for each migration version.
-    #[must_use]
-    pub fn expected_schema_hashes(&self) -> &[SchemaHash] {
-        &self.expected_schema_hashes
+        let base_versions = self.base_migrations.len();
+        if current_version > 0 && current_version < base_versions {
+            let name = self.migration_name(current_version).unwrap_or("<unknown>");
+            bail!(
+                "database version {current_version} \"{name}\" is inside the base migration range; \
+                 base migrations are only supported for new databases"
+            );
+        }
+
+        if current_version > 0 {
+            self.verify_current_schema(conn, current_version)?;
+        }
+
+        Ok(current_version)
     }
 
     fn apply_migration(
@@ -128,30 +118,30 @@ impl Migrator {
         migration: &Migration,
     ) -> Result<()> {
         let tx = conn.transaction().with_context(|| {
-            format!("failed to start transaction for migration {version} {:?}", migration.name)
+            format!("failed to start transaction for migration {version} \"{}\"", migration.name)
         })?;
 
-        migration
-            .apply(&tx)
-            .with_context(|| format!("failed to apply migration {version} {:?}", migration.name))?;
+        migration.apply(&tx).with_context(|| {
+            format!("failed to apply migration {version} \"{}\"", migration.name)
+        })?;
         self.verify_migration_schema(&tx, version, migration.name)?;
-        set_user_version(&tx, version).with_context(|| {
-            format!("failed to update user_version for migration {version} {:?}", migration.name)
+        schema::set_version(&tx, version).with_context(|| {
+            format!("failed to update user_version for migration {version} \"{}\"", migration.name)
         })?;
         tx.commit()
-            .with_context(|| format!("failed to commit migration {version} {:?}", migration.name))
+            .with_context(|| format!("failed to commit migration {version} \"{}\"", migration.name))
     }
 
     fn verify_current_schema(&self, conn: &Connection, version: usize) -> Result<()> {
         let name = self.migration_name(version).unwrap_or("<unknown>");
         let expected = self.expected_schema_hashes[version - 1];
         let actual = SchemaHash::new(conn).with_context(|| {
-            format!("failed to compute schema hash at database version {version} {name:?}")
+            format!("failed to compute schema hash at database version {version} \"{name}\"")
         })?;
 
         ensure!(
             actual == expected,
-            "schema hash mismatch at database version {version} {name:?}: expected {expected}, \
+            "schema hash mismatch at database version {version} \"{name}\": expected {expected}, \
              got {actual}"
         );
         Ok(())
@@ -165,12 +155,12 @@ impl Migrator {
     ) -> Result<()> {
         let expected = self.expected_schema_hashes[version - 1];
         let actual = SchemaHash::new(conn).with_context(|| {
-            format!("failed to compute schema hash after migration {version} {name:?}")
+            format!("failed to compute schema hash after migration {version} \"{name}\"")
         })?;
 
         ensure!(
             actual == expected,
-            "schema hash mismatch after migration {version} {name:?}: expected {expected}, got \
+            "schema hash mismatch after migration {version} \"{name}\": expected {expected}, got \
              {actual}"
         );
         Ok(())
@@ -189,24 +179,6 @@ impl Migrator {
             .get(version - self.base_migrations.len() - 1)
             .map(Migration::name)
     }
-}
-
-fn read_user_version(conn: &Connection) -> Result<usize> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    ensure!(version >= 0, "database user_version is negative: {version}");
-    usize::try_from(version).context("database user_version does not fit into usize")
-}
-
-fn set_user_version(conn: &Connection, version: usize) -> Result<()> {
-    let version = version_to_user_version(version)?;
-    conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
-    Ok(())
-}
-
-fn version_to_user_version(version: usize) -> Result<i32> {
-    i32::try_from(version).with_context(|| {
-        format!("migration version {version} exceeds SQLite user_version i32 range")
-    })
 }
 
 #[cfg(test)]
@@ -250,7 +222,7 @@ mod tests {
         let mut conn = Connection::open_in_memory()?;
         migrator.migrate(&mut conn)?;
 
-        assert_eq!(read_user_version(&conn)?, 2);
+        assert_eq!(schema::get_version(&conn)?, 2);
         conn.execute("INSERT INTO items (id, value, height) VALUES (1, 'a', 10)", [])?;
         Ok(())
     }
@@ -270,7 +242,7 @@ mod tests {
 
         migrator.migrate(&mut conn)?;
 
-        assert_eq!(read_user_version(&conn)?, 2);
+        assert_eq!(schema::get_version(&conn)?, 2);
         assert!(object_exists(&conn, "idx_items_value")?);
         Ok(())
     }
@@ -324,7 +296,7 @@ mod tests {
 
         let err = migrator.migrate(&mut conn).expect_err("migration should fail");
         assert!(err.to_string().contains("schema hash mismatch after migration 2"));
-        assert_eq!(read_user_version(&conn)?, 1);
+        assert_eq!(schema::get_version(&conn)?, 1);
         assert!(!object_exists(&conn, "unexpected")?);
         Ok(())
     }
