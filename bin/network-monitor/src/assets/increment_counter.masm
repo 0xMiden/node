@@ -4,6 +4,7 @@
 
 use external_contract::counter_contract
 
-begin
+@note_script
+pub proc main
     call.counter_contract::increment
 end

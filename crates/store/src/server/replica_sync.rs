@@ -111,7 +111,7 @@ impl ReplicaSync for BlockReplicaSync {
             let event = result?;
             let block = SignedBlock::read_from_bytes(&event.block)
                 .context("failed to deserialize block from upstream")?;
-            self.state.apply_block(block, None).await?;
+            self.state.apply_block(block).await?;
         }
 
         Ok(())

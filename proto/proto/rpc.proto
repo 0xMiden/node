@@ -480,9 +480,9 @@ enum FinalityLevel {
 
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
-    // Block number from which to synchronize (inclusive). Set this to the last block
+    // Block number from which to synchronize. Set this to the last block
     // already present in the caller's MMR so the delta begins at the next block.
-    fixed32 current_block_height = 1;
+    fixed32 current_client_block_height = 1;
 
     // Sync target: either the committed or the proven tip.
     FinalityLevel finality_level = 2;
@@ -493,7 +493,7 @@ message SyncChainMmrResponse {
     // For which block range the MMR delta is returned.
     BlockRange block_range = 1;
 
-    // Data needed to update the partial MMR from `request.block_range.current_block_height + 1` to
+    // Data needed to update the partial MMR from `request.current_client_block_height + 1` to
     // the sync target.
     primitives.MmrDelta mmr_delta = 2;
 

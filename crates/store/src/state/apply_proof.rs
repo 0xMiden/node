@@ -14,10 +14,9 @@ impl State {
         block_num: BlockNumber,
         proof_bytes: Vec<u8>,
     ) -> anyhow::Result<()> {
-        self.block_store.save_proof(block_num, &proof_bytes).await?;
-        let tip = self.db.mark_proven_and_advance_sequence(block_num).await?;
+        self.block_store.commit_proof(block_num, &proof_bytes).await?;
         self.proof_cache.push(block_num, ProofNotification::new(block_num, proof_bytes));
-        self.proven_tip.advance(tip);
+        self.proven_tip.advance(block_num);
         Ok(())
     }
 }

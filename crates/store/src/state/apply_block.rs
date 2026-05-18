@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use miden_node_proto::BlockProofRequest;
+use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
-use miden_protocol::block::{BlockBody, BlockHeader, SignedBlock};
+use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::note::{NoteAttachments, NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
@@ -42,17 +42,9 @@ impl State {
     ///   use the fresh data.
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `proving_inputs` is `None` and the block is not the genesis block.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
     #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn apply_block(
-        &self,
-        signed_block: SignedBlock,
-        proving_inputs: Option<BlockProofRequest>,
-    ) -> Result<(), ApplyBlockError> {
+    pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
         let header = signed_block.header();
@@ -64,10 +56,8 @@ impl State {
         self.validate_block_header(header, body).await?;
 
         // Save the block to the block store. In a case of a rolled-back DB transaction, the
-        // in-memory state will be unchanged, but the block might still be written into the
-        // block store. Thus, such block should be considered as block candidates, but not
-        // finalized blocks. So we should check for the latest block when getting block from
-        // the store.
+        // in-memory state will be unchanged, but the file might still be written. Such blocks
+        // should be considered candidates, not finalized blocks.
         let signed_block_bytes = signed_block.to_bytes();
         // Clone before moving into the block-save task so we can cache for replicas at commit.
         let cache_bytes = signed_block_bytes.clone();
@@ -106,11 +96,8 @@ impl State {
         // spawned.
         let db = Arc::clone(&self.db);
         let db_update_task = tokio::spawn(
-            async move {
-                db.apply_block(allow_acquire, acquire_done, signed_block, notes, proving_inputs)
-                    .await
-            }
-            .in_current_span(),
+            async move { db.apply_block(allow_acquire, acquire_done, signed_block, notes).await }
+                .in_current_span(),
         );
 
         // Wait for the message from the DB update task, that we ready to commit the DB
@@ -174,6 +161,17 @@ impl State {
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
 
         Ok(())
+    }
+
+    /// Saves the proving inputs for the given block to the block store.
+    pub async fn save_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+        proving_inputs: &BlockProofRequest,
+    ) -> std::io::Result<()> {
+        self.block_store
+            .save_proving_inputs(block_num, &proving_inputs.to_bytes())
+            .await
     }
 
     /// Validates that the block header is consistent with the block body and the current state.

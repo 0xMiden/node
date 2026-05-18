@@ -186,8 +186,9 @@ impl State {
 
     /// Loads the state from the data directory.
     ///
-    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler to
-    /// advance the proven tip; callers can subscribe to tip changes via the methods on `Self`.
+    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler
+    /// (in block-producer mode) to advance the proven tip; callers can subscribe to tip changes
+    /// via the methods on `Self`.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
@@ -250,9 +251,10 @@ impl State {
         let writer = Mutex::new(());
         let db = Arc::new(db);
 
-        // Initialize the proven tip from database.
-        let proven_tip_init =
-            db.proven_chain_tip().await.map_err(StateInitializationError::DatabaseError)?;
+        // Initialize the proven tip from the block store.
+        let proven_tip_init = block_store
+            .load_proven_tip()
+            .map_err(StateInitializationError::ProvenTipLoadError)?;
         let (proven_tip, _rx) = ProvenTipWriter::new(proven_tip_init);
 
         // Committed-tip watch: fires after each successful apply_block.
@@ -273,11 +275,6 @@ impl State {
             },
             proven_tip,
         ))
-    }
-
-    /// Returns the database.
-    pub(crate) fn db(&self) -> Arc<Db> {
-        Arc::clone(&self.db)
     }
 
     /// Returns the block store.
