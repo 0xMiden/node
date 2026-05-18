@@ -32,16 +32,6 @@ use crate::state::Finality;
 
 #[tonic::async_trait]
 impl ntx_builder_server::NtxBuilder for StoreApi {
-    /// Returns block header for the specified block number.
-    ///
-    /// If the block number is not provided, block header for the latest block is returned.
-    async fn get_block_header_by_number(
-        &self,
-        request: Request<proto::rpc::BlockHeaderByNumberRequest>,
-    ) -> Result<Response<proto::rpc::BlockHeaderByNumberResponse>, Status> {
-        self.get_block_header_by_number_inner(request).await
-    }
-
     /// Returns the chain tip's header and MMR peaks corresponding to that header.
     /// If there are N blocks, the peaks will represent the MMR at block `N - 1`.
     ///
