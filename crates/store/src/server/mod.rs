@@ -99,10 +99,10 @@ impl Store {
             })?;
         tracing::info!(target=COMPONENT, path=%data_directory.display(), "Data directory loaded");
 
-        let block_store = data_directory.block_store_dir();
+        let block_store_path = data_directory.block_store_dir();
         let block_store =
-            BlockStore::bootstrap(block_store.clone(), &genesis).with_context(|| {
-                format!("failed to bootstrap block store at {}", block_store.display())
+            BlockStore::bootstrap(block_store_path.clone(), &genesis).with_context(|| {
+                format!("failed to bootstrap block store at {}", block_store_path.display())
             })?;
         tracing::info!(target=COMPONENT, path=%block_store.display(), "Block store created");
 
@@ -275,7 +275,6 @@ impl Store {
         let (chain_tip_tx, chain_tip_rx) = watch::channel(chain_tip);
 
         let handle = proof_scheduler::spawn(
-            state.db().clone(),
             block_prover,
             state.block_store(),
             chain_tip_rx,

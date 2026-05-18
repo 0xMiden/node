@@ -33,7 +33,7 @@ miden-node store bootstrap \
 You can also configure the account and asset data in the genesis block by passing in a toml configuration file.
 This is particularly useful for setting up test scenarios without requiring multiple rounds of
 transactions to achieve the desired state. Any account secrets will be written to disk inside the
-the provided `--accounts-directory` path in the process.
+provided `--accounts-directory` path in the process.
 
 ```sh
 miden-validator bootstrap \

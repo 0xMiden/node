@@ -13,7 +13,7 @@ OpenTelemetry exporting can be enabled by specifying `--enable-otel` via the com
 We do _not_ export OpenTelemetry logs or metrics. Our end goal is to derive these based off of our tracing information.
 This approach is known as [wide-events](https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics),
 [structured logs](https://newrelic.com/blog/how-to-relic/structured-logging), and
-[Observibility 2.0](https://www.honeycomb.io/blog/time-to-version-observability-signs-point-to-yes).
+[Observability 2.0](https://www.honeycomb.io/blog/time-to-version-observability-signs-point-to-yes).
 
 What we're exporting are `traces` which consist of `spans` (covering a period of time), and `events` (something happened
 at a specific instance in time). These are extremely useful to debug distributed systems - even though `miden` is still
@@ -138,7 +138,7 @@ miden-node rpc start --enable-otel
 ```
 
 The exporter can be configured using environment variables as specified in the official
-[documents](httpthes://opentelemetry.io/docs/specs/otel/protocol/exporter/).
+[documents](https://opentelemetry.io/docs/specs/otel/protocol/exporter/).
 
 <div class="warning">
 Not all options are fully supported. We are limited to what the Rust OpenTelemetry implementation supports. If you have any problems please open an issue and we'll do our best to resolve it.
