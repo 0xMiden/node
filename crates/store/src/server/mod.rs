@@ -302,6 +302,8 @@ impl Store {
         let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
         let replica_service =
             store::store_replica_server::StoreReplicaServer::new(store_api.clone());
+        let ntx_builder_replica_service =
+            store::store_replica_server::StoreReplicaServer::new(store_api.clone());
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api);
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(block_producer_api);
@@ -326,9 +328,12 @@ impl Store {
                 .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
         );
 
+        // The ntx-builder uses the replica stream against this same endpoint to drive its
+        // committed-block subscription, so expose both services here.
         join_set.spawn(
             make_server()
                 .add_service(ntx_builder_service)
+                .add_service(ntx_builder_replica_service)
                 .add_service(reflection_service.clone())
                 .serve_with_incoming(TcpListenerStream::new(ntx_builder_listener)),
         );
