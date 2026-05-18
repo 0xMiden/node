@@ -3,6 +3,7 @@ use std::fmt;
 use anyhow::Result;
 use rusqlite::Transaction;
 
+pub mod build_script;
 mod builder;
 mod migrator;
 pub mod schema;
