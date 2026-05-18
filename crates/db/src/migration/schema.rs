@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
-/// A schema hash computed from normalized SQL entries in `sqlite_master`.
+/// A schema hash computed from ordered schema entries in `sqlite_schema`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SchemaHash([u8; 32]);
 
@@ -32,26 +32,35 @@ impl SchemaHash {
     pub fn new(conn: &Connection) -> Result<Self> {
         let mut stmt = conn
             .prepare(
-                "SELECT sql FROM sqlite_master \
+                "SELECT type, name, tbl_name, sql FROM sqlite_schema \
                  WHERE sql IS NOT NULL \
-                 AND name NOT LIKE 'sqlite_%'",
+                 AND name NOT LIKE 'sqlite_%' \
+                 ORDER BY type, name, tbl_name",
             )
-            .context("failed to prepare sqlite_master schema query")?;
+            .context("failed to prepare sqlite_schema query")?;
 
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .context("failed to query sqlite_master schema rows")?;
+            .query_map([], |row| {
+                Ok(SchemaEntry {
+                    kind: row.get(0)?,
+                    name: row.get(1)?,
+                    table_name: row.get(2)?,
+                    sql: normalize_sql(&row.get::<_, String>(3)?),
+                })
+            })
+            .context("failed to query sqlite_schema rows")?;
 
-        let mut normalized_sql = rows
-            .map(|row| row.map(|sql| normalize_sql(&sql)))
+        let schema_entries = rows
             .collect::<rusqlite::Result<Vec<_>>>()
-            .context("failed to read sqlite_master schema rows")?;
-        normalized_sql.sort_unstable();
+            .context("failed to read sqlite_schema rows")?;
 
         let mut hasher = Sha256::new();
-        for sql in normalized_sql {
-            hasher.update(sql.as_bytes());
-            hasher.update(b"\0");
+        hash_field(&mut hasher, "schema-hash-v1");
+        for entry in schema_entries {
+            hash_field(&mut hasher, &entry.kind);
+            hash_field(&mut hasher, &entry.name);
+            hash_field(&mut hasher, &entry.table_name);
+            hash_field(&mut hasher, &entry.sql);
         }
 
         let digest = hasher.finalize();
@@ -64,6 +73,13 @@ impl SchemaHash {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+}
+
+struct SchemaEntry {
+    kind: String,
+    name: String,
+    table_name: String,
+    sql: String,
 }
 
 impl fmt::Display for SchemaHash {
@@ -81,6 +97,11 @@ fn normalize_sql(sql: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn hash_field(hasher: &mut Sha256, field: &str) {
+    hasher.update(field.len().to_le_bytes());
+    hasher.update(field.as_bytes());
 }
 
 const fn hex_digit(byte: u8) -> u8 {
@@ -121,5 +142,69 @@ mod tests {
         );
 
         assert_eq!(HASH.to_string(), "ab".repeat(32));
+    }
+
+    #[test]
+    fn schema_hash_is_stable_across_creation_order() -> Result<()> {
+        let left = Connection::open_in_memory()?;
+        left.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);
+             CREATE TABLE notes (id INTEGER PRIMARY KEY, item_id INTEGER);
+             CREATE INDEX idx_notes_item_id ON notes(item_id);",
+        )?;
+
+        let right = Connection::open_in_memory()?;
+        right.execute_batch(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY, item_id INTEGER);
+             CREATE INDEX idx_notes_item_id ON notes(item_id);
+             CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);",
+        )?;
+
+        assert_eq!(SchemaHash::new(&left)?, SchemaHash::new(&right)?);
+        Ok(())
+    }
+
+    #[test]
+    fn schema_hash_changes_for_views_triggers_indexes_and_constraints() -> Result<()> {
+        let base = Connection::open_in_memory()?;
+        base.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value INTEGER);")?;
+        let base_hash = SchemaHash::new(&base)?;
+
+        let with_index = Connection::open_in_memory()?;
+        with_index.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, value INTEGER);
+             CREATE INDEX idx_items_value ON items(value);",
+        )?;
+        assert_ne!(base_hash, SchemaHash::new(&with_index)?);
+
+        let with_view = Connection::open_in_memory()?;
+        with_view.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, value INTEGER);
+             CREATE VIEW item_values AS SELECT value FROM items;",
+        )?;
+        assert_ne!(base_hash, SchemaHash::new(&with_view)?);
+
+        let with_trigger = Connection::open_in_memory()?;
+        with_trigger.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, value INTEGER);
+             CREATE TRIGGER items_positive_value
+             BEFORE INSERT ON items
+             WHEN NEW.value < 0
+             BEGIN
+                 SELECT RAISE(ABORT, 'negative value');
+             END;",
+        )?;
+        assert_ne!(base_hash, SchemaHash::new(&with_trigger)?);
+
+        let with_constraints = Connection::open_in_memory()?;
+        with_constraints.execute_batch(
+            "CREATE TABLE items (
+                 id INTEGER PRIMARY KEY,
+                 value INTEGER UNIQUE CHECK (value > 0)
+             );",
+        )?;
+        assert_ne!(base_hash, SchemaHash::new(&with_constraints)?);
+
+        Ok(())
     }
 }
