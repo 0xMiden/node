@@ -13,7 +13,7 @@ Both `amd64` and `arm64` packages are available.
 
 Note that the packages include a `systemd` service which is disabled by default.
 
-To install, download the desired releases `.deb` package and checksum files. Install using
+To install, download the desired release's `.deb` package and checksum files. Install using
 
 ```sh
 sudo dpkg -i $package_name.deb
@@ -89,4 +89,4 @@ existing chain will not work with the new version. This will change as our proto
 settle.
 :::
 
-Updating the node to a new version is as simply as re-running the install process and repeating the [bootstrapping](./usage#bootstrapping) instructions.
+Updating the node to a new version is as simple as re-running the install process and repeating the [bootstrapping](./usage#bootstrapping) instructions.
