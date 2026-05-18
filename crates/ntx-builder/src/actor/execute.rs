@@ -98,14 +98,29 @@ fn is_transient_store_error(err: &StoreError) -> bool {
     matches!(err, StoreError::GrpcClientError(status) if is_transient_status(status))
 }
 
+/// Maximum number of retries applied to a single transient request before the error is
+/// propagated to the actor-level retry.
+const MAX_REQUEST_RETRIES: usize = 20;
+
 /// Builds the [`ExponentialBuilder`] used to back off retries on transient request failures.
 fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
     ExponentialBuilder::default()
         .with_min_delay(initial)
         .with_max_delay(max)
         .with_factor(2.0)
-        .without_max_times()
+        .with_max_times(MAX_REQUEST_RETRIES)
         .with_jitter()
+}
+
+/// Emits a structured warning for a transient NTX request failure that is about to be retried.
+fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, sleep: Duration) {
+    tracing::warn!(
+        target: COMPONENT,
+        operation,
+        err = %err.as_report(),
+        sleep_ms = sleep.as_millis() as u64,
+        "ntx transient request failure; retrying after backoff",
+    );
 }
 
 /// The result of a successful transaction execution.
@@ -387,11 +402,7 @@ impl NtxContext {
                 .retry(self.request_backoff())
                 .when(|err| matches!(err, TransactionProverError::Other { .. }))
                 .notify(|err, dur| {
-                    tracing::warn!(
-                        err = %err.as_report(),
-                        sleep_ms = dur.as_millis() as u64,
-                        "remote prover request failed transiently; retrying after backoff",
-                    );
+                    log_transient_retry("remote_prover.prove", err, dur);
                 })
                 .await
                 .map_err(NtxError::Proving)
@@ -423,12 +434,7 @@ impl NtxContext {
             .retry(self.request_backoff())
             .when(is_transient_status)
             .notify(|status, dur| {
-                tracing::warn!(
-                    code = ?status.code(),
-                    err = %status,
-                    sleep_ms = dur.as_millis() as u64,
-                    "block producer submit failed transiently; retrying after backoff",
-                );
+                log_transient_retry("block_producer.submit_proven_transaction", status, dur);
             })
             .await
             .map_err(NtxError::Submission)
@@ -447,12 +453,7 @@ impl NtxContext {
             .retry(self.request_backoff())
             .when(is_transient_status)
             .notify(|status, dur| {
-                tracing::warn!(
-                    code = ?status.code(),
-                    err = %status,
-                    sleep_ms = dur.as_millis() as u64,
-                    "validator submit failed transiently; retrying after backoff",
-                );
+                log_transient_retry("validator.submit_proven_transaction", status, dur);
             })
             .await
             .map_err(NtxError::Submission)
@@ -582,11 +583,7 @@ impl DataStore for NtxDataStore {
                     .retry(self.store_backoff())
                     .when(is_transient_store_error)
                     .notify(|err, dur| {
-                        tracing::warn!(
-                            err = %err.as_report(),
-                            sleep_ms = dur.as_millis() as u64,
-                            "store get_account_inputs failed transiently; retrying after backoff",
-                        );
+                        log_transient_retry("store.get_account_inputs", err, dur);
                     })
                     .await
                     .map_err(|err| {
@@ -625,11 +622,7 @@ impl DataStore for NtxDataStore {
             .retry(self.store_backoff())
             .when(is_transient_store_error)
             .notify(|err, dur| {
-                tracing::warn!(
-                    err = %err.as_report(),
-                    sleep_ms = dur.as_millis() as u64,
-                    "store get_vault_asset_witnesses failed transiently; retrying after backoff",
-                );
+                log_transient_retry("store.get_vault_asset_witnesses", err, dur);
             })
             .await
             .map_err(|err| {
@@ -669,11 +662,7 @@ impl DataStore for NtxDataStore {
             .retry(self.store_backoff())
             .when(is_transient_store_error)
             .notify(|err, dur| {
-                tracing::warn!(
-                    err = %err.as_report(),
-                    sleep_ms = dur.as_millis() as u64,
-                    "store get_storage_map_witness failed transiently; retrying after backoff",
-                );
+                log_transient_retry("store.get_storage_map_witness", err, dur);
             })
             .await
             .map_err(|err| {
@@ -713,11 +702,7 @@ impl DataStore for NtxDataStore {
                 .retry(self.store_backoff())
                 .when(is_transient_store_error)
                 .notify(|err, dur| {
-                    tracing::warn!(
-                        err = %err.as_report(),
-                        sleep_ms = dur.as_millis() as u64,
-                        "store get_note_script_by_root failed transiently; retrying after backoff",
-                    );
+                    log_transient_retry("store.get_note_script_by_root", err, dur);
                 })
                 .await
                 .map_err(|err| {

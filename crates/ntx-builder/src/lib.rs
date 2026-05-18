@@ -70,7 +70,7 @@ const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 /// Default initial sleep applied between per-request retries on transient infrastructure failures
 /// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles
 /// on each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
-const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 
 /// Default upper bound on the per-request retry backoff sleep.
 const DEFAULT_REQUEST_BACKOFF_MAX: Duration = Duration::from_secs(30);
