@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
 use super::{CodeMigrationFn, Migration, Migrator, SchemaHash, schema};
@@ -83,6 +83,28 @@ impl<T> MigratorBuilder<T> {
         Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
     }
 
+    /// Asserts that the schema hash for a migration version matches `expected`.
+    pub fn assert_schema_hash(self, version: usize, expected: SchemaHash) -> Result<Self> {
+        ensure!(version > 0, "schema hash assertion version must be at least 1");
+
+        let Some(actual) = self.schema_hashes.get(version - 1).copied() else {
+            bail!(
+                "cannot assert schema hash for migration version {version}; builder has only {} \
+                 migrations",
+                self.schema_hashes.len()
+            );
+        };
+
+        let name = self.migration_name(version).unwrap_or("<unknown>");
+        ensure!(
+            actual == expected,
+            "schema hash mismatch for migration {version} \"{name}\": expected {expected}, got \
+             {actual}"
+        );
+
+        Ok(self)
+    }
+
     fn apply_migration(
         conn: &mut Connection,
         version: usize,
@@ -95,5 +117,19 @@ impl<T> MigratorBuilder<T> {
         tx.commit().context("failed to commit transaction")?;
 
         Ok(hash)
+    }
+
+    fn migration_name(&self, version: usize) -> Option<&'static str> {
+        if version == 0 {
+            return None;
+        }
+
+        if version <= self.base_migrations.len() {
+            return Some(self.base_migrations[version - 1].name());
+        }
+
+        self.code_migrations
+            .get(version - self.base_migrations.len() - 1)
+            .map(Migration::name)
     }
 }

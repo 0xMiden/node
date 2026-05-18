@@ -99,6 +99,42 @@ mod tests {
     }
 
     #[test]
+    fn builder_asserts_schema_hash_for_version() -> Result<()> {
+        let reference = Connection::open_in_memory()?;
+        reference.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+        let expected = SchemaHash::new(&reference)?;
+
+        let _migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .assert_schema_hash(1, expected)?
+            .build();
+
+        Ok(())
+    }
+
+    #[test]
+    fn builder_reports_schema_hash_assertion_mismatch() -> Result<()> {
+        let result = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .assert_schema_hash(
+                1,
+                SchemaHash::from_hex(
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                ),
+            );
+
+        let Err(err) = result else {
+            panic!("schema hash assertion should fail");
+        };
+
+        assert!(
+            err.to_string()
+                .contains("schema hash mismatch for migration 1 \"create items\"")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn applies_missing_code_migrations_to_existing_database() -> Result<()> {
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?

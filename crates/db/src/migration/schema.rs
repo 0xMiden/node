@@ -9,6 +9,25 @@ use sha2::{Digest, Sha256};
 pub struct SchemaHash([u8; 32]);
 
 impl SchemaHash {
+    /// Parses a schema hash from its hex representation.
+    ///
+    /// This is a `const fn` so invalid hash constants fail at compile time.
+    pub const fn from_hex(hex: &str) -> Self {
+        assert!(hex.len() == 64, "schema hash must be 64 hex characters");
+
+        let mut hash = [0_u8; 32];
+        let bytes = hex.as_bytes();
+        let mut idx = 0;
+        while idx < 32 {
+            let high = hex_digit(bytes[idx * 2]);
+            let low = hex_digit(bytes[idx * 2 + 1]);
+            hash[idx] = (high << 4) | low;
+            idx += 1;
+        }
+
+        Self(hash)
+    }
+
     /// Computes the schema hash for `conn`.
     pub fn new(conn: &Connection) -> Result<Self> {
         let mut stmt = conn
@@ -64,6 +83,15 @@ fn normalize_sql(sql: &str) -> String {
         .join(" ")
 }
 
+const fn hex_digit(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => panic!("invalid schema hash hex digit"),
+    }
+}
+
 pub fn get_version(conn: &Connection) -> Result<usize> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     ensure!(version >= 0, "database user_version is negative: {version}");
@@ -80,4 +108,18 @@ fn version_to_user_version(version: usize) -> Result<i32> {
     i32::try_from(version).with_context(|| {
         format!("migration version {version} exceeds SQLite user_version i32 range")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_hash_round_trips_as_hex() {
+        const HASH: SchemaHash = SchemaHash::from_hex(
+            "abababababababababababababababababababababababababababababababab",
+        );
+
+        assert_eq!(HASH.to_string(), "ab".repeat(32));
+    }
 }
