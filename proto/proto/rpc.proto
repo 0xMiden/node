@@ -44,14 +44,14 @@ service Api {
     // --------------------------------------------------------------------------------------------
 
     // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTx(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
     // Submits a batch of transactions to the Miden network.
     //
     // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTxBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
     // STATE SYNCHRONIZATION ENDPOINTS
     // --------------------------------------------------------------------------------------------

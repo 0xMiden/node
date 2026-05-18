@@ -100,8 +100,8 @@ impl Rpc {
             // web-clients (which would experience CORS rejection).
             .layer(
                 AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
-                    .with_genesis_enforced_method("SubmitProvenTransaction")
-                    .with_genesis_enforced_method("SubmitProvenBatch"),
+                    .with_genesis_enforced_method("SubmitProvenTx")
+                    .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
             .add_service(api_service)
             // Enables gRPC reflection service.

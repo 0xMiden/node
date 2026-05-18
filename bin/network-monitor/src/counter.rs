@@ -283,7 +283,7 @@ impl IncrementService {
 
         let block_height: BlockNumber = self
             .rpc_client
-            .submit_proven_transaction(request)
+            .submit_proven_tx(request)
             .await
             .context("Failed to submit proven transaction to RPC")?
             .into_inner()

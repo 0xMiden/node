@@ -56,12 +56,12 @@ Error handling follows this pattern:
 2. **gRPC Conversion**: Domain errors are converted to gRPC `Status` objects with structured details
 3. **Error Details**: Specific error codes are embedded in `Status.details` as single bytes
 
-### SubmitProvenTransaction Errors
+### SubmitProvenTx Errors
 
 Transaction submission errors are:
 
 ```rust
-enum SubmitProvenTransactionGrpcError {
+enum SubmitProvenTxGrpcError {
     Internal = 0,
     DeserializationFailed = 1,
     InvalidTransactionProof = 2,

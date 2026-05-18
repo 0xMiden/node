@@ -51,7 +51,7 @@ pub struct AcceptHeaderLayer {
     genesis_commitment: Word,
     /// RPC method names for which the `genesis` parameter is mandatory.
     ///
-    /// These should be gRPC method names (e.g. `SubmitProvenTransaction`),
+    /// These should be gRPC method names (e.g. `SubmitProvenTx`),
     /// matched against the end of the request path like "/rpc.Api/<method>".
     require_genesis_methods: Vec<&'static str>,
 }
