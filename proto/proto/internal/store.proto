@@ -287,10 +287,6 @@ message BlockProof {
 
 // Store API for the network transaction builder component
 service NtxBuilder {
-    // Retrieves block header by given block number. Optionally, it also returns the MMR path
-    // and current chain length to authenticate the block's inclusion.
-    rpc GetBlockHeaderByNumber(rpc.BlockHeaderByNumberRequest) returns (rpc.BlockHeaderByNumberResponse) {}
-
     // Returns a paginated list of unconsumed network notes.
     rpc GetUnconsumedNetworkNotes(UnconsumedNetworkNotesRequest) returns (UnconsumedNetworkNotes) {}
 
