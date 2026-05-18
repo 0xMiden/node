@@ -101,6 +101,18 @@ impl Db {
             .await
     }
 
+    /// Returns `true` if any of the supplied nullifiers has been committed on-chain.
+    ///
+    /// Used by an account actor to decide whether its previously submitted transaction has been
+    /// included in a block.
+    pub async fn any_nullifier_committed(&self, nullifiers: Vec<Nullifier>) -> Result<bool> {
+        self.inner
+            .query("any_nullifier_committed", move |conn| {
+                queries::any_nullifier_committed(conn, &nullifiers)
+            })
+            .await
+    }
+
     /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
     /// the latest error message.
     pub async fn notes_failed(

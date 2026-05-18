@@ -146,6 +146,36 @@ pub fn available_notes(
     Ok(result)
 }
 
+/// Returns `true` if any of the supplied nullifiers has been committed
+/// (i.e. has a non-null `committed_at`).
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT 1 FROM notes
+/// WHERE nullifier IN (?1, ?2, ...)
+///   AND committed_at IS NOT NULL
+/// LIMIT 1
+/// ```
+pub fn any_nullifier_committed(
+    conn: &mut SqliteConnection,
+    nullifiers: &[Nullifier],
+) -> Result<bool, DatabaseError> {
+    if nullifiers.is_empty() {
+        return Ok(false);
+    }
+    let nullifier_bytes: Vec<Vec<u8>> =
+        nullifiers.iter().map(conversions::nullifier_to_bytes).collect();
+
+    let hit: Option<i32> = schema::notes::table
+        .filter(schema::notes::nullifier.eq_any(&nullifier_bytes))
+        .filter(schema::notes::committed_at.is_not_null())
+        .select(diesel::dsl::sql::<diesel::sql_types::Integer>("1"))
+        .first(conn)
+        .optional()?;
+    Ok(hit.is_some())
+}
+
 /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
 /// the latest error message.
 ///

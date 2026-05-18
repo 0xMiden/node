@@ -85,6 +85,9 @@ pub struct ActorConfig {
     /// Pre-compiled tx script that sets each submitted transaction's expiration block delta.
     /// Built once at builder startup and shared by all actors.
     pub expiration_script: TransactionScript,
+    /// Same delta encoded in [`Self::expiration_script`], retained so the actor can decide when a
+    /// submitted transaction must have either landed or been dropped.
+    pub tx_expiration_delta: u16,
 }
 
 // ACCOUNT ACTOR CONTEXT
@@ -138,6 +141,7 @@ impl AccountActorContext {
                 idle_timeout: Duration::from_secs(60),
                 max_cycles: 1 << 18,
                 expiration_script: crate::actor::compile_expiration_tx_script(5),
+                tx_expiration_delta: 5,
             },
             request_tx,
         }
@@ -152,10 +156,17 @@ impl AccountActorContext {
 enum ActorMode {
     NoViableNotes,
     NotesAvailable,
-    /// The actor has just submitted a transaction and is waiting for the next coordinator
-    /// notification (a committed block) before doing any more work for this account. This avoids
-    /// busy-looping with the same notes between submit and block commit.
-    WaitForNextBlock,
+    /// The actor has just submitted a transaction and is waiting for it to either land on-chain or
+    /// expire before doing any more work for this account. This avoids busy-looping with the same
+    /// notes between submit and block commit.
+    ///
+    /// Carries the nullifiers of the submitted notes and the chain tip at submission time so we
+    /// can detect on each wake-up whether the tx landed (any nullifier became committed) or
+    /// definitely won't (the chain has advanced past the expiration window).
+    WaitForNextBlock {
+        nullifiers: Vec<Nullifier>,
+        submitted_at: BlockNumber,
+    },
 }
 
 // ACCOUNT ACTOR
@@ -259,7 +270,7 @@ impl AccountActor {
             // Enable or disable transaction execution based on actor mode.
             let tx_permit_acquisition = match mode {
                 // Disable transaction execution.
-                ActorMode::NoViableNotes | ActorMode::WaitForNextBlock => {
+                ActorMode::NoViableNotes | ActorMode::WaitForNextBlock { .. } => {
                     std::future::pending().boxed()
                 },
                 // Enable transaction execution.
@@ -274,9 +285,10 @@ impl AccountActor {
             };
 
             tokio::select! {
-                // Handle coordinator notifications. On notification, re-evaluate state from DB.
+                // Handle coordinator notifications. Whether we re-evaluate depends on whether
+                // an in-flight submission still might land.
                 _ = self.notify.notified() => {
-                    mode = ActorMode::NotesAvailable;
+                    mode = self.on_notified(mode).await?;
                 },
                 // Execute transactions.
                 permit = tx_permit_acquisition => {
@@ -284,6 +296,7 @@ impl AccountActor {
 
                     // Read the chain state.
                     let chain_state = self.state.chain.get_cloned();
+                    let submitted_at = chain_state.chain_tip_header.block_num();
 
                     // Query DB for latest account and available notes.
                     let tx_candidate = self.select_candidate_from_db(
@@ -292,7 +305,14 @@ impl AccountActor {
                     ).await?;
 
                     if let Some(tx_candidate) = tx_candidate {
-                        mode = self.execute_transactions(account_id, tx_candidate).await;
+                        let nullifiers: Vec<Nullifier> = tx_candidate
+                            .notes
+                            .iter()
+                            .map(|n| n.as_note().nullifier())
+                            .collect();
+                        mode = self
+                            .execute_transactions(account_id, tx_candidate, nullifiers, submitted_at)
+                            .await;
                     } else {
                         // No transactions to execute, wait for events.
                         mode = ActorMode::NoViableNotes;
@@ -304,6 +324,44 @@ impl AccountActor {
                     return Ok(());
                 }
             }
+        }
+    }
+
+    /// Decides the next mode when a coordinator notification arrives.
+    ///
+    /// If we are in [`ActorMode::WaitForNextBlock`], we only transition out once either:
+    /// - one of our submitted nullifiers has been recorded as committed in the local DB, or
+    /// - the chain has advanced past the expiration window, in which case the submission must be
+    ///   considered dropped.
+    ///
+    /// While neither holds we stay in `WaitForNextBlock` so the actor does not re-execute and
+    /// re-submit the same notes every block. In any other mode we move to
+    /// [`ActorMode::NotesAvailable`] so the next loop iteration re-queries the DB.
+    async fn on_notified(&self, mode: ActorMode) -> anyhow::Result<ActorMode> {
+        let ActorMode::WaitForNextBlock { nullifiers, submitted_at } = mode else {
+            return Ok(ActorMode::NotesAvailable);
+        };
+
+        let chain_tip = self.state.chain.chain_tip_block_number();
+        let blocks_elapsed = chain_tip.as_u32().saturating_sub(submitted_at.as_u32());
+        let expired = blocks_elapsed >= u32::from(self.config.tx_expiration_delta);
+
+        if expired {
+            // Submission can no longer be included; re-evaluate from scratch.
+            return Ok(ActorMode::NotesAvailable);
+        }
+
+        let landed = self
+            .state
+            .db
+            .any_nullifier_committed(nullifiers.clone())
+            .await
+            .context("failed to check if submitted notes were committed")?;
+
+        if landed {
+            Ok(ActorMode::NotesAvailable)
+        } else {
+            Ok(ActorMode::WaitForNextBlock { nullifiers, submitted_at })
         }
     }
 
@@ -393,11 +451,16 @@ impl AccountActor {
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Returns the new actor mode based on the execution result.
-    #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
+    #[tracing::instrument(
+        name = "ntx.actor.execute_transactions",
+        skip(self, tx_candidate, submitted_nullifiers)
+    )]
     async fn execute_transactions(
         &self,
         account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
+        submitted_nullifiers: Vec<Nullifier>,
+        submitted_at: BlockNumber,
     ) -> ActorMode {
         let block_num = tx_candidate.chain_tip_header.block_num();
 
@@ -437,7 +500,10 @@ impl AccountActor {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                ActorMode::WaitForNextBlock
+                ActorMode::WaitForNextBlock {
+                    nullifiers: submitted_nullifiers,
+                    submitted_at,
+                }
             },
             // Transaction execution failed.
             Err(err) => {

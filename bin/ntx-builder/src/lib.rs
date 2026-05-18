@@ -358,6 +358,7 @@ impl NtxBuilderConfig {
                 idle_timeout: self.idle_timeout,
                 max_cycles: self.max_cycles,
                 expiration_script: actor::compile_expiration_tx_script(self.tx_expiration_delta),
+                tx_expiration_delta: self.tx_expiration_delta,
             },
             request_tx,
         };
