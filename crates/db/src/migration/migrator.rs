@@ -1,25 +1,33 @@
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
-use super::{Migration, MigratorBuilder, SchemaHash, schema};
+use super::{
+    CodeMigration, Migration, MigrationRef, MigratorBuilder, SchemaHash, SqlMigration, schema,
+};
 
 /// Applies base migrations to new databases and code migrations to existing databases.
 #[derive(Debug)]
 pub struct Migrator {
-    base_migrations: Vec<Migration>,
-    code_migrations: Vec<Migration>,
+    base_migrations: Vec<SqlMigration>,
+    code_migrations: Vec<CodeMigration>,
     expected_schema_hashes: Vec<SchemaHash>,
 }
 
 impl Migrator {
     pub(super) fn new(
-        base_migrations: Vec<Migration>,
-        code_migrations: Vec<Migration>,
+        base_migrations: Vec<SqlMigration>,
+        code_migrations: Vec<CodeMigration>,
         expected_schema_hashes: Vec<SchemaHash>,
     ) -> Self {
+        let migration_count = base_migrations.len() + code_migrations.len();
         assert!(
             !expected_schema_hashes.is_empty(),
             "migrator must contain at least one migration"
+        );
+        assert_eq!(
+            expected_schema_hashes.len(),
+            migration_count,
+            "migrator schema hash count must match migration count"
         );
         Self {
             base_migrations,
@@ -55,7 +63,7 @@ impl Migrator {
         if applied_version == 0 {
             for (idx, migration) in self.base_migrations.iter().enumerate() {
                 let version = idx + 1;
-                self.apply_migration(conn, version, migration)?;
+                self.apply_migration(conn, version, MigrationRef::Sql(migration))?;
                 applied_version = version;
             }
         }
@@ -63,7 +71,7 @@ impl Migrator {
         let code_start = applied_version.saturating_sub(base_versions);
         for (idx, migration) in self.code_migrations.iter().enumerate().skip(code_start) {
             let version = base_versions + idx + 1;
-            self.apply_migration(conn, version, migration)?;
+            self.apply_migration(conn, version, MigrationRef::Code(migration))?;
         }
 
         Ok(())
@@ -99,21 +107,22 @@ impl Migrator {
         &self,
         conn: &mut Connection,
         version: usize,
-        migration: &Migration,
+        migration: MigrationRef<'_>,
     ) -> Result<()> {
+        let name = migration.name();
         let tx = conn.transaction().with_context(|| {
-            format!("failed to start transaction for migration {version} \"{}\"", migration.name)
+            format!("failed to start transaction for migration {version} \"{name}\"")
         })?;
 
-        migration.apply(&tx).with_context(|| {
-            format!("failed to apply migration {version} \"{}\"", migration.name)
-        })?;
-        self.verify_migration_schema(&tx, version, migration.name)?;
+        migration
+            .apply(&tx)
+            .with_context(|| format!("failed to apply migration {version} \"{name}\""))?;
+        self.verify_migration_schema(&tx, version, name)?;
         schema::set_version(&tx, version).with_context(|| {
-            format!("failed to update user_version for migration {version} \"{}\"", migration.name)
+            format!("failed to update user_version for migration {version} \"{name}\"")
         })?;
         tx.commit()
-            .with_context(|| format!("failed to commit migration {version} \"{}\"", migration.name))
+            .with_context(|| format!("failed to commit migration {version} \"{name}\""))
     }
 
     fn verify_current_schema(&self, conn: &Connection, version: usize) -> Result<()> {

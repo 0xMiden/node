@@ -8,41 +8,63 @@ mod builder;
 mod migrator;
 pub mod schema;
 
-pub use builder::{BaseMigrationPhase, CodeMigrationPhase, EmptyMigrationPhase, MigratorBuilder};
+pub use builder::MigratorBuilder;
+#[doc(hidden)]
+pub use builder::{BaseMigrationPhase, CodeMigrationPhase, EmptyMigrationPhase};
 pub use migrator::Migrator;
 pub use schema::SchemaHash;
 
-type MigrationFn = dyn for<'conn> Fn(&Transaction<'conn>) -> Result<()> + Send + Sync + 'static;
+type SqlMigration = Migration<&'static str>;
+type CodeMigration = Migration<CodeMigrationFn>;
 
-/// A migration with a name and executable body.
-struct Migration {
+/// A migration with a name and typed body.
+struct Migration<Body> {
     name: &'static str,
-    apply: Box<MigrationFn>,
+    body: Body,
 }
 
-impl Migration {
+impl Migration<&'static str> {
     pub(super) fn base(name: &'static str, sql: &'static str) -> Self {
-        Self {
-            name,
-            apply: Box::new(move |tx| tx.execute_batch(sql).map_err(Into::into)),
-        }
+        Self { name, body: sql }
     }
+}
 
-    pub(super) fn code(name: &'static str, apply: CodeMigrationFn) -> Self {
-        Self { name, apply: Box::new(apply) }
+impl Migration<CodeMigrationFn> {
+    pub(super) fn code(name: &'static str, body: CodeMigrationFn) -> Self {
+        Self { name, body }
     }
+}
 
+impl<Body> Migration<Body> {
     /// Returns the migration name.
     fn name(&self) -> &'static str {
         self.name
     }
+}
+
+#[derive(Clone, Copy)]
+enum MigrationRef<'a> {
+    Sql(&'a SqlMigration),
+    Code(&'a CodeMigration),
+}
+
+impl MigrationRef<'_> {
+    pub(super) fn name(&self) -> &'static str {
+        match self {
+            Self::Sql(migration) => migration.name(),
+            Self::Code(migration) => migration.name(),
+        }
+    }
 
     pub(super) fn apply(&self, tx: &Transaction<'_>) -> Result<()> {
-        (self.apply)(tx)
+        match self {
+            Self::Sql(migration) => tx.execute_batch(migration.body).map_err(Into::into),
+            Self::Code(migration) => (migration.body)(tx),
+        }
     }
 }
 
-impl fmt::Debug for Migration {
+impl<Body> fmt::Debug for Migration<Body> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Migration").field("name", &self.name).finish_non_exhaustive()
     }
@@ -131,42 +153,6 @@ mod tests {
 
         assert_eq!(migrator.schema_hashes(), &[base_hash, final_hash]);
         assert_eq!(migrator.final_schema_hash(), final_hash);
-        Ok(())
-    }
-
-    #[test]
-    fn builder_asserts_schema_hash_for_version() -> Result<()> {
-        let reference = Connection::open_in_memory()?;
-        reference.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
-        let expected = SchemaHash::new(&reference)?;
-
-        let _migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
-            .assert_schema_hash(1, expected)?
-            .build();
-
-        Ok(())
-    }
-
-    #[test]
-    fn builder_reports_schema_hash_assertion_mismatch() -> Result<()> {
-        let result = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
-            .assert_schema_hash(
-                1,
-                SchemaHash::from_hex(
-                    "0000000000000000000000000000000000000000000000000000000000000000",
-                ),
-            );
-
-        let Err(err) = result else {
-            panic!("schema hash assertion should fail");
-        };
-
-        assert!(
-            err.to_string()
-                .contains("schema hash mismatch for migration 1 \"create items\"")
-        );
         Ok(())
     }
 

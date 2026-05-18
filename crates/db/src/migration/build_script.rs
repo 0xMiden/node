@@ -57,11 +57,6 @@ pub(super) fn generate_migrator_to(
     let output_file = output_file.as_ref();
 
     ensure!(
-        migration_dir.is_dir(),
-        "migration path is not a directory: {}",
-        migration_dir.display()
-    );
-    ensure!(
         output_file.file_name() == Some(output_file.as_os_str()),
         "generated migrator output must be a file name, got {}",
         output_file.display()
@@ -69,23 +64,25 @@ pub(super) fn generate_migrator_to(
 
     let out_path = build_rs::input::out_dir().join(output_file);
 
-    emit_rerun_if_changed(migration_dir);
-    let base_migrations = discover_base_migrations(migration_dir)?;
-    let code_migrations = discover_code_migrations(migration_dir)?;
-    ensure!(
-        !base_migrations.is_empty() || !code_migrations.is_empty(),
-        "migration directory contains no migrations: {}",
-        migration_dir.display()
-    );
+    let migrations = discover_migrations(migration_dir)?;
 
-    fs::write(&out_path, render_migrator(&base_migrations, &code_migrations)?)
-        .with_context(|| format!("failed to write generated migrator to {}", out_path.display()))?;
+    fs::write(
+        &out_path,
+        render_migrator(&migrations.base_migrations, &migrations.code_migrations)?,
+    )
+    .with_context(|| format!("failed to write generated migrator to {}", out_path.display()))?;
 
     Ok(out_path)
 }
 
 #[derive(Debug)]
-struct BaseMigration {
+struct DiscoveredMigrations {
+    base_migrations: Vec<SqlMigration>,
+    code_migrations: Vec<CodeMigration>,
+}
+
+#[derive(Debug)]
+struct SqlMigration {
     name: String,
     path: PathBuf,
 }
@@ -97,7 +94,26 @@ struct CodeMigration {
     path: PathBuf,
 }
 
-fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<BaseMigration>> {
+fn discover_migrations(migration_dir: &Path) -> Result<DiscoveredMigrations> {
+    ensure!(
+        migration_dir.is_dir(),
+        "migration path is not a directory: {}",
+        migration_dir.display()
+    );
+
+    emit_rerun_if_changed(migration_dir);
+    let base_migrations = discover_base_migrations(migration_dir)?;
+    let code_migrations = discover_code_migrations(migration_dir)?;
+    ensure!(
+        !base_migrations.is_empty() || !code_migrations.is_empty(),
+        "migration directory contains no migrations: {}",
+        migration_dir.display()
+    );
+
+    Ok(DiscoveredMigrations { base_migrations, code_migrations })
+}
+
+fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<SqlMigration>> {
     let base_dir = migration_dir.join("base");
     emit_rerun_if_changed(&base_dir);
     if !base_dir.exists() {
@@ -121,7 +137,7 @@ fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<BaseMigration>> 
         );
 
         emit_rerun_if_changed(&path);
-        migrations.push(BaseMigration {
+        migrations.push(SqlMigration {
             name: file_stem(&path)?,
             path: absolute_path(&path)?,
         });
@@ -177,7 +193,7 @@ fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> 
 }
 
 fn render_migrator(
-    base_migrations: &[BaseMigration],
+    base_migrations: &[SqlMigration],
     code_migrations: &[CodeMigration],
 ) -> Result<String> {
     let mut source = String::new();
@@ -330,6 +346,63 @@ mod tests {
         assert!(rendered.contains("include_str!("));
         assert!(rendered.contains("migration_003_backfill::migrate"));
 
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_empty_migration_directory() -> Result<()> {
+        let root = unique_temp_dir("rejects_empty_migration_directory")?;
+
+        let err = discover_migrations(&root).expect_err("empty migration directory should fail");
+
+        assert!(err.to_string().contains("contains no migrations"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_base_migration_entries() -> Result<()> {
+        let root = unique_temp_dir("rejects_invalid_base_migration_entries")?;
+        fs::create_dir_all(root.join("base"))?;
+        fs::write(root.join("base").join("001_init.txt"), "CREATE TABLE t (id INTEGER);")?;
+
+        let err = discover_base_migrations(&root).expect_err("invalid base entry should fail");
+
+        assert!(err.to_string().contains("must use .sql extension"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_code_migration_missing_rust_file() -> Result<()> {
+        let root = unique_temp_dir("rejects_code_migration_missing_rust_file")?;
+        fs::create_dir_all(root.join("code").join("001_backfill"))?;
+
+        let err = discover_code_migrations(&root).expect_err("missing migration.rs should fail");
+
+        assert!(err.to_string().contains("is missing migration.rs"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_code_migration_module_identifier_collisions() -> Result<()> {
+        let root = unique_temp_dir("rejects_code_migration_module_identifier_collisions")?;
+        fs::create_dir_all(root.join("code").join("001-backfill"))?;
+        fs::create_dir_all(root.join("code").join("001_backfill"))?;
+        fs::write(
+            root.join("code").join("001-backfill").join(CODE_MIGRATION_FILE),
+            "pub fn migrate(_: &rusqlite::Transaction<'_>) -> anyhow::Result<()> { Ok(()) }",
+        )?;
+        fs::write(
+            root.join("code").join("001_backfill").join(CODE_MIGRATION_FILE),
+            "pub fn migrate(_: &rusqlite::Transaction<'_>) -> anyhow::Result<()> { Ok(()) }",
+        )?;
+
+        let err = discover_code_migrations(&root).expect_err("module collision should fail");
+
+        assert!(err.to_string().contains("module identifier collision"));
         fs::remove_dir_all(root)?;
         Ok(())
     }
