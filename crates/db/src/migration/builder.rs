@@ -23,7 +23,6 @@ impl MigratorBuilder {
 
     /// Adds a pure SQL base migration.
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
-        self.migrator.assert_can_push_base();
         let version = self.migrator.next_version();
         let migration = Migration::base(name, sql);
         let hash: SchemaHash = apply_migration_transaction(
@@ -34,7 +33,7 @@ impl MigratorBuilder {
         )
         .with_context(|| format!("failed to apply base migration {version}: {name}"))?;
 
-        self.migrator.push_base(migration, hash);
+        self.migrator.push_base_unchecked(migration, hash);
         Ok(self)
     }
 
@@ -50,7 +49,7 @@ impl MigratorBuilder {
         )
         .with_context(|| format!("failed to apply code migration {version}: {name}"))?;
 
-        self.migrator.push_code(migration, hash);
+        self.migrator.push_code_unchecked(migration, hash);
         Ok(self)
     }
 

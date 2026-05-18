@@ -28,7 +28,7 @@ impl SchemaHash {
         Self(hash)
     }
 
-    /// Computes the schema hash for `conn`.
+    /// Computes the hash for the database schema.
     pub fn new(conn: &Connection) -> Result<Self> {
         let mut stmt = conn
             .prepare(
