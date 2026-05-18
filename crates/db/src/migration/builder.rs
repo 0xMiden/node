@@ -5,6 +5,43 @@ use super::entry::{CodeMigration, CodeMigrationFn, SqlMigration, apply_migration
 use super::{Migrator, SchemaHash};
 
 /// Builds a [`Migrator`] while computing expected schema hashes on an in-memory database.
+///
+/// ```ignore
+/// use miden_node_db::migration::{Migrator, SchemaHash};
+/// use rusqlite::Transaction;
+///
+/// fn add_item_height(tx: &Transaction<'_>) -> anyhow::Result<()> {
+///     tx.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
+///     Ok(())
+/// }
+///
+/// fn migrator() -> anyhow::Result<Migrator> {
+///     Migrator::builder()?
+///         .push_base(
+///             "001_create_items",
+///             "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);",
+///         )?
+///         .push_code("002_add_item_height", add_item_height)?
+///         .build()
+/// }
+///
+/// const EXPECTED_SCHEMA_HASHES: [SchemaHash; 2] = [
+///     SchemaHash::from_hex(
+///         "1111111111111111111111111111111111111111111111111111111111111111",
+///     ),
+///     SchemaHash::from_hex(
+///         "2222222222222222222222222222222222222222222222222222222222222222",
+///     ),
+/// ];
+///
+/// #[test]
+/// fn migration_schema_hashes_are_stable() -> anyhow::Result<()> {
+///     let migrator = migrator()?;
+///
+///     assert_eq!(migrator.schema_hashes(), &EXPECTED_SCHEMA_HASHES);
+///     Ok(())
+/// }
+/// ```
 pub struct MigratorBuilder {
     /// Connection to an in-memory SQLite database used to verify the migrations as they are added.
     reference: Connection,

@@ -25,6 +25,31 @@ impl Migrator {
     ///
     /// // src/lib.rs
     /// include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
+    ///
+    /// #[cfg(test)]
+    /// mod tests {
+    ///     use miden_node_db::migration::SchemaHash;
+    ///
+    ///     const EXPECTED_SCHEMA_HASHES: [SchemaHash; 3] = [
+    ///         SchemaHash::from_hex(
+    ///             "1111111111111111111111111111111111111111111111111111111111111111",
+    ///         ),
+    ///         SchemaHash::from_hex(
+    ///             "2222222222222222222222222222222222222222222222222222222222222222",
+    ///         ),
+    ///         SchemaHash::from_hex(
+    ///             "3333333333333333333333333333333333333333333333333333333333333333",
+    ///         ),
+    ///     ];
+    ///
+    ///     #[test]
+    ///     fn migration_schema_hashes_are_stable() -> anyhow::Result<()> {
+    ///         let migrator = super::migrator()?;
+    ///
+    ///         assert_eq!(migrator.schema_hashes(), &EXPECTED_SCHEMA_HASHES);
+    ///         Ok(())
+    ///     }
+    /// }
     /// ```
     ///
     /// The expected layout is:
