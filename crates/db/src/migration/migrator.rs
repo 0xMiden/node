@@ -41,6 +41,11 @@ impl Migrator {
             .expect("migrator must contain at least one schema hash")
     }
 
+    /// Returns the schema hashes expected after each migration.
+    pub fn schema_hashes(&self) -> &[SchemaHash] {
+        &self.expected_schema_hashes
+    }
+
     /// Applies missing migrations to `conn`.
     pub fn migrate(&self, conn: &mut Connection) -> Result<()> {
         let current_version = self.version_check(conn)?;

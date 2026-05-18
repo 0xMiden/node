@@ -117,19 +117,20 @@ mod tests {
     }
 
     #[test]
-    fn exposes_final_schema_hash() -> Result<()> {
+    fn exposes_schema_hashes() -> Result<()> {
         let reference = Connection::open_in_memory()?;
-        reference.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT, height INTEGER);",
-        )?;
-        let expected = SchemaHash::new(&reference)?;
+        reference.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+        let base_hash = SchemaHash::new(&reference)?;
+        reference.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
+        let final_hash = SchemaHash::new(&reference)?;
 
         let migrator = Migrator::builder()?
             .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
             .push_code("add item height", add_item_height)?
             .build();
 
-        assert_eq!(migrator.final_schema_hash(), expected);
+        assert_eq!(migrator.schema_hashes(), &[base_hash, final_hash]);
+        assert_eq!(migrator.final_schema_hash(), final_hash);
         Ok(())
     }
 
