@@ -4,7 +4,19 @@ use anyhow::{Context, Result, ensure};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
-/// A schema hash computed from ordered schema entries in `sqlite_schema`.
+/// A schema fingerprint computed from ordered entries in `sqlite_schema`.
+///
+/// The hash includes each non-internal schema object's type, name, table name, and normalized SQL.
+/// Normalization trims trailing semicolons and collapses whitespace, then entries are ordered by
+/// object type, name, and table name before hashing. This makes the hash stable across object
+/// creation order while still detecting changes to tables, indexes, views, triggers, constraints,
+/// and object names.
+///
+/// This is a drift-detection fingerprint, not a semantic SQLite schema model. It does not parse SQL
+/// or understand equivalent SQL forms. For example, two semantically equivalent declarations can
+/// hash differently if SQLite stores their SQL text differently, while behavior not represented in
+/// `sqlite_schema.sql` is outside the hash. SQLite-internal objects whose names start with
+/// `sqlite_` are intentionally ignored.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SchemaHash([u8; 32]);
 
@@ -29,6 +41,8 @@ impl SchemaHash {
     }
 
     /// Computes the hash for the database schema.
+    ///
+    /// See [`SchemaHash`] for what is included and the limits of this fingerprint.
     pub fn new(conn: &Connection) -> Result<Self> {
         let mut stmt = conn
             .prepare(
