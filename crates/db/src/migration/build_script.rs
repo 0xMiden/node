@@ -68,6 +68,11 @@ pub fn generate_migrator_to(
     emit_rerun_if_changed(migration_dir);
     let base_migrations = discover_base_migrations(migration_dir)?;
     let code_migrations = discover_code_migrations(migration_dir)?;
+    ensure!(
+        !base_migrations.is_empty() || !code_migrations.is_empty(),
+        "migration directory contains no migrations: {}",
+        migration_dir.display()
+    );
 
     fs::write(&out_path, render_migrator(&base_migrations, &code_migrations)?)
         .with_context(|| format!("failed to write generated migrator to {}", out_path.display()))?;

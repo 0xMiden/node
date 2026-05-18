@@ -5,14 +5,17 @@ use rusqlite::Connection;
 
 use super::{CodeMigrationFn, Migration, Migrator, SchemaHash, schema};
 
-/// Builder phase which allows adding base migrations.
+/// Builder phase before any migrations have been added.
+pub enum EmptyMigrationPhase {}
+
+/// Builder phase which allows adding more base migrations.
 pub enum BaseMigrationPhase {}
 
 /// Builder phase after code migrations have started.
 pub enum CodeMigrationPhase {}
 
 /// Builds a [`Migrator`] while computing expected schema hashes on an in-memory database.
-pub struct MigratorBuilder<Phase = BaseMigrationPhase> {
+pub struct MigratorBuilder<Phase = EmptyMigrationPhase> {
     /// Connection to an in-memory SQLite database used to verify the migrations as they are added.
     reference: Connection,
     /// List of base migrations added so far.
@@ -28,7 +31,7 @@ pub struct MigratorBuilder<Phase = BaseMigrationPhase> {
     _phase: PhantomData<Phase>,
 }
 
-impl MigratorBuilder<BaseMigrationPhase> {
+impl MigratorBuilder<EmptyMigrationPhase> {
     pub(super) fn new() -> Result<Self> {
         let reference = Connection::open_in_memory()
             .context("failed to create in-memory migration database")?;
@@ -43,7 +46,70 @@ impl MigratorBuilder<BaseMigrationPhase> {
     }
 
     /// Adds a pure SQL base migration.
+    pub fn push_base(
+        mut self,
+        name: &'static str,
+        sql: &'static str,
+    ) -> Result<MigratorBuilder<BaseMigrationPhase>> {
+        self.apply_base(name, sql)?;
+        Ok(self.into_phase())
+    }
+
+    /// Adds a Rust migration function.
+    pub fn push_code(
+        mut self,
+        name: &'static str,
+        apply: CodeMigrationFn,
+    ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
+        self.apply_code(name, apply)?;
+        Ok(self.into_phase())
+    }
+}
+
+impl MigratorBuilder<BaseMigrationPhase> {
+    /// Adds a pure SQL base migration.
     pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
+        self.apply_base(name, sql)?;
+        Ok(self)
+    }
+
+    /// Adds a Rust migration function.
+    pub fn push_code(
+        mut self,
+        name: &'static str,
+        apply: CodeMigrationFn,
+    ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
+        self.apply_code(name, apply)?;
+        Ok(self.into_phase())
+    }
+}
+
+impl MigratorBuilder<CodeMigrationPhase> {
+    /// Adds a Rust migration function.
+    pub fn push_code(mut self, name: &'static str, apply: CodeMigrationFn) -> Result<Self> {
+        self.apply_code(name, apply)?;
+        Ok(self)
+    }
+}
+
+impl MigratorBuilder<BaseMigrationPhase> {
+    /// Returns a migrator containing all migrations and their expected schema hashes.
+    #[must_use]
+    pub fn build(self) -> Migrator {
+        Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
+    }
+}
+
+impl MigratorBuilder<CodeMigrationPhase> {
+    /// Returns a migrator containing all migrations and their expected schema hashes.
+    #[must_use]
+    pub fn build(self) -> Migrator {
+        Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
+    }
+}
+
+impl<T> MigratorBuilder<T> {
+    fn apply_base(&mut self, name: &'static str, sql: &'static str) -> Result<()> {
         let version = self.schema_hashes.len() + 1;
         let migration = Migration::base(name, sql);
         let hash = Self::apply_migration(&mut self.reference, version, &migration)
@@ -51,16 +117,10 @@ impl MigratorBuilder<BaseMigrationPhase> {
 
         self.base_migrations.push(migration);
         self.schema_hashes.push(hash);
-        Ok(self)
+        Ok(())
     }
-}
 
-impl<T> MigratorBuilder<T> {
-    pub fn push_code(
-        mut self,
-        name: &'static str,
-        apply: CodeMigrationFn,
-    ) -> Result<MigratorBuilder<CodeMigrationPhase>> {
+    fn apply_code(&mut self, name: &'static str, apply: CodeMigrationFn) -> Result<()> {
         let version = self.schema_hashes.len() + 1;
         let migration = Migration::code(name, apply);
         let hash = Self::apply_migration(&mut self.reference, version, &migration)
@@ -68,19 +128,17 @@ impl<T> MigratorBuilder<T> {
 
         self.code_migrations.push(migration);
         self.schema_hashes.push(hash);
-        Ok(MigratorBuilder {
+        Ok(())
+    }
+
+    fn into_phase<Next>(self) -> MigratorBuilder<Next> {
+        MigratorBuilder {
             reference: self.reference,
             base_migrations: self.base_migrations,
             code_migrations: self.code_migrations,
             schema_hashes: self.schema_hashes,
             _phase: PhantomData,
-        })
-    }
-
-    /// Returns a migrator containing all migrations and their expected schema hashes.
-    #[must_use]
-    pub fn build(self) -> Migrator {
-        Migrator::new(self.base_migrations, self.code_migrations, self.schema_hashes)
+        }
     }
 
     /// Asserts that the schema hash for a migration version matches `expected`.

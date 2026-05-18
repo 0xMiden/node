@@ -8,7 +8,7 @@ mod builder;
 mod migrator;
 pub mod schema;
 
-pub use builder::{BaseMigrationPhase, CodeMigrationPhase, MigratorBuilder};
+pub use builder::{BaseMigrationPhase, CodeMigrationPhase, EmptyMigrationPhase, MigratorBuilder};
 pub use migrator::Migrator;
 pub use schema::SchemaHash;
 
@@ -75,6 +75,11 @@ mod tests {
         Ok(())
     }
 
+    fn create_items_table(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
+        Ok(())
+    }
+
     fn object_exists(conn: &Connection, name: &str) -> Result<bool> {
         let exists = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)",
@@ -96,6 +101,35 @@ mod tests {
 
         assert_eq!(schema::get_version(&conn)?, 2);
         conn.execute("INSERT INTO items (id, value, height) VALUES (1, 'a', 10)", [])?;
+        Ok(())
+    }
+
+    #[test]
+    fn migrates_new_database_with_code_only_migration() -> Result<()> {
+        let migrator = Migrator::builder()?.push_code("create items", create_items_table)?.build();
+
+        let mut conn = Connection::open_in_memory()?;
+        migrator.migrate(&mut conn)?;
+
+        assert_eq!(schema::get_version(&conn)?, 1);
+        conn.execute("INSERT INTO items (id, value) VALUES (1, 'a')", [])?;
+        Ok(())
+    }
+
+    #[test]
+    fn exposes_final_schema_hash() -> Result<()> {
+        let reference = Connection::open_in_memory()?;
+        reference.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT, height INTEGER);",
+        )?;
+        let expected = SchemaHash::new(&reference)?;
+
+        let migrator = Migrator::builder()?
+            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_code("add item height", add_item_height)?
+            .build();
+
+        assert_eq!(migrator.final_schema_hash(), expected);
         Ok(())
     }
 

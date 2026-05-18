@@ -17,6 +17,10 @@ impl Migrator {
         code_migrations: Vec<Migration>,
         expected_schema_hashes: Vec<SchemaHash>,
     ) -> Self {
+        assert!(
+            !expected_schema_hashes.is_empty(),
+            "migrator must contain at least one migration"
+        );
         Self {
             base_migrations,
             code_migrations,
@@ -27,6 +31,14 @@ impl Migrator {
     /// Creates a migration builder backed by an in-memory SQLite database.
     pub fn builder() -> Result<MigratorBuilder> {
         MigratorBuilder::new()
+    }
+
+    /// Returns the schema hash expected after all migrations have been applied.
+    pub fn final_schema_hash(&self) -> SchemaHash {
+        *self
+            .expected_schema_hashes
+            .last()
+            .expect("migrator must contain at least one schema hash")
     }
 
     /// Applies missing migrations to `conn`.
