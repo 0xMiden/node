@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use fs_err as fs;
 
 use super::Migrator;
@@ -42,37 +43,29 @@ impl Migrator {
     /// migration name is the file stem. Code migrations are loaded from lexicographically sorted
     /// folders in `code`; the migration name is the folder name. Each code folder must contain
     /// [`CODE_MIGRATION_FILE`] and that file must expose a `pub fn migrate(...)` matching
-    /// [`super::CodeMigrationFn`].
+    /// [`super::CodeMigrationFn`]. Relative migration paths are resolved from the package manifest
+    /// directory, i.e. the crate root.
     pub fn generate(migration_dir: impl AsRef<Path>) -> Result<PathBuf> {
-        generate_migrator_to(migration_dir, GENERATED_MIGRATOR_FILE)
+        let migration_dir = migration_dir_path(migration_dir.as_ref());
+        build_rs::output::rerun_if_changed(&migration_dir);
+
+        let out_path = build_rs::input::out_dir().join(GENERATED_MIGRATOR_FILE);
+        let migrations = discover_migrations(&migration_dir)?;
+        fs::write(
+            &out_path,
+            render_migrator(&migrations.base_migrations, &migrations.code_migrations)?,
+        )
+        .with_context(|| format!("failed to write generated migrator to {}", out_path.display()))?;
+        Ok(out_path)
     }
 }
 
-/// Generates Rust source for a migrator into a specific file name under `OUT_DIR`.
-pub(super) fn generate_migrator_to(
-    migration_dir: impl AsRef<Path>,
-    output_file: impl AsRef<Path>,
-) -> Result<PathBuf> {
-    let migration_dir = migration_dir.as_ref();
-    let output_file = output_file.as_ref();
-
-    ensure!(
-        output_file.file_name() == Some(output_file.as_os_str()),
-        "generated migrator output must be a file name, got {}",
-        output_file.display()
-    );
-
-    let out_path = build_rs::input::out_dir().join(output_file);
-
-    let migrations = discover_migrations(migration_dir)?;
-
-    fs::write(
-        &out_path,
-        render_migrator(&migrations.base_migrations, &migrations.code_migrations)?,
-    )
-    .with_context(|| format!("failed to write generated migrator to {}", out_path.display()))?;
-
-    Ok(out_path)
+fn migration_dir_path(migration_dir: &Path) -> PathBuf {
+    if migration_dir.is_absolute() {
+        migration_dir.to_path_buf()
+    } else {
+        build_rs::input::cargo_manifest_dir().join(migration_dir)
+    }
 }
 
 #[derive(Debug)]
@@ -101,7 +94,6 @@ fn discover_migrations(migration_dir: &Path) -> Result<DiscoveredMigrations> {
         migration_dir.display()
     );
 
-    emit_rerun_if_changed(migration_dir);
     let base_migrations = discover_base_migrations(migration_dir)?;
     let code_migrations = discover_code_migrations(migration_dir)?;
     ensure!(
@@ -115,7 +107,6 @@ fn discover_migrations(migration_dir: &Path) -> Result<DiscoveredMigrations> {
 
 fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<SqlMigration>> {
     let base_dir = migration_dir.join("base");
-    emit_rerun_if_changed(&base_dir);
     if !base_dir.exists() {
         return Ok(Vec::new());
     }
@@ -136,7 +127,6 @@ fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<SqlMigration>> {
             path.display()
         );
 
-        emit_rerun_if_changed(&path);
         migrations.push(SqlMigration {
             name: file_stem(&path)?,
             path: absolute_path(&path)?,
@@ -148,7 +138,6 @@ fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<SqlMigration>> {
 
 fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> {
     let code_dir = migration_dir.join("code");
-    emit_rerun_if_changed(&code_dir);
     if !code_dir.exists() {
         return Ok(Vec::new());
     }
@@ -159,6 +148,9 @@ fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> 
         code_dir.display()
     );
 
+    // Folder names are converted into Rust module identifiers lossy, e.g. `001-backfill` and
+    // `001_backfill` both become `migration_001_backfill`. To prevent this, we track seen
+    // identifiers and reject any collisions.
     let mut seen_idents = HashSet::new();
     let mut migrations = Vec::new();
     for entry in read_dir_sorted(&code_dir)? {
@@ -180,8 +172,6 @@ fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> 
             CODE_MIGRATION_FILE
         );
 
-        emit_rerun_if_changed(&path);
-        emit_rerun_if_changed(&migration_rs);
         migrations.push(CodeMigration {
             name,
             module_ident,
@@ -192,6 +182,22 @@ fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> 
     Ok(migrations)
 }
 
+/// Renders the Rust source written by [`Migrator::generate`].
+///
+/// For one base migration named `001_initial` and one code migration named `002_backfill`,
+/// the generated file has this shape:
+///
+/// ```ignore
+/// #[path = "/path/to/migrations/code/002_backfill/migration.rs"]
+/// mod migration_002_backfill;
+///
+/// pub fn migrator() -> ::anyhow::Result<::miden_node_db::migration::Migrator> {
+///     ::miden_node_db::migration::Migrator::builder()?
+///         .push_base("001_initial", include_str!("/path/to/migrations/base/001_initial.sql"))?
+///         .push_code("002_backfill", migration_002_backfill::migrate)?
+///         .build()
+/// }
+/// ```
 fn render_migrator(
     base_migrations: &[SqlMigration],
     code_migrations: &[CodeMigration],
@@ -200,7 +206,8 @@ fn render_migrator(
 
     for migration in code_migrations {
         source.push_str("#[path = ");
-        push_rust_string(&mut source, rust_path(&migration.path)?);
+        write!(&mut source, "{:?}", rust_path(&migration.path)?)
+            .expect("writing to a String cannot fail");
         source.push_str("]\n");
         source.push_str("mod ");
         source.push_str(&migration.module_ident);
@@ -213,26 +220,27 @@ fn render_migrator(
 
     source.push_str(
         "pub fn migrator() -> ::anyhow::Result<::miden_node_db::migration::Migrator> {\n    \
-         let migrator = ::miden_node_db::migration::Migrator::builder()?",
+         ::miden_node_db::migration::Migrator::builder()?",
     );
 
     for migration in base_migrations {
         source.push_str("\n        .push_base(");
-        push_rust_string(&mut source, &migration.name);
+        write!(&mut source, "{:?}", migration.name).expect("writing to a String cannot fail");
         source.push_str(", include_str!(");
-        push_rust_string(&mut source, rust_path(&migration.path)?);
+        write!(&mut source, "{:?}", rust_path(&migration.path)?)
+            .expect("writing to a String cannot fail");
         source.push_str("))?");
     }
 
     for migration in code_migrations {
         source.push_str("\n        .push_code(");
-        push_rust_string(&mut source, &migration.name);
+        write!(&mut source, "{:?}", migration.name).expect("writing to a String cannot fail");
         source.push_str(", ");
         source.push_str(&migration.module_ident);
         source.push_str("::migrate)?");
     }
 
-    source.push_str("\n        .build()?;\n    Ok(migrator)\n}\n");
+    source.push_str("\n        .build()\n}\n");
     Ok(source)
 }
 
@@ -265,55 +273,34 @@ fn file_stem(path: &Path) -> Result<String> {
     })
 }
 
+/// Converts a migration folder name into a Rust module identifier.
+///
+/// The generated identifier is prefixed with `migration_`, ASCII alphanumeric characters are
+/// lowercased, and every other character is replaced with `_`. For example,
+/// `001--Backfill-Accounts` becomes `migration_001__backfill_accounts`.
 fn module_ident(name: &str) -> Result<String> {
-    let mut ident = String::from("migration_");
-    let mut has_name_part = false;
-    let mut last_was_underscore = true;
+    ensure!(
+        name.chars().any(|ch| ch.is_ascii_alphanumeric()),
+        "migration name {name:?} cannot be converted to a Rust module identifier"
+    );
 
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            ident.push(ch.to_ascii_lowercase());
-            has_name_part = true;
-            last_was_underscore = false;
-        } else if !last_was_underscore {
-            ident.push('_');
-            last_was_underscore = true;
-        }
-    }
+    let ident = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
 
-    if last_was_underscore {
-        ident.pop();
-    }
-
-    if !has_name_part {
-        bail!("migration name {name:?} cannot be converted to a Rust module identifier");
-    }
-
-    Ok(ident)
+    Ok(format!("migration_{ident}"))
 }
 
 fn rust_path(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("migration path is not valid UTF-8: {}", path.display()))
-}
-
-fn push_rust_string(source: &mut String, value: &str) {
-    source.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => source.push_str("\\\\"),
-            '"' => source.push_str("\\\""),
-            '\n' => source.push_str("\\n"),
-            '\r' => source.push_str("\\r"),
-            '\t' => source.push_str("\\t"),
-            ch => source.push(ch),
-        }
-    }
-    source.push('"');
-}
-
-fn emit_rerun_if_changed(path: &Path) {
-    build_rs::output::rerun_if_changed(path);
 }
 
 #[cfg(test)]
@@ -345,7 +332,8 @@ mod tests {
         assert!(indexes < backfill);
         assert!(rendered.contains("include_str!("));
         assert!(rendered.contains("migration_003_backfill::migrate"));
-        assert!(rendered.contains(".build()?;"));
+        assert!(rendered.contains(".build()\n}\n"));
+        assert!(!rendered.contains("Ok(migrator)"));
 
         fs::remove_dir_all(root)?;
         Ok(())
@@ -406,6 +394,23 @@ mod tests {
         assert!(err.to_string().contains("module identifier collision"));
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn module_ident_preserves_repeated_separators() -> Result<()> {
+        assert_eq!(module_ident("001--backfill")?, "migration_001__backfill");
+        Ok(())
+    }
+
+    #[test]
+    fn migration_dir_path_resolves_relative_paths_from_manifest_dir() {
+        assert_eq!(
+            migration_dir_path(Path::new("migrations")),
+            build_rs::input::cargo_manifest_dir().join("migrations")
+        );
+
+        let absolute = env::temp_dir().join("miden-node-db-absolute-migrations");
+        assert_eq!(migration_dir_path(&absolute), absolute);
     }
 
     fn unique_temp_dir(name: &str) -> Result<PathBuf> {

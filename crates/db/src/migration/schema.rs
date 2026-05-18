@@ -11,7 +11,7 @@ pub struct SchemaHash([u8; 32]);
 impl SchemaHash {
     /// Parses a schema hash from its hex representation.
     ///
-    /// This is a `const fn` so invalid hash constants fail at compile time.
+    /// Expects exactly 64 hex characters and panics otherwise.
     pub const fn from_hex(hex: &str) -> Self {
         assert!(hex.len() == 64, "schema hash must be 64 hex characters");
 
@@ -67,11 +67,6 @@ impl SchemaHash {
         let mut hash = [0_u8; 32];
         hash.copy_from_slice(&digest);
         Ok(Self(hash))
-    }
-
-    /// Returns the raw hash bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
     }
 }
 
