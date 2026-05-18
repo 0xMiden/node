@@ -30,7 +30,7 @@ use miden_protocol::account::{
     AccountStorageMode,
     AccountType,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
 use miden_protocol::utils::serde::Serializable;
@@ -81,6 +81,36 @@ fn build_test_proven_tx(
         AccountStorageMode::Public,
     );
 
+    let account_update = TxAccountUpdate::new(
+        account_id,
+        [8; 32].try_into().unwrap(),
+        account.to_commitment(),
+        delta.to_commitment(),
+        AccountUpdateDetails::Delta(delta.clone()),
+    )
+    .unwrap();
+
+    ProvenTransaction::new(
+        account_update,
+        Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
+        Vec::<miden_protocol::transaction::OutputNote>::new(),
+        0.into(),
+        genesis,
+        test_fee(),
+        u32::MAX.into(),
+        ExecutionProof::new_dummy(),
+    )
+    .unwrap()
+}
+
+/// Same as `build_test_proven_tx` but lets the caller supply the `AccountId`. Uses a non-empty
+/// `initial_state_commitment` so the result is a post-deployment tx.
+fn build_test_proven_tx_with_id(
+    account_id: AccountId,
+    account: &Account,
+    delta: &AccountDelta,
+    genesis: Word,
+) -> ProvenTransaction {
     let account_update = TxAccountUpdate::new(
         account_id,
         [8; 32].try_into().unwrap(),
@@ -391,6 +421,63 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 }
 
 #[tokio::test]
+async fn rpc_rejects_post_deployment_network_account_tx() {
+    let (_, rpc_addr, store_listener) = start_rpc().await;
+    let (store_runtime, data_directory, genesis, _store_addr) = start_store(store_listener).await;
+
+    // Wait for the store to be ready before sending requests.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Build a client that advertises the right `application/vnd.miden` content type so
+    // tx-submission requests reach the handler.
+    let mut rpc_client =
+        miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())
+            .without_tls()
+            .with_timeout(Duration::from_secs(5))
+            .without_metadata_version()
+            .with_metadata_genesis(genesis.to_hex())
+            .without_otel_context_injection()
+            .connect_lazy::<miden_node_proto::clients::RpcClient>();
+
+    // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
+    // The store uses WAL mode so a secondary connection is safe.
+    let network_account_id = AccountId::dummy(
+        [7u8; 15],
+        AccountIdVersion::Version1,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Public,
+    );
+    miden_node_store::test_support::seed_network_account(
+        &data_directory.path().join("miden-store.sqlite3"),
+        network_account_id,
+    );
+
+    // Build a non-deployment tx for that account.
+    let (account, account_delta) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx_with_id(network_account_id, &account, &account_delta, genesis);
+    let request = proto::transaction::ProvenTransaction {
+        transaction: tx.to_bytes(),
+        transaction_inputs: None,
+    };
+
+    let response = rpc_client.submit_proven_tx(request).await;
+    assert!(response.is_err());
+    let err = response.as_ref().unwrap_err().message();
+    assert!(
+        err.contains("Network transactions may not be submitted by users yet"),
+        "expected the network-tx gate error, got: {err}"
+    );
+
+    shutdown_store(store_runtime).await;
+}
+
+// Batch-path coverage for the network-account gate is provided manually. Building a valid
+// `ProposedBatch` + `ProvenBatch` in this test harness would require duplicating LocalBatchProver
+// setup. The query layer is covered by the unit test in store::db::tests, and the gRPC wiring is
+// the same as `submit_proven_transaction` (covered by
+// `rpc_rejects_post_deployment_network_account_tx`).
+
+#[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
     // Start the RPC.
     let (_, rpc_addr, store_listener) = start_rpc().await;
@@ -527,7 +614,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
     let data_directory = tempfile::tempdir().expect("tempdir should be created");
 
     let config = GenesisConfig::default();
-    let signer = SecretKey::new();
+    let signer = SigningKey::new();
     let (genesis_state, _) = config.into_state(signer.public_key()).unwrap();
     let genesis_block = genesis_state
         .clone()
@@ -710,25 +797,26 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     for i in 0..5u32 {
         let chain_commitment = server_mmr.peaks().hash_peaks();
         let header = BlockHeader::mock(i, Some(chain_commitment), None, &[], Word::default());
-        server_mmr.add(header.commitment());
+        server_mmr.add(header.commitment()).unwrap();
         headers.push(header);
     }
 
     // Client bootstraps with genesis.
-    let mut client_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
-    client_mmr.add(headers[0].commitment(), false);
+    let mut client_mmr =
+        PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0).unwrap(), vec![]).unwrap());
+    client_mmr.add(headers[0].commitment(), false).unwrap();
 
     // First delta: block_from=0, block_to=2, so from_forest=1, to_forest=2.
-    let delta = server_mmr.get_delta(Forest::new(1), Forest::new(2)).unwrap();
+    let delta = server_mmr.get_delta(Forest::new(1).unwrap(), Forest::new(2).unwrap()).unwrap();
     client_mmr.apply(delta).unwrap();
     assert_eq!(client_mmr.peaks().hash_peaks(), headers[2].chain_commitment());
-    client_mmr.add(headers[2].commitment(), false);
+    client_mmr.add(headers[2].commitment(), false).unwrap();
 
     // Second delta: block_from=2, block_to=4, so from_forest=3, to_forest=4.
-    let delta = server_mmr.get_delta(Forest::new(3), Forest::new(4)).unwrap();
+    let delta = server_mmr.get_delta(Forest::new(3).unwrap(), Forest::new(4).unwrap()).unwrap();
     client_mmr.apply(delta).unwrap();
     assert_eq!(client_mmr.peaks().hash_peaks(), headers[4].chain_commitment());
-    client_mmr.add(headers[4].commitment(), false);
+    client_mmr.add(headers[4].commitment(), false).unwrap();
 
     assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
 }

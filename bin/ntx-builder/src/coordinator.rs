@@ -274,21 +274,19 @@ impl Coordinator {
             // transaction has been applied, and in the future also resolves race conditions with
             // external network transactions (once these are allowed).
             if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
-                let account_id = delta.id();
-                if account_id.is_network() {
-                    let network_account_id =
-                        account_id.try_into().expect("account is network account");
-                    if self.actor_registry.contains_key(&network_account_id) {
-                        target_account_ids.insert(network_account_id);
-                    }
+                // The actor registry only contains accounts the builder has already classified as
+                // network. Wrap the id unconditionally and let the registry lookup filter for us;
+                // unknown accounts simply won't match.
+                let network_account_id = NetworkAccountId::new_trusted(delta.id());
+                if self.actor_registry.contains_key(&network_account_id) {
+                    target_account_ids.insert(network_account_id);
                 }
             }
 
             // Determine target actors for each note.
             for note in network_notes {
                 let account = note.target_account_id();
-                let account = NetworkAccountId::try_from(account)
-                    .expect("network note target account should be a network account");
+                let account = NetworkAccountId::new_trusted(account);
 
                 if self.actor_registry.contains_key(&account) {
                     target_account_ids.insert(account);

@@ -55,7 +55,7 @@ pub async fn bench_get_account(
     let mut account_ids: Vec<AccountId> = accounts
         .lines()
         .map(|a| AccountId::from_hex(a).expect("invalid account id"))
-        .filter(AccountId::has_public_state)
+        .filter(AccountId::is_public)
         .collect();
 
     assert!(

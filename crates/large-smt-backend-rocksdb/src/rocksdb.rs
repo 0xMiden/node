@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use std::mem::ManuallyDrop;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,7 +25,14 @@ use rocksdb::{
     WriteOptions,
 };
 
-use super::{SmtStorage, StorageError, StorageUpdateParts, StorageUpdates, SubtreeUpdate};
+use super::{
+    SmtStorage,
+    SmtStorageReader,
+    StorageError,
+    StorageUpdateParts,
+    StorageUpdates,
+    SubtreeUpdate,
+};
 use crate::helpers::{insert_into_leaf, map_rocksdb_err, remove_from_leaf};
 use crate::{EMPTY_WORD, Word};
 
@@ -317,71 +325,297 @@ impl RocksDbStorage {
         };
         KeyBytes::new(index.position(), keep)
     }
+}
 
-    /// Retrieves a handle to a `RocksDB` column family by its name.
-    ///
-    /// # Errors
-    /// Returns `StorageError::Backend` if the column family with the given `name` does not
-    /// exist.
+// READ-SOURCE TRAIT
+// --------------------------------------------------------------------------------------------
+
+/// Internal abstraction over reading from either the live `DB` ([`RocksDbStorage`]) or a
+/// point-in-time `Snapshot` ([`RocksDbSnapshotStorage`]).
+///
+/// The two storage types each implement this trait by providing the few low-level operations
+/// (`db`, `get_cf_bytes`, `multi_get_cf_bytes`, optional `apply_snapshot`); the shared
+/// `SmtStorageReader` logic lives in the default methods below so it is written once.
+trait RocksReadSource: Send + Sync + 'static {
+    fn db(&self) -> &DB;
+
+    fn get_cf_bytes(
+        &self,
+        cf: &rocksdb::ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, rocksdb::Error>;
+
+    fn multi_get_cf_bytes<'b, K, I, W>(
+        &self,
+        keys_cf: I,
+    ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = (&'b W, K)>,
+        W: rocksdb::AsColumnFamilyRef + 'b;
+
+    fn apply_snapshot(&self, _read_opts: &mut ReadOptions) {}
+
     fn cf_handle(&self, name: &str) -> Result<&rocksdb::ColumnFamily, StorageError> {
-        self.db
+        self.db()
             .cf_handle(name)
             .ok_or_else(|| StorageError::Unsupported(format!("unknown column family `{name}`")))
     }
 
-    /* helper: CF handle from NodeIndex ------------------------------------- */
     #[inline(always)]
     fn subtree_cf(&self, index: NodeIndex) -> &rocksdb::ColumnFamily {
-        let name = cf_for_depth(index.depth());
-        self.cf_handle(name).expect("CF handle missing")
+        self.cf_handle(cf_for_depth(index.depth())).expect("CF handle missing")
+    }
+
+    fn read_count_impl(&self, what: &'static str, key: &[u8]) -> Result<usize, StorageError> {
+        let cf = self.cf_handle(METADATA_CF)?;
+        self.get_cf_bytes(cf, key).map_err(map_rocksdb_err)?.map_or(Ok(0), |bytes| {
+            let arr: [u8; 8] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| StorageError::BadValueLen { what, expected: 8, found: bytes.len() })?;
+            Ok(usize::from_be_bytes(arr))
+        })
+    }
+
+    fn leaf_count_impl(&self) -> Result<usize, StorageError> {
+        self.read_count_impl("leaf count", LEAF_COUNT_KEY)
+    }
+
+    fn entry_count_impl(&self) -> Result<usize, StorageError> {
+        self.read_count_impl("entry count", ENTRY_COUNT_KEY)
+    }
+
+    fn get_leaf_impl(&self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
+        let cf = self.cf_handle(LEAVES_CF)?;
+        let key = RocksDbStorage::index_db_key(index);
+        match self.get_cf_bytes(cf, &key).map_err(map_rocksdb_err)? {
+            Some(bytes) => Ok(Some(SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?)),
+            None => Ok(None),
+        }
+    }
+
+    fn get_leaves_impl(&self, indices: &[u64]) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
+        let cf = self.cf_handle(LEAVES_CF)?;
+        let db_keys: Vec<[u8; 8]> =
+            indices.iter().map(|&idx| RocksDbStorage::index_db_key(idx)).collect();
+        let results = self.multi_get_cf_bytes(db_keys.iter().map(|k| (cf, k.as_ref())));
+        results
+            .into_iter()
+            .map(|result| match result {
+                Ok(Some(bytes)) => {
+                    Ok(Some(SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?))
+                },
+                Ok(None) => Ok(None),
+                Err(e) => Err(map_rocksdb_err(e)),
+            })
+            .collect()
+    }
+
+    fn has_leaves_impl(&self) -> Result<bool, StorageError> {
+        Ok(self.leaf_count_impl()? > 0)
+    }
+
+    fn get_subtree_impl(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
+        let cf = self.subtree_cf(index);
+        let key = RocksDbStorage::subtree_db_key(index);
+        match self.get_cf_bytes(cf, key.as_ref()).map_err(map_rocksdb_err)? {
+            Some(bytes) => Ok(Some(Subtree::from_vec(index, &bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Batch-retrieves subtrees grouped by depth via parallel `multi_get` calls, one per depth
+    /// bucket.
+    ///
+    /// Note: when multiple buckets error, only the first one observed by `collect` is propagated.
+    fn get_subtrees_impl(
+        &self,
+        indices: &[NodeIndex],
+    ) -> Result<Vec<Option<Subtree>>, StorageError> {
+        use rayon::prelude::*;
+
+        let mut depth_buckets: [Vec<(usize, NodeIndex)>; 5] = Default::default();
+
+        for (original_index, &node_index) in indices.iter().enumerate() {
+            let depth = node_index.depth();
+            let bucket_index = match depth {
+                56 => 0,
+                48 => 1,
+                40 => 2,
+                32 => 3,
+                24 => 4,
+                _ => {
+                    return Err(StorageError::Unsupported(format!(
+                        "unsupported subtree depth {depth}"
+                    )));
+                },
+            };
+            depth_buckets[bucket_index].push((original_index, node_index));
+        }
+        let mut results = vec![None; indices.len()];
+
+        let bucket_results: Result<Vec<_>, StorageError> = depth_buckets
+            .into_par_iter()
+            .enumerate()
+            .filter(|(_, bucket)| !bucket.is_empty())
+            .map(
+                |(bucket_index, bucket)| -> Result<Vec<(usize, Option<Subtree>)>, StorageError> {
+                    let depth = SUBTREE_DEPTHS[bucket_index];
+                    let cf = self.cf_handle(cf_for_depth(depth))?;
+                    let keys: Vec<_> = bucket
+                        .iter()
+                        .map(|(_, idx)| RocksDbStorage::subtree_db_key(*idx))
+                        .collect();
+
+                    let db_results = self.multi_get_cf_bytes(keys.iter().map(|k| (cf, k.as_ref())));
+
+                    bucket
+                        .into_iter()
+                        .zip(db_results)
+                        .map(|((original_index, node_index), db_result)| {
+                            let subtree = match db_result {
+                                Ok(Some(bytes)) => Some(Subtree::from_vec(node_index, &bytes)?),
+                                Ok(None) => None,
+                                Err(e) => return Err(map_rocksdb_err(e)),
+                            };
+                            Ok((original_index, subtree))
+                        })
+                        .collect()
+                },
+            )
+            .collect();
+
+        for bucket_result in bucket_results? {
+            for (original_index, subtree) in bucket_result {
+                results[original_index] = subtree;
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn get_inner_node_impl(&self, index: NodeIndex) -> Result<Option<InnerNode>, StorageError> {
+        if index.depth() < IN_MEMORY_DEPTH {
+            return Err(StorageError::Unsupported(
+                "Cannot get inner node from upper part of the tree".into(),
+            ));
+        }
+        let subtree_root_index = Subtree::find_subtree_root(index);
+        Ok(self
+            .get_subtree_impl(subtree_root_index)?
+            .and_then(|subtree| subtree.get_inner_node(index)))
+    }
+
+    fn iter_leaves_impl(
+        &self,
+    ) -> Result<Box<dyn Iterator<Item = (u64, SmtLeaf)> + '_>, StorageError> {
+        let cf = self.cf_handle(LEAVES_CF)?;
+        let mut read_opts = ReadOptions::default();
+        read_opts.set_total_order_seek(true);
+        self.apply_snapshot(&mut read_opts);
+        let db_iter = self.db().iterator_cf_opt(cf, read_opts, IteratorMode::Start);
+        Ok(Box::new(RocksDbDirectLeafIterator { iter: db_iter }))
+    }
+
+    fn iter_subtrees_impl(&self) -> Result<Box<dyn Iterator<Item = Subtree> + '_>, StorageError> {
+        const SUBTREE_CFS: [&str; 5] =
+            [SUBTREE_24_CF, SUBTREE_32_CF, SUBTREE_40_CF, SUBTREE_48_CF, SUBTREE_56_CF];
+
+        let mut cf_handles = Vec::new();
+        for cf_name in SUBTREE_CFS {
+            cf_handles.push(self.cf_handle(cf_name)?);
+        }
+        let configure = move |opts: &mut ReadOptions| self.apply_snapshot(opts);
+        Ok(Box::new(RocksDbSubtreeIterator::new(self.db(), cf_handles, configure)))
+    }
+
+    fn get_depth24_impl(&self) -> Result<Vec<(u64, Word)>, StorageError> {
+        let cf = self.cf_handle(DEPTH_24_CF)?;
+        let mut read_opts = ReadOptions::default();
+        self.apply_snapshot(&mut read_opts);
+        let iter = self.db().iterator_cf_opt(cf, read_opts, IteratorMode::Start);
+        let mut hashes = Vec::new();
+        for item in iter {
+            let (key_bytes, value_bytes) = item.map_err(map_rocksdb_err)?;
+            let index = index_from_key_bytes(&key_bytes)?;
+            let hash = Word::read_from_bytes_with_budget(&value_bytes, value_bytes.len())?;
+            hashes.push((index, hash));
+        }
+        Ok(hashes)
+    }
+}
+
+impl RocksReadSource for RocksDbStorage {
+    fn db(&self) -> &DB {
+        &self.db
+    }
+
+    fn get_cf_bytes(
+        &self,
+        cf: &rocksdb::ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, rocksdb::Error> {
+        self.db.get_cf(cf, key)
+    }
+
+    fn multi_get_cf_bytes<'b, K, I, W>(
+        &self,
+        keys_cf: I,
+    ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = (&'b W, K)>,
+        W: rocksdb::AsColumnFamilyRef + 'b,
+    {
+        self.db.multi_get_cf(keys_cf)
+    }
+}
+
+impl SmtStorageReader for RocksDbStorage {
+    fn leaf_count(&self) -> Result<usize, StorageError> {
+        self.leaf_count_impl()
+    }
+    fn entry_count(&self) -> Result<usize, StorageError> {
+        self.entry_count_impl()
+    }
+    fn get_leaf(&self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
+        self.get_leaf_impl(index)
+    }
+    fn get_leaves(&self, indices: &[u64]) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
+        self.get_leaves_impl(indices)
+    }
+    fn has_leaves(&self) -> Result<bool, StorageError> {
+        self.has_leaves_impl()
+    }
+    fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
+        self.get_subtree_impl(index)
+    }
+    fn get_subtrees(&self, indices: &[NodeIndex]) -> Result<Vec<Option<Subtree>>, StorageError> {
+        self.get_subtrees_impl(indices)
+    }
+    fn get_inner_node(&self, index: NodeIndex) -> Result<Option<InnerNode>, StorageError> {
+        self.get_inner_node_impl(index)
+    }
+    fn iter_leaves(&self) -> Result<Box<dyn Iterator<Item = (u64, SmtLeaf)> + '_>, StorageError> {
+        self.iter_leaves_impl()
+    }
+    fn iter_subtrees(&self) -> Result<Box<dyn Iterator<Item = Subtree> + '_>, StorageError> {
+        self.iter_subtrees_impl()
+    }
+    fn get_depth24(&self) -> Result<Vec<(u64, Word)>, StorageError> {
+        self.get_depth24_impl()
     }
 }
 
 impl SmtStorage for RocksDbStorage {
-    /// Retrieves the total count of non-empty leaves from the `METADATA_CF` column family.
-    /// Returns 0 if the count is not found.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the metadata column family is missing or a RocksDB error
-    ///   occurs.
-    /// - `StorageError::BadValueLen`: If the retrieved count bytes are invalid.
-    fn leaf_count(&self) -> Result<usize, StorageError> {
-        let cf = self.cf_handle(METADATA_CF)?;
-        self.db
-            .get_cf(cf, LEAF_COUNT_KEY)
-            .map_err(map_rocksdb_err)?
-            .map_or(Ok(0), |bytes| {
-                let arr: [u8; 8] =
-                    bytes.as_slice().try_into().map_err(|_| StorageError::BadValueLen {
-                        what: "leaf count",
-                        expected: 8,
-                        found: bytes.len(),
-                    })?;
-                Ok(usize::from_be_bytes(arr))
-            })
-    }
+    type Reader = RocksDbSnapshotStorage;
 
-    /// Retrieves the total count of key-value entries from the `METADATA_CF` column family.
-    /// Returns 0 if the count is not found.
+    /// Returns a read-only point-in-time snapshot of the underlying RocksDB.
     ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the metadata column family is missing or a RocksDB error
-    ///   occurs.
-    /// - `StorageError::BadValueLen`: If the retrieved count bytes are invalid.
-    fn entry_count(&self) -> Result<usize, StorageError> {
-        let cf = self.cf_handle(METADATA_CF)?;
-        self.db
-            .get_cf(cf, ENTRY_COUNT_KEY)
-            .map_err(map_rocksdb_err)?
-            .map_or(Ok(0), |bytes| {
-                let arr: [u8; 8] =
-                    bytes.as_slice().try_into().map_err(|_| StorageError::BadValueLen {
-                        what: "entry count",
-                        expected: 8,
-                        found: bytes.len(),
-                    })?;
-                Ok(usize::from_be_bytes(arr))
-            })
+    /// Subsequent writes through `self` do not affect the returned reader.
+    fn reader(&self) -> Result<Self::Reader, StorageError> {
+        Ok(RocksDbSnapshotStorage::new(self.db.clone()))
     }
 
     /// Inserts a key-value pair into the SMT leaf at the specified logical `index`.
@@ -503,23 +737,6 @@ impl SmtStorage for RocksDbStorage {
         Ok(current_value)
     }
 
-    /// Retrieves a single SMT leaf node by its logical `index` from the `LEAVES_CF` column family.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the leaves column family is missing or a RocksDB error occurs.
-    /// - `StorageError::DeserializationError`: If the retrieved leaf data is corrupt.
-    fn get_leaf(&self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
-        let cf = self.cf_handle(LEAVES_CF)?;
-        let key = Self::index_db_key(index);
-        match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
-            Some(bytes) => {
-                let leaf = SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?;
-                Ok(Some(leaf))
-            },
-            None => Ok(None),
-        }
-    }
-
     /// Sets or updates multiple SMT leaf nodes in the `LEAVES_CF` column family.
     ///
     /// This method performs a batch write to RocksDB. It also updates the global
@@ -573,144 +790,6 @@ impl SmtStorage for RocksDbStorage {
             SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())
                 .expect("failed to deserialize leaf")
         }))
-    }
-
-    /// Retrieves multiple SMT leaf nodes by their logical `indices` using RocksDB's `multi_get_cf`.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the leaves column family is missing or a RocksDB error occurs.
-    /// - `StorageError::DeserializationError`: If any retrieved leaf data is corrupt.
-    fn get_leaves(&self, indices: &[u64]) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
-        let cf = self.cf_handle(LEAVES_CF)?;
-        let db_keys: Vec<[u8; 8]> = indices.iter().map(|&idx| Self::index_db_key(idx)).collect();
-        let results = self.db.multi_get_cf(db_keys.iter().map(|k| (cf, k.as_ref())));
-
-        results
-            .into_iter()
-            .map(|result| match result {
-                Ok(Some(bytes)) => {
-                    Ok(Some(SmtLeaf::read_from_bytes_with_budget(&bytes, bytes.len())?))
-                },
-                Ok(None) => Ok(None),
-                Err(e) => Err(map_rocksdb_err(e)),
-            })
-            .collect()
-    }
-
-    /// Returns true if the storage has any leaves.
-    ///
-    /// # Errors
-    /// Returns `StorageError` if the storage read operation fails.
-    fn has_leaves(&self) -> Result<bool, StorageError> {
-        Ok(self.leaf_count()? > 0)
-    }
-
-    /// Batch-retrieves multiple subtrees from RocksDB by their node indices.
-    ///
-    /// This method groups requests by subtree depth into column family buckets,
-    /// then performs parallel `multi_get` operations to efficiently retrieve
-    /// all subtrees. Results are deserialized and placed in the same order as
-    /// the input indices.
-    ///
-    /// Note: Retrieval is performed in parallel. If multiple errors occur (e.g.,
-    /// deserialization or backend errors), only the first one encountered is returned.
-    /// Other errors will be discarded.
-    ///
-    /// # Parameters
-    /// - `indices`: A slice of subtree root indices to retrieve.
-    ///
-    /// # Returns
-    /// - A `Vec<Option<Subtree>>` where each index corresponds to the original input.
-    /// - `Ok(...)` if all fetches succeed.
-    /// - `Err(StorageError)` if any RocksDB access or deserialization fails.
-    fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
-        let cf = self.subtree_cf(index);
-        let key = Self::subtree_db_key(index);
-        match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
-            Some(bytes) => {
-                let subtree = Subtree::from_vec(index, &bytes)?;
-                Ok(Some(subtree))
-            },
-            None => Ok(None),
-        }
-    }
-
-    /// Batch-retrieves multiple subtrees from RocksDB by their node indices.
-    ///
-    /// This method groups requests by subtree depth into column family buckets,
-    /// then performs parallel `multi_get` operations to efficiently retrieve
-    /// all subtrees. Results are deserialized and placed in the same order as
-    /// the input indices.
-    ///
-    /// # Parameters
-    /// - `indices`: A slice of subtree root indices to retrieve.
-    ///
-    /// # Returns
-    /// - A `Vec<Option<Subtree>>` where each index corresponds to the original input.
-    /// - `Ok(...)` if all fetches succeed.
-    /// - `Err(StorageError)` if any RocksDB access or deserialization fails.
-    fn get_subtrees(&self, indices: &[NodeIndex]) -> Result<Vec<Option<Subtree>>, StorageError> {
-        use rayon::prelude::*;
-
-        let mut depth_buckets: [Vec<(usize, NodeIndex)>; 5] = Default::default();
-
-        for (original_index, &node_index) in indices.iter().enumerate() {
-            let depth = node_index.depth();
-            let bucket_index = match depth {
-                56 => 0,
-                48 => 1,
-                40 => 2,
-                32 => 3,
-                24 => 4,
-                _ => {
-                    return Err(StorageError::Unsupported(format!(
-                        "unsupported subtree depth {depth}"
-                    )));
-                },
-            };
-            depth_buckets[bucket_index].push((original_index, node_index));
-        }
-        let mut results = vec![None; indices.len()];
-
-        // Process depth buckets in parallel
-        let bucket_results: Result<Vec<_>, StorageError> = depth_buckets
-            .into_par_iter()
-            .enumerate()
-            .filter(|(_, bucket)| !bucket.is_empty())
-            .map(
-                |(bucket_index, bucket)| -> Result<Vec<(usize, Option<Subtree>)>, StorageError> {
-                    let depth = SUBTREE_DEPTHS[bucket_index];
-                    let cf = self.cf_handle(cf_for_depth(depth))?;
-                    let keys: Vec<_> =
-                        bucket.iter().map(|(_, idx)| Self::subtree_db_key(*idx)).collect();
-
-                    let db_results = self.db.multi_get_cf(keys.iter().map(|k| (cf, k.as_ref())));
-
-                    // Process results for this bucket
-                    bucket
-                        .into_iter()
-                        .zip(db_results)
-                        .map(|((original_index, node_index), db_result)| {
-                            let subtree = match db_result {
-                                Ok(Some(bytes)) => Some(Subtree::from_vec(node_index, &bytes)?),
-                                Ok(None) => None,
-                                Err(e) => return Err(map_rocksdb_err(e)),
-                            };
-                            Ok((original_index, subtree))
-                        })
-                        .collect()
-                },
-            )
-            .collect();
-
-        // Flatten results and place them in correct positions
-        for bucket_result in bucket_results? {
-            for (original_index, subtree) in bucket_result {
-                results[original_index] = subtree;
-            }
-        }
-
-        Ok(results)
     }
 
     /// Stores a single subtree in RocksDB and optionally updates the depth-24 root cache.
@@ -806,27 +885,6 @@ impl SmtStorage for RocksDbStorage {
 
         self.write_batch(batch)?;
         Ok(())
-    }
-
-    /// Retrieves a single inner node (non-leaf node) from within a Subtree.
-    ///
-    /// This method is intended for accessing nodes at depths greater than or equal to
-    /// `IN_MEMORY_DEPTH`. It first finds the appropriate Subtree containing the `index`, then
-    /// delegates to `Subtree::get_inner_node()`.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If `index.depth() < IN_MEMORY_DEPTH`, or if RocksDB errors occur.
-    /// - `StorageError::Value`: If the containing Subtree data is corrupt.
-    fn get_inner_node(&self, index: NodeIndex) -> Result<Option<InnerNode>, StorageError> {
-        if index.depth() < IN_MEMORY_DEPTH {
-            return Err(StorageError::Unsupported(
-                "Cannot get inner node from upper part of the tree".into(),
-            ));
-        }
-        let subtree_root_index = Subtree::find_subtree_root(index);
-        Ok(self
-            .get_subtree(subtree_root_index)?
-            .and_then(|subtree| subtree.get_inner_node(index)))
     }
 
     /// Sets or updates a single inner node (non-leaf node) within a Subtree.
@@ -995,70 +1053,6 @@ impl SmtStorage for RocksDbStorage {
 
         Ok(())
     }
-
-    /// Returns an iterator over all (logical u64 index, `SmtLeaf`) pairs in the `LEAVES_CF`.
-    ///
-    /// The iterator uses a RocksDB snapshot for consistency and iterates in lexicographical
-    /// order of the keys (leaf indices). Errors during iteration (e.g., deserialization issues)
-    /// cause the iterator to skip the problematic item and attempt to continue.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the leaves column family is missing or a RocksDB error occurs
-    ///   during iterator creation.
-    fn iter_leaves(&self) -> Result<Box<dyn Iterator<Item = (u64, SmtLeaf)> + '_>, StorageError> {
-        let cf = self.cf_handle(LEAVES_CF)?;
-        let mut read_opts = ReadOptions::default();
-        read_opts.set_total_order_seek(true);
-        let db_iter = self.db.iterator_cf_opt(cf, read_opts, IteratorMode::Start);
-
-        Ok(Box::new(RocksDbDirectLeafIterator { iter: db_iter }))
-    }
-
-    /// Returns an iterator over all `Subtree` instances across all subtree column families.
-    ///
-    /// The iterator uses a RocksDB snapshot and iterates in lexicographical order of keys
-    /// (subtree root NodeIndex) across all depth column families (24, 32, 40, 48, 56).
-    /// Errors during iteration (e.g., deserialization issues) cause the iterator to skip
-    /// the problematic item and attempt to continue.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If any subtree column family is missing or a RocksDB error occurs
-    ///   during iterator creation.
-    fn iter_subtrees(&self) -> Result<Box<dyn Iterator<Item = Subtree> + '_>, StorageError> {
-        // All subtree column family names in order
-        const SUBTREE_CFS: [&str; 5] =
-            [SUBTREE_24_CF, SUBTREE_32_CF, SUBTREE_40_CF, SUBTREE_48_CF, SUBTREE_56_CF];
-
-        let mut cf_handles = Vec::new();
-        for cf_name in SUBTREE_CFS {
-            cf_handles.push(self.cf_handle(cf_name)?);
-        }
-
-        Ok(Box::new(RocksDbSubtreeIterator::new(&self.db, cf_handles)))
-    }
-
-    /// Retrieves all depth 24 hashes for fast tree rebuilding.
-    ///
-    /// # Errors
-    /// - `StorageError::Backend`: If the depth24 column family is missing or a RocksDB error
-    ///   occurs.
-    /// - `StorageError::Value`: If any hash bytes are corrupt.
-    fn get_depth24(&self) -> Result<Vec<(u64, Word)>, StorageError> {
-        let cf = self.cf_handle(DEPTH_24_CF)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
-        let mut hashes = Vec::new();
-
-        for item in iter {
-            let (key_bytes, value_bytes) = item.map_err(map_rocksdb_err)?;
-
-            let index = index_from_key_bytes(&key_bytes)?;
-            let hash = Word::read_from_bytes_with_budget(&value_bytes, value_bytes.len())?;
-
-            hashes.push((index, hash));
-        }
-
-        Ok(hashes)
-    }
 }
 
 /// Syncs the RocksDB database to disk before dropping the storage.
@@ -1105,18 +1099,28 @@ impl Iterator for RocksDbDirectLeafIterator<'_> {
 ///
 /// Iterates through all subtree column families (24, 32, 40, 48, 56) sequentially.
 /// When one column family is exhausted, it moves to the next one.
+///
+/// The `configure` hook is called whenever a new per-CF iterator is built; it is used by the
+/// snapshot-backed source to attach its `Snapshot` to the per-CF `ReadOptions`, and is a no-op for
+/// the live-DB source.
 struct RocksDbSubtreeIterator<'a> {
     db: &'a DB,
     cf_handles: Vec<&'a rocksdb::ColumnFamily>,
+    configure: Box<dyn Fn(&mut ReadOptions) + 'a>,
     current_cf_index: usize,
     current_iter: Option<DBIteratorWithThreadMode<'a, DB>>,
 }
 
 impl<'a> RocksDbSubtreeIterator<'a> {
-    fn new(db: &'a DB, cf_handles: Vec<&'a rocksdb::ColumnFamily>) -> Self {
+    fn new<F: Fn(&mut ReadOptions) + 'a>(
+        db: &'a DB,
+        cf_handles: Vec<&'a rocksdb::ColumnFamily>,
+        configure: F,
+    ) -> Self {
         let mut iterator = Self {
             db,
             cf_handles,
+            configure: Box::new(configure),
             current_cf_index: 0,
             current_iter: None,
         };
@@ -1129,6 +1133,7 @@ impl<'a> RocksDbSubtreeIterator<'a> {
             let cf = self.cf_handles[self.current_cf_index];
             let mut read_opts = ReadOptions::default();
             read_opts.set_total_order_seek(true);
+            (self.configure)(&mut read_opts);
             self.current_iter = Some(self.db.iterator_cf_opt(cf, read_opts, IteratorMode::Start));
         } else {
             self.current_iter = None;
@@ -1594,5 +1599,140 @@ fn cf_for_depth(depth: u8) -> &'static str {
         48 => SUBTREE_48_CF,
         56 => SUBTREE_56_CF,
         _ => panic!("unsupported subtree depth: {depth}"),
+    }
+}
+
+// SNAPSHOT STORAGE
+// --------------------------------------------------------------------------------------------
+
+/// Read-only point-in-time view over [`RocksDbStorage`].
+///
+/// Wraps a `rocksdb::Snapshot` together with the `Arc<DB>` it borrows from so the snapshot
+/// stays valid for the lifetime of this value. Used as [`SmtStorage::Reader`].
+pub struct RocksDbSnapshotStorage {
+    inner: Arc<RocksDbSnapshotInner>,
+}
+
+impl std::fmt::Debug for RocksDbSnapshotStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocksDbSnapshotStorage").finish_non_exhaustive()
+    }
+}
+
+/// Owns a RocksDB snapshot alongside the database it borrows from.
+///
+/// `rocksdb::Snapshot<'a>` borrows the DB used to create it, but `SmtStorage::Reader` must be
+/// `'static`, so we store the `Arc<DB>` next to the snapshot and rely on field-drop ordering
+/// (snapshot first via `ManuallyDrop`, then the `Arc<DB>`) to keep the borrow valid.
+///
+/// This mirrors the `RocksDbSnapshotInner` defined upstream in
+/// `miden_crypto::merkle::smt::large::storage::rocksdb` (≥0.25); see that module for the same
+/// SAFETY rationale.
+struct RocksDbSnapshotInner {
+    snapshot: ManuallyDrop<rocksdb::Snapshot<'static>>,
+    db: Arc<DB>,
+}
+
+impl RocksDbSnapshotInner {
+    fn new(db: Arc<DB>) -> Self {
+        let snapshot = db.snapshot();
+        // SAFETY: The snapshot internally borrows the `DB` allocation owned by `db`. This struct
+        // keeps that `Arc<DB>` alive and its `Drop` impl releases the snapshot before the `Arc` is
+        // dropped by Rust's normal field cleanup, so the borrow stays valid for the snapshot's
+        // entire lifetime. Mirrors the identical pattern used upstream in
+        // `miden_crypto::merkle::smt::large::storage::rocksdb::RocksDbSnapshotInner`.
+        let snapshot = unsafe {
+            core::mem::transmute::<rocksdb::Snapshot<'_>, rocksdb::Snapshot<'static>>(snapshot)
+        };
+        Self {
+            snapshot: ManuallyDrop::new(snapshot),
+            db,
+        }
+    }
+}
+
+impl Drop for RocksDbSnapshotInner {
+    fn drop(&mut self) {
+        // SAFETY: `snapshot` is only wrapped in `ManuallyDrop` to control field-drop order. We drop
+        // it exactly once here, before `db` is dropped by Rust's normal field cleanup. Mirrors the
+        // upstream `RocksDbSnapshotInner::drop` in `miden_crypto`.
+        unsafe {
+            ManuallyDrop::drop(&mut self.snapshot);
+        }
+    }
+}
+
+impl RocksDbSnapshotStorage {
+    /// Builds a snapshot-backed reader from a shared RocksDB handle.
+    pub fn new(db: Arc<DB>) -> Self {
+        Self {
+            inner: Arc::new(RocksDbSnapshotInner::new(db)),
+        }
+    }
+}
+
+impl RocksReadSource for RocksDbSnapshotStorage {
+    fn db(&self) -> &DB {
+        &self.inner.db
+    }
+
+    fn get_cf_bytes(
+        &self,
+        cf: &rocksdb::ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, rocksdb::Error> {
+        self.inner.snapshot.get_cf(cf, key)
+    }
+
+    fn multi_get_cf_bytes<'b, K, I, W>(
+        &self,
+        keys_cf: I,
+    ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = (&'b W, K)>,
+        W: rocksdb::AsColumnFamilyRef + 'b,
+    {
+        self.inner.snapshot.multi_get_cf(keys_cf)
+    }
+
+    fn apply_snapshot(&self, read_opts: &mut ReadOptions) {
+        read_opts.set_snapshot(&self.inner.snapshot);
+    }
+}
+
+impl SmtStorageReader for RocksDbSnapshotStorage {
+    fn leaf_count(&self) -> Result<usize, StorageError> {
+        self.leaf_count_impl()
+    }
+    fn entry_count(&self) -> Result<usize, StorageError> {
+        self.entry_count_impl()
+    }
+    fn get_leaf(&self, index: u64) -> Result<Option<SmtLeaf>, StorageError> {
+        self.get_leaf_impl(index)
+    }
+    fn get_leaves(&self, indices: &[u64]) -> Result<Vec<Option<SmtLeaf>>, StorageError> {
+        self.get_leaves_impl(indices)
+    }
+    fn has_leaves(&self) -> Result<bool, StorageError> {
+        self.has_leaves_impl()
+    }
+    fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
+        self.get_subtree_impl(index)
+    }
+    fn get_subtrees(&self, indices: &[NodeIndex]) -> Result<Vec<Option<Subtree>>, StorageError> {
+        self.get_subtrees_impl(indices)
+    }
+    fn get_inner_node(&self, index: NodeIndex) -> Result<Option<InnerNode>, StorageError> {
+        self.get_inner_node_impl(index)
+    }
+    fn iter_leaves(&self) -> Result<Box<dyn Iterator<Item = (u64, SmtLeaf)> + '_>, StorageError> {
+        self.iter_leaves_impl()
+    }
+    fn iter_subtrees(&self) -> Result<Box<dyn Iterator<Item = Subtree> + '_>, StorageError> {
+        self.iter_subtrees_impl()
+    }
+    fn get_depth24(&self) -> Result<Vec<(u64, Word)>, StorageError> {
+        self.get_depth24_impl()
     }
 }

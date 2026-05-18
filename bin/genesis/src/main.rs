@@ -94,7 +94,7 @@ fn run(
     // Create bridge account (NoAuth, nonce=0), then bump nonce to 1 for genesis.
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let bridge_seed: [u64; 4] = rng.random();
-    let bridge_seed = Word::from(bridge_seed.map(Felt::new));
+    let bridge_seed = Word::from(bridge_seed.map(Felt::new_unchecked));
     let bridge = create_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
 
     // Bump bridge nonce to 1 (required for genesis accounts). File-loaded accounts via [[account]]
@@ -158,7 +158,7 @@ path = "bridge.mac"
 fn generate_falcon_keypair() -> (falcon512_poseidon2::PublicKey, FalconSecretKey) {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let auth_seed: [u64; 4] = rng.random();
-    let mut coin = RandomCoin::new(Word::from(auth_seed.map(Felt::new)));
+    let mut coin = RandomCoin::new(Word::from(auth_seed.map(Felt::new_unchecked)));
     let secret_key = FalconSecretKey::with_rng(&mut coin);
     let public_key = secret_key.public_key();
     (public_key, secret_key)
@@ -197,7 +197,7 @@ fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
 #[cfg(test)]
 mod tests {
     use miden_node_store::genesis::config::GenesisConfig;
-    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::utils::serde::Serializable;
 
     use super::*;
@@ -208,7 +208,7 @@ mod tests {
         let bridge_id = AccountFile::read(dir.join("bridge.mac")).unwrap().account.id();
 
         let config = GenesisConfig::read_toml_file(&dir.join("genesis.toml")).unwrap();
-        let signer = SecretKey::read_from_bytes(&[0x01; 32]).unwrap();
+        let signer = SigningKey::read_from_bytes(&[0x01; 32]).unwrap();
         let (state, _) = config.into_state(signer.public_key()).unwrap();
 
         let bridge = state.accounts.iter().find(|a| a.id() == bridge_id).unwrap();

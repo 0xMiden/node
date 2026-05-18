@@ -356,7 +356,10 @@ impl<B: Backend> AccountStateForest<B> {
         let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
         let assets = entries
             .take(AccountVaultDetails::MAX_RETURN_ENTRIES + 1)
-            .map(|entry| Asset::from_key_value_words(entry.key, entry.value))
+            .map(|entry| {
+                let entry = entry.map_err(Self::map_forest_error_to_witness)?;
+                Asset::from_key_value_words(entry.key, entry.value).map_err(WitnessError::from)
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(AccountVaultDetails::from_assets(assets))
@@ -402,12 +405,12 @@ impl<B: Backend> AccountStateForest<B> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
         let tree = self.get_tree_id(lineage, block_num)?;
 
-        Some(
-            self.forest
-                .entries(tree)
-                .map_err(Self::map_forest_error)
-                .map(|entries| entries.take(limit).map(|entry| (entry.key, entry.value)).collect()),
-        )
+        Some(self.forest.entries(tree).map_err(Self::map_forest_error).and_then(|entries| {
+            entries
+                .take(limit)
+                .map(|entry| entry.map(|e| (e.key, e.value)).map_err(Self::map_forest_error))
+                .collect()
+        }))
     }
 
     /// Returns all storage map entries when the forest and reverse-key cache contain enough data.
@@ -725,7 +728,7 @@ impl<B: Backend> AccountStateForest<B> {
                 asset.add(delta)?
             };
 
-            let value = if updated.amount() == 0 {
+            let value = if updated.amount().as_u64() == 0 {
                 EMPTY_WORD
             } else {
                 updated.to_value_word()

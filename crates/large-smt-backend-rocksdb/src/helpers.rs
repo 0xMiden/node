@@ -1,5 +1,4 @@
 use miden_crypto::merkle::smt::{MAX_LEAF_ENTRIES, SmtLeaf, SmtLeafError};
-use miden_crypto::word::LexicographicWord;
 use rocksdb::Error as RocksDbError;
 
 use crate::{StorageError, Word};
@@ -25,30 +24,28 @@ pub(crate) fn insert_into_leaf(
                 Ok(Some(old_value))
             } else {
                 let mut pairs = vec![*kv_pair, (key, value)];
-                pairs.sort_by(|(key_1, _), (key_2, _)| {
-                    LexicographicWord::from(*key_1).cmp(&LexicographicWord::from(*key_2))
-                });
+                pairs.sort_by(|(key_1, _), (key_2, _)| key_1.cmp(key_2));
                 *leaf = SmtLeaf::Multiple(pairs);
                 Ok(None)
             }
         },
-        SmtLeaf::Multiple(kv_pairs) => match kv_pairs.binary_search_by(|kv_pair| {
-            LexicographicWord::from(kv_pair.0).cmp(&LexicographicWord::from(key))
-        }) {
-            Ok(pos) => {
-                let old_value = kv_pairs[pos].1;
-                kv_pairs[pos].1 = value;
-                Ok(Some(old_value))
-            },
-            Err(pos) => {
-                if kv_pairs.len() >= MAX_LEAF_ENTRIES {
-                    return Err(StorageError::Leaf(SmtLeafError::TooManyLeafEntries {
-                        actual: kv_pairs.len() + 1,
-                    }));
-                }
-                kv_pairs.insert(pos, (key, value));
-                Ok(None)
-            },
+        SmtLeaf::Multiple(kv_pairs) => {
+            match kv_pairs.binary_search_by(|kv_pair| kv_pair.0.cmp(&key)) {
+                Ok(pos) => {
+                    let old_value = kv_pairs[pos].1;
+                    kv_pairs[pos].1 = value;
+                    Ok(Some(old_value))
+                },
+                Err(pos) => {
+                    if kv_pairs.len() >= MAX_LEAF_ENTRIES {
+                        return Err(StorageError::Leaf(SmtLeafError::TooManyLeafEntries {
+                            actual: kv_pairs.len() + 1,
+                        }));
+                    }
+                    kv_pairs.insert(pos, (key, value));
+                    Ok(None)
+                },
+            }
         },
     }
 }
@@ -65,19 +62,19 @@ pub(crate) fn remove_from_leaf(leaf: &mut SmtLeaf, key: Word) -> (Option<Word>, 
                 (None, false)
             }
         },
-        SmtLeaf::Multiple(kv_pairs) => match kv_pairs.binary_search_by(|kv_pair| {
-            LexicographicWord::from(kv_pair.0).cmp(&LexicographicWord::from(key))
-        }) {
-            Ok(pos) => {
-                let old_value = kv_pairs[pos].1;
-                kv_pairs.remove(pos);
-                debug_assert!(!kv_pairs.is_empty());
-                if kv_pairs.len() == 1 {
-                    *leaf = SmtLeaf::Single(kv_pairs[0]);
-                }
-                (Some(old_value), false)
-            },
-            Err(_) => (None, false),
+        SmtLeaf::Multiple(kv_pairs) => {
+            match kv_pairs.binary_search_by(|kv_pair| kv_pair.0.cmp(&key)) {
+                Ok(pos) => {
+                    let old_value = kv_pairs[pos].1;
+                    kv_pairs.remove(pos);
+                    debug_assert!(!kv_pairs.is_empty());
+                    if kv_pairs.len() == 1 {
+                        *leaf = SmtLeaf::Single(kv_pairs[0]);
+                    }
+                    (Some(old_value), false)
+                },
+                Err(_) => (None, false),
+            }
         },
     }
 }

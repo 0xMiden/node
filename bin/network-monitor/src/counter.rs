@@ -834,7 +834,7 @@ async fn fetch_wallet_account(
     let storage_details = details.storage_details.context("missing storage details")?;
     let storage = build_account_storage(storage_details)?;
 
-    let account = Account::new(account_id, vault, storage, code, Felt::new(nonce), None)
+    let account = Account::new(account_id, vault, storage, code, Felt::new_unchecked(nonce), None)
         .context("failed to create account")?;
 
     // Sanity check: verify reconstructed account matches header commitments
@@ -952,10 +952,10 @@ fn create_network_note(
     let partial_metadata = PartialNoteMetadata::new(wallet_account.id(), NoteType::Public);
 
     let serial_num = Word::new([
-        Felt::new(rng.random()),
-        Felt::new(rng.random()),
-        Felt::new(rng.random()),
-        Felt::new(rng.random()),
+        Felt::new_unchecked(rng.random()),
+        Felt::new_unchecked(rng.random()),
+        Felt::new_unchecked(rng.random()),
+        Felt::new_unchecked(rng.random()),
     ]);
 
     let recipient = NoteRecipient::new(serial_num, script, NoteStorage::new(vec![])?);

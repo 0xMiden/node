@@ -181,7 +181,7 @@ pub(super) fn select_vault_balances_by_faucet_ids(
         if let Some(asset_bytes) = maybe_asset_bytes {
             let asset = Asset::read_from_bytes(&asset_bytes)?;
             if let Asset::Fungible(fungible) = asset {
-                balances.insert(fungible.faucet_id(), fungible.amount());
+                balances.insert(fungible.faucet_id(), fungible.amount().as_u64());
             }
         }
     }

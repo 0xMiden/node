@@ -109,12 +109,14 @@ impl StoreClient {
                 let header =
                     BlockHeader::try_from(block).map_err(StoreError::DeserializationError)?;
 
-                let peaks = MmrPeaks::new(Forest::new(header.block_num().as_usize()), peaks)
-                    .map_err(|_| {
-                        StoreError::MalformedResponse(
-                            "returned peaks are not valid for the sent request".into(),
-                        )
-                    })?;
+                let forest = Forest::new(header.block_num().as_usize()).map_err(|err| {
+                    StoreError::DeserializationError(ConversionError::from(err).context("forest"))
+                })?;
+                let peaks = MmrPeaks::new(forest, peaks).map_err(|_| {
+                    StoreError::MalformedResponse(
+                        "returned peaks are not valid for the sent request".into(),
+                    )
+                })?;
 
                 let partial_mmr = PartialMmr::from_peaks(peaks);
 
@@ -327,11 +329,7 @@ impl StoreClient {
                         ConversionError::from(err).context("account_id"),
                     )
                 })?;
-                NetworkAccountId::try_from(account_id).map_err(|_| {
-                    StoreError::MalformedResponse(
-                        "account id is not a valid network account".into(),
-                    )
-                })
+                Ok(NetworkAccountId::new_trusted(account_id))
             })
             .collect::<Result<Vec<NetworkAccountId>, StoreError>>()?;
 

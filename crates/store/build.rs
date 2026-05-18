@@ -45,16 +45,16 @@ fn generate_agglayer_sample_accounts() {
     fs_err::create_dir_all(&samples_dir).expect("Failed to create samples directory");
 
     // Use deterministic seeds for reproducible builds. WARNING: DO NOT USE THESE IN PRODUCTION
-    let bridge_seed: Word = Word::new([Felt::new(1u64); 4]);
-    let eth_faucet_seed: Word = Word::new([Felt::new(2u64); 4]);
-    let usdc_faucet_seed: Word = Word::new([Felt::new(3u64); 4]);
+    let bridge_seed: Word = Word::new([Felt::new_unchecked(1u64); 4]);
+    let eth_faucet_seed: Word = Word::new([Felt::new_unchecked(2u64); 4]);
+    let usdc_faucet_seed: Word = Word::new([Felt::new_unchecked(3u64); 4]);
 
     // Create bridge admin and GER manager as proper wallet accounts. WARNING: DO NOT USE THESE IN
     // PRODUCTION
     let bridge_admin_key =
-        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(4u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new_unchecked(4u64); 4])));
     let ger_manager_key =
-        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(5u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new_unchecked(5u64); 4])));
 
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
@@ -96,8 +96,8 @@ fn generate_agglayer_sample_accounts() {
         eth_faucet_seed,
         "ETH",
         8,
-        Felt::new(1_000_000_000),
-        Felt::new(0),
+        Felt::new_unchecked(1_000_000_000),
+        Felt::new_unchecked(0),
         bridge_account_id,
         &eth_origin_address,
         0u32,
@@ -110,8 +110,8 @@ fn generate_agglayer_sample_accounts() {
         usdc_faucet_seed,
         "USDC",
         6,
-        Felt::new(10_000_000_000),
-        Felt::new(0),
+        Felt::new_unchecked(10_000_000_000),
+        Felt::new_unchecked(0),
         bridge_account_id,
         &usdc_origin_address,
         0u32,

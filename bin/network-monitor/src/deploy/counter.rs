@@ -64,7 +64,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     let init_seed: [u8; 32] = rand::random();
     let counter_account = AccountBuilder::new(init_seed)
         .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Network)
+        .storage_mode(AccountStorageMode::Public)
         .with_component(account_code)
         .with_auth_component(incr_nonce_auth)
         .build()?;

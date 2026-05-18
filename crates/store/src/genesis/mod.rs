@@ -11,7 +11,7 @@ use miden_protocol::block::{
     FeeParameters,
     SignedBlock,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signature};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature, SigningKey};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
 use miden_protocol::errors::AccountError;
@@ -174,7 +174,7 @@ impl GenesisState {
     }
 
     /// Builds and signs the genesis block with a local secret key.
-    pub fn into_block(self, signer: &SecretKey) -> anyhow::Result<GenesisBlock> {
+    pub fn into_block(self, signer: &SigningKey) -> anyhow::Result<GenesisBlock> {
         let unsigned_block = self.into_unsigned_block()?;
         let signature = signer.sign(unsigned_block.header().commitment());
         unsigned_block.into_block(signature)

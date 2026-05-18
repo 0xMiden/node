@@ -5,7 +5,7 @@ use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountStorageMode, AccountType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::testing::account_id::{
-    ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE,
+    ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
 use miden_protocol::transaction::TransactionId;
@@ -17,17 +17,17 @@ use rand_chacha::rand_core::SeedableRng;
 /// Creates a network account ID from a test constant.
 pub fn mock_network_account_id() -> NetworkAccountId {
     let account_id: AccountId =
-        ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap();
-    NetworkAccountId::try_from(account_id).unwrap()
+        ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap();
+    NetworkAccountId::new_trusted(account_id)
 }
 
 /// Creates a distinct network account ID using a seeded RNG.
 pub fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
     let account_id = AccountIdBuilder::new()
         .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Network)
+        .storage_mode(AccountStorageMode::Public)
         .build_with_seed([seed; 32]);
-    NetworkAccountId::try_from(account_id).unwrap()
+    NetworkAccountId::new_trusted(account_id)
 }
 
 /// Creates a unique `TransactionId` from a seed value.
@@ -69,7 +69,7 @@ pub fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::A
 
     AccountBuilder::new([0u8; 32])
         .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Network)
+        .storage_mode(AccountStorageMode::Public)
         .with_component(MockAccountComponent::with_slots(vec![]))
         .with_auth_component(NoopAuthComponent)
         .build_existing()

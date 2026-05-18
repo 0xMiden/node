@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::ValidatorSigner;
 
@@ -158,7 +158,7 @@ impl ValidatorCommand {
                     )
                     .await
                 } else {
-                    let signer = SecretKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
+                    let signer = SigningKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
                     let signer = ValidatorSigner::new_local(signer);
                     start::start(
                         address,
@@ -216,7 +216,7 @@ impl ValidatorKey {
         if let Some(kms_key_id) = self.validator_kms_key_id {
             Ok(ValidatorSigner::new_kms(kms_key_id).await?)
         } else {
-            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
+            let signer = SigningKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
             Ok(ValidatorSigner::new_local(signer))
         }
     }
