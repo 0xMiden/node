@@ -436,7 +436,7 @@ impl api_server::Api for RpcService {
     /// Deserializes and rebuilds the transaction with MAST decorators stripped from output note
     /// scripts, verifies the transaction proof, optionally re-executes via the validator if
     /// transaction inputs are provided, then forwards the transaction to the block producer.
-    async fn submit_proven_transaction(
+    async fn submit_proven_tx(
         &self,
         request: Request<proto::transaction::ProvenTransaction>,
     ) -> Result<Response<proto::blockchain::BlockNumber>, Status> {
@@ -516,12 +516,12 @@ impl api_server::Api for RpcService {
             return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
-        block_producer.clone().submit_proven_transaction(request).await
+        block_producer.clone().submit_proven_tx(request).await
     }
 
     /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
     /// the batch, then forwards it to the block producer.
-    async fn submit_proven_batch(
+    async fn submit_proven_tx_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
@@ -607,7 +607,7 @@ impl api_server::Api for RpcService {
             self.validator.clone().submit_proven_transaction(request).await?;
         }
 
-        block_producer.clone().submit_proven_batch(request).await
+        block_producer.clone().submit_proven_tx_batch(request).await
     }
 
     // -- Status & utility endpoints ----------------------------------------------------------

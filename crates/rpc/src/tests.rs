@@ -329,7 +329,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -374,7 +374,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -414,7 +414,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());

@@ -27,6 +27,8 @@
 - Replaced blocking-in-async LargeSmt and account state forest operations in the store with wrappers using Tokio's `block_in_place()` ([#2076](https://github.com/0xMiden/node/pull/2076)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
+- [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 
 ## v0.14.10 (2026-05-29)
 
