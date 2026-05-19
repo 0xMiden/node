@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
@@ -195,6 +196,11 @@ impl Coordinator {
         tracing::info!(account_id = %account_id, "Created actor for account prefix");
     }
 
+    /// Returns `true` if an actor is currently registered for the given account.
+    pub fn has_actor(&self, account_id: NetworkAccountId) -> bool {
+        self.actor_registry.contains_key(&account_id)
+    }
+
     /// Notifies specific account actors that state may have changed.
     ///
     /// Only actors that are currently active are notified. Each actor will re-evaluate its state
@@ -311,13 +317,15 @@ impl Coordinator {
 
     /// Applies a committed block's effects to the database.
     ///
-    /// This must be called BEFORE sending notifications to actors. Returns an [`ApplyBlockResult`]
-    /// with the accounts that should be notified.
+    /// Persists the new chain MMR atomically with the block effects. Must be called BEFORE
+    /// sending notifications to actors. Returns an [`ApplyBlockResult`] with the accounts that
+    /// should be notified.
     pub async fn apply_block(
         &self,
         effects: &CommittedBlockEffects,
+        chain_mmr: PartialMmr,
     ) -> Result<ApplyBlockResult, DatabaseError> {
-        let affected_accounts = self.db.apply_committed_block(effects.clone()).await?;
+        let affected_accounts = self.db.apply_committed_block(effects.clone(), chain_mmr).await?;
         Ok(ApplyBlockResult { accounts_to_notify: affected_accounts })
     }
 }

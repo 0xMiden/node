@@ -41,10 +41,24 @@ impl ChainState {
         }
     }
 
+    /// Constructs the genesis bootstrap [`ChainState`] from the genesis block header.
+    ///
+    /// The chain MMR at the genesis tip is empty: by the convention that the MMR lags one block
+    /// behind the tip, the MMR for block 0 contains no leaves.
+    pub(crate) fn bootstrap_genesis(genesis_header: BlockHeader) -> Self {
+        debug_assert_eq!(genesis_header.block_num(), BlockNumber::GENESIS);
+        Self::new(genesis_header, PartialMmr::default())
+    }
+
     /// Consumes the chain state and returns the chain tip header and the partial blockchain as a
     /// tuple.
     pub fn into_parts(self) -> (BlockHeader, Arc<PartialBlockchain>) {
         (self.chain_tip_header, self.chain_mmr)
+    }
+
+    /// Returns the chain MMR as a serializable [`PartialMmr`].
+    pub(crate) fn mmr_for_persistence(&self) -> PartialMmr {
+        self.chain_mmr.mmr().clone()
     }
 
     /// Updates the chain tip and prunes old blocks from the MMR.
@@ -73,6 +87,10 @@ impl SharedChainState {
         Self(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)))
     }
 
+    pub fn from_state(state: ChainState) -> Self {
+        Self(RwLock::new(state))
+    }
+
     pub(crate) fn chain_tip_block_number(&self) -> BlockNumber {
         self.0.read().expect("chain state lock poisoned").chain_tip_header.block_num()
     }
@@ -82,6 +100,21 @@ impl SharedChainState {
             .write()
             .expect("chain state lock poisoned")
             .update_chain_tip(tip, max_block_count);
+    }
+
+    /// Computes the [`PartialMmr`] that would result from advancing the chain tip to `next_tip`,
+    /// without mutating the in-memory chain state.
+    ///
+    /// Used by callers that need to persist the next chain state atomically with block effects
+    /// before committing the in-memory transition via [`Self::update_chain_tip`].
+    pub(crate) fn next_chain_mmr(
+        &self,
+        next_tip: &BlockHeader,
+        max_block_count: usize,
+    ) -> PartialMmr {
+        let mut snapshot = self.0.read().expect("chain state lock poisoned").clone();
+        snapshot.update_chain_tip(next_tip.clone(), max_block_count);
+        snapshot.mmr_for_persistence()
     }
 
     pub(crate) fn get_cloned(&self) -> ChainState {

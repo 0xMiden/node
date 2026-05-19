@@ -217,50 +217,6 @@ pub(crate) fn select_full_account(
     Ok(Account::new(account_id, vault, storage, code, nonce, None)?)
 }
 
-/// Select the latest account info for a network account by its full account ID.
-///
-/// # Returns
-///
-/// The latest account info, `None` if the account was not found, or an error.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT
-///     accounts.account_id,
-///     accounts.account_commitment,
-///     accounts.block_num
-/// FROM
-///     accounts
-/// WHERE
-///     account_id = ?1
-///     AND network_account_type = 1
-///     AND is_latest = 1
-/// ```
-pub(crate) fn select_network_account_by_id(
-    conn: &mut SqliteConnection,
-    account_id: AccountId,
-) -> Result<Option<AccountInfo>, DatabaseError> {
-    let maybe_summary = SelectDsl::select(schema::accounts::table, AccountSummaryRaw::as_select())
-        .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
-        .filter(schema::accounts::network_account_type.eq(NetworkAccountType::Network.to_raw_sql()))
-        .filter(schema::accounts::is_latest.eq(true))
-        .get_result::<AccountSummaryRaw>(conn)
-        .optional()
-        .map_err(DatabaseError::Diesel)?;
-
-    match maybe_summary {
-        None => Ok(None),
-        Some(raw) => {
-            let summary: AccountSummary = raw.try_into()?;
-            let account_id = summary.account_id;
-            // Backfill account details from database
-            let details = select_full_account(conn, account_id).ok();
-            Ok(Some(AccountInfo { summary, details }))
-        },
-    }
-}
-
 /// Page of account commitments returned by [`select_account_commitments_paged`].
 #[derive(Debug)]
 pub struct AccountCommitmentsPage {
@@ -633,85 +589,6 @@ pub(crate) fn select_all_accounts(
         .collect();
 
     Ok(account_infos)
-}
-
-/// Returns network account IDs within the specified block range (based on account creation
-/// block).
-///
-/// The function may return fewer accounts than exist in the range if the result would exceed
-/// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-/// truncated at a block boundary to ensure all accounts from included blocks are returned.
-///
-/// # Returns
-///
-/// A tuple containing:
-/// - A vector of network account IDs.
-/// - The last block number that was fully included in the result. When truncated, this will be less
-///   than the requested range end.
-pub(crate) fn select_all_network_account_ids(
-    conn: &mut SqliteConnection,
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<(Vec<AccountId>, BlockNumber), DatabaseError> {
-    const ROW_OVERHEAD_BYTES: usize = AccountId::SERIALIZED_SIZE;
-    const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
-
-    const _: () = assert!(
-        MAX_ROWS > miden_protocol::MAX_ACCOUNTS_PER_BLOCK,
-        "Block pagination limit must exceed maximum block capacity to uphold assumed logic invariant"
-    );
-
-    if block_range.is_empty() {
-        return Err(DatabaseError::InvalidBlockRange {
-            from: *block_range.start(),
-            to: *block_range.end(),
-        });
-    }
-
-    let account_ids_raw: Vec<(Vec<u8>, i64)> = Box::new(
-        QueryDsl::select(
-            schema::accounts::table
-                .filter(
-                    schema::accounts::network_account_type
-                        .eq(NetworkAccountType::Network.to_raw_sql()),
-                )
-                .filter(schema::accounts::is_latest.eq(true)),
-            (schema::accounts::account_id, schema::accounts::created_at_block),
-        )
-        .filter(
-            schema::accounts::block_num
-                .between(block_range.start().to_raw_sql(), block_range.end().to_raw_sql()),
-        )
-        .order(schema::accounts::created_at_block.asc())
-        .limit(i64::try_from(MAX_ROWS + 1).expect("limit fits within i64")),
-    )
-    .load::<(Vec<u8>, i64)>(conn)?;
-
-    if account_ids_raw.len() > MAX_ROWS {
-        // SAFETY: We just checked that len > MAX_ROWS, so the vec is not empty.
-        let last_created_at_block = account_ids_raw.last().expect("vec is not empty").1;
-
-        let account_ids = account_ids_raw
-            .into_iter()
-            .take_while(|(_, created_at_block)| *created_at_block != last_created_at_block)
-            .map(|(id_bytes, _)| {
-                AccountId::read_from_bytes(&id_bytes).map_err(DatabaseError::DeserializationError)
-            })
-            .collect::<Result<Vec<AccountId>, DatabaseError>>()?;
-
-        let last_block_included =
-            BlockNumber::from_raw_sql(last_created_at_block.saturating_sub(1))?;
-
-        Ok((account_ids, last_block_included))
-    } else {
-        let account_ids = account_ids_raw
-            .into_iter()
-            .map(|(id_bytes, _)| {
-                AccountId::read_from_bytes(&id_bytes).map_err(DatabaseError::DeserializationError)
-            })
-            .collect::<Result<Vec<AccountId>, DatabaseError>>()?;
-
-        Ok((account_ids, *block_range.end()))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

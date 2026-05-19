@@ -6,16 +6,20 @@ use std::time::Duration;
 use actor::{AccountActorContext, ActorConfig, GrpcClients, State};
 use anyhow::Context;
 use builder::BlockStream;
-use chain_state::SharedChainState;
+use chain_state::{ChainState, SharedChainState};
 use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
 use db::Db;
+use futures::StreamExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::mpsc;
 use url::Url;
+
+use crate::committed_block::CommittedBlockEffects;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
@@ -50,9 +54,6 @@ const DEFAULT_MAX_CONCURRENT_TXS: usize = 4;
 
 /// Default maximum number of blocks to keep in the chain MMR.
 const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
-
-/// Default channel capacity for account loading from the store.
-const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
 /// Default maximum number of attempts to execute a failing note before dropping it.
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
@@ -118,9 +119,6 @@ pub struct NtxBuilderConfig {
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
     pub max_block_count: usize,
 
-    /// Channel capacity for loading accounts from the store during startup.
-    pub account_channel_capacity: usize,
-
     /// Duration after which an idle network account will deactivate.
     ///
     /// An account is considered idle once it has no viable notes to consume.
@@ -168,7 +166,6 @@ impl NtxBuilderConfig {
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
-            account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
@@ -239,13 +236,6 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the account channel capacity for startup loading.
-    #[must_use]
-    pub fn with_account_channel_capacity(mut self, capacity: usize) -> Self {
-        self.account_channel_capacity = capacity;
-        self
-    }
-
     /// Sets the idle timeout for actors.
     ///
     /// Actors that remain idle (no viable notes) for this duration will be deactivated.
@@ -278,16 +268,17 @@ impl NtxBuilderConfig {
 
     /// Builds and initializes the network transaction builder.
     ///
-    /// This method connects to the store services, determines the catch-up target block, and
-    /// opens a committed-block subscription. The catch-up phase itself runs inside
-    /// [`NetworkTransactionBuilder::run`].
+    /// Opens the committed-block subscription on the store. On a fresh DB the subscription
+    /// starts at genesis and the first block is consumed inline to bootstrap the in-memory
+    /// chain state; on resume, the in-memory chain state is loaded from the persisted MMR and
+    /// the subscription starts at `persisted_tip + 1`.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The store connection fails
     /// - The block subscription cannot be opened (after retries)
-    /// - The store contains no blocks (not bootstrapped)
+    /// - The genesis bootstrap fails to read the first block from the subscription
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup_with_pool_size(
@@ -305,33 +296,18 @@ impl NtxBuilderConfig {
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
 
-        // Fetch the current chain tip + MMR. This is needed as the catch-up target and as the
-        // initial in-memory chain state used by actors.
-        let (chain_tip_header, chain_mmr) = store
-            .get_latest_blockchain_data_with_retry()
-            .await?
-            .context("store should contain a latest block")?;
-        let chain_tip_block_num = chain_tip_header.block_num();
-
-        // Resume from where we left off. If the DB has no chain state yet, we initialize it
-        // from the current chain tip.
-        // Existing DBs resume from their persisted block; the catch-up phase then drains the
-        // stream until the in-memory chain state reaches the current tip.
+        // Decide where to start the subscription. On resume we load the persisted chain state;
+        // on fresh start we begin at genesis and bootstrap inline below.
         let stored_chain_state =
             db.get_chain_state().await.context("failed to read chain state")?;
 
-        let (block_from, last_applied_block) =
-            resume_point(stored_chain_state.as_ref().map(|(num, _)| *num), chain_tip_block_num);
-
-        if stored_chain_state.is_none() {
-            db.upsert_chain_state(chain_tip_block_num, chain_tip_header.clone())
-                .await
-                .context("failed to upsert chain state")?;
-        }
+        let block_from = stored_chain_state
+            .as_ref()
+            .map_or(BlockNumber::GENESIS, |(num, _, _)| num.child());
 
         tracing::info!(
             %block_from,
-            %chain_tip_block_num,
+            resume = stored_chain_state.is_some(),
             "ntx-builder opening block subscription"
         );
 
@@ -340,11 +316,39 @@ impl NtxBuilderConfig {
             .await
             .map_err(|err| anyhow::anyhow!(err))
             .context("failed to subscribe to committed blocks")?;
-        let block_stream: BlockStream = Box::pin(block_stream_inner);
+        let mut block_stream: BlockStream = Box::pin(block_stream_inner);
 
-        // Chain state is initialized at the chain tip, actors only start after catch-up, so the
-        // tip is consistent with the DB by the time they run.
-        let chain_state = Arc::new(SharedChainState::new(chain_tip_header, chain_mmr));
+        let (chain_state, last_applied_block) = if let Some((block_num, header, mmr)) =
+            stored_chain_state
+        {
+            let cs = Arc::new(SharedChainState::new(header, mmr));
+            (cs, block_num)
+        } else {
+            // Fresh DB: consume the genesis block from the subscription, apply it with an empty
+            // chain MMR (the MMR for tip=GENESIS has no leaves by the one-block-lag convention),
+            // and bootstrap the in-memory chain state.
+            let genesis = block_stream
+                .next()
+                .await
+                .context("block stream ended before delivering the genesis block")?
+                .context("block stream failed before delivering the genesis block")?;
+            let genesis_header = genesis.header().clone();
+            anyhow::ensure!(
+                genesis_header.block_num() == BlockNumber::GENESIS,
+                "expected genesis block from subscription but got block {}",
+                genesis_header.block_num()
+            );
+
+            let effects = CommittedBlockEffects::from_signed_block(&genesis);
+            db.apply_committed_block(effects, PartialMmr::default())
+                .await
+                .context("failed to apply genesis block during bootstrap")?;
+
+            let cs = Arc::new(SharedChainState::from_state(ChainState::bootstrap_genesis(
+                genesis_header,
+            )));
+            (cs, BlockNumber::GENESIS)
+        };
 
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
@@ -374,73 +378,13 @@ impl NtxBuilderConfig {
         Ok(NetworkTransactionBuilder::new(
             self,
             coordinator,
-            store,
             db,
             chain_state,
             actor_context,
             block_stream,
-            chain_tip_block_num,
             last_applied_block,
             actor_request_rx,
         ))
     }
 }
 
-// HELPERS
-// =================================================================================================
-
-/// Decides where the ntx-builder should start consuming the block stream from on startup.
-///
-/// Returns `(block_from, last_applied_block)`:
-/// - `block_from` is the first block number the subscription should yield (inclusive).
-/// - `last_applied_block` is the highest block already reflected in the DB. The catch-up phase
-///   drains the stream until this reaches the chain tip.
-///
-/// If the DB has a persisted chain state, resume from the block after it. Otherwise the DB is
-/// fresh and we treat the current chain tip as already applied (the caller is responsible for
-/// persisting that state).
-fn resume_point(stored: Option<BlockNumber>, chain_tip: BlockNumber) -> (BlockNumber, BlockNumber) {
-    match stored {
-        Some(num) => (num.child(), num),
-        None => (chain_tip.child(), chain_tip),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use miden_protocol::block::BlockNumber;
-
-    use super::resume_point;
-
-    #[test]
-    fn resume_point_fresh_db_starts_after_chain_tip() {
-        let tip = BlockNumber::from(10u32);
-
-        let (block_from, last_applied) = resume_point(None, tip);
-
-        assert_eq!(last_applied, tip);
-        assert_eq!(block_from, tip.child());
-    }
-
-    #[test]
-    fn resume_point_existing_db_resumes_after_stored_block() {
-        let tip = BlockNumber::from(10u32);
-        let stored = BlockNumber::from(7u32);
-
-        let (block_from, last_applied) = resume_point(Some(stored), tip);
-
-        assert_eq!(last_applied, stored);
-        assert_eq!(block_from, stored.child());
-    }
-
-    #[test]
-    fn resume_point_db_already_at_tip() {
-        let tip = BlockNumber::from(10u32);
-
-        let (block_from, last_applied) = resume_point(Some(tip), tip);
-
-        assert_eq!(last_applied, tip);
-        assert_eq!(block_from, tip.child());
-        // Catch-up loop terminates immediately because last_applied >= target.
-    }
-}

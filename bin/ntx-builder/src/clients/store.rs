@@ -1,19 +1,14 @@
 use std::collections::BTreeSet;
-use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
 use miden_node_proto::decode::ConversionResultExt;
-use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
+use miden_node_proto::domain::account::{AccountDetails, AccountResponse};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::try_convert;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{
-    Account,
     AccountCode,
     AccountId,
     PartialAccount,
@@ -23,13 +18,11 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{AssetVaultKey, AssetWitness, PartialVault};
-use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
-use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
+use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::AccountInputs;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_standards::note::AccountTargetNetworkNote;
 use thiserror::Error;
 use tracing::{info, instrument};
 use url::Url;
@@ -113,96 +106,6 @@ impl StoreClient {
         }))
     }
 
-    /// Returns the block header and MMR peaks at the current chain tip.
-    #[instrument(target = COMPONENT, name = "store.client.get_latest_blockchain_data_with_retry", skip_all, err)]
-    pub async fn get_latest_blockchain_data_with_retry(
-        &self,
-    ) -> Result<Option<(BlockHeader, PartialMmr)>, StoreError> {
-        let mut retry_counter = 0;
-        loop {
-            match self.get_latest_blockchain_data().await {
-                Err(StoreError::GrpcClientError(err)) => {
-                    // Exponential backoff with base 500ms and max 30s.
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retry_counter.min(6))
-                        .min(Duration::from_secs(30));
-
-                    tracing::warn!(
-                        ?backoff,
-                        %retry_counter,
-                        %err,
-                        "store connection failed while fetching latest blockchain data, retrying"
-                    );
-
-                    retry_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-                result => return result,
-            }
-        }
-    }
-
-    #[instrument(target = COMPONENT, name = "store.client.get_latest_blockchain_data", skip_all, err)]
-    async fn get_latest_blockchain_data(
-        &self,
-    ) -> Result<Option<(BlockHeader, PartialMmr)>, StoreError> {
-        let request = tonic::Request::new(proto::blockchain::MaybeBlockNumber::default());
-
-        let response = self.inner.clone().get_current_blockchain_data(request).await?.into_inner();
-
-        match response.current_block_header {
-            // There are new blocks compared to the builder's latest state
-            Some(block) => {
-                let peaks: Vec<Word> = try_convert(response.current_peaks)
-                    .collect::<Result<_, _>>()
-                    .context("current_peaks")
-                    .map_err(StoreError::DeserializationError)?;
-                let header =
-                    BlockHeader::try_from(block).map_err(StoreError::DeserializationError)?;
-
-                let peaks = MmrPeaks::new(Forest::new(header.block_num().as_usize()), peaks)
-                    .map_err(|_| {
-                        StoreError::MalformedResponse(
-                            "returned peaks are not valid for the sent request".into(),
-                        )
-                    })?;
-
-                let partial_mmr = PartialMmr::from_peaks(peaks);
-
-                Ok(Some((header, partial_mmr)))
-            },
-            // No new blocks were created, return
-            None => Ok(None),
-        }
-    }
-
-    #[instrument(target = COMPONENT, name = "store.client.get_network_account", skip_all, err)]
-    pub async fn get_network_account(
-        &self,
-        account_id: NetworkAccountId,
-    ) -> Result<Option<Account>, StoreError> {
-        let request = proto::account::AccountId::from(account_id.inner());
-
-        let store_response = self
-            .inner
-            .clone()
-            .get_network_account_details_by_id(request)
-            .await?
-            .into_inner()
-            .details;
-
-        // we only care about the case where the account returns and is actually a network account,
-        // which implies details being public, so OK to error otherwise
-        let account = match store_response.map(|acc| acc.details) {
-            Some(Some(details)) => Some(Account::read_from_bytes(&details).map_err(|err| {
-                StoreError::DeserializationError(ConversionError::from(err).context("details"))
-            })?),
-            _ => None,
-        };
-
-        Ok(account)
-    }
-
     /// Get the inputs for an account at a given block number from the store.
     ///
     /// Retrieves account details from the store. The retrieved details are limited to the account
@@ -242,176 +145,6 @@ impl StoreClient {
             .map_err(StoreError::DeserializationError)?;
 
         Ok(AccountInputs::new(partial_account, account_response.witness))
-    }
-
-    /// Returns the list of unconsumed network notes for a specific network account up to a
-    /// specified block.
-    #[instrument(target = COMPONENT, name = "store.client.get_unconsumed_network_notes", skip_all, err)]
-    pub async fn get_unconsumed_network_notes(
-        &self,
-        network_account_id: NetworkAccountId,
-        block_num: u32,
-    ) -> Result<Vec<AccountTargetNetworkNote>, StoreError> {
-        // Upper bound of each note is ~10KB. Limit page size to ~10MB.
-        const PAGE_SIZE: u64 = 1024;
-
-        let mut all_notes = Vec::new();
-        let mut page_token: Option<u64> = None;
-
-        let mut store_client = self.inner.clone();
-        loop {
-            let req = proto::store::UnconsumedNetworkNotesRequest {
-                page_token,
-                page_size: PAGE_SIZE,
-                account_id: Some(network_account_id.inner().into()),
-                block_num,
-            };
-            let resp = store_client.get_unconsumed_network_notes(req).await?.into_inner();
-
-            all_notes.reserve(resp.notes.len());
-            for note in resp.notes {
-                all_notes.push(
-                    AccountTargetNetworkNote::try_from(note)
-                        .map_err(StoreError::DeserializationError)?,
-                );
-            }
-
-            match resp.next_token {
-                Some(token) => page_token = Some(token),
-                None => break,
-            }
-        }
-
-        Ok(all_notes)
-    }
-
-    /// Streams network account IDs to the provided sender.
-    ///
-    /// This method is designed to be run in a background task, sending accounts to the main event
-    /// loop as they are loaded. This allows the ntx-builder to start processing mempool events
-    /// without waiting for all accounts to be preloaded.
-    pub async fn stream_network_account_ids(
-        &self,
-        sender: tokio::sync::mpsc::Sender<NetworkAccountId>,
-    ) -> Result<(), StoreError> {
-        let mut block_range = BlockNumber::GENESIS..=BlockNumber::MAX;
-
-        while let Some(next_start) = self.load_accounts_page(block_range, &sender).await? {
-            block_range = next_start..=BlockNumber::MAX;
-        }
-
-        Ok(())
-    }
-
-    /// Loads a single page of network accounts and submits them to the sender.
-    ///
-    /// Returns the next block number to fetch from, or `None` if the chain tip has been reached.
-    #[instrument(target = COMPONENT, name = "store.client.load_accounts_page", skip_all, err)]
-    async fn load_accounts_page(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-        sender: &tokio::sync::mpsc::Sender<NetworkAccountId>,
-    ) -> Result<Option<BlockNumber>, StoreError> {
-        let (accounts, pagination_info) = self.fetch_network_account_ids_page(block_range).await?;
-
-        let chain_tip = pagination_info.chain_tip;
-        let current_height = pagination_info.block_num;
-
-        self.send_accounts_to_channel(accounts, sender).await?;
-
-        if current_height >= chain_tip {
-            Ok(None)
-        } else {
-            Ok(Some(BlockNumber::from(current_height + 1)))
-        }
-    }
-
-    #[instrument(target = COMPONENT, name = "store.client.fetch_network_account_ids_page", skip_all, err)]
-    async fn fetch_network_account_ids_page(
-        &self,
-        block_range: std::ops::RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<NetworkAccountId>, proto::rpc::PaginationInfo), StoreError> {
-        self.fetch_network_account_ids_page_inner(block_range)
-            .await
-            .inspect_err(|err| tracing::Span::current().set_error(err))
-    }
-
-    async fn fetch_network_account_ids_page_inner(
-        &self,
-        block_range: std::ops::RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<NetworkAccountId>, proto::rpc::PaginationInfo), StoreError> {
-        let mut retry_counter = 0u32;
-
-        let response = loop {
-            match self
-                .inner
-                .clone()
-                .get_network_account_ids(Into::<BlockRange>::into(block_range.clone()))
-                .await
-            {
-                Ok(response) => break response.into_inner(),
-                Err(err) => {
-                    // Exponential backoff with base 500ms and max 30s.
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retry_counter.min(6))
-                        .min(Duration::from_secs(30));
-
-                    tracing::warn!(
-                        ?backoff,
-                        %retry_counter,
-                        %err,
-                        "store connection failed while fetching committed accounts page, retrying"
-                    );
-
-                    retry_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-            }
-        };
-
-        let accounts = response
-            .account_ids
-            .into_iter()
-            .map(|account_id| {
-                let account_id = AccountId::read_from_bytes(&account_id.id).map_err(|err| {
-                    StoreError::DeserializationError(
-                        ConversionError::from(err).context("account_id"),
-                    )
-                })?;
-                NetworkAccountId::try_from(account_id).map_err(|_| {
-                    StoreError::MalformedResponse(
-                        "account id is not a valid network account".into(),
-                    )
-                })
-            })
-            .collect::<Result<Vec<NetworkAccountId>, StoreError>>()?;
-
-        let pagination_info = response.pagination_info.ok_or(ConversionError::missing_field::<
-            proto::store::NetworkAccountIdList,
-        >("pagination_info"))?;
-
-        Ok((accounts, pagination_info))
-    }
-
-    #[instrument(
-        target = COMPONENT,
-        name = "store.client.send_accounts_to_channel",
-        skip_all
-    )]
-    async fn send_accounts_to_channel(
-        &self,
-        accounts: Vec<NetworkAccountId>,
-        sender: &tokio::sync::mpsc::Sender<NetworkAccountId>,
-    ) -> Result<(), StoreError> {
-        for account in accounts {
-            // If the receiver is dropped, stop loading.
-            if sender.send(account).await.is_err() {
-                tracing::warn!("Account receiver dropped");
-                return Ok(());
-            }
-        }
-
-        Ok(())
     }
 
     #[instrument(target = COMPONENT, name = "store.client.get_note_script_by_root", skip_all, err)]

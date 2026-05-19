@@ -1,5 +1,6 @@
--- Singleton row storing the chain tip header.
--- The chain MMR is reconstructed on startup from the store and maintained in memory.
+-- Singleton row storing the chain tip header and partial MMR.
+-- Both are populated by replaying committed blocks; on restart the row is loaded so the
+-- subscription can resume at `block_num + 1` without re-fetching anything from the store.
 CREATE TABLE chain_state (
     -- Singleton constraint: only one row allowed.
     id              INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
@@ -7,6 +8,8 @@ CREATE TABLE chain_state (
     block_num       INTEGER NOT NULL,
     -- Serialized BlockHeader.
     block_header    BLOB    NOT NULL,
+    -- Serialized PartialMmr representing the chain MMR at this tip.
+    chain_mmr       BLOB    NOT NULL,
 
     CONSTRAINT chain_state_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );

@@ -294,20 +294,6 @@ service NtxBuilder {
     // single client.
     rpc BlockSubscription(BlockSubscriptionRequest) returns (stream SignedBlock) {}
 
-    // Returns a paginated list of unconsumed network notes.
-    rpc GetUnconsumedNetworkNotes(UnconsumedNetworkNotesRequest) returns (UnconsumedNetworkNotes) {}
-
-    // Returns the block header at the chain tip, as well as the MMR peaks corresponding to this
-    // header for executing network transactions. If the block number is not provided, the latest
-    // header and peaks will be retrieved.
-    rpc GetCurrentBlockchainData(blockchain.MaybeBlockNumber) returns (CurrentBlockchainData) {}
-
-    // Returns the latest state of a network account with the specified account ID.
-    rpc GetNetworkAccountDetailsById(account.AccountId) returns (MaybeAccountDetails) {}
-
-    // Returns a list of all network account ids.
-    rpc GetNetworkAccountIds(rpc.BlockRange) returns (NetworkAccountIdList) {}
-
     // Returns the latest details of the specified account.
     rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
 
@@ -319,77 +305,6 @@ service NtxBuilder {
 
     // Returns a storage map witness for the specified account and storage map entry.
     rpc GetStorageMapWitness(StorageMapWitnessRequest) returns (StorageMapWitnessResponse) {}
-}
-
-// GET NETWORK ACCOUNT DETAILS BY ID
-// ================================================================================================
-
-// Represents the result of getting network account details by ID.
-message MaybeAccountDetails {
-    // Account details.
-    optional account.AccountDetails details = 1;
-}
-
-// GET UNCONSUMED NETWORK NOTES
-// ================================================================================================
-
-// Returns a paginated list of unconsumed network notes for an account.
-//
-// Notes created or consumed after the specified block are excluded from the result.
-message UnconsumedNetworkNotesRequest {
-    // This should be null on the first call, and set to the response token until the response token
-    // is null, at which point all data has been fetched.
-    //
-    // Note that this token is only valid if used with the same parameters.
-     optional uint64 page_token = 1;
-
-     // Number of notes to retrieve per page.
-     uint64 page_size = 2;
-
-     // The full account ID to filter notes by.
-     account.AccountId account_id = 3;
-
-     // The block number to filter the returned notes by.
-     //
-     // Notes that are created or consumed after this block are excluded from the result.
-     fixed32 block_num = 4;
-}
-
-// Represents the result of getting the unconsumed network notes.
-message UnconsumedNetworkNotes {
-    // An opaque pagination token.
-    //
-    // Use this in your next request to get the next
-    // set of data.
-    //
-    // Will be null once there is no more data remaining.
-    optional uint64 next_token = 1;
-
-    // The list of unconsumed network notes.
-    repeated note.NetworkNote notes = 2;
-}
-
-// GET NETWORK ACCOUNTS
-// ================================================================================================
-
-// Represents the result of getting the network account ids.
-message NetworkAccountIdList {
-  // Pagination information.
-  rpc.PaginationInfo pagination_info = 1;
-
-  // The list of network account ids.
-  repeated account.AccountId account_ids = 2;
-}
-
-// GET CURRENT BLOCKCHAIN DATA
-// ================================================================================================
-
-// Current blockchain data based on the requested block number.
-message CurrentBlockchainData {
-    // Commitments that represent the current state according to the MMR.
-    repeated primitives.Digest current_peaks = 1;
-    // Current block header.
-    optional blockchain.BlockHeader current_block_header = 2;
 }
 
 // GET VAULT ASSET WITNESSES

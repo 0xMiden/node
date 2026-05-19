@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZeroUsize;
-use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -31,7 +30,7 @@ use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain};
-use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
+use miden_protocol::crypto::merkle::mmr::{MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
@@ -46,7 +45,6 @@ use crate::account_state_forest::{
 };
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
-use crate::db::models::Page;
 use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
     ApplyBlockError,
@@ -55,7 +53,6 @@ use crate::errors::{
     GetBatchInputsError,
     GetBlockHeaderError,
     GetBlockInputsError,
-    GetCurrentBlockchainDataError,
     StateInitializationError,
 };
 use crate::proven_tip::ProvenTipWriter;
@@ -420,35 +417,6 @@ impl State {
         self.db.select_notes_by_id(note_ids).await
     }
 
-    /// If the input block number is the current chain tip, `None` is returned.
-    /// Otherwise, gets the current chain tip's block header with its corresponding MMR peaks.
-    pub async fn get_current_blockchain_data(
-        &self,
-        block_num: Option<BlockNumber>,
-    ) -> Result<Option<(BlockHeader, MmrPeaks)>, GetCurrentBlockchainDataError> {
-        if let Some(number) = block_num
-            && number == self.chain_tip(Finality::Committed).await
-        {
-            return Ok(None);
-        }
-
-        // SAFETY: `select_block_header_by_block_num` will always return `Some(chain_tip_header)`
-        // when `None` is passed
-        let block_header: BlockHeader = self
-            .db
-            .select_block_header_by_block_num(None)
-            .await
-            .map_err(GetCurrentBlockchainDataError::ErrorRetrievingBlockHeader)?
-            .unwrap();
-
-        let blockchain = &self.inner.read().await.blockchain;
-        let peaks = blockchain
-            .peaks_at(block_header.block_num())
-            .map_err(GetCurrentBlockchainDataError::InvalidPeaks)?;
-
-        Ok(Some((block_header, peaks)))
-    }
-
     /// Fetches the inputs for a transaction batch from the database.
     ///
     /// ## Inputs
@@ -757,29 +725,6 @@ impl State {
     /// Returns details for public (on-chain) account.
     pub async fn get_account_details(&self, id: AccountId) -> Result<AccountInfo, DatabaseError> {
         self.db.select_account(id).await
-    }
-
-    /// Returns details for public (on-chain) network accounts by full account ID.
-    pub async fn get_network_account_details_by_id(
-        &self,
-        account_id: AccountId,
-    ) -> Result<Option<AccountInfo>, DatabaseError> {
-        self.db.select_network_account_by_id(account_id).await
-    }
-
-    /// Returns network account IDs within the specified block range (based on account creation
-    /// block).
-    ///
-    /// The function may return fewer accounts than exist in the range if the result would exceed
-    /// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-    /// truncated at a block boundary to ensure all accounts from included blocks are returned.
-    ///
-    /// The response includes the last block number that was fully included in the result.
-    pub async fn get_all_network_accounts(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<AccountId>, BlockNumber), DatabaseError> {
-        self.db.select_all_network_account_ids(block_range).await
     }
 
     /// Returns an account witness and optionally account details at a specific block.
@@ -1091,17 +1036,6 @@ impl State {
             return Ok(None);
         }
         self.block_store.load_proof(block_num).await.map_err(Into::into)
-    }
-
-    /// Returns the network notes for an account that are unconsumed by a specified block number,
-    /// along with the next pagination token.
-    pub async fn get_unconsumed_network_notes_for_account(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        page: Page,
-    ) -> Result<(Vec<NoteRecord>, Page), DatabaseError> {
-        self.db.select_unconsumed_network_notes(account_id, block_num, page).await
     }
 
     /// Returns the script for a note by its root.
