@@ -1,6 +1,7 @@
 mod bootstrap;
 mod start;
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -15,6 +16,7 @@ const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
 const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
+const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
 
 /// A predefined, insecure validator key for development purposes.
 pub(crate) const INSECURE_KEY_HEX: &str =
@@ -41,6 +43,14 @@ pub enum ValidatorCommand {
         /// Directory in which to store the validator's database.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
+        /// Maximum number of SQLite connections in the validator database connection pool.
+        #[arg(
+            long = "sqlite.connection_pool_size",
+            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
+            default_value_t = miden_node_db::default_connection_pool_size(),
+            value_name = "NUM"
+        )]
+        sqlite_connection_pool_size: NonZeroUsize,
         /// Use the given configuration file to construct the genesis state from.
         #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
         genesis_config_file: Option<PathBuf>,
@@ -64,6 +74,15 @@ pub enum ValidatorCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
+
+        /// Maximum number of SQLite connections in the validator database connection pool.
+        #[arg(
+            long = "sqlite.connection_pool_size",
+            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
+            default_value_t = miden_node_db::default_connection_pool_size(),
+            value_name = "NUM"
+        )]
+        sqlite_connection_pool_size: NonZeroUsize,
 
         /// Directory in which to store the validator's data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -103,6 +122,7 @@ impl ValidatorCommand {
                 genesis_block_directory,
                 accounts_directory,
                 data_directory,
+                sqlite_connection_pool_size,
                 genesis_config_file,
                 validator_key,
             } => {
@@ -110,6 +130,7 @@ impl ValidatorCommand {
                     &genesis_block_directory,
                     &accounts_directory,
                     &data_directory,
+                    sqlite_connection_pool_size,
                     genesis_config_file.as_ref(),
                     validator_key,
                 )
@@ -121,17 +142,32 @@ impl ValidatorCommand {
                 validator_key,
                 data_directory,
                 kms_key_id,
+                sqlite_connection_pool_size,
                 ..
             } => {
                 let address = listen;
 
                 if let Some(kms_key_id) = kms_key_id {
                     let signer = ValidatorSigner::new_kms(kms_key_id).await?;
-                    start::start(address, grpc_options, signer, data_directory).await
+                    start::start(
+                        address,
+                        grpc_options,
+                        signer,
+                        data_directory,
+                        sqlite_connection_pool_size,
+                    )
+                    .await
                 } else {
                     let signer = SecretKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
                     let signer = ValidatorSigner::new_local(signer);
-                    start::start(address, grpc_options, signer, data_directory).await
+                    start::start(
+                        address,
+                        grpc_options,
+                        signer,
+                        data_directory,
+                        sqlite_connection_pool_size,
+                    )
+                    .await
                 }
             },
         }

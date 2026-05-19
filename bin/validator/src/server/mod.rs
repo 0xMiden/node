@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64};
@@ -16,7 +17,9 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::db::{count_signed_blocks, count_validated_transactions, load, load_chain_tip};
+use crate::db::{
+    count_signed_blocks, count_validated_transactions, load_chain_tip, load_with_pool_size,
+};
 use crate::{COMPONENT, ValidatorSigner};
 
 #[cfg(test)]
@@ -45,6 +48,9 @@ pub struct Validator {
 
     /// The data directory for the validator component's database files.
     pub data_directory: PathBuf,
+
+    /// Maximum number of SQLite connections in the validator database connection pool.
+    pub sqlite_connection_pool_size: NonZeroUsize,
 }
 
 impl Validator {
@@ -56,9 +62,12 @@ impl Validator {
         tracing::info!(target: COMPONENT, endpoint=?self.address, "Initializing server");
 
         // Initialize database connection.
-        let db = load(self.data_directory.join("validator.sqlite3"))
-            .await
-            .context("failed to initialize validator database")?;
+        let db = load_with_pool_size(
+            self.data_directory.join("validator.sqlite3"),
+            self.sqlite_connection_pool_size,
+        )
+        .await
+        .context("failed to initialize validator database")?;
 
         // Load initial metrics from the database for the in-memory counters.
         let (initial_chain_tip, initial_tx_count, initial_block_count) = db

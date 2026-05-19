@@ -132,6 +132,9 @@ pub struct NtxBuilderConfig {
 
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
+
+    /// Maximum number of SQLite connections in the database connection pool.
+    pub sqlite_connection_pool_size: NonZeroUsize,
 }
 
 impl NtxBuilderConfig {
@@ -156,6 +159,7 @@ impl NtxBuilderConfig {
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
             database_filepath,
+            sqlite_connection_pool_size: miden_node_db::default_connection_pool_size(),
         }
     }
 
@@ -243,6 +247,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the SQLite connection pool size.
+    #[must_use]
+    pub fn with_sqlite_connection_pool_size(mut self, size: NonZeroUsize) -> Self {
+        self.sqlite_connection_pool_size = size;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -256,7 +267,11 @@ impl NtxBuilderConfig {
     /// - The store contains no blocks (not bootstrapped)
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
-        let db = Db::setup(self.database_filepath.clone()).await?;
+        let db = Db::setup_with_pool_size(
+            self.database_filepath.clone(),
+            self.sqlite_connection_pool_size,
+        )
+        .await?;
 
         // Purge inflight state from previous run.
         db.purge_inflight().await.context("failed to purge inflight state")?;

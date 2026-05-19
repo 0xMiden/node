@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
+use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -285,10 +286,21 @@ impl Db {
     /// Open a connection to the DB and apply any pending migrations.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
-        let db = miden_node_db::Db::new(&database_filepath)?;
+        Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
+            .await
+    }
+
+    /// Open a connection to the DB with a specific pool size and apply any pending migrations.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub async fn load_with_pool_size(
+        database_filepath: PathBuf,
+        connection_pool_size: NonZeroUsize,
+    ) -> Result<Self, DatabaseError> {
+        let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
             target: COMPONENT,
             sqlite= %database_filepath.display(),
+            connection_pool_size = %connection_pool_size,
             "Connected to the database"
         );
 
