@@ -118,9 +118,9 @@ OTEL_SERVICE_NAME=miden-store-primary $BINARY store start \
 PIDS+=($!)
 
 KMS_START_ARGS=()
-# if [[ -n "$KMS_KEY_ID" ]]; then
-#   KMS_START_ARGS+=("--key.kms-id" "$KMS_KEY_ID")
-# fi
+if [[ -n "$KMS_KEY_ID" ]]; then
+    KMS_START_ARGS+=(--key.kms-id "$KMS_KEY_ID")
+fi
 
 echo "Starting validator..."
 OTEL_SERVICE_NAME=miden-validator $VALIDATOR_BINARY start --listen "0.0.0.0:$VALIDATOR_PORT" \
