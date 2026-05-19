@@ -18,6 +18,7 @@ doctest = false
 
 [dependencies]
 anyhow                     = { workspace = true }
+backon                     = { workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }

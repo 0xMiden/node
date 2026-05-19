@@ -77,6 +77,12 @@ pub struct AccountActorContext {
     pub request_tx: mpsc::Sender<ActorRequest>,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures
+    /// (prover unreachable, validator/block-producer transport error, store gRPC hiccup). Doubles
+    /// each retry up to [`Self::request_backoff_max`].
+    pub request_backoff_initial: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
 }
 
 #[cfg(test)]
@@ -112,6 +118,8 @@ impl AccountActorContext {
             db: db.clone(),
             request_tx,
             max_cycles: 1 << 18,
+            request_backoff_initial: Duration::from_millis(1),
+            request_backoff_max: Duration::from_millis(10),
         }
     }
 }
@@ -221,6 +229,10 @@ pub struct AccountActor {
     request_tx: mpsc::Sender<ActorRequest>,
     /// Maximum number of VM execution cycles for network transactions.
     max_cycles: u32,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures.
+    request_backoff_initial: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    request_backoff_max: Duration,
 }
 
 impl AccountActor {
@@ -248,6 +260,8 @@ impl AccountActor {
             idle_timeout: actor_context.idle_timeout,
             request_tx: actor_context.request_tx.clone(),
             max_cycles: actor_context.max_cycles,
+            request_backoff_initial: actor_context.request_backoff_initial,
+            request_backoff_max: actor_context.request_backoff_max,
         }
     }
 
@@ -327,7 +341,17 @@ impl AccountActor {
                     ).await?;
 
                     if let Some(tx_candidate) = tx_candidate {
-                        self.execute_transactions(account_id, tx_candidate).await;
+                        match self.execute_transactions(account_id, tx_candidate).await {
+                            Ok(tx_id) => {
+                                self.mode = ActorMode::TransactionInflight(tx_id);
+                            },
+                            // The batch failed terminally: offending notes have been marked
+                            // failed; let the next loop iteration re-query the DB to decide
+                            // whether anything remains to consume for this account.
+                            Err(_) => {
+                                self.mode = ActorMode::NotesAvailable;
+                            },
+                        }
                     } else {
                         // No transactions to execute, wait for events.
                         self.mode = ActorMode::NoViableNotes;
@@ -378,13 +402,16 @@ impl AccountActor {
 
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
-    /// Updates the state of the actor based on the execution result.
+    /// Transient infrastructure failures (prover unreachable, validator/block-producer transport
+    /// hiccup, store gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
+    /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
+    /// are marked failed and the actor moves on.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &mut self,
         account_id: NetworkAccountId,
         tx_candidate: TransactionCandidate,
-    ) {
+    ) -> Result<TransactionId, ()> {
         let block_num = tx_candidate.chain_tip_header.block_num();
 
         // Execute the selected transaction.
@@ -396,6 +423,8 @@ impl AccountActor {
             self.script_cache.clone(),
             self.db.clone(),
             self.max_cycles,
+            self.request_backoff_initial,
+            self.request_backoff_max,
         );
 
         let notes = tx_candidate.notes.clone();
@@ -422,9 +451,8 @@ impl AccountActor {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                self.mode = ActorMode::TransactionInflight(tx_id);
+                Ok(tx_id)
             },
-            // Transaction execution failed.
             Err(err) => {
                 let error_msg = err.as_report();
                 tracing::error!(
@@ -433,10 +461,6 @@ impl AccountActor {
                     err = %error_msg,
                     "network transaction failed",
                 );
-                self.mode = ActorMode::NoViableNotes;
-
-                // For `AllNotesFailed`, use the per-note errors which contain the
-                // specific reason each note failed (e.g. consumability check details).
                 let failed_notes: Vec<_> = match err {
                     execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
                     other => {
@@ -455,7 +479,10 @@ impl AccountActor {
                             .collect()
                     },
                 };
-                self.mark_notes_failed(&failed_notes, block_num).await;
+                if !failed_notes.is_empty() {
+                    self.mark_notes_failed(&failed_notes, block_num).await;
+                }
+                Err(())
             },
         }
     }
