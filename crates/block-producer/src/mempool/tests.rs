@@ -178,6 +178,13 @@ fn empty_block_commitment() {
     }
 }
 
+/// Regression test for a child transaction that consumes an unauthenticated note produced by a
+/// parent transaction which has already been committed and later pruned from retained mempool
+/// history.
+///
+/// The child remains in the transaction graph after the parent block is committed. Once retention
+/// pruning removes the parent, the note is no longer represented by an inflight transaction, so the
+/// child must stop reporting it as unauthenticated before it is selected into its own batch.
 #[test]
 fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
     let (mut uut, _) = Mempool::for_tests();

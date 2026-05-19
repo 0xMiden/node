@@ -26,6 +26,7 @@
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
+- Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
 
 ## v0.14.10 (2026-05-29)
 
