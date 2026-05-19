@@ -110,17 +110,7 @@ impl State {
         // Awaiting the block saving task to complete without errors.
         block_save_task.await??;
 
-        // Scope to update the in-memory data.
-        async move {
-            // We need to hold the write lock here to prevent inconsistency between the in-memory
-            // state and the DB state. Thus, we need to wait for the DB update task to complete
-            // successfully.
-            let mut inner = self
-                .inner
-                .write()
-                .instrument(info_span!(target: COMPONENT, "acquire_inner_write_lock"))
-                .await;
-
+        self.with_inner_write_blocking(|inner| {
             // We need to check that neither the nullifier tree nor the account tree have changed
             // while we were waiting for the DB preparation task to complete. If either of them
             // did change, we do not proceed with in-memory and database updates, since it may
@@ -141,8 +131,8 @@ impl State {
             // Await for successful commit of the DB transaction. If the commit fails, we mustn't
             // change in-memory state, so we return a block applying error and don't proceed with
             // in-memory updates.
-            db_update_task
-                .await?
+            tokio::runtime::Handle::current()
+                .block_on(db_update_task)?
                 .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
 
             // Update the in-memory data structures after successful commit of the DB transaction
@@ -158,15 +148,11 @@ impl State {
             inner.blockchain.push(block_commitment);
 
             Ok(())
-        }
-        .in_current_span()
-        .await?;
+        })?;
 
-        self.forest
-            .write()
-            .instrument(info_span!(target: COMPONENT, "acquire_forest_write_lock"))
-            .await
-            .apply_block_updates(block_num, account_deltas)?;
+        self.with_forest_write_blocking(|forest| {
+            forest.apply_block_updates(block_num, account_deltas)
+        })?;
 
         // Push to cache and notify replica subscribers.
         self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
@@ -235,78 +221,74 @@ impl State {
         header: &BlockHeader,
         body: &BlockBody,
     ) -> Result<(Word, NullifierMutationSet, Word, AccountMutationSet), ApplyBlockError> {
-        let inner = self
-            .inner
-            .read()
-            .instrument(info_span!(target: COMPONENT, "acquire_inner_read_lock"))
-            .await;
+        self.with_inner_read_blocking(|inner| {
+            let block_num = header.block_num();
 
-        let block_num = header.block_num();
+            // nullifiers can be produced only once
+            let duplicate_nullifiers: Vec<_> = body
+                .created_nullifiers()
+                .iter()
+                .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
+                .copied()
+                .collect();
+            if !duplicate_nullifiers.is_empty() {
+                return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
+            }
 
-        // nullifiers can be produced only once
-        let duplicate_nullifiers: Vec<_> = body
-            .created_nullifiers()
-            .iter()
-            .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
-            .copied()
-            .collect();
-        if !duplicate_nullifiers.is_empty() {
-            return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
-        }
+            // new_block.chain_root must be equal to the chain MMR root prior to the update
+            let peaks = inner.blockchain.peaks();
+            if peaks.hash_peaks() != header.chain_commitment() {
+                return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
+            }
 
-        // new_block.chain_root must be equal to the chain MMR root prior to the update
-        let peaks = inner.blockchain.peaks();
-        if peaks.hash_peaks() != header.chain_commitment() {
-            return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
-        }
+            // compute update for nullifier tree
+            let nullifier_tree_update = inner
+                .nullifier_tree
+                .compute_mutations(
+                    body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
+                )
+                .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
-        // compute update for nullifier tree
-        let nullifier_tree_update = inner
-            .nullifier_tree
-            .compute_mutations(
-                body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
-            )
-            .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
+            if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
+                // We do our best here to notify the serve routine, if it doesn't care (dropped the
+                // receiver) we can't do much.
+                let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
+                    InvalidBlockError::NewBlockInvalidNullifierRoot,
+                ));
+                return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
+            }
 
-        if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
-            // We do our best here to notify the serve routine, if it doesn't care (dropped the
-            // receiver) we can't do much.
-            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                InvalidBlockError::NewBlockInvalidNullifierRoot,
-            ));
-            return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
-        }
+            // compute update for account tree
+            let account_tree_update = inner
+                .account_tree
+                .compute_mutations(
+                    body.updated_accounts()
+                        .iter()
+                        .map(|update| (update.account_id(), update.final_state_commitment())),
+                )
+                .map_err(|e| match e {
+                    HistoricalError::AccountTreeError(err) => {
+                        InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
+                    },
+                    HistoricalError::MerkleError(_) => {
+                        panic!("Unexpected MerkleError during account tree mutation computation")
+                    },
+                })?;
 
-        // compute update for account tree
-        let account_tree_update = inner
-            .account_tree
-            .compute_mutations(
-                body.updated_accounts()
-                    .iter()
-                    .map(|update| (update.account_id(), update.final_state_commitment())),
-            )
-            .map_err(|e| match e {
-                HistoricalError::AccountTreeError(err) => {
-                    InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-                },
-                HistoricalError::MerkleError(_) => {
-                    panic!("Unexpected MerkleError during account tree mutation computation")
-                },
-            })?;
+            if account_tree_update.as_mutation_set().root() != header.account_root() {
+                let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
+                    InvalidBlockError::NewBlockInvalidAccountRoot,
+                ));
+                return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
+            }
 
-        if account_tree_update.as_mutation_set().root() != header.account_root() {
-            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                InvalidBlockError::NewBlockInvalidAccountRoot,
-            ));
-            return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
-        }
-
-        Ok((
-            inner.nullifier_tree.root(),
-            nullifier_tree_update,
-            inner.account_tree.root_latest(),
-            account_tree_update,
-        ))
+            Ok((
+                inner.nullifier_tree.root(),
+                nullifier_tree_update,
+                inner.account_tree.root_latest(),
+                account_tree_update,
+            ))
+        })
     }
 
     /// Builds note records with inclusion proofs from the block body.
