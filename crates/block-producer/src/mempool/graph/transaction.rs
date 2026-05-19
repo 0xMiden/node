@@ -320,11 +320,30 @@ impl TransactionGraph {
     /// graph.
     pub fn prune(&mut self, batch: &SelectedBatch) {
         for tx in batch.transactions() {
+            self.mark_committed_notes_authenticated_for_descendants(tx);
             self.inner.prune(tx.id());
             self.failures.remove(&tx.id());
             self.txs_user_batch.remove(&tx.id());
         }
         self.user_batch_txs.remove(&batch.id());
+    }
+
+    fn mark_committed_notes_authenticated_for_descendants(
+        &mut self,
+        tx: &Arc<AuthenticatedTransaction>,
+    ) {
+        let output_notes = tx.output_note_commitments().collect::<HashSet<_>>();
+        if output_notes.is_empty() {
+            return;
+        }
+
+        let tx_id = tx.id();
+        let descendants = self.inner.descendants(&tx_id);
+        for descendant in descendants.into_iter().filter(|descendant| *descendant != tx_id) {
+            if let Some(descendant) = self.inner.get_mut(&descendant) {
+                Arc::make_mut(descendant).mark_notes_authenticated(output_notes.iter().copied());
+            }
+        }
     }
 
     /// Number of transactions which have not been selected for inclusion in a batch.
