@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{
-    DEFAULT_MAX_CONCURRENT_PROOFS, DatabaseOptions, Store, StoreMode,
+    DEFAULT_MAX_CONCURRENT_PROOFS,
+    DatabaseOptions,
+    Store,
+    StoreMode,
     default_sqlite_connection_pool_size,
 };
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
