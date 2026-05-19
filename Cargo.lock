@@ -2933,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "miden-agglayer"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "alloy-sol-types",
  "fs-err",
@@ -3013,7 +3013,7 @@ dependencies = [
 [[package]]
 name = "miden-block-prover"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "miden-protocol",
  "thiserror 2.0.18",
@@ -3648,7 +3648,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3751,7 +3751,7 @@ dependencies = [
 [[package]]
 name = "miden-standards"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "bon",
  "fs-err",
@@ -3790,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "miden-testing"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -3810,7 +3810,7 @@ dependencies = [
 [[package]]
 name = "miden-tx"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -3823,7 +3823,7 @@ dependencies = [
 [[package]]
 name = "miden-tx-batch-prover"
 version = "0.15.0"
-source = "git+https://github.com/0xMiden/protocol?branch=next#01077765ca06fb49fc6e90e8ee9e181ad76ff7e2"
+source = "git+https://github.com/0xMiden/protocol?branch=next#c2d8c615b90eb7b3993864eaa9c22c4bb4061ee5"
 dependencies = [
  "miden-protocol",
  "miden-tx",

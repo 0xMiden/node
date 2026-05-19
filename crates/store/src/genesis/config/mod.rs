@@ -25,7 +25,7 @@ use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, ONE, Word};
+use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
@@ -297,14 +297,9 @@ impl GenesisConfig {
                         total_issuance,
                     });
                 }
-                let new_token_config = Word::new([
-                    Felt::from(new_token_supply),
-                    Felt::from(current_faucet.max_supply()),
-                    Felt::from(current_faucet.decimals()),
-                    Felt::from(current_faucet.symbol()),
-                ]);
-                storage_delta
-                    .set_item(FungibleFaucet::token_config_slot().clone(), new_token_config)?;
+                let updated_faucet = current_faucet.with_token_supply(new_token_supply)?;
+                let slot = updated_faucet.token_config_slot_value();
+                storage_delta.set_item(slot.name().clone(), slot.value())?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),

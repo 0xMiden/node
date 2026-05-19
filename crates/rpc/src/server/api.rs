@@ -496,8 +496,7 @@ impl api_server::Api for RpcService {
         // account; the store is the source of truth because network-ness now lives in account
         // storage and isn't derivable from an AccountId alone. Network accounts must be public, so
         // private-account txs short-circuit and skip the store roundtrip.
-        if !tx.account_update().initial_state_commitment().is_empty()
-            && tx.account_id().is_public()
+        if !tx.account_update().initial_state_commitment().is_empty() && tx.account_id().is_public()
         {
             let response = self
                 .store
