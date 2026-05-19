@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
+use codegen::{Function, Scope};
 use fs_err as fs;
 
 use super::Migrator;
@@ -227,45 +227,34 @@ fn render_migrator(
     base_migrations: &[SqlMigration],
     code_migrations: &[CodeMigration],
 ) -> Result<String> {
-    let mut source = String::new();
+    let mut scope = Scope::new();
 
     for migration in code_migrations {
-        source.push_str("#[path = ");
-        write!(&mut source, "{:?}", rust_path(&migration.path)?)
-            .expect("writing to a String cannot fail");
-        source.push_str("]\n");
-        source.push_str("mod ");
-        source.push_str(&migration.module_ident);
-        source.push_str(";\n");
+        let path = format!("{:?}", rust_path(&migration.path)?);
+        scope.raw(format!("#[path = {path}]\nmod {};", migration.module_ident));
     }
 
-    if !code_migrations.is_empty() {
-        source.push('\n');
-    }
-
-    source.push_str(
-        "pub fn migrator() -> ::anyhow::Result<::miden_node_db::migration::Migrator> {\n    \
-         ::miden_node_db::migration::Migrator::builder()?",
-    );
+    let mut function = Function::new("migrator");
+    function.vis("pub");
+    function.ret("::anyhow::Result<::miden_node_db::migration::Migrator>");
+    function.line("::miden_node_db::migration::Migrator::builder()?");
 
     for migration in base_migrations {
-        source.push_str("\n        .push_base(");
-        write!(&mut source, "{:?}", migration.name).expect("writing to a String cannot fail");
-        source.push_str(", include_str!(");
-        write!(&mut source, "{:?}", rust_path(&migration.path)?)
-            .expect("writing to a String cannot fail");
-        source.push_str("))?");
+        let name = format!("{:?}", migration.name);
+        let path = format!("{:?}", rust_path(&migration.path)?);
+        function.line(format!("    .push_base({name}, include_str!({path}))?"));
     }
 
     for migration in code_migrations {
-        source.push_str("\n        .push_code(");
-        write!(&mut source, "{:?}", migration.name).expect("writing to a String cannot fail");
-        source.push_str(", ");
-        source.push_str(&migration.module_ident);
-        source.push_str("::migrate)?");
+        let name = format!("{:?}", migration.name);
+        function.line(format!("    .push_code({name}, {}::migrate)?", migration.module_ident));
     }
 
-    source.push_str("\n        .build()\n}\n");
+    function.line("    .build()");
+    scope.push_fn(function);
+
+    let mut source = scope.to_string();
+    source.push('\n');
     Ok(source)
 }
 

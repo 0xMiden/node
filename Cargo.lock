@@ -3300,6 +3300,7 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "build-rs",
+ "codegen",
  "deadpool",
  "deadpool-diesel",
  "deadpool-sync",
