@@ -559,6 +559,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::test(),
             storage_options: StorageOptions::default(),
         }
@@ -600,6 +601,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::test(),
             storage_options: StorageOptions::default(),
         }

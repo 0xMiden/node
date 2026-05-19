@@ -190,6 +190,16 @@ miden-node ntx-builder start \
   --data-directory /tmp/ntx-builder
 ```
 
+### SQLite pools
+
+The store, validator, and network transaction builder use SQLite connection pools for database
+queries. By default, each pool size is twice the number of available CPU cores. Override it with
+`--sqlite.connection_pool_size` or the component-specific environment variable:
+
+- `MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE`
+- `MIDEN_NODE_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE`
+- `MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE`
+
 ### gRPC server limits and timeouts
 
 The RPC component enforces per-request timeouts, per-IP rate limits, and global concurrency caps. Configure these

@@ -59,7 +59,7 @@ use crate::errors::{
     StateInitializationError,
 };
 use crate::proven_tip::ProvenTipWriter;
-use crate::{COMPONENT, DataDirectory};
+use crate::{COMPONENT, DataDirectory, DatabaseOptions};
 
 /// Number of recent committed blocks held in the in-memory cache for replica subscriptions.
 const BLOCK_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
@@ -195,6 +195,27 @@ impl State {
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     ) -> Result<(Self, ProvenTipWriter), StateInitializationError> {
+        Self::load_with_database_options(
+            data_path,
+            storage_options,
+            DatabaseOptions::default(),
+            termination_ask,
+        )
+        .await
+    }
+
+    /// Loads the state from the data directory using explicit database options.
+    ///
+    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler
+    /// (in block-producer mode) to advance the proven tip; callers can subscribe to tip changes
+    /// via the methods on `Self`.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub async fn load_with_database_options(
+        data_path: &Path,
+        storage_options: StorageOptions,
+        database_options: DatabaseOptions,
+        termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
+    ) -> Result<(Self, ProvenTipWriter), StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -204,9 +225,12 @@ impl State {
         );
 
         let database_filepath = data_directory.database_path();
-        let mut db = Db::load(database_filepath.clone())
-            .await
-            .map_err(StateInitializationError::DatabaseLoadError)?;
+        let mut db = Db::load_with_pool_size(
+            database_filepath.clone(),
+            database_options.connection_pool_size,
+        )
+        .await
+        .map_err(StateInitializationError::DatabaseLoadError)?;
 
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
