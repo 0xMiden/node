@@ -19,10 +19,12 @@ const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE";
+const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_NODE_NTX_BUILDER_TX_EXPIRATION_DELTA";
 
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
+const DEFAULT_TX_EXPIRATION_DELTA: u16 = 5;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -110,6 +112,10 @@ pub enum NtxBuilderCommand {
         /// OpenTelemetry documentation. See our operator manual for further details.
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
+
+        /// Sets the transaction expiration delta (in blocks).
+        #[arg(long = "tx-expiration-delta", default_value_t = DEFAULT_TX_EXPIRATION_DELTA, env = ENV_TX_EXPIRATION_DELTA, value_name = "NUM")]
+        tx_expiration_delta: u16,
     },
 }
 
@@ -128,6 +134,7 @@ impl NtxBuilderCommand {
             sqlite_connection_pool_size,
             data_directory,
             enable_otel: _,
+            tx_expiration_delta,
         } = self;
 
         let listener = TcpListener::bind(listen)
@@ -147,7 +154,8 @@ impl NtxBuilderCommand {
         .with_idle_timeout(idle_timeout)
         .with_max_account_crashes(max_account_crashes)
         .with_max_cycles(max_tx_cycles)
-        .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
+        .with_sqlite_connection_pool_size(sqlite_connection_pool_size)
+        .with_tx_expiration_delta(tx_expiration_delta);
 
         config
             .build()
