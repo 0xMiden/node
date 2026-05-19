@@ -19,6 +19,7 @@ doctest = false
 
 [dependencies]
 anyhow                     = { workspace = true }
+backon                     = { workspace = true }
 clap                       = { features = ["env", "string"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }

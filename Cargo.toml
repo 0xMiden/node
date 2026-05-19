@@ -75,6 +75,7 @@ miden-crypto = { version = "0.23" }
 anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
+backon            = { version = "1.6" }
 build-rs          = { version = "0.3" }
 clap              = { features = ["derive"], version = "4.5" }
 codegen           = { version = "0.3" }
