@@ -7,6 +7,7 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
@@ -154,50 +155,36 @@ impl Db {
 
     /// Applies a committed block's effects to the database in a single transaction.
     ///
+    /// Persists the new chain MMR atomically with the block effects so the persisted state can
+    /// be loaded directly on restart.
+    ///
     /// Returns the list of affected account IDs that should be notified.
     pub async fn apply_committed_block(
         &self,
         effects: CommittedBlockEffects,
+        chain_mmr: PartialMmr,
     ) -> Result<Vec<NetworkAccountId>> {
         self.inner
             .transact("apply_committed_block", move |conn| {
-                queries::apply_committed_block(conn, &effects)
+                queries::apply_committed_block(conn, &effects, &chain_mmr)
             })
             .await
     }
 
-    /// Reads the singleton chain state row, returning the last synced block number and its header
-    /// if any block has been applied locally.
-    pub async fn get_chain_state(&self) -> Result<Option<(BlockNumber, BlockHeader)>> {
+    /// Reads the singleton chain state row, returning the last synced block number, its header,
+    /// and the persisted chain MMR if any block has been applied locally.
+    pub async fn get_chain_state(
+        &self,
+    ) -> Result<Option<(BlockNumber, BlockHeader, PartialMmr)>> {
         self.inner.query("get_chain_state", queries::select_chain_state).await
     }
 
-    /// Inserts or replaces the singleton chain state row.
-    pub async fn upsert_chain_state(
-        &self,
-        block_num: BlockNumber,
-        header: BlockHeader,
-    ) -> Result<()> {
+    /// Returns the set of network account IDs that have at least one unconsumed note in the local
+    /// DB. Used at startup to spawn actors for the pending-note backlog inherited from a previous
+    /// run.
+    pub async fn accounts_with_pending_notes(&self) -> Result<Vec<NetworkAccountId>> {
         self.inner
-            .transact("upsert_chain_state", move |conn| {
-                queries::upsert_chain_state(conn, block_num, &header)
-            })
-            .await
-    }
-
-    /// Syncs an account and its notes from the store into the DB.
-    pub async fn sync_account_from_store(
-        &self,
-        account_id: NetworkAccountId,
-        account: Account,
-        notes: Vec<AccountTargetNetworkNote>,
-    ) -> Result<()> {
-        self.inner
-            .transact("sync_account_from_store", move |conn| {
-                queries::upsert_account(conn, account_id, &account)?;
-                queries::insert_committed_notes(conn, &notes)?;
-                Ok(())
-            })
+            .query("accounts_with_pending_notes", queries::accounts_with_pending_notes)
             .await
     }
 

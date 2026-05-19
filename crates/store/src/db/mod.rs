@@ -40,7 +40,7 @@ pub use crate::db::models::queries::{
     PublicAccountStateRootsPage,
 };
 use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
-use crate::db::models::{Page, queries};
+use crate::db::models::queries;
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
@@ -458,42 +458,6 @@ impl Db {
             .await
     }
 
-    /// Loads public account details for a network account by its full account ID.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_network_account_by_id(
-        &self,
-        account_id: AccountId,
-    ) -> Result<Option<AccountInfo>> {
-        self.transact("Get network account by id", move |conn| {
-            queries::select_network_account_by_id(conn, account_id)
-        })
-        .await
-    }
-
-    /// Returns network account IDs within the specified block range (based on account creation
-    /// block).
-    ///
-    /// The function may return fewer accounts than exist in the range if the result would exceed
-    /// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-    /// truncated at a block boundary to ensure all accounts from included blocks are returned.
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    /// - A vector of network account IDs.
-    /// - The last block number that was fully included in the result. When truncated, this will be
-    ///   less than the requested range end.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_network_account_ids(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<AccountId>, BlockNumber)> {
-        self.transact("Get all network account IDs", move |conn| {
-            queries::select_all_network_account_ids(conn, block_range)
-        })
-        .await
-    }
-
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
@@ -719,22 +683,6 @@ impl Db {
             slot_name,
             entries: StorageMapEntries::AllEntries(entries),
         })
-    }
-
-    /// Loads the network notes for an account that are unconsumed by a specified block number.
-    /// Pagination is used to limit the number of notes returned.
-    pub(crate) async fn select_unconsumed_network_notes(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        page: Page,
-    ) -> Result<(Vec<NoteRecord>, Page)> {
-        self.transact("unconsumed network notes for account", move |conn| {
-            models::queries::select_unconsumed_network_notes_by_account_id(
-                conn, account_id, block_num, page,
-            )
-        })
-        .await
     }
 
     pub async fn get_account_vault_sync(

@@ -325,14 +325,6 @@ impl From<diesel::result::Error> for NoteSyncError {
 }
 
 #[derive(Error, Debug)]
-pub enum GetCurrentBlockchainDataError {
-    #[error("failed to retrieve block header")]
-    ErrorRetrievingBlockHeader(#[source] DatabaseError),
-    #[error("failed to instantiate MMR peaks")]
-    InvalidPeaks(MmrError),
-}
-
-#[derive(Error, Debug)]
 pub enum GetBatchInputsError {
     #[error("failed to select note inclusion proofs")]
     SelectNoteInclusionProofError(#[source] DatabaseError),
@@ -397,20 +389,6 @@ pub enum SyncAccountStorageMapsError {
     AccountNotFound(AccountId),
     #[error("account {0} is not public")]
     AccountNotPublic(AccountId),
-}
-
-// GET NETWORK ACCOUNT IDS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum GetNetworkAccountIdsError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
-    #[error("malformed nullifier prefix")]
-    DeserializationFailed(#[from] ConversionError),
 }
 
 // GET BLOCK BY NUMBER ERRORS

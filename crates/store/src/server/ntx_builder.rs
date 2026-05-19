@@ -1,29 +1,17 @@
 use std::collections::BTreeSet;
-use std::num::{NonZero, TryFromIntError};
 
 use miden_crypto::merkle::smt::SmtProof;
-use miden_node_proto::decode::{read_account_id, read_block_range, read_root};
-use miden_node_proto::domain::account::AccountInfo;
+use miden_node_proto::decode::{read_account_id, read_root};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::BlockRange;
 use miden_node_proto::generated::store::{BlockSubscriptionRequest, ntx_builder_server};
-use miden_node_utils::ErrorReport;
 use miden_protocol::account::{StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetVaultKey;
-use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Note;
 use tonic::{Request, Response, Status};
 use tracing::debug;
 
 use crate::COMPONENT;
-use crate::db::models::Page;
-use crate::errors::{
-    GetAccountError,
-    GetNetworkAccountIdsError,
-    GetNoteScriptByRootError,
-    GetWitnessesError,
-};
+use crate::errors::{GetAccountError, GetNoteScriptByRootError, GetWitnessesError};
 use crate::server::api::{StoreApi, internal_error, invalid_argument};
 use crate::server::replica::BlockSubscriptionStream;
 use crate::state::Finality;
@@ -43,131 +31,6 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         request: Request<BlockSubscriptionRequest>,
     ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
         self.block_subscription_inner(request)
-    }
-
-    /// Returns the chain tip's header and MMR peaks corresponding to that header.
-    /// If there are N blocks, the peaks will represent the MMR at block `N - 1`.
-    ///
-    /// This returns all the blockchain-related information needed for executing transactions
-    /// without authenticating notes.
-    async fn get_current_blockchain_data(
-        &self,
-        request: Request<proto::blockchain::MaybeBlockNumber>,
-    ) -> Result<Response<proto::store::CurrentBlockchainData>, Status> {
-        let block_num = request.into_inner().block_num.map(BlockNumber::from);
-
-        let response = match self
-            .state
-            .get_current_blockchain_data(block_num)
-            .await
-            .map_err(internal_error)?
-        {
-            Some((header, peaks)) => proto::store::CurrentBlockchainData {
-                current_peaks: peaks.peaks().iter().map(Into::into).collect(),
-                current_block_header: Some(header.into()),
-            },
-            None => proto::store::CurrentBlockchainData {
-                current_peaks: vec![],
-                current_block_header: None,
-            },
-        };
-
-        Ok(Response::new(response))
-    }
-
-    async fn get_network_account_details_by_id(
-        &self,
-        request: Request<proto::account::AccountId>,
-    ) -> Result<Response<proto::store::MaybeAccountDetails>, Status> {
-        let account_id =
-            read_account_id::<proto::account::AccountId, Status>(Some(request.into_inner()))?;
-
-        let account_info: Option<AccountInfo> =
-            self.state.get_network_account_details_by_id(account_id).await?;
-
-        Ok(Response::new(proto::store::MaybeAccountDetails {
-            details: account_info.map(|acc| (&acc).into()),
-        }))
-    }
-
-    async fn get_unconsumed_network_notes(
-        &self,
-        request: Request<proto::store::UnconsumedNetworkNotesRequest>,
-    ) -> Result<Response<proto::store::UnconsumedNetworkNotes>, Status> {
-        let request = request.into_inner();
-        let block_num = BlockNumber::from(request.block_num);
-        let account_id = read_account_id::<proto::store::UnconsumedNetworkNotesRequest, Status>(
-            request.account_id,
-        )?;
-
-        let state = self.state.clone();
-
-        let size =
-            NonZero::try_from(request.page_size as usize).map_err(|err: TryFromIntError| {
-                invalid_argument(err.as_report_context("invalid page_size"))
-            })?;
-        let page = Page { token: request.page_token, size };
-        // TODO: no need to get the whole NoteRecord here, a NetworkNote wrapper should be created
-        // instead
-        let (notes, next_page) = state
-            .get_unconsumed_network_notes_for_account(account_id, block_num, page)
-            .await
-            .map_err(internal_error)?;
-
-        let mut network_notes = Vec::with_capacity(notes.len());
-        for note in notes {
-            // SAFETY: Network notes are filtered in the database, so they should have details;
-            // otherwise the state would be corrupted
-            let (assets, recipient) = note.details.unwrap().into_parts();
-            let partial_metadata = *note.metadata.partial_metadata();
-            let note =
-                Note::with_attachments(assets, partial_metadata, recipient, note.attachments);
-            network_notes.push(note.into());
-        }
-
-        Ok(Response::new(proto::store::UnconsumedNetworkNotes {
-            notes: network_notes,
-            next_token: next_page.token,
-        }))
-    }
-
-    /// Returns network account IDs within the specified block range (based on account creation
-    /// block).
-    ///
-    /// The function may return fewer accounts than exist in the range if the result would exceed
-    /// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-    /// truncated at a block boundary to ensure all accounts from included blocks are returned.
-    ///
-    /// The response includes pagination info with the last block number that was fully included.
-    async fn get_network_account_ids(
-        &self,
-        request: Request<BlockRange>,
-    ) -> Result<Response<proto::store::NetworkAccountIdList>, Status> {
-        let request = request.into_inner();
-
-        let block_range =
-            read_block_range::<GetNetworkAccountIdsError>(Some(request), "GetNetworkAccountIds")?
-                .into_inclusive_range::<GetNetworkAccountIdsError>()?;
-
-        let (account_ids, mut last_block_included) =
-            self.state.get_all_network_accounts(block_range).await.map_err(internal_error)?;
-
-        let account_ids = Vec::from_iter(account_ids.into_iter().map(Into::into));
-
-        let mut chain_tip = self.state.chain_tip(Finality::Committed).await;
-        if last_block_included > chain_tip {
-            last_block_included = chain_tip;
-        }
-
-        chain_tip = self.state.chain_tip(Finality::Committed).await;
-
-        Ok(Response::new(proto::store::NetworkAccountIdList {
-            account_ids,
-            pagination_info: Some(proto::rpc::PaginationInfo {
-                chain_tip: chain_tip.as_u32(),
-                block_num: last_block_included.as_u32(),
-            }),
-        }))
     }
 
     async fn get_account(

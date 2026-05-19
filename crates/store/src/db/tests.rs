@@ -1,4 +1,3 @@
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use assert_matches::assert_matches;
@@ -82,7 +81,7 @@ use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionR
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
-use crate::db::models::{Page, queries, utils};
+use crate::db::models::{queries, utils};
 use crate::errors::DatabaseError;
 
 fn create_db() -> SqliteConnection {
@@ -337,92 +336,6 @@ fn make_account_and_note(
         Ok::<_, DatabaseError>((account_id, new_note))
     })
     .unwrap()
-}
-
-#[test]
-#[miden_node_test_macro::enable_logging]
-fn sql_unconsumed_network_notes() {
-    let mut conn = create_db();
-
-    // Create account.
-    let account_note =
-        make_account_and_note(&mut conn, 0.into(), [1u8; 32], AccountStorageMode::Network);
-
-    // Create 2 blocks.
-    create_block(&mut conn, 0.into());
-    create_block(&mut conn, 1.into());
-
-    // Create a NetworkAccountTarget attachment for the network account
-    let target = NetworkAccountTarget::new(account_note.0, NoteExecutionHint::Always)
-        .expect("NetworkAccountTarget creation should succeed for network account");
-    let attachment: NoteAttachment = target.into();
-
-    // Create an unconsumed note in each block.
-    let notes = Vec::from_iter((0..2).map(|i: u32| {
-        let attachments = NoteAttachments::from(attachment.clone());
-        let metadata = NoteMetadata::new(
-            PartialNoteMetadata::new(account_note.0, NoteType::Public),
-            &attachments,
-        );
-        let note = NoteRecord {
-            block_num: 0.into(), // Created on same block.
-            note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
-            note_id: num_to_word(i.into()),
-            note_commitment: num_to_word(i.into()),
-            metadata,
-            details: None,
-            attachments,
-            inclusion_path: SparseMerklePath::default(),
-        };
-        (note, Some(num_to_nullifier(i.into())))
-    }));
-    queries::insert_scripts(&mut conn, notes.iter().map(|(note, _)| note)).unwrap();
-    queries::insert_notes(&mut conn, &notes).unwrap();
-
-    // Both notes are unconsumed, query should return both notes on both blocks.
-    (0..2).for_each(|i: u32| {
-        let (result, _) = queries::select_unconsumed_network_notes_by_account_id(
-            &mut conn,
-            account_note.0,
-            i.into(),
-            Page {
-                token: None,
-                size: NonZeroUsize::new(10).unwrap(),
-            },
-        )
-        .unwrap();
-        assert_eq!(result.len(), 2);
-    });
-
-    // Consume the 2nd note on the 2nd block.
-    queries::insert_nullifiers_for_block(&mut conn, &[notes[1].1.unwrap()], 1.into()).unwrap();
-
-    // Query against first block should return both notes.
-    let (result, _) = queries::select_unconsumed_network_notes_by_account_id(
-        &mut conn,
-        account_note.0,
-        0.into(),
-        Page {
-            token: None,
-            size: NonZeroUsize::new(10).unwrap(),
-        },
-    )
-    .unwrap();
-    assert_eq!(result.len(), 2);
-
-    // Query against second block should return only first note.
-    let (result, _) = queries::select_unconsumed_network_notes_by_account_id(
-        &mut conn,
-        account_note.0,
-        1.into(),
-        Page {
-            token: None,
-            size: NonZeroUsize::new(10).unwrap(),
-        },
-    )
-    .unwrap();
-    assert_eq!(result.len(), 1);
-    assert_eq!(result[0].note_id, num_to_word(0));
 }
 
 #[test]

@@ -5,6 +5,7 @@ use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
@@ -72,4 +73,13 @@ pub fn note_script_from_bytes(bytes: &[u8]) -> Result<NoteScript, DatabaseError>
 pub fn block_header_from_bytes(bytes: &[u8]) -> Result<BlockHeader, DatabaseError> {
     BlockHeader::read_from_bytes(bytes)
         .map_err(|e| DatabaseError::deserialization("block header", e))
+}
+
+pub fn partial_mmr_to_bytes(mmr: &PartialMmr) -> Vec<u8> {
+    mmr.to_bytes()
+}
+
+pub fn partial_mmr_from_bytes(bytes: &[u8]) -> Result<PartialMmr, DatabaseError> {
+    PartialMmr::read_from_bytes(bytes)
+        .map_err(|e| DatabaseError::deserialization("partial mmr", e))
 }

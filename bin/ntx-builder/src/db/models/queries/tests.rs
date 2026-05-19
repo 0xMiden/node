@@ -5,6 +5,7 @@ use std::sync::Arc;
 use diesel::prelude::*;
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 
 use super::*;
 use crate::NoteError;
@@ -49,7 +50,7 @@ fn apply_committed_block_inserts_notes_and_advances_chain_state() {
         network_account_updates: vec![],
     };
 
-    let affected = apply_committed_block(conn, &effects).unwrap();
+    let affected = apply_committed_block(conn, &effects, &PartialMmr::default()).unwrap();
 
     // Note inserted; note's target account is reported as affected.
     assert_eq!(count_notes(conn), 1);
@@ -79,6 +80,7 @@ fn apply_committed_block_marks_nullifiers_consumed() {
             nullifiers: vec![],
             network_account_updates: vec![],
         },
+        &PartialMmr::default(),
     )
     .unwrap();
 
@@ -92,6 +94,7 @@ fn apply_committed_block_marks_nullifiers_consumed() {
             nullifiers: vec![nullifier],
             network_account_updates: vec![],
         },
+        &PartialMmr::default(),
     )
     .unwrap();
 
@@ -120,6 +123,7 @@ fn apply_committed_block_advances_chain_state() {
             nullifiers: vec![],
             network_account_updates: vec![],
         },
+        &PartialMmr::default(),
     )
     .unwrap();
     apply_committed_block(
@@ -130,6 +134,7 @@ fn apply_committed_block_advances_chain_state() {
             nullifiers: vec![],
             network_account_updates: vec![],
         },
+        &PartialMmr::default(),
     )
     .unwrap();
 
@@ -302,12 +307,12 @@ fn upsert_chain_state_updates_singleton() {
 
     let block_num_1 = BlockNumber::from(1u32);
     let header_1 = mock_block_header(block_num_1);
-    upsert_chain_state(conn, block_num_1, &header_1).unwrap();
+    upsert_chain_state(conn, block_num_1, &header_1, &PartialMmr::default()).unwrap();
 
     // Upsert again with higher block.
     let block_num_2 = BlockNumber::from(2u32);
     let header_2 = mock_block_header(block_num_2);
-    upsert_chain_state(conn, block_num_2, &header_2).unwrap();
+    upsert_chain_state(conn, block_num_2, &header_2, &PartialMmr::default()).unwrap();
 
     // Should only have one row.
     let row_count: i64 = schema::chain_state::table.count().get_result(conn).unwrap();

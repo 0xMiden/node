@@ -137,6 +137,31 @@ pub fn available_notes(
     Ok(result)
 }
 
+/// Returns the set of account IDs that have at least one note still pending consumption
+/// (i.e., `committed_at IS NULL`).
+///
+/// Used on startup to spawn actors for accounts whose pending-note backlog predates the
+/// current block subscription window.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT DISTINCT account_id FROM notes WHERE committed_at IS NULL
+/// ```
+pub fn accounts_with_pending_notes(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let rows: Vec<Vec<u8>> = schema::notes::table
+        .filter(schema::notes::committed_at.is_null())
+        .select(schema::notes::account_id)
+        .distinct()
+        .load(conn)?;
+
+    rows.iter()
+        .map(|bytes| conversions::network_account_id_from_bytes(bytes))
+        .collect()
+}
+
 /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
 /// the latest error message.
 ///

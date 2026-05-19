@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 
 use super::account_effect::NetworkAccountEffect;
 use crate::committed_block::CommittedBlockEffects;
@@ -42,6 +43,7 @@ mod tests;
 pub fn apply_committed_block(
     conn: &mut SqliteConnection,
     effects: &CommittedBlockEffects,
+    chain_mmr: &PartialMmr,
 ) -> Result<Vec<NetworkAccountId>, DatabaseError> {
     let block_num = effects.header.block_num();
     let mut affected_accounts: HashSet<NetworkAccountId> = HashSet::new();
@@ -105,7 +107,7 @@ pub fn apply_committed_block(
     }
 
     // Update chain state singleton.
-    upsert_chain_state(conn, block_num, &effects.header)?;
+    upsert_chain_state(conn, block_num, &effects.header, chain_mmr)?;
 
     Ok(affected_accounts.into_iter().collect())
 }
