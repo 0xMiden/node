@@ -312,6 +312,10 @@ fn safe_comment_text(content: &str) -> Option<&str> {
         return None;
     }
 
+    if is_repeated_separator(trimmed) {
+        return None;
+    }
+
     Some(trimmed)
 }
 
@@ -330,6 +334,16 @@ fn is_markdown_sensitive(trimmed: &str) -> bool {
         || is_table_row(trimmed)
         || is_url_only(trimmed)
         || is_link_reference(trimmed)
+}
+
+fn is_repeated_separator(trimmed: &str) -> bool {
+    let mut chars = trimmed.chars();
+    let Some(separator) = chars.next() else {
+        return false;
+    };
+
+    // Section dividers like `// =====` and `// -----` are intentional layout, not prose.
+    trimmed.len() >= 3 && separator.is_ascii_punctuation() && chars.all(|char| char == separator)
 }
 
 fn is_list_item(trimmed: &str) -> bool {
@@ -469,5 +483,19 @@ fn main() {}
 fn main() {}
 "
         );
+    }
+
+    #[test]
+    fn skips_repeated_separator_comments() {
+        let source = r"// ================================================================================================
+// SECTION HEADER
+// ================================================================================================
+fn main() {}
+";
+
+        let reflowed =
+            reflow_source(source, Config { width: 60, include_normal_comments: true }).unwrap();
+
+        assert_eq!(reflowed, source);
     }
 }
