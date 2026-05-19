@@ -33,8 +33,8 @@ pub struct GenesisState {
     pub validator_key: PublicKey,
 }
 
-/// A type-safety wrapper ensuring that genesis block data can only be created from
-/// [`GenesisState`] or validated from a [`SignedBlock`] via [`GenesisBlock::try_from`].
+/// A type-safety wrapper ensuring that genesis block data can only be created from [`GenesisState`]
+/// or validated from a [`SignedBlock`] via [`GenesisBlock::try_from`].
 pub struct GenesisBlock(SignedBlock);
 
 /// A genesis block with all data except the validator signature.

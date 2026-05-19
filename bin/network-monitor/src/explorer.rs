@@ -244,8 +244,8 @@ mod tests {
 
     #[test]
     fn truncate_json_multibyte_chars_are_handled() {
-        // Each 'é' is 2 bytes in UTF-8. Build a string whose serialized JSON form
-        // exceeds 60 characters, ensuring truncation lands on a char boundary.
+        // Each 'é' is 2 bytes in UTF-8. Build a string whose serialized JSON form exceeds 60
+        // characters, ensuring truncation lands on a char boundary.
         let multibyte_string = "é".repeat(80);
         let value = json!(multibyte_string);
         // Should not panic and should still truncate correctly.
@@ -255,8 +255,8 @@ mod tests {
 
     #[test]
     fn truncate_json_exactly_60_chars_is_not_truncated() {
-        // Build a JSON string whose serialized form is exactly 60 characters.
-        // json!("x".repeat(58)) serializes as `"xxx...xxx"` (58 chars + 2 quotes = 60).
+        // Build a JSON string whose serialized form is exactly 60 characters. json!("x".repeat(58))
+        // serializes as `"xxx...xxx"` (58 chars + 2 quotes = 60).
         let value = json!("x".repeat(58));
         let result = truncate_json(&value);
         assert_eq!(result.chars().count(), 60);

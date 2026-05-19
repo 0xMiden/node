@@ -93,10 +93,9 @@ impl State {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
         let block_end = *block_range.end();
-        // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_end + 1 to
-        // include the proof for block_end.
-        // SAFETY: it is ensured that block_end <= chain_tip, and the blockchain MMR always has
-        // at least chain_tip + 1 leaves.
+        // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_end + 1 to include
+        // the proof for block_end. SAFETY: it is ensured that block_end <= chain_tip, and the
+        // blockchain MMR always has at least chain_tip + 1 leaves.
         let mmr_checkpoint = block_end + 1;
 
         let note_syncs = self.db.get_note_sync_multi(block_range, note_tags.into()).await?;

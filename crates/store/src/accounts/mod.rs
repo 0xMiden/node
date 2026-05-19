@@ -88,9 +88,8 @@ impl HistoricalOverlay {
                 match mutation {
                     NodeMutation::Addition(inner_node) => (*node_index, inner_node.hash()),
                     NodeMutation::Removal => {
-                        // Store the actual empty subtree root for this depth
-                        // depth() is 1-indexed from leaf, so we use it directly for
-                        // EmptySubtreeRoots
+                        // Store the actual empty subtree root for this depth depth() is 1-indexed
+                        // from leaf, so we use it directly for EmptySubtreeRoots
                         let empty_root = *EmptySubtreeRoots::entry(SMT_DEPTH, node_index.depth());
                         (*node_index, empty_root)
                     },
@@ -266,9 +265,9 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
 
         let leaf_index = NodeIndex::from(leaf.index());
 
-        // Apply reversion overlays to reconstruct historical state.
-        // We reverse the overlay iteration (newest to oldest) to walk backwards in time
-        // from the latest state to the target block.
+        // Apply reversion overlays to reconstruct historical state. We reverse the overlay
+        // iteration (newest to oldest) to walk backwards in time from the latest state to the
+        // target block.
         let (path, leaf) = Self::apply_reversion_overlays(
             self.overlays.range(block_target..).rev().map(|(_, overlay)| overlay),
             path_nodes,
@@ -319,10 +318,9 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
                     .expect("proof_indices should not include root")
                     as usize;
 
-                // Apply reversion mutation if this node was modified.
-                // It's sound since `proof_indices()`` returns siblings on the path from leaf to
-                // root, hence the height is always less than `SMT_DEPTH`, the leaf
-                // and root are not included.
+                // Apply reversion mutation if this node was modified. It's sound since
+                // `proof_indices()`` returns siblings on the path from leaf to root, hence the
+                // height is always less than `SMT_DEPTH`, the leaf and root are not included.
                 if let Some(hash) = overlay.node_mutations.get(&sibling) {
                     path_nodes[height] = *hash;
                 }
@@ -338,8 +336,8 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
             }
         }
 
-        // Build the Merkle path directly from the reconstructed nodes
-        // No need for build_dense_path since all nodes have actual values (not sentinels)
+        // Build the Merkle path directly from the reconstructed nodes No need for build_dense_path
+        // since all nodes have actual values (not sentinels)
         let dense: Vec<Word> = path_nodes.iter().rev().copied().collect();
         let path = MerklePath::new(dense);
         let path = SparseMerklePath::try_from(path).ok()?;

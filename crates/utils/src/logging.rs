@@ -67,8 +67,8 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     let tracer_provider = if otel.is_enabled() {
         let provider = init_tracer_provider()?;
 
-        // Store the provider globally so the panic hook can flush it.
-        // SdkTracerProvider is internally reference-counted, so cloning is cheap.
+        // Store the provider globally so the panic hook can flush it. SdkTracerProvider is
+        // internally reference-counted, so cloning is cheap.
         TRACER_PROVIDER
             .set(provider.clone())
             .expect("setup_tracing should only be called once");
@@ -86,8 +86,8 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
         .with(otel_layer.with_filter(env_or_default_filter()));
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
 
-    // Register panic hook now that tracing is initialized.
-    // This chains with the default panic hook to preserve backtrace printing.
+    // Register panic hook now that tracing is initialized. This chains with the default panic hook
+    // to preserve backtrace printing.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!(panic = true, info = %info, "panic");
@@ -97,8 +97,8 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
         let wrapped = anyhow::Error::msg(info_str);
         tracing::Span::current().set_error(wrapped.as_ref());
 
-        // Flush traces before the program terminates.
-        // This ensures the panic trace is exported even though the OtelGuard won't be dropped.
+        // Flush traces before the program terminates. This ensures the panic trace is exported even
+        // though the OtelGuard won't be dropped.
         if let Some(provider) = TRACER_PROVIDER.get() {
             if let Err(err) = provider.force_flush() {
                 eprintln!("Failed to flush traces on panic: {err:?}");

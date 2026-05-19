@@ -1,5 +1,5 @@
-//! Renders the remote-prover card: proxy info, worker list, and last proof-generation test
-//! outcome. Embeds `data-grpc-url` for `/remote_prover.ProxyStatusApi/Status` browser probes.
+//! Renders the remote-prover card: proxy info, worker list, and last proof-generation test outcome.
+//! Embeds `data-grpc-url` for `/remote_prover.ProxyStatusApi/Status` browser probes.
 
 use maud::{Markup, html};
 

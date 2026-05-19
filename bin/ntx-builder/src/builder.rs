@@ -115,8 +115,8 @@ impl NetworkTransactionBuilder {
 
         join_set.spawn(self.run_event_loop());
 
-        // Wait for either the event loop or the gRPC server to complete.
-        // Any completion is treated as fatal.
+        // Wait for either the event loop or the gRPC server to complete. Any completion is treated
+        // as fatal.
         if let Some(result) = join_set.join_next().await {
             result.context("ntx-builder task panicked")??;
         }
@@ -126,8 +126,8 @@ impl NetworkTransactionBuilder {
 
     /// Runs the main event loop.
     async fn run_event_loop(mut self) -> anyhow::Result<()> {
-        // Spawn a background task to load network accounts from the store.
-        // Accounts are sent through a channel and processed in the main event loop.
+        // Spawn a background task to load network accounts from the store. Accounts are sent
+        // through a channel and processed in the main event loop.
         let (account_tx, mut account_rx) =
             mpsc::channel::<NetworkAccountId>(self.config.account_channel_capacity);
         let account_loader_store = self.store.clone();
@@ -156,9 +156,9 @@ impl NetworkTransactionBuilder {
 
                     self.handle_mempool_event(event).await?;
                 },
-                // Handle account batches loaded from the store.
-                // Once all accounts are loaded, the channel closes and this branch
-                // becomes inactive (recv returns None and we stop matching).
+                // Handle account batches loaded from the store. Once all accounts are loaded, the
+                // channel closes and this branch becomes inactive (recv returns None and we stop
+                // matching).
                 Some(account_id) = account_rx.recv() => {
                     self.handle_loaded_account(account_id).await?;
                 },
@@ -166,9 +166,9 @@ impl NetworkTransactionBuilder {
                 Some(request) = self.actor_request_rx.recv() => {
                     self.handle_actor_request(request).await?;
                 },
-                // Handle account loader task completion/failure.
-                // If the task fails, we abort since the builder would be in a degraded state
-                // where existing notes against network accounts won't be processed.
+                // Handle account loader task completion/failure. If the task fails, we abort since
+                // the builder would be in a degraded state where existing notes against network
+                // accounts won't be processed.
                 result = &mut account_loader_handle => {
                     result
                         .context("account loader task panicked")
@@ -250,8 +250,8 @@ impl NetworkTransactionBuilder {
                 self.coordinator.notify_accounts(&result.accounts_to_notify);
                 Ok(())
             },
-            // Notify affected actors (reverted account actors will self-cancel when they
-            // detect their account has been removed from the DB).
+            // Notify affected actors (reverted account actors will self-cancel when they detect
+            // their account has been removed from the DB).
             MempoolEvent::TransactionsReverted(_) => {
                 // Write event effects to DB first.
                 let result = self

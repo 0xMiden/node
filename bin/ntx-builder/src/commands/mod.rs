@@ -45,8 +45,8 @@ pub enum NtxBuilderCommand {
         #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
         validator_url: Url,
 
-        /// The remote transaction prover's gRPC url. If unset, will default to running a
-        /// prover in-process which is expensive.
+        /// The remote transaction prover's gRPC url. If unset, will default to running a prover
+        /// in-process which is expensive.
         #[arg(long = "tx-prover.url", env = ENV_TX_PROVER_URL, value_name = "URL")]
         tx_prover_url: Option<Url>,
 

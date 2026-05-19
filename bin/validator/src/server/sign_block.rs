@@ -28,8 +28,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
     }
 
     async fn handle(&self, proposed_block: Self::Input) -> tonic::Result<Self::Output> {
-        // Serialize sign_block requests to prevent race conditions between loading the
-        // chain tip and persisting the validated block header.
+        // Serialize sign_block requests to prevent race conditions between loading the chain tip
+        // and persisting the validated block header.
         let _permit = self.sign_block_semaphore.acquire().await.map_err(|err| {
             tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
         })?;

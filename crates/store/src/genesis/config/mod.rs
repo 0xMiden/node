@@ -207,8 +207,8 @@ impl GenesisConfig {
                 faucet_account.id(),
                 secret_key,
             ));
-            // Do _not_ collect the account, only after we know all wallet assets
-            // we know the remaining supply in the faucets.
+            // Do _not_ collect the account, only after we know all wallet assets we know the
+            // remaining supply in the faucets.
         }
 
         let fee_parameters =
@@ -280,8 +280,8 @@ impl GenesisConfig {
         // Apply all fungible faucet adjustments to the respective faucet
         for (symbol, mut faucet_account) in faucet_accounts {
             let faucet_id = faucet_account.id();
-            // If there is no account using the asset, we use an empty delta to set the
-            // nonce to `ONE`.
+            // If there is no account using the asset, we use an empty delta to set the nonce to
+            // `ONE`.
             let total_issuance = faucet_issuance.get(&faucet_id).copied().unwrap_or_default();
 
             let mut storage_delta = AccountStorageDelta::default();
@@ -577,8 +577,8 @@ impl AccountSecrets {
 // HELPERS
 // ================================================================================================
 
-/// Process wallet assets and return them as a fungible asset delta.
-/// Track the negative adjustments for the respective faucets.
+/// Process wallet assets and return them as a fungible asset delta. Track the negative adjustments
+/// for the respective faucets.
 fn prepare_fungible_asset_update(
     assets: impl IntoIterator<Item = AssetEntry>,
     faucets: &IndexMap<TokenSymbolStr, Account>,

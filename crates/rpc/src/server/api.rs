@@ -519,8 +519,8 @@ impl api_server::Api for RpcService {
         block_producer.clone().submit_proven_tx(request).await
     }
 
-    /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
-    /// the batch, then forwards it to the block producer.
+    /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds the
+    /// batch, then forwards it to the block producer.
     async fn submit_proven_tx_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,

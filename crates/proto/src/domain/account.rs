@@ -334,8 +334,8 @@ impl From<AccountStorageHeader> for proto::account::AccountStorageHeader {
 /// to use the `SyncAccountVault` endpoint instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountVaultDetails {
-    /// The vault has too many assets to return inline.
-    /// Clients must use `SyncAccountVault` endpoint instead.
+    /// The vault has too many assets to return inline. Clients must use `SyncAccountVault` endpoint
+    /// instead.
     LimitExceeded,
 
     /// The assets in the vault (up to `MAX_RETURN_ENTRIES`).
@@ -343,8 +343,8 @@ pub enum AccountVaultDetails {
 }
 
 impl AccountVaultDetails {
-    /// Maximum number of vault entries that can be returned in a single response.
-    /// Accounts with more assets will have `LimitExceeded` variant.
+    /// Maximum number of vault entries that can be returned in a single response. Accounts with
+    /// more assets will have `LimitExceeded` variant.
     pub const MAX_RETURN_ENTRIES: usize = 1000;
 
     pub fn new(vault: &AssetVault) -> Self {
@@ -419,16 +419,16 @@ pub struct AccountStorageMapDetails {
 /// instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageMapEntries {
-    /// The map has too many entries to return inline.
-    /// Clients must use `SyncAccountStorageMaps` endpoint instead.
+    /// The map has too many entries to return inline. Clients must use `SyncAccountStorageMaps`
+    /// endpoint instead.
     LimitExceeded,
 
-    /// All storage map entries (key-value pairs) without proofs.
-    /// Used when all entries are requested for small maps.
+    /// All storage map entries (key-value pairs) without proofs. Used when all entries are
+    /// requested for small maps.
     AllEntries(Vec<(StorageMapKey, Word)>),
 
-    /// Specific entries with their SMT proofs for client-side verification.
-    /// Used when specific keys are requested from the storage map.
+    /// Specific entries with their SMT proofs for client-side verification. Used when specific keys
+    /// are requested from the storage map.
     EntriesWithProofs(Vec<SmtProof>),
 }
 
@@ -926,8 +926,8 @@ impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> fo
 
         let account_commitment = decode!(decoder, from.account_commitment)?;
 
-        // If the commitment is equal to `Word::empty()`, it signifies that this is a new
-        // account which is not yet present in the Store.
+        // If the commitment is equal to `Word::empty()`, it signifies that this is a new account
+        // which is not yet present in the Store.
         let account_commitment = if account_commitment == Word::empty() {
             None
         } else {
@@ -1039,8 +1039,7 @@ impl From<NetworkAccountId> for AccountId {
 }
 
 impl From<NetworkAccountId> for u32 {
-    /// Returns the 30-bit prefix of the network account ID.
-    /// This is used for note tag matching.
+    /// Returns the 30-bit prefix of the network account ID. This is used for note tag matching.
     fn from(value: NetworkAccountId) -> Self {
         value.prefix()
     }

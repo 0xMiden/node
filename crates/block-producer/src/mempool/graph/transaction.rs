@@ -253,9 +253,9 @@ impl TransactionGraph {
                 self.failures.remove(&tx.id());
 
                 // Note that this is a pretty rough shod approach. We just dump the entire batch of
-                // transactions in, which will result in at least the current
-                // transaction being duplicated in `to_revert`. This isn't a concern
-                // though since we skip already processed transactions at the top of the loop.
+                // transactions in, which will result in at least the current transaction being
+                // duplicated in `to_revert`. This isn't a concern though since we skip already
+                // processed transactions at the top of the loop.
                 if let Some(batch) = self.txs_user_batch.remove(&tx.id()) {
                     if let Some(batch) = self.user_batch_txs.remove(&batch) {
                         to_revert.extend(batch);

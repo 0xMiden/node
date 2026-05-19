@@ -165,8 +165,8 @@ async fn run(
                 let (block_num, proof_bytes) = proving_result?;
                 pending.insert(block_num, proof_bytes);
 
-                // Drain completed proofs in ascending order so the proven tip advances
-                // without gaps.
+                // Drain completed proofs in ascending order so the proven tip advances without
+                // gaps.
                 let mut next = proven_tip.read().child();
                 while let Some(proof_bytes) = pending.remove(&next) {
                     block_store.commit_proof(next, &proof_bytes).await?;
