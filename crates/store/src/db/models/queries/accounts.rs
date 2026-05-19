@@ -1635,17 +1635,9 @@ fn prune_account_storage_map_values(
 /// references its `code_commitment`. This covers both active accounts (`is_latest=true`) and
 /// recent historical rows that still fall within the retention window.
 ///
-/// # Raw SQL
-///
-/// ```sql
-/// DELETE FROM account_codes
-/// WHERE code_commitment NOT IN (
-///     SELECT DISTINCT code_commitment
-///     FROM accounts
-///     WHERE code_commitment IS NOT NULL
-///       AND (block_num >= ?1 OR is_latest = 1)
-/// )
-/// ```
+/// The `UNION ALL` shape and explicit index selections avoid SQLite choosing
+/// `idx_accounts_code_commitment` for the whole predicate, which is expensive when the account
+/// history table has millions of public rows.
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -1662,9 +1654,17 @@ fn prune_account_codes(
         "DELETE FROM account_codes \
          WHERE code_commitment NOT IN ( \
              SELECT DISTINCT code_commitment \
-             FROM accounts \
-             WHERE code_commitment IS NOT NULL \
-               AND (block_num >= ?1 OR is_latest = 1 ) \
+             FROM ( \
+                 SELECT code_commitment \
+                 FROM accounts INDEXED BY idx_accounts_prune_code \
+                 WHERE code_commitment IS NOT NULL \
+                   AND block_num >= ?1 \
+                 UNION ALL \
+                 SELECT code_commitment \
+                 FROM accounts INDEXED BY idx_accounts_latest_code_commitment \
+                 WHERE code_commitment IS NOT NULL \
+                   AND is_latest = 1 \
+             ) \
          )",
     )
     .bind::<BigInt, _>(cutoff_block)

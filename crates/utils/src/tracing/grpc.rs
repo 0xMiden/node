@@ -82,6 +82,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         http::header::FORWARDED,
         HeaderName::from_static("x-forwarded-for"),
         HeaderName::from_static("x-real-ip"),
+        HeaderName::from_static("x-request-id"),
     ] {
         if let Some(value) = request.headers().get(&header) {
             if let Ok(value) = value.to_str() {

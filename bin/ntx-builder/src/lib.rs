@@ -146,6 +146,9 @@ pub struct NtxBuilderConfig {
 
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
+
+    /// Maximum number of SQLite connections in the database connection pool.
+    pub sqlite_connection_pool_size: NonZeroUsize,
 }
 
 impl NtxBuilderConfig {
@@ -171,6 +174,7 @@ impl NtxBuilderConfig {
             max_cycles: DEFAULT_MAX_TX_CYCLES,
             tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             database_filepath,
+            sqlite_connection_pool_size: miden_node_db::default_connection_pool_size(),
         }
     }
 
@@ -265,6 +269,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the SQLite connection pool size.
+    #[must_use]
+    pub fn with_sqlite_connection_pool_size(mut self, size: NonZeroUsize) -> Self {
+        self.sqlite_connection_pool_size = size;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store services, determines the catch-up target block, and
@@ -279,7 +290,11 @@ impl NtxBuilderConfig {
     /// - The store contains no blocks (not bootstrapped)
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
-        let db = Db::setup(self.database_filepath.clone()).await?;
+        let db = Db::setup_with_pool_size(
+            self.database_filepath.clone(),
+            self.sqlite_connection_pool_size,
+        )
+        .await?;
 
         let script_cache = LruCache::new(self.script_cache_size);
         let coordinator =

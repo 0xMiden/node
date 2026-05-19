@@ -258,7 +258,6 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let asset_witnesses = self
             .state
             .get_vault_asset_witnesses(account_id, block_num, vault_keys)
-            .await
             .map_err(internal_error)?;
 
         // Convert AssetWitness to protobuf format by extracting witness data.
@@ -312,7 +311,6 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
         let storage_witness = self
             .state
             .get_storage_map_witness(account_id, &slot_name, block_num, map_key)
-            .await
             .map_err(internal_error)?;
 
         // Convert StorageMapWitness to protobuf format by extracting witness data.

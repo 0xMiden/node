@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -11,12 +12,14 @@ pub async fn start(
     grpc_options: GrpcOptionsInternal,
     signer: ValidatorSigner,
     data_directory: PathBuf,
+    sqlite_connection_pool_size: NonZeroUsize,
 ) -> anyhow::Result<()> {
     Validator {
         address,
         grpc_options,
         signer,
         data_directory,
+        sqlite_connection_pool_size,
     }
     .serve()
     .await

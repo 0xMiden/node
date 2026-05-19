@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -40,12 +41,29 @@ impl Db {
         err,
     )]
     pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
-        let inner = miden_node_db::Db::new(&database_filepath)
+        Self::setup_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
+            .await
+    }
+
+    /// Creates and initializes the database with a specific pool size.
+    #[instrument(
+        target = COMPONENT,
+        name = "ntx_builder.database.setup",
+        skip_all,
+        fields(path=%database_filepath.display()),
+        err,
+    )]
+    pub async fn setup_with_pool_size(
+        database_filepath: PathBuf,
+        connection_pool_size: NonZeroUsize,
+    ) -> anyhow::Result<Self> {
+        let inner = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)
             .context("failed to build connection pool")?;
 
         info!(
             target: COMPONENT,
             sqlite = %database_filepath.display(),
+            connection_pool_size = %connection_pool_size,
             "Connected to the database"
         );
 

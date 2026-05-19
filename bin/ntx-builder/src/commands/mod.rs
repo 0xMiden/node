@@ -18,6 +18,7 @@ const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
 const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
+const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE";
 
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
@@ -90,6 +91,15 @@ pub enum NtxBuilderCommand {
         )]
         max_tx_cycles: u32,
 
+        /// Maximum number of SQLite connections in the ntx-builder database connection pool.
+        #[arg(
+            long = "sqlite.connection_pool_size",
+            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
+            default_value_t = miden_node_db::default_connection_pool_size(),
+            value_name = "NUM"
+        )]
+        sqlite_connection_pool_size: NonZeroUsize,
+
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
@@ -115,6 +125,7 @@ impl NtxBuilderCommand {
             idle_timeout,
             max_account_crashes,
             max_tx_cycles,
+            sqlite_connection_pool_size,
             data_directory,
             enable_otel: _,
         } = self;
@@ -135,7 +146,8 @@ impl NtxBuilderCommand {
         .with_script_cache_size(script_cache_size)
         .with_idle_timeout(idle_timeout)
         .with_max_account_crashes(max_account_crashes)
-        .with_max_cycles(max_tx_cycles);
+        .with_max_cycles(max_tx_cycles)
+        .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
 
         config
             .build()

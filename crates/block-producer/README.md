@@ -14,7 +14,7 @@ The full gRPC API can be found [here](../../proto/proto/block_producer.proto).
 
 ---
 
-### SubmitProvenTransaction
+### SubmitProvenTx
 
 Submits a proven transaction to the block-producer, returning the current chain height if successful.
 

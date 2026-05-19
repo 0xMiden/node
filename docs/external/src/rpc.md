@@ -19,7 +19,7 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [GetNotesById](#getnotesbyid)
 - [GetNoteScriptByRoot](#getnotescriptbyroot)
 - [Status](#status)
-- [SubmitProvenTransaction](#submitproventransaction)
+- [SubmitProvenTx](#submitproventx)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
 - [SyncAccountVault](#syncaccountvault)
 - [SyncChainMmr](#syncchainmmr)
@@ -130,7 +130,7 @@ Request the script for a note by its root.
 
 Request the status of the node components. The response contains the current version of the RPC component and the connection status of the other components, including their versions and the number of the most recent block in the chain (chain tip).
 
-### SubmitProvenTransaction
+### SubmitProvenTx
 
 Submit a transaction to the network.
 

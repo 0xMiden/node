@@ -870,6 +870,7 @@ pub async fn start_store(
                 max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::bench(),
             storage_options: StorageOptions::bench(),
         }
