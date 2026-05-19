@@ -39,7 +39,7 @@ pub mod counter;
 pub mod wallet;
 
 /// Create an RPC client configured with the correct genesis metadata in the
-/// `Accept` header so that write RPCs such as `SubmitProvenTransaction` are
+/// `Accept` header so that write RPCs such as `SubmitProvenTx` are
 /// accepted by the node.
 pub async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
@@ -79,7 +79,7 @@ pub async fn create_genesis_aware_rpc_client(
     let genesis = genesis_commitment.to_hex();
 
     // Rebuild the client, this time including the required genesis metadata so that
-    // write RPCs like SubmitProvenTransaction are accepted by the node.
+    // write RPCs like SubmitProvenTx are accepted by the node.
     let rpc_client = Builder::new(rpc_url.clone())
         .with_tls()
         .context("Failed to configure TLS for RPC client")?
@@ -220,7 +220,7 @@ pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) ->
     };
 
     rpc_client
-        .submit_proven_transaction(request)
+        .submit_proven_tx(request)
         .await
         .context("Failed to submit proven transaction to RPC")?;
 

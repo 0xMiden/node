@@ -52,6 +52,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             grpc_options,
             signer: ValidatorSigner::new_local(random_secret_key()),
             data_directory,
+            sqlite_connection_pool_size: NonZeroUsize::new(2).unwrap(),
         }
         .serve()
         .await
@@ -162,6 +163,7 @@ async fn start_store(
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::bench(),
             storage_options: StorageOptions::bench(),
         }
