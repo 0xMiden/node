@@ -38,8 +38,8 @@ pub(crate) trait ReplicaSync: Sized + Send + Sync + 'static {
     /// Returns the upstream store URL to connect to.
     fn upstream_url(&self) -> &Url;
 
-    /// Subscribes to the upstream stream via `client` and processes events until the stream ends
-    /// or an error occurs.
+    /// Subscribes to the upstream stream via `client` and processes events until the stream ends or
+    /// an error occurs.
     async fn subscribe(&self, client: StoreReplicaClient) -> anyhow::Result<()>;
 
     /// Opens a connection to [`upstream_url`](Self::upstream_url) and calls
@@ -111,7 +111,7 @@ impl ReplicaSync for BlockReplicaSync {
             let event = result?;
             let block = SignedBlock::read_from_bytes(&event.block)
                 .context("failed to deserialize block from upstream")?;
-            self.state.apply_block(block, None).await?;
+            self.state.apply_block(block).await?;
         }
 
         Ok(())

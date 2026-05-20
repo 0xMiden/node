@@ -57,14 +57,15 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             grpc_options,
             signer: ValidatorSigner::new_local(random_secret_key()),
             data_directory,
+            sqlite_connection_pool_size: NonZeroUsize::new(2).unwrap(),
         }
         .serve()
         .await
         .unwrap();
     });
 
-    // start the block producer BEFORE the store is available
-    // this tests the exponential backoff behavior
+    // start the block producer BEFORE the store is available this tests the exponential backoff
+    // behavior
     let store_url = Url::parse(&format!("http://{store_addr}")).expect("Failed to parse store URL");
     let validator_url =
         Url::parse(&format!("http://{validator_addr}")).expect("Failed to parse validator URL");
@@ -87,8 +88,8 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         .unwrap();
     });
 
-    // test: connecting to the block producer should fail because the store is not yet started
-    // (and therefore the block producer is not yet listening)
+    // test: connecting to the block producer should fail because the store is not yet started (and
+    // therefore the block producer is not yet listening)
     let block_producer_endpoint =
         Endpoint::try_from(format!("http://{block_producer_addr}")).expect("valid url");
     let block_producer_client =
@@ -102,8 +103,8 @@ async fn block_producer_startup_is_robust_to_network_failures() {
     let data_directory = tempfile::tempdir().expect("tempdir should be created");
     let store_runtime = start_store(store_addr, data_directory.path()).await;
 
-    // wait for the block producer's exponential backoff to connect to the store
-    // use a retry loop since CI environments may be slower
+    // wait for the block producer's exponential backoff to connect to the store use a retry loop
+    // since CI environments may be slower
     let block_producer_client = {
         let mut attempts = 0;
         loop {
@@ -168,6 +169,7 @@ async fn start_store(
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::bench(),
             storage_options: StorageOptions::bench(),
         }

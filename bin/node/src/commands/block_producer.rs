@@ -197,8 +197,8 @@ pub struct BlockProducerConfig {
     )]
     pub batch_interval: Duration,
 
-    /// The remote batch prover's gRPC url. If unset, will default to running a prover
-    /// in-process which is expensive.
+    /// The remote batch prover's gRPC url. If unset, will default to running a prover in-process
+    /// which is expensive.
     #[arg(long = "batch-prover.url", env = ENV_BATCH_PROVER_URL, value_name = "URL")]
     pub batch_prover_url: Option<Url>,
 

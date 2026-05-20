@@ -53,8 +53,8 @@ fn valid_with_state_from_multiple_parents() {
     }
 }
 
-/// Ensures that transactions that expire before or within the expiration slack of the chain tip
-/// are rejected.
+/// Ensures that transactions that expire before or within the expiration slack of the chain tip are
+/// rejected.
 mod tx_expiration {
     use super::*;
 

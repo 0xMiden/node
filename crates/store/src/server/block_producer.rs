@@ -30,8 +30,8 @@ use crate::state::Finality;
 // BLOCK PRODUCER API
 // ================================================================================================
 
-/// Extends [`StoreApi`] with the proof-scheduler notification channel, which is only required
-/// by the `BlockProducer` gRPC service. Not used in replica mode.
+/// Extends [`StoreApi`] with the proof-scheduler notification channel, which is only required by
+/// the `BlockProducer` gRPC service. Not used in replica mode.
 #[derive(Clone)]
 pub(super) struct BlockProducerApi {
     pub(super) inner: StoreApi,
@@ -101,6 +101,12 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
             block_header: header.clone(),
             block_inputs,
         };
+        let block_num = header.block_num();
+        self.inner
+            .state
+            .save_proving_inputs(block_num, &proving_inputs)
+            .await
+            .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
 
         // We perform the apply block work in a separate task. This prevents the caller
         // cancelling the request and thereby cancelling the task at an arbitrary point of
@@ -111,14 +117,12 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
         let this = self.clone();
         tokio::spawn(
             async move {
-                let block_num = header.block_num();
                 let signed_block = SignedBlock::new(header, body, signature)
                     .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
-                // Note: This is an internal endpoint, so its safe to expose the full error
-                // report.
+                // Note: This is an internal endpoint, so its safe to expose the full error report.
                 this.inner
                     .state
-                    .apply_block(signed_block, Some(proving_inputs))
+                    .apply_block(signed_block)
                     .await
                     .inspect(|_| {
                         if let Err(err) = this.chain_tip_sender.send(block_num) {

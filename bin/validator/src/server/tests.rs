@@ -16,8 +16,8 @@ use crate::db::{load, load_chain_tip, upsert_block_header};
 // TEST HELPERS
 // ================================================================================================
 
-/// Test harness that wraps a [`ValidatorServer`] and tracks the chain MMR state needed to
-/// construct valid [`ProposedBlock`]s.
+/// Test harness that wraps a [`ValidatorServer`] and tracks the chain MMR state needed to construct
+/// valid [`ProposedBlock`]s.
 struct TestValidator {
     server: ValidatorServer,
     chain: PartialBlockchain,
@@ -101,8 +101,8 @@ impl TestValidator {
     }
 }
 
-/// Builds an empty [`ProposedBlock`] that extends the given parent block header using the
-/// provided partial blockchain state.
+/// Builds an empty [`ProposedBlock`] that extends the given parent block header using the provided
+/// partial blockchain state.
 fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> ProposedBlock {
     let block_inputs = BlockInputs::new(
         parent_header.clone(),
@@ -133,15 +133,15 @@ async fn chain_tip_plus_one_succeeds() {
 async fn chain_tip_replacement_succeeds() {
     let mut tv = TestValidator::new().await;
 
-    // The genesis block can never be replaced, so we advance the chain
-    // to block 1, which we can then replace.
+    // The genesis block can never be replaced, so we advance the chain to block 1, which we can
+    // then replace.
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
     tv.apply_empty_block().await;
     let original_header = tv.chain_tip.clone();
 
-    // Submit a different block at the same height (block 1), which is a replacement.
-    // Use an explicit timestamp far in the future to ensure the replacement block differs.
+    // Submit a different block at the same height (block 1), which is a replacement. Use an
+    // explicit timestamp far in the future to ensure the replacement block differs.
     let block_inputs = BlockInputs::new(
         genesis_header.clone(),
         chain_at_genesis.clone(),
@@ -215,8 +215,8 @@ async fn chain_tip_minus_one_rejected() {
     tv.apply_empty_block().await;
     tv.apply_empty_block().await;
 
-    // Try to submit a block at height 1 (chain tip - 1). This is neither a replacement
-    // (which would need to match tip height 2) nor the next block (which would be 3).
+    // Try to submit a block at height 1 (chain tip - 1). This is neither a replacement (which would
+    // need to match tip height 2) nor the next block (which would be 3).
     let stale_block = empty_block(&genesis_header, &chain_at_genesis);
 
     let result = tv.call_sign_block(&stale_block).await;
@@ -234,8 +234,8 @@ async fn chain_tip_minus_one_rejected() {
 async fn commitment_mismatch_rejected() {
     let tv = TestValidator::new().await;
 
-    // Build a valid ProposedBlock on a *different* genesis so its prev_block_commitment
-    // won't match the validator's actual chain tip.
+    // Build a valid ProposedBlock on a *different* genesis so its prev_block_commitment won't match
+    // the validator's actual chain tip.
     let other_genesis_signer = random_secret_key();
     let other_genesis_state =
         GenesisState::new(vec![], test_fee_params(), 1, 1, other_genesis_signer.public_key());
@@ -313,8 +313,8 @@ async fn unknown_transactions_rejected() {
     let tv = TestValidator::new().await;
     let genesis_header = tv.chain_tip.clone();
 
-    // Build a dummy transaction header with a transaction ID that has NOT been
-    // submitted through `submit_proven_transaction`.
+    // Build a dummy transaction header with a transaction ID that has NOT been submitted through
+    // `submit_proven_transaction`.
     let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
     let fee = FungibleAsset::new(test_fee_params().fee_faucet_id(), 0).unwrap();
     let tx_header = TransactionHeader::new(
@@ -399,8 +399,8 @@ async fn new_block_after_replacement_with_stale_commitment_rejected() {
     );
     tv.call_sign_block(&replacement).await.unwrap();
 
-    // Now try to submit block 2 built on top of the *original* block 1.
-    // Its prev_block_commitment points to the old block 1, not the replacement.
+    // Now try to submit block 2 built on top of the *original* block 1. Its prev_block_commitment
+    // points to the old block 1, not the replacement.
     let stale_block_2 = empty_block(&original_block_1_header, &chain_after_block_1);
 
     let result = tv.call_sign_block(&stale_block_2).await;

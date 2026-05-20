@@ -12,16 +12,16 @@ pub trait GraphNode {
 
     fn id(&self) -> Self::Id;
 
-    /// All [`Nullifier`]s created by this node, **including** nullifiers for erased notes. This
-    /// may not be strictly necessary but it removes having to worry about reverting batches and
-    /// blocks with erased notes -- since these would otherwise have different state impact than
-    /// the transactions within them.
-    fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_>;
-
-    /// All output notes created by this node, **including** erased notes. This may not
-    /// be strictly necessary but it removes having to worry about reverting batches and blocks
+    /// All [`Nullifier`]s created by this node, **including** nullifiers for erased notes. This may
+    /// not be strictly necessary but it removes having to worry about reverting batches and blocks
     /// with erased notes -- since these would otherwise have different state impact than the
     /// transactions within them.
+    fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_>;
+
+    /// All output notes created by this node, **including** erased notes. This may not be strictly
+    /// necessary but it removes having to worry about reverting batches and blocks with erased
+    /// notes -- since these would otherwise have different state impact than the transactions
+    /// within them.
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_>;
 
     /// Input notes which were not authenticated against any committed block thus far.

@@ -217,8 +217,8 @@ struct BlockProducerRpcServer {
 
     store: StoreClient,
 
-    /// Cached mempool statistics that are updated periodically to avoid locking the mempool
-    /// for each status request.
+    /// Cached mempool statistics that are updated periodically to avoid locking the mempool for
+    /// each status request.
     cached_mempool_stats: Arc<RwLock<MempoolStats>>,
 }
 
@@ -300,11 +300,11 @@ impl BlockProducerRpcServer {
 
     #[instrument(
          target = COMPONENT,
-         name = "block_producer.server.submit_proven_transaction",
+         name = "block_producer.server.submit_proven_tx",
          skip_all,
          err
      )]
-    async fn submit_proven_transaction(
+    async fn submit_proven_tx(
         &self,
         request: proto::transaction::ProvenTransaction,
     ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
@@ -344,11 +344,11 @@ impl BlockProducerRpcServer {
 
     #[instrument(
          target = COMPONENT,
-         name = "block_producer.server.submit_proven_batch",
+         name = "block_producer.server.submit_proven_tx_batch",
          skip_all,
          err
      )]
-    async fn submit_proven_batch(
+    async fn submit_proven_tx_batch(
         &self,
         request: proto::transaction::TransactionBatch,
     ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
@@ -385,22 +385,22 @@ impl BlockProducerRpcServer {
 impl api_server::Api for BlockProducerRpcServer {
     type MempoolSubscriptionStream = MempoolEventSubscription;
 
-    async fn submit_proven_transaction(
+    async fn submit_proven_tx(
         &self,
         request: tonic::Request<proto::transaction::ProvenTransaction>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        self.submit_proven_transaction(request.into_inner())
+        self.submit_proven_tx(request.into_inner())
              .await
              .map(tonic::Response::new)
              // This Status::from mapping takes care of hiding internal errors.
              .map_err(Into::into)
     }
 
-    async fn submit_proven_batch(
+    async fn submit_proven_tx_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        self.submit_proven_batch(request.into_inner())
+        self.submit_proven_tx_batch(request.into_inner())
              .await
              .map(tonic::Response::new)
              // This Status::from mapping takes care of hiding internal errors.

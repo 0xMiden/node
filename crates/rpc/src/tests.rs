@@ -45,8 +45,8 @@ use url::Url;
 
 use crate::Rpc;
 
-/// Byte offset of the account delta commitment in serialized `ProvenTransaction`.
-/// Layout: `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
+/// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
+/// `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
 const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -217,8 +217,8 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
 
 #[tokio::test]
 async fn rpc_startup_is_robust_to_network_failures() {
-    // This test starts the store and RPC components and verifies that they successfully
-    // connect to each other on startup and that they reconnect after the store is restarted.
+    // This test starts the store and RPC components and verifies that they successfully connect to
+    // each other on startup and that they reconnect after the store is restarted.
 
     // Start the RPC.
     let (mut rpc_client, _, store_listener) = start_rpc().await;
@@ -329,7 +329,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -374,7 +374,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -414,7 +414,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -473,8 +473,8 @@ async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
     RpcClient::with_interceptor(channel, interceptor)
 }
 
-/// Binds a socket on an available port, runs the RPC server on it, and
-/// returns a client to talk to the server, along with the socket address.
+/// Binds a socket on an available port, runs the RPC server on it, and returns a client to talk to
+/// the server, along with the socket address.
 async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
     start_rpc_with_options(GrpcOptionsExternal::test()).await
 }
@@ -544,9 +544,8 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
         .expect("Failed to bind store ntx-builder gRPC endpoint");
     let block_producer_listener =
         TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-    // In order to later kill the store, we need to spawn a new runtime and run the store on
-    // it. That allows us to kill all the tasks spawned by the store when we
-    // kill the runtime.
+    // In order to later kill the store, we need to spawn a new runtime and run the store on it.
+    // That allows us to kill all the tasks spawned by the store when we kill the runtime.
     let store_runtime =
         runtime::Builder::new_multi_thread().enable_time().enable_io().build().unwrap();
     store_runtime.spawn(async move {
@@ -559,6 +558,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::test(),
             storage_options: StorageOptions::default(),
         }
@@ -600,6 +600,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::test(),
             storage_options: StorageOptions::default(),
         }
@@ -654,8 +655,8 @@ async fn get_limits_endpoint() {
         QueryParamNoteTagLimit::LIMIT
     );
 
-    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id,
-    // not a repeated list, so they do not have list parameter limits.
+    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id, not a repeated
+    // list, so they do not have list parameter limits.
     assert!(
         !limits.endpoints.contains_key("SyncAccountVault"),
         "SyncAccountVault should not have list parameter limits"

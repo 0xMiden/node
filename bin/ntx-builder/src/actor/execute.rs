@@ -358,7 +358,7 @@ impl NtxContext {
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
     async fn submit(&self, proven_tx: &ProvenTransaction) -> NtxResult<()> {
         self.block_producer
-            .submit_proven_transaction(proven_tx)
+            .submit_proven_tx(proven_tx)
             .await
             .map_err(NtxError::Submission)
     }
@@ -400,8 +400,7 @@ struct NtxDataStore {
     script_cache: LruCache<Word, NoteScript>,
     /// Local database for persistent note script.
     db: Db,
-    /// Scripts fetched from the remote store during execution, to be persisted by the
-    /// coordinator.
+    /// Scripts fetched from the remote store during execution, to be persisted by the coordinator.
     fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///

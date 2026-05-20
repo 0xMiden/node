@@ -68,6 +68,21 @@ pub enum StoreMode {
     Replica { upstream_url: Url },
 }
 
+/// Database options used by the store.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseOptions {
+    /// Maximum number of SQLite connections in the connection pool.
+    pub connection_pool_size: NonZeroUsize,
+}
+
+impl Default for DatabaseOptions {
+    fn default() -> Self {
+        Self {
+            connection_pool_size: miden_node_db::default_connection_pool_size(),
+        }
+    }
+}
+
 struct ModeSetup {
     /// gRPC server tasks (one per bound listener + the DB maintenance loop).
     grpc_servers: tokio::task::JoinSet<Result<(), tonic::transport::Error>>,
@@ -80,6 +95,7 @@ pub struct Store {
     pub rpc_listener: TcpListener,
     pub mode: StoreMode,
     pub data_directory: PathBuf,
+    pub database_options: DatabaseOptions,
     pub storage_options: StorageOptions,
     pub grpc_options: GrpcOptionsInternal,
 }
@@ -99,10 +115,10 @@ impl Store {
             })?;
         tracing::info!(target=COMPONENT, path=%data_directory.display(), "Data directory loaded");
 
-        let block_store = data_directory.block_store_dir();
+        let block_store_path = data_directory.block_store_dir();
         let block_store =
-            BlockStore::bootstrap(block_store.clone(), &genesis).with_context(|| {
-                format!("failed to bootstrap block store at {}", block_store.display())
+            BlockStore::bootstrap(block_store_path.clone(), &genesis).with_context(|| {
+                format!("failed to bootstrap block store at {}", block_store_path.display())
             })?;
         tracing::info!(target=COMPONENT, path=%block_store.display(), "Block store created");
 
@@ -122,14 +138,20 @@ impl Store {
     pub async fn serve(self) -> anyhow::Result<()> {
         let rpc_address = self.rpc_listener.local_addr()?;
         info!(target: COMPONENT, rpc_endpoint=?rpc_address,
-            ?self.data_directory, ?self.grpc_options.request_timeout, "Loading database");
+            ?self.data_directory, ?self.grpc_options.request_timeout,
+            sqlite_connection_pool_size = %self.database_options.connection_pool_size,
+            "Loading database");
 
         let (termination_ask, mut termination_signal) =
             tokio::sync::mpsc::channel::<ApplyBlockError>(1);
-        let (state, tx_proven_tip) =
-            State::load(&self.data_directory, self.storage_options, termination_ask)
-                .await
-                .context("failed to load state")?;
+        let (state, tx_proven_tip) = State::load_with_database_options(
+            &self.data_directory,
+            self.storage_options,
+            self.database_options,
+            termination_ask,
+        )
+        .await
+        .context("failed to load state")?;
         let _disk_monitor_task = Self::spawn_disk_monitor(self.data_directory.clone());
 
         let ModeSetup { mut grpc_servers, mode_task } = match self.mode {
@@ -275,7 +297,6 @@ impl Store {
         let (chain_tip_tx, chain_tip_rx) = watch::channel(chain_tip);
 
         let handle = proof_scheduler::spawn(
-            state.db().clone(),
             block_prover,
             state.block_store(),
             chain_tip_rx,
@@ -377,8 +398,8 @@ impl Store {
 
         Ok(join_set)
     }
-    /// Spawns a background task that periodically records the on-disk size of every store data
-    /// path as `OTel` span attributes.
+    /// Spawns a background task that periodically records the on-disk size of every store data path
+    /// as `OTel` span attributes.
     fn spawn_disk_monitor(data_directory: PathBuf) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_mins(5));

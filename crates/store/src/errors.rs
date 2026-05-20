@@ -132,6 +132,8 @@ pub enum StateInitializationError {
     DataDirectoryLoadError(#[source] std::io::Error),
     #[error("failed to load block store")]
     BlockStoreLoadError(#[source] std::io::Error),
+    #[error("failed to load proven tip")]
+    ProvenTipLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
     DatabaseLoadError(#[source] DatabaseError),
     #[error("account state forest error")]
@@ -593,8 +595,8 @@ mod compile_tests {
         StateInitializationError,
     };
 
-    /// Ensure all enum variants remain compat with the desired
-    /// trait bounds. Otherwise one gets very unwieldy errors.
+    /// Ensure all enum variants remain compat with the desired trait bounds. Otherwise one gets
+    /// very unwieldy errors.
     #[expect(dead_code)]
     fn assumed_trait_bounds_upheld() {
         fn ensure_is_error<E>(_phony: PhantomData<E>)

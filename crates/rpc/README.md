@@ -20,7 +20,7 @@ The full gRPC method definitions can be found in the [proto](../proto/README.md)
 - [GetLimits](#getlimits)
 - [GetNotesById](#getnotesbyid)
 - [GetNoteScriptByRoot](#getnotescriptbyroot)
-- [SubmitProvenTransaction](#submitproventransaction)
+- [SubmitProvenTx](#submitproventx)
 - [SyncAccountVault](#SyncAccountVault)
 - [SyncNotes](#syncnotes)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
@@ -99,7 +99,7 @@ When script retrieval fails, detailed error information is provided through gRPC
 
 ---
 
-### SubmitProvenTransaction
+### SubmitProvenTx
 
 Submits a proven transaction to the Miden network for inclusion in future blocks. The transaction must be properly formatted and include a valid execution proof.
 

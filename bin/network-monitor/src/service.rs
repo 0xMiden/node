@@ -17,8 +17,8 @@ use url::Url;
 
 use crate::service_status::ServiceStatus;
 
-/// Build a lazily-connected gRPC client using the network monitor's standard settings
-/// (TLS enabled, no metadata, no OTEL propagation).
+/// Build a lazily-connected gRPC client using the network monitor's standard settings (TLS enabled,
+/// no metadata, no OTEL propagation).
 pub fn build_tls_client<C: GrpcClient>(url: Url, timeout: Duration) -> C {
     ClientBuilder::new(url)
         .with_tls()
@@ -44,9 +44,9 @@ pub trait Service: Send + 'static {
     /// Runs a single check iteration.
     fn check(&mut self) -> impl std::future::Future<Output = ServiceStatus> + Send;
 
-    /// Full service lifecycle. The default implementation loops on [`Self::interval`] ticks,
-    /// calls [`Self::check`], and publishes the result. Returns when the channel has no
-    /// receivers (clean shutdown). Services with custom scheduling override this.
+    /// Full service lifecycle. The default implementation loops on [`Self::interval`] ticks, calls
+    /// [`Self::check`], and publishes the result. Returns when the channel has no receivers (clean
+    /// shutdown). Services with custom scheduling override this.
     fn run(
         mut self,
         tx: watch::Sender<ServiceStatus>,

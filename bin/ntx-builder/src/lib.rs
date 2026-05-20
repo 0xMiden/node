@@ -92,19 +92,19 @@ pub struct NtxBuilderConfig {
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
 
-    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached
-    /// to avoid repeated gRPC calls.
+    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached to
+    /// avoid repeated gRPC calls.
     pub script_cache_size: NonZeroUsize,
 
-    /// Maximum number of network transactions which should be in progress concurrently across
-    /// all account actors.
+    /// Maximum number of network transactions which should be in progress concurrently across all
+    /// account actors.
     pub max_concurrent_txs: usize,
 
     /// Maximum number of network notes a single transaction is allowed to consume.
     pub max_notes_per_tx: NonZeroUsize,
 
-    /// Maximum number of attempts to execute a failing note before dropping it.
-    /// Notes use exponential backoff between attempts.
+    /// Maximum number of attempts to execute a failing note before dropping it. Notes use
+    /// exponential backoff between attempts.
     pub max_note_attempts: usize,
 
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
@@ -132,6 +132,9 @@ pub struct NtxBuilderConfig {
 
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
+
+    /// Maximum number of SQLite connections in the database connection pool.
+    pub sqlite_connection_pool_size: NonZeroUsize,
 }
 
 impl NtxBuilderConfig {
@@ -156,6 +159,7 @@ impl NtxBuilderConfig {
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
             database_filepath,
+            sqlite_connection_pool_size: miden_node_db::default_connection_pool_size(),
         }
     }
 
@@ -243,6 +247,13 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the SQLite connection pool size.
+    #[must_use]
+    pub fn with_sqlite_connection_pool_size(mut self, size: NonZeroUsize) -> Self {
+        self.sqlite_connection_pool_size = size;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -256,7 +267,11 @@ impl NtxBuilderConfig {
     /// - The store contains no blocks (not bootstrapped)
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
-        let db = Db::setup(self.database_filepath.clone()).await?;
+        let db = Db::setup_with_pool_size(
+            self.database_filepath.clone(),
+            self.sqlite_connection_pool_size,
+        )
+        .await?;
 
         // Purge inflight state from previous run.
         db.purge_inflight().await.context("failed to purge inflight state")?;
@@ -270,8 +285,8 @@ impl NtxBuilderConfig {
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
 
-        // Subscribe to mempool first to ensure we don't miss any events. The subscription
-        // replays all inflight transactions, so the subscriber's state is fully reconstructed.
+        // Subscribe to mempool first to ensure we don't miss any events. The subscription replays
+        // all inflight transactions, so the subscriber's state is fully reconstructed.
         let subscription = block_producer
             .subscribe_to_mempool_with_retry()
             .await

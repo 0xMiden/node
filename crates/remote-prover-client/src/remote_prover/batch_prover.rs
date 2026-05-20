@@ -40,8 +40,8 @@ pub struct RemoteBatchProver {
 }
 
 impl RemoteBatchProver {
-    /// Creates a new [`RemoteBatchProver`] with the specified gRPC server endpoint. The
-    /// endpoint should be in the format `{protocol}://{hostname}:{port}`.
+    /// Creates a new [`RemoteBatchProver`] with the specified gRPC server endpoint. The endpoint
+    /// should be in the format `{protocol}://{hostname}:{port}`.
     pub fn new(endpoint: impl Into<String>) -> Self {
         RemoteBatchProver {
             endpoint: endpoint.into(),
@@ -65,9 +65,9 @@ impl RemoteBatchProver {
         self
     }
 
-    /// Establishes a connection to the remote batch prover server. The connection is
-    /// maintained for the lifetime of the prover. If the connection is already established, this
-    /// method does nothing.
+    /// Establishes a connection to the remote batch prover server. The connection is maintained for
+    /// the lifetime of the prover. If the connection is already established, this method does
+    /// nothing.
     async fn connect(&self) -> Result<(), RemoteProverClientError> {
         let mut client = self.client.lock().await;
         if client.is_some() {
@@ -165,8 +165,8 @@ impl RemoteBatchProver {
             )));
         }
 
-        // Because we checked the length matches we can zip the iterators up.
-        // We expect the transactions to be in the same order.
+        // Because we checked the length matches we can zip the iterators up. We expect the
+        // transactions to be in the same order.
         for (proposed_header, proven_header) in
             proposed_txs.into_iter().zip(proven_batch.transactions().as_slice())
         {
@@ -204,8 +204,8 @@ impl RemoteBatchProver {
                 )));
             }
 
-            // Because we checked the length matches we can zip the iterators up.
-            // We expect the nullifiers to be in the same order.
+            // Because we checked the length matches we can zip the iterators up. We expect the
+            // nullifiers to be in the same order.
             for (proposed_nullifier, input_note_commitment) in
                 proposed_header.nullifiers().zip(proven_header.input_notes().iter())
             {
@@ -225,8 +225,8 @@ impl RemoteBatchProver {
                 )));
             }
 
-            // Because we checked the length matches we can zip the iterators up.
-            // We expect the note IDs to be in the same order.
+            // Because we checked the length matches we can zip the iterators up. We expect the note
+            // IDs to be in the same order.
             for (proposed_note_id, header_note) in proposed_header
                 .output_notes()
                 .iter()

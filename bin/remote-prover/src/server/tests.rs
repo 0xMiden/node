@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
+use miden_node_proto::generated::remote_prover::api_client::ApiClient;
+use miden_node_proto::generated::remote_prover::{Proof, ProofRequest, ProofType};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
@@ -17,8 +19,6 @@ use miden_tx::{LocalTransactionProver, TransactionVerifier};
 use miden_tx_batch_prover::LocalBatchProver;
 use serial_test::serial;
 
-use crate::generated::api_client::ApiClient;
-use crate::generated::{Proof, ProofRequest, ProofType};
 use crate::server::Server;
 use crate::server::proof_kind::ProofKind;
 
@@ -42,19 +42,26 @@ impl Client {
     }
 }
 
-impl ProofRequest {
+trait ProofRequestExt {
     /// Generates a proof request for a transaction using [`MockChain`].
-    fn from_tx(tx: &ExecutedTransaction) -> Self {
+    fn from_tx(tx: &ExecutedTransaction) -> ProofRequest;
+    fn from_batch(batch: &ProposedBatch) -> ProofRequest;
+    async fn mock_tx() -> ExecutedTransaction;
+    async fn mock_batch() -> ProposedBatch;
+}
+
+impl ProofRequestExt for ProofRequest {
+    fn from_tx(tx: &ExecutedTransaction) -> ProofRequest {
         let tx_inputs = tx.tx_inputs().clone();
 
-        Self {
+        ProofRequest {
             proof_type: ProofType::Transaction as i32,
             payload: tx_inputs.to_bytes(),
         }
     }
 
-    fn from_batch(batch: &ProposedBatch) -> Self {
-        Self {
+    fn from_batch(batch: &ProposedBatch) -> ProofRequest {
+        ProofRequest {
             proof_type: ProofType::Batch as i32,
             payload: batch.to_bytes(),
         }
@@ -197,8 +204,8 @@ async fn legacy_behaviour_with_capacity_1() {
 
     let (first, second) = tokio::join!(a, b);
 
-    // We cannot know which got served and which got rejected.
-    // We can only assert that one of them is Ok and the other is Err.
+    // We cannot know which got served and which got rejected. We can only assert that one of them
+    // is Ok and the other is Err.
     assert!(first.is_ok() || second.is_ok());
     assert!(first.is_err() || second.is_err());
     // We also expect that the error is a resource exhaustion error.
@@ -233,8 +240,8 @@ async fn capacity_is_respected() {
 
     let (first, second, third) = tokio::join!(a, b, c);
 
-    // We cannot know which got served and which got rejected.
-    // We can only assert that two succeeded and one failed.
+    // We cannot know which got served and which got rejected. We can only assert that two succeeded
+    // and one failed.
     let mut expected = [true, true, false];
     let mut result = [first.is_ok(), second.is_ok(), third.is_ok()];
     expected.sort_unstable();

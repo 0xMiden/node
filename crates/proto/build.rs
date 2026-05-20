@@ -56,8 +56,8 @@ fn main() -> miette::Result<()> {
     Ok(())
 }
 
-/// Generates protobuf bindings from the given file descriptor set and stores them in the
-/// given destination directory.
+/// Generates protobuf bindings from the given file descriptor set and stores them in the given
+/// destination directory.
 fn generate_bindings(file_descriptors: FileDescriptorSet, dst_dir: &Path) -> miette::Result<()> {
     let mut prost_config = tonic_prost_build::Config::new();
     prost_config.skip_debug(["AccountId", "Digest"]);
@@ -81,9 +81,9 @@ fn rustfmt_generated(dir: &Path) -> miette::Result<()> {
     }
 
     // Just ignore output and exit status. The `rustfmt` binary is part of the Rust toolchain even
-    // if the `rustfmt` component is not installed, and it will print a warning and exit with
-    // status code 1. We don't actually care about formatting in this case, so we can just ignore
-    // the error.
+    // if the `rustfmt` component is not installed, and it will print a warning and exit with status
+    // code 1. We don't actually care about formatting in this case, so we can just ignore the
+    // error.
     let _output = Command::new("rustfmt")
         .args(["--edition", "2024"])
         .args(&rs_files)

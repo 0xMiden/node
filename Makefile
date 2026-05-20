@@ -26,12 +26,14 @@ fix: ## Runs Fix with configs
 
 
 .PHONY: format
-format: ## Runs Format using nightly toolchain
+format: ## Runs rustfmt and comment reflow
+	cargo xtask fmt-comments --write
 	cargo +nightly fmt --all
 
 
 .PHONY: format-check
-format-check: ## Runs Format using nightly toolchain but only in check mode
+format-check: ## Checks rustfmt and comment reflow
+	cargo xtask fmt-comments --check
 	cargo +nightly fmt --all --check
 
 

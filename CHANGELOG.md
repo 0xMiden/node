@@ -12,6 +12,7 @@
 - Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
 - [BREAKING] Network monitor `/status` endpoint now emits a single `RemoteProverStatus` entry per remote prover that bundles status, workers, and test results, instead of separate entries ([#1980](https://github.com/0xMiden/node/pull/1980)).
 - Refactored the validator gRPC API implementation to use the new per-method trait implementations ([#1959](https://github.com/0xMiden/node/pull/1959)).
+- Refactored the remote prover gRPC API implementation to use the new per-method trait implementations ([#1975](https://github.com/0xMiden/node/issues/1975)).
 - Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, extended `GetLimits` test coverage, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
 - Added a `replica` mode to the store, which streams blocks from an upstream master store ([#1987](https://github.com/0xMiden/node/pull/1987)).
 - Added `StoreReplica` gRPC service with endpoints for streaming blocks and proofs ([#1987](https://github.com/0xMiden/node/pull/1987)).
@@ -24,10 +25,14 @@
 - [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
+- Made SQLite connection pool sizes configurable for store, validator, and ntx-builder components, defaulting each to twice the available CPU core count ([#2098](https://github.com/0xMiden/node/pull/2098)).
+- Replaced blocking-in-async LargeSmt and account state forest operations in the store with wrappers using Tokio's `block_in_place()` ([#2076](https://github.com/0xMiden/node/pull/2076)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
 - Added `miden-benchmark` binary for end-to-end TPS measurements. `create-proofs` generates locally-proven mint/consume transaction pairs bound to the target node's chain tip; `run-benchmark` submits the bundle and reports peak/mean/window-average TPS plus inclusion latency, all derived from block-header data ([#2073](https://github.com/0xMiden/node/pull/2073)).
 - Added `--batch.workers` flag (env `MIDEN_NODE_BLOCK_PRODUCER_BATCH_WORKERS`) to the block-producer to make the previously-hardcoded batch-builder worker pool size configurable; default remains 2 ([#2073](https://github.com/0xMiden/node/pull/2073)).
+- [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 
 ## v0.14.10 (2026-05-29)
 
