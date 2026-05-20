@@ -81,16 +81,14 @@ use crate::{
 // PROVING TASK HELPERS
 // ================================================================================================
 
-/// Result of a single spawned proving task: the proof attempt and the wall
-/// time that task spent (which, for the remote path, includes rate-limit and
-/// retry waits).
+/// Result of a single spawned proving task: the proof attempt and the wall time that task spent
+/// (which, for the remote path, includes rate-limit and retry waits).
 type ProveOutcome = (anyhow::Result<ProvenTransaction>, Duration);
 
-/// Await every spawned proving task in spawn order, returning the proofs in
-/// that same order plus the summed per-task wall time. If any task fails (or
-/// panics) we print the error and exit with a non-zero status. Proven txs
-/// later in the bundle reference earlier ones, so a single failure means the
-/// bundle is unusable anyway.
+/// Await every spawned proving task in spawn order, returning the proofs in that same order plus
+/// the summed per-task wall time. If any task fails (or panics) we print the error and exit with a
+/// non-zero status. Proven txs later in the bundle reference earlier ones, so a single failure
+/// means the bundle is unusable anyway.
 async fn collect_proofs(
     label: &str,
     tasks: Vec<tokio::task::JoinHandle<ProveOutcome>>,
@@ -180,9 +178,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     });
     let faucet_id = faucet.id();
 
-    // Mint phase: executions are sequential (each mutates the shared faucet),
-    // but proving runs concurrently on the prover (under the rate limiter when
-    // remote).
+    // Mint phase: executions are sequential (each mutates the shared faucet), but proving runs
+    // concurrently on the prover (under the rate limiter when remote).
     println!("Executing {num_transactions} mint transactions (sequential)...");
     let mut mint_tasks: Vec<tokio::task::JoinHandle<ProveOutcome>> =
         Vec::with_capacity(num_transactions as usize);
@@ -230,11 +227,10 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
         let delta = executed_tx.account_delta().clone();
 
-        // Evolve the faucet state for the next iteration before we hand the
-        // executed tx off for proving. The first mint of a never-before-seen
-        // account produces a full-state delta (because the delta carries the
-        // freshly deployed code); subsequent mints produce partial-state
-        // deltas that can be applied incrementally.
+        // Evolve the faucet state for the next iteration before we hand the executed tx off for
+        // proving. The first mint of a never-before-seen account produces a full-state delta
+        // (because the delta carries the freshly deployed code); subsequent mints produce
+        // partial-state deltas that can be applied incrementally.
         if delta.is_full_state() {
             faucet = Account::try_from(&delta)
                 .expect("failed to materialize faucet from full-state delta");
@@ -369,8 +365,8 @@ fn create_faucet() -> (Account, SecretKey) {
     (faucet, key_pair)
 }
 
-/// Creates a new wallet account with the given public key, using `index` to vary
-/// the init seed so each wallet ends up with a distinct account ID.
+/// Creates a new wallet account with the given public key, using `index` to vary the init seed so
+/// each wallet ends up with a distinct account ID.
 fn create_wallet(
     public_key: &miden_protocol::crypto::dsa::falcon512_poseidon2::PublicKey,
     index: u64,
@@ -391,9 +387,8 @@ fn create_wallet(
 // BENCHMARK DATA STORE
 // ================================================================================================
 
-/// In-memory `DataStore` impl used to feed the [`TransactionExecutor`] when
-/// generating real proofs locally. Modelled on the network-monitor's
-/// `MonitorDataStore`.
+/// In-memory `DataStore` impl used to feed the [`TransactionExecutor`] when generating real proofs
+/// locally. Modelled on the network-monitor's `MonitorDataStore`.
 struct BenchmarkDataStore {
     accounts: HashMap<AccountId, Account>,
     block_header: BlockHeader,

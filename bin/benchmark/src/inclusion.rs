@@ -17,8 +17,8 @@ use miden_protocol::block::{BlockHeader, SignedBlock};
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::Deserializable;
 
-/// One scanned block that contained at least one of our txs. Empty blocks
-/// in the scan range are not represented here.
+/// One scanned block that contained at least one of our txs. Empty blocks in the scan range are not
+/// represented here.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BlockHit {
     /// On-chain block number.
@@ -33,37 +33,34 @@ pub(crate) struct BlockHit {
 pub(crate) struct InclusionResult {
     pub(crate) submitted_count: u64,
     pub(crate) included_count: u64,
-    /// One entry per block in the scan range that included any of our txs,
-    /// in scan order. Throughput metrics are derived from this list plus
-    /// the block interval inferred from the scan span (see
-    /// [`InclusionResult::derived_block_interval`]).
+    /// One entry per block in the scan range that included any of our txs, in scan order.
+    /// Throughput metrics are derived from this list plus the block interval inferred from the scan
+    /// span (see [`InclusionResult::derived_block_interval`]).
     pub(crate) per_block_hits: Vec<BlockHit>,
-    /// For each successfully submitted tx that landed in a block: the
-    /// elapsed time from RPC ack to that block's header timestamp.
+    /// For each successfully submitted tx that landed in a block: the elapsed time from RPC ack to
+    /// that block's header timestamp.
     pub(crate) inclusion_latencies: Vec<Duration>,
     /// Number of blocks the inclusion scan successfully read headers for.
     pub(crate) scanned_block_count: u32,
-    /// Header timestamps of the first and last successfully scanned blocks
-    /// (unix seconds). Together with `scanned_block_count`, used to derive
-    /// the block interval at print time.
+    /// Header timestamps of the first and last successfully scanned blocks (unix seconds). Together
+    /// with `scanned_block_count`, used to derive the block interval at print time.
     pub(crate) scanned_first_ts: u32,
     pub(crate) scanned_last_ts: u32,
 }
 
 impl InclusionResult {
-    /// Derive the average block interval from the scan span. Returns `None`
-    /// when the scan touched fewer than two blocks or when all scanned
-    /// headers share the same 1-second-resolution timestamp (sub-second
-    /// cadence), in which case the bench cannot determine the interval
-    /// from headers alone.
+    /// Derive the average block interval from the scan span. Returns `None` when the scan touched
+    /// fewer than two blocks or when all scanned headers share the same 1-second-resolution
+    /// timestamp (sub-second cadence), in which case the bench cannot determine the interval from
+    /// headers alone.
     pub(crate) fn derived_block_interval(&self) -> Option<Duration> {
         if self.scanned_block_count < 2 || self.scanned_last_ts <= self.scanned_first_ts {
             return None;
         }
         let span_secs = u64::from(self.scanned_last_ts - self.scanned_first_ts);
         let intervals = u64::from(self.scanned_block_count - 1);
-        // f64 keeps the fractional seconds when the cadence is finer than 1s
-        // *and* the scan crosses enough one-second boundaries.
+        // f64 keeps the fractional seconds when the cadence is finer than 1s *and* the scan crosses
+        // enough one-second boundaries.
         #[expect(
             clippy::cast_precision_loss,
             reason = "block counts and timestamp deltas are tiny in practice"
@@ -73,13 +70,11 @@ impl InclusionResult {
     }
 }
 
-/// Watch the chain advance past `start_height` and scan each new block for
-/// our submitted txs as it lands. Stops as soon as every entry in `ack_by_id`
-/// has been matched (early-exit), or after `max_blocks` blocks past
-/// `start_height` have been scanned without draining (timeout) — whichever
-/// comes first. Returns the final scanned block number alongside the
-/// inclusion stats; if early-exit fires, the returned `h_final` is the
-/// block that completed the drain.
+/// Watch the chain advance past `start_height` and scan each new block for our submitted txs as it
+/// lands. Stops as soon as every entry in `ack_by_id` has been matched (early-exit), or after
+/// `max_blocks` blocks past `start_height` have been scanned without draining (timeout) — whichever
+/// comes first. Returns the final scanned block number alongside the inclusion stats; if early-exit
+/// fires, the returned `h_final` is the block that completed the drain.
 #[expect(
     clippy::too_many_lines,
     reason = "polling + per-block deserialization + tx-id matching is intentionally inline; \
@@ -161,8 +156,8 @@ pub(crate) async fn scan_with_drain(
                 if let Some(ack_at) = ack_by_id.remove(&header.id()) {
                     hits_in_this_block += 1;
                     included_count += 1;
-                    // Block timestamps have 1-second resolution and may round
-                    // down past the ack instant; clamp negative deltas to zero.
+                    // Block timestamps have 1-second resolution and may round down past the ack
+                    // instant; clamp negative deltas to zero.
                     let latency = block_ts_system.duration_since(ack_at).unwrap_or_default();
                     inclusion_latencies.push(latency);
                 }
@@ -189,9 +184,8 @@ pub(crate) async fn scan_with_drain(
             }
         }
 
-        // Hit the safety bound but still have pending txs. Stop and report
-        // what we have; the unaccounted-for txs will show as drop in the
-        // summary.
+        // Hit the safety bound but still have pending txs. Stop and report what we have; the
+        // unaccounted-for txs will show as drop in the summary.
         if next_block > max_target {
             println!(
                 "  reached max wait of {max_blocks} blocks past height {start_height}; \

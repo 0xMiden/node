@@ -44,8 +44,8 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
     let consume_tx_inputs: Vec<Vec<u8>> = read_from_file(&in_dir.join("consume_tx_inputs.bin"));
     assert_eq!(consume_txs.len(), consume_tx_inputs.len(), "consume tx/inputs length mismatch");
 
-    // Compute the tx-id master lists up front so we can match them against
-    // on-chain block contents later, without having to interrogate the node.
+    // Compute the tx-id master lists up front so we can match them against on-chain block contents
+    // later, without having to interrogate the node.
     let mint_ids: Vec<TransactionId> = mint_txs.iter().map(ProvenTransaction::id).collect();
     let consume_ids: Vec<TransactionId> = consume_txs.iter().map(ProvenTransaction::id).collect();
 
@@ -87,14 +87,14 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
 /// Outcome of a single `submit_proven_tx` RPC.
 #[derive(Debug)]
 pub(crate) struct SubmitOutcome {
-    /// Position of this tx in the original input vec — used to recover the
-    /// corresponding `TransactionId` from the caller-owned id list.
+    /// Position of this tx in the original input vec — used to recover the corresponding
+    /// `TransactionId` from the caller-owned id list.
     pub(crate) index: usize,
     /// `Ok(rpc_round_trip_duration)` on success, `Err(grpc_code)` on failure.
     pub(crate) result: Result<Duration, tonic::Code>,
-    /// Wall-clock timestamp at which the RPC returned `Ok`. `None` on error.
-    /// Stored as `SystemTime` so it is directly comparable to block headers'
-    /// unix-second timestamps when computing inclusion latency.
+    /// Wall-clock timestamp at which the RPC returned `Ok`. `None` on error. Stored as `SystemTime`
+    /// so it is directly comparable to block headers' unix-second timestamps when computing
+    /// inclusion latency.
     pub(crate) ack_at: Option<SystemTime>,
 }
 
@@ -140,15 +140,15 @@ async fn submit_all(
     tx_inputs: Vec<Vec<u8>>,
     concurrency: usize,
 ) -> PhaseStats {
-    /// How many distinct error messages to surface to the console as they
-    /// happen. The full failure breakdown still appears in the summary.
+    /// How many distinct error messages to surface to the console as they happen. The full failure
+    /// breakdown still appears in the summary.
     const MAX_ERRORS_TO_PRINT: u64 = 5;
 
     let start = Instant::now();
     let semaphore = Arc::new(Semaphore::new(concurrency));
-    // Incrementing-only counter used purely to budget the live error prints.
-    // It is never read on the hot path, so it does not introduce any
-    // submit-side synchronization beyond what was already there.
+    // Incrementing-only counter used purely to budget the live error prints. It is never read on
+    // the hot path, so it does not introduce any submit-side synchronization beyond what was
+    // already there.
     let printed = Arc::new(AtomicU64::new(0));
 
     let total = txs.len();
@@ -189,8 +189,8 @@ async fn submit_all(
         });
     }
 
-    // Outcomes carry their original `index`, so completion order is fine —
-    // downstream summarizers don't depend on the vec being in spawn order.
+    // Outcomes carry their original `index`, so completion order is fine — downstream summarizers
+    // don't depend on the vec being in spawn order.
     let mut outcomes = Vec::with_capacity(total);
     while let Some(res) = set.join_next().await {
         outcomes.push(res.expect("submission task panicked"));
@@ -199,13 +199,11 @@ async fn submit_all(
     PhaseStats { elapsed: start.elapsed(), outcomes }
 }
 
-/// Submit txs one at a time, awaiting each RPC response before sending the
-/// next. Used for the mint phase, where every tx mutates the shared faucet
-/// and therefore must arrive at the mempool in order — the block-producer's
-/// mempool will reject out-of-order submissions but happily chains in-order
-/// ones against its own pending state, so we only need to serialize the
-/// `submit_proven_tx` calls themselves, not wait for block
-/// inclusion in between.
+/// Submit txs one at a time, awaiting each RPC response before sending the next. Used for the mint
+/// phase, where every tx mutates the shared faucet and therefore must arrive at the mempool in
+/// order — the block-producer's mempool will reject out-of-order submissions but happily chains
+/// in-order ones against its own pending state, so we only need to serialize the `submit_proven_tx`
+/// calls themselves, not wait for block inclusion in between.
 async fn submit_sequential(
     mut client: RpcClient,
     txs: Vec<ProvenTransaction>,
@@ -243,9 +241,9 @@ async fn submit_sequential(
     PhaseStats { elapsed: start.elapsed(), outcomes }
 }
 
-/// Build a lookup from the on-chain `TransactionId` of every successfully
-/// submitted tx to the `SystemTime` at which the node ack'd its submission.
-/// Used by [`compute_inclusion`] to compute per-tx inclusion latency.
+/// Build a lookup from the on-chain `TransactionId` of every successfully submitted tx to the
+/// `SystemTime` at which the node ack'd its submission. Used by [`compute_inclusion`] to compute
+/// per-tx inclusion latency.
 fn build_ack_map(
     mint_ids: &[TransactionId],
     mint_stats: &PhaseStats,

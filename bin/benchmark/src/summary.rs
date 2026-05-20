@@ -1,7 +1,6 @@
-//! Every line the bench prints to stdout, plus the formatting and metric
-//! helpers that only matter for output (percentiles, rate/percentage casts,
-//! duration formatters). Other modules pass `PhaseStats` and `InclusionResult`
-//! references in; this module never mutates or owns them.
+//! Every line the bench prints to stdout, plus the formatting and metric helpers that only matter
+//! for output (percentiles, rate/percentage casts, duration formatters). Other modules pass
+//! `PhaseStats` and `InclusionResult` references in; this module never mutates or owns them.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,9 +11,9 @@ use crate::submit::PhaseStats;
 // PROOF-GENERATION SUMMARY
 // ================================================================================================
 
-/// Prints a per-phase summary of how long proof generation took, broken down
-/// into the executor (VM execution) and prover (STARK proving) costs, plus the
-/// mean per tx for each so that runs of different sizes can be compared.
+/// Prints a per-phase summary of how long proof generation took, broken down into the executor (VM
+/// execution) and prover (STARK proving) costs, plus the mean per tx for each so that runs of
+/// different sizes can be compared.
 pub(crate) fn print_proving_summary(
     label: &str,
     num_transactions: u64,
@@ -172,8 +171,7 @@ fn print_inclusion_summary(inclusion: &InclusionResult) {
         inclusion.scanned_last_ts - inclusion.scanned_first_ts,
     );
 
-    // Throughput. Each block-with-our-txs is treated as `block_interval`
-    // seconds of node work.
+    // Throughput. Each block-with-our-txs is treated as `block_interval` seconds of node work.
     let interval_secs = block_interval.as_secs_f64();
     let peak_rate = rate_per_second(u64::from(peak_block.hit_count), block_interval);
     let mean_rate = if interval_secs > 0.0 {
@@ -209,10 +207,9 @@ fn print_inclusion_summary(inclusion: &InclusionResult) {
     }
 }
 
-/// Print a compact per-block series so the operator can eyeball the
-/// time-series shape (ramp, plateau, dip). Empty blocks in the scan range
-/// are intentionally omitted. If `block_interval` is `Some`, each line also
-/// shows the equivalent rate; if `None`, only the raw count.
+/// Print a compact per-block series so the operator can eyeball the time-series shape (ramp,
+/// plateau, dip). Empty blocks in the scan range are intentionally omitted. If `block_interval` is
+/// `Some`, each line also shows the equivalent rate; if `None`, only the raw count.
 fn print_per_block_series(hits: &[BlockHit], block_interval: Option<Duration>) {
     println!("  per-block series:");
     for hit in hits {
@@ -237,9 +234,9 @@ fn print_per_block_series(hits: &[BlockHit], block_interval: Option<Duration>) {
 // METRIC HELPERS
 // ================================================================================================
 
-/// Computes `count / elapsed`, treating a zero-or-negative elapsed window as
-/// zero. Wrapping the cast in a helper keeps the precision-loss expect tightly
-/// scoped — the loss is harmless for display purposes.
+/// Computes `count / elapsed`, treating a zero-or-negative elapsed window as zero. Wrapping the
+/// cast in a helper keeps the precision-loss expect tightly scoped — the loss is harmless for
+/// display purposes.
 #[expect(
     clippy::cast_precision_loss,
     reason = "presentational rate; precision loss past 2^52 events is irrelevant"
@@ -296,8 +293,8 @@ fn percentiles(samples: &mut [Duration]) -> Option<Percentiles> {
     }
     samples.sort();
     let n = samples.len();
-    // Integer index for percentile `num/den`. Picked over an `f64` cast to
-    // avoid the cast_sign_loss / cast_precision_loss footguns.
+    // Integer index for percentile `num/den`. Picked over an `f64` cast to avoid the cast_sign_loss
+    // / cast_precision_loss footguns.
     let pick = |num: usize, den: usize| -> Duration {
         let idx = (n * num / den).min(n - 1);
         samples[idx]

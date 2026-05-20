@@ -26,14 +26,12 @@ const START_RATE: u32 = 1;
 const MAX_RATE: u32 = 10;
 const STEP_DURATION: Duration = Duration::from_secs(180);
 
-/// Per-request gRPC deadline. STARK transaction proofs routinely exceed the
-/// default 10s, so we override it. Anything past this is treated as a
-/// retryable error.
+/// Per-request gRPC deadline. STARK transaction proofs routinely exceed the default 10s, so we
+/// override it. Anything past this is treated as a retryable error.
 const PROVE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Cap on the number of proving requests in flight at once, independent of the
-/// rate. At [`MAX_RATE`] with ~30s proof latency we'd otherwise stack hundreds
-/// of in-flight requests.
+/// Cap on the number of proving requests in flight at once, independent of the rate. At
+/// [`MAX_RATE`] with ~30s proof latency we'd otherwise stack hundreds of in-flight requests.
 const MAX_IN_FLIGHT: usize = 64;
 
 // RETRY CONSTANTS
@@ -70,9 +68,9 @@ impl BenchmarkProver {
         }
     }
 
-    /// Prove the given executed transaction. The remote path paces dispatch
-    /// through the rate limiter and retries retryable errors with exponential
-    /// backoff; the local path runs the in-process prover directly.
+    /// Prove the given executed transaction. The remote path paces dispatch through the rate
+    /// limiter and retries retryable errors with exponential backoff; the local path runs the
+    /// in-process prover directly.
     pub(crate) async fn prove(
         &self,
         executed_tx: ExecutedTransaction,
@@ -96,8 +94,8 @@ async fn prove_remote_with_retry(
     permits: &Arc<Semaphore>,
     tx_inputs: &TransactionInputs,
 ) -> Result<ProvenTransaction> {
-    // Hold one in-flight permit across every retry so the concurrency cap
-    // accounts for slow-but-still-progressing requests.
+    // Hold one in-flight permit across every retry so the concurrency cap accounts for
+    // slow-but-still-progressing requests.
     let _permit = permits
         .clone()
         .acquire_owned()
@@ -131,9 +129,9 @@ async fn prove_remote_with_retry(
     }
 }
 
-/// Walk the error source chain looking for a tonic status or transport error.
-/// We classify resource-exhausted, unavailable, deadline-exceeded, and any
-/// transport-level failure (e.g. broken pipe, connect refused) as retryable.
+/// Walk the error source chain looking for a tonic status or transport error. We classify
+/// resource-exhausted, unavailable, deadline-exceeded, and any transport-level failure (e.g. broken
+/// pipe, connect refused) as retryable.
 fn is_retryable(err: &TransactionProverError) -> bool {
     let mut src: Option<&(dyn std::error::Error + 'static)> = err.source();
     while let Some(e) = src {
@@ -185,8 +183,7 @@ impl RampingRateLimiter {
         }
     }
 
-    /// Block until this caller is allowed to dispatch one request under the
-    /// current rate schedule.
+    /// Block until this caller is allowed to dispatch one request under the current rate schedule.
     async fn acquire(&self) {
         let sleep_until = {
             let mut inner = self.inner.lock().await;
@@ -247,8 +244,8 @@ mod tests {
     #[test]
     fn rate_is_capped_by_freeze() {
         let now = Instant::now();
-        // `frozen_at` is a cap, not a target — at t=0 the natural rate is
-        // `START_RATE`, which is already below caps of 3 or higher.
+        // `frozen_at` is a cap, not a target — at t=0 the natural rate is `START_RATE`, which is
+        // already below caps of 3 or higher.
         assert_eq!(compute_rate(now, Some(3)), START_RATE);
         assert_eq!(compute_rate(now, Some(MAX_RATE)), START_RATE);
         // A cap below the natural rate clamps the result down.
@@ -257,8 +254,8 @@ mod tests {
 
     #[test]
     fn natural_rate_is_capped_at_max() {
-        // Simulate "elapsed > MAX_RATE * STEP_DURATION" by constructing a
-        // start instant far in the past.
+        // Simulate "elapsed > MAX_RATE * STEP_DURATION" by constructing a start instant far in the
+        // past.
         let long_ago = Instant::now()
             .checked_sub(STEP_DURATION * (MAX_RATE + 5))
             .expect("test environment supports backdated Instants");
