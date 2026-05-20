@@ -108,8 +108,10 @@ rand_chacha        = { default-features = false, version = "0.9" }
 rayon              = { version = "1.10" }
 reqwest            = { version = "0.13" }
 rstest             = { version = "0.26" }
+rusqlite           = { features = ["bundled"], version = "0.37" }
 serde              = { features = ["derive"], version = "1" }
 serial_test        = { version = "3.2" }
+sha2               = { version = "0.10" }
 syn                = { version = "2.0" }
 tempfile           = { version = "3.12" }
 thiserror          = { default-features = false, version = "2.0" }
