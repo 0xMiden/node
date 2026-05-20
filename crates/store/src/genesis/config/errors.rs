@@ -10,6 +10,7 @@ use miden_protocol::errors::{
 };
 use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
+use miden_standards::account::policies::TokenPolicyManagerError;
 use miden_standards::account::wallets::BasicWalletError;
 
 use crate::genesis::config::TokenSymbolStr;
@@ -74,4 +75,6 @@ pub enum GenesisConfigError {
     InvalidSecretKey(#[from] DeserializationError),
     #[error("provided signer config is not supported")]
     UnsupportedSignerConfig,
+    #[error("token policy manager error")]
+    TokenPolicyManager(#[from] TokenPolicyManagerError),
 }

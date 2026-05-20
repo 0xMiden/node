@@ -30,7 +30,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
@@ -61,7 +61,7 @@ fn setup_test_db() -> SqliteConnection {
 fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
     use crate::db::schema::block_headers;
 
-    let secret_key = SecretKey::new();
+    let secret_key = SigningKey::new();
     let block_header = BlockHeader::new(
         1_u8.into(),
         Word::default(),
@@ -124,10 +124,10 @@ fn optimized_delta_matches_full_account_method() {
 
     // Create an account with value slots only (no map slots to avoid SmtForest complexity)
     let slot_value_initial = Word::from([
-        Felt::new(INITIAL_SLOT_VALUES[0]),
-        Felt::new(INITIAL_SLOT_VALUES[1]),
-        Felt::new(INITIAL_SLOT_VALUES[2]),
-        Felt::new(INITIAL_SLOT_VALUES[3]),
+        Felt::new_unchecked(INITIAL_SLOT_VALUES[0]),
+        Felt::new_unchecked(INITIAL_SLOT_VALUES[1]),
+        Felt::new_unchecked(INITIAL_SLOT_VALUES[2]),
+        Felt::new_unchecked(INITIAL_SLOT_VALUES[3]),
     ]);
 
     let component_storage = vec![
@@ -186,10 +186,10 @@ fn optimized_delta_matches_full_account_method() {
     // - Add 500 tokens to the vault (starting from empty)
 
     let new_slot_value = Word::from([
-        Felt::new(UPDATED_SLOT_VALUES[0]),
-        Felt::new(UPDATED_SLOT_VALUES[1]),
-        Felt::new(UPDATED_SLOT_VALUES[2]),
-        Felt::new(UPDATED_SLOT_VALUES[3]),
+        Felt::new_unchecked(UPDATED_SLOT_VALUES[0]),
+        Felt::new_unchecked(UPDATED_SLOT_VALUES[1]),
+        Felt::new_unchecked(UPDATED_SLOT_VALUES[2]),
+        Felt::new_unchecked(UPDATED_SLOT_VALUES[3]),
     ]);
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
 
@@ -215,7 +215,7 @@ fn optimized_delta_matches_full_account_method() {
     };
 
     // Create a partial delta
-    let nonce_delta = Felt::new(NONCE_DELTA);
+    let nonce_delta = Felt::new_unchecked(NONCE_DELTA);
     let partial_delta = AccountDelta::new(
         full_account_before.id(),
         storage_delta.clone(),
@@ -226,8 +226,9 @@ fn optimized_delta_matches_full_account_method() {
     assert!(!partial_delta.is_full_state(), "Delta should be partial, not full state");
 
     // Construct the expected final account by applying the delta
-    let expected_nonce =
-        Felt::new(full_account_before.nonce().as_canonical_u64() + nonce_delta.as_canonical_u64());
+    let expected_nonce = Felt::new_unchecked(
+        full_account_before.nonce().as_canonical_u64() + nonce_delta.as_canonical_u64(),
+    );
     let expected_code_commitment = full_account_before.code().commitment();
 
     let mut expected_account = full_account_before.clone();
@@ -283,7 +284,7 @@ fn optimized_delta_matches_full_account_method() {
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
     assert_matches!(&vault_assets_after[0], Asset::Fungible(f) => {
         assert_eq!(f.faucet_id(), faucet_id, "Faucet ID should match");
-        assert_eq!(f.amount(), VAULT_AMOUNT, "Amount should be 500");
+        assert_eq!(f.amount().as_u64(), VAULT_AMOUNT, "Amount should be 500");
     });
 
     // Verify the account commitment matches
@@ -390,7 +391,7 @@ fn optimized_delta_updates_non_empty_vault() {
         account.id(),
         AccountStorageDelta::new(),
         vault_delta,
-        Felt::new(NONCE_DELTA),
+        Felt::new_unchecked(NONCE_DELTA),
     )
     .unwrap();
 
@@ -412,7 +413,7 @@ fn optimized_delta_updates_non_empty_vault() {
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
     assert_matches!(&vault_assets_after[0], Asset::Fungible(f) => {
         assert_eq!(f.faucet_id(), faucet_id_1, "Faucet ID should match");
-        assert_eq!(f.amount(), ADDED_AMOUNT_BLOCK_2, "Amount should match");
+        assert_eq!(f.amount().as_u64(), ADDED_AMOUNT_BLOCK_2, "Amount should match");
     });
 
     let full_account_after = select_full_account(&mut conn, account.id())
@@ -431,7 +432,7 @@ fn optimized_delta_updates_non_empty_vault() {
         account.id(),
         AccountStorageDelta::new(),
         vault_delta_3,
-        Felt::new(NONCE_DELTA),
+        Felt::new_unchecked(NONCE_DELTA),
     )
     .unwrap();
 
@@ -454,7 +455,7 @@ fn optimized_delta_updates_non_empty_vault() {
     assert_eq!(final_assets.len(), 1, "Should have exactly 1 vault asset");
     assert_matches!(&final_assets[0], Asset::Fungible(f) => {
         assert_eq!(f.faucet_id(), faucet_id_1);
-        assert_eq!(f.amount(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3, "Expected total of 400");
+        assert_eq!(f.amount().as_u64(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3, "Expected total of 400");
     });
 
     assert_eq!(full_account_final.vault().root(), expected_vault_root_3);
@@ -480,22 +481,22 @@ fn optimized_delta_updates_storage_map_header() {
     let mut conn = setup_test_db();
 
     let map_key = StorageMapKey::new(Word::from([
-        Felt::new(MAP_KEY_VALUES[0]),
-        Felt::new(MAP_KEY_VALUES[1]),
-        Felt::new(MAP_KEY_VALUES[2]),
-        Felt::new(MAP_KEY_VALUES[3]),
+        Felt::new_unchecked(MAP_KEY_VALUES[0]),
+        Felt::new_unchecked(MAP_KEY_VALUES[1]),
+        Felt::new_unchecked(MAP_KEY_VALUES[2]),
+        Felt::new_unchecked(MAP_KEY_VALUES[3]),
     ]));
     let map_value_initial = Word::from([
-        Felt::new(MAP_VALUE_INITIAL[0]),
-        Felt::new(MAP_VALUE_INITIAL[1]),
-        Felt::new(MAP_VALUE_INITIAL[2]),
-        Felt::new(MAP_VALUE_INITIAL[3]),
+        Felt::new_unchecked(MAP_VALUE_INITIAL[0]),
+        Felt::new_unchecked(MAP_VALUE_INITIAL[1]),
+        Felt::new_unchecked(MAP_VALUE_INITIAL[2]),
+        Felt::new_unchecked(MAP_VALUE_INITIAL[3]),
     ]);
     let map_value_updated = Word::from([
-        Felt::new(MAP_VALUE_UPDATED[0]),
-        Felt::new(MAP_VALUE_UPDATED[1]),
-        Felt::new(MAP_VALUE_UPDATED[2]),
-        Felt::new(MAP_VALUE_UPDATED[3]),
+        Felt::new_unchecked(MAP_VALUE_UPDATED[0]),
+        Felt::new_unchecked(MAP_VALUE_UPDATED[1]),
+        Felt::new_unchecked(MAP_VALUE_UPDATED[2]),
+        Felt::new_unchecked(MAP_VALUE_UPDATED[3]),
     ]);
 
     let storage_map = StorageMap::with_entries(vec![(map_key, map_value_initial)]).unwrap();
@@ -551,7 +552,7 @@ fn optimized_delta_updates_storage_map_header() {
         account.id(),
         storage_delta,
         AccountVaultDelta::default(),
-        Felt::new(NONCE_DELTA),
+        Felt::new_unchecked(NONCE_DELTA),
     )
     .unwrap();
 
@@ -612,10 +613,10 @@ fn upsert_private_account() {
     );
 
     let account_commitment = Word::from([
-        Felt::new(COMMITMENT_WORDS[0]),
-        Felt::new(COMMITMENT_WORDS[1]),
-        Felt::new(COMMITMENT_WORDS[2]),
-        Felt::new(COMMITMENT_WORDS[3]),
+        Felt::new_unchecked(COMMITMENT_WORDS[0]),
+        Felt::new_unchecked(COMMITMENT_WORDS[1]),
+        Felt::new_unchecked(COMMITMENT_WORDS[2]),
+        Felt::new_unchecked(COMMITMENT_WORDS[3]),
     ]);
 
     // Insert as private account
@@ -667,10 +668,10 @@ fn upsert_full_state_delta() {
 
     // Create an account with storage
     let slot_value = Word::from([
-        Felt::new(SLOT_VALUES[0]),
-        Felt::new(SLOT_VALUES[1]),
-        Felt::new(SLOT_VALUES[2]),
-        Felt::new(SLOT_VALUES[3]),
+        Felt::new_unchecked(SLOT_VALUES[0]),
+        Felt::new_unchecked(SLOT_VALUES[1]),
+        Felt::new_unchecked(SLOT_VALUES[2]),
+        Felt::new_unchecked(SLOT_VALUES[3]),
     ]);
     let component_storage =
         vec![StorageSlot::with_value(StorageSlotName::mock(SLOT_INDEX), slot_value)];

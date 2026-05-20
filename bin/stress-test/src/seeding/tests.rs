@@ -11,7 +11,7 @@ fn benchmark_fungible_faucet_ids(vault_entries: usize) -> Vec<AccountId> {
 
 #[test]
 fn public_account_can_be_created_with_large_storage_map() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
 
@@ -33,7 +33,7 @@ fn public_account_can_be_created_with_large_storage_map() {
 
 #[test]
 fn private_account_ignores_large_storage_map_entries() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
 
@@ -50,7 +50,7 @@ fn private_account_ignores_large_storage_map_entries() {
 
 #[test]
 fn public_account_note_contains_requested_distinct_vault_assets() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
     let mut key_rng = rng.lock().unwrap();
     let key_pair = SecretKey::with_rng(&mut *key_rng);
@@ -78,7 +78,7 @@ fn public_account_note_contains_requested_distinct_vault_assets() {
 
 #[test]
 fn private_account_note_keeps_single_vault_asset() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
     let mut key_rng = rng.lock().unwrap();
     let key_pair = SecretKey::with_rng(&mut *key_rng);
@@ -101,7 +101,7 @@ fn private_account_note_keeps_single_vault_asset() {
 
 #[test]
 fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let mut account = create_account(key_pair.public_key(), 42, AccountStorageMode::Public, 4);
@@ -125,7 +125,7 @@ fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
 
 #[test]
 fn private_account_storage_map_update_is_skipped() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let mut account = create_account(key_pair.public_key(), 42, AccountStorageMode::Private, 4);

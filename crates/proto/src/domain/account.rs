@@ -992,6 +992,16 @@ impl std::fmt::Display for NetworkAccountId {
 }
 
 impl NetworkAccountId {
+    /// Wraps an `AccountId` known by the caller to belong to a network account.
+    ///
+    /// Network-ness is no longer encoded in the `AccountId` itself; it is determined by the
+    /// presence of the standardized `NetworkAccountNoteAllowlist` slot in the account's storage.
+    /// Callers must therefore verify that classification themselves (e.g. via the store's
+    /// `network_account_type` column or the protocol's `NetworkAccount` type) before wrapping.
+    pub fn new_trusted(id: AccountId) -> Self {
+        Self(id)
+    }
+
     /// Returns the inner `AccountId`.
     pub fn inner(&self) -> AccountId {
         self.0
@@ -1000,17 +1010,6 @@ impl NetworkAccountId {
     /// Gets the 30-bit prefix of the account ID used for tag matching.
     pub fn prefix(&self) -> AccountPrefix {
         get_account_id_tag_prefix(self.0)
-    }
-}
-
-impl TryFrom<AccountId> for NetworkAccountId {
-    type Error = NetworkAccountError;
-
-    fn try_from(id: AccountId) -> Result<Self, Self::Error> {
-        if !id.is_network() {
-            return Err(NetworkAccountError::NotNetworkAccount(id));
-        }
-        Ok(NetworkAccountId(id))
     }
 }
 

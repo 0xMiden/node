@@ -46,7 +46,7 @@ impl State {
         if block_from == block_to {
             return Ok((
                 MmrDelta {
-                    forest: Forest::new(block_from.as_usize()),
+                    forest: Forest::new(block_from.as_usize()).expect("block index fits in u32"),
                     data: vec![],
                 },
                 block_header,
@@ -72,7 +72,10 @@ impl State {
             .await
             .blockchain
             .as_mmr()
-            .get_delta(Forest::new(from_forest), Forest::new(to_forest))
+            .get_delta(
+                Forest::new(from_forest).expect("from_forest fits in u32"),
+                Forest::new(to_forest).expect("to_forest fits in u32"),
+            )
             .map_err(StateSyncError::FailedToBuildMmrDelta)?;
 
         Ok((mmr_delta, block_header, signature))

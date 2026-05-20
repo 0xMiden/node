@@ -96,7 +96,7 @@ impl StoreApi {
 
             for note in batch.input_notes().iter() {
                 if let Some(header) = note.header() {
-                    unauthenticated_note_commitments.insert(header.to_commitment());
+                    unauthenticated_note_commitments.insert(header.id().as_word());
                 }
             }
         }

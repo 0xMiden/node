@@ -17,7 +17,7 @@ use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 #[cfg(feature = "rocksdb")]
 use miden_crypto::merkle::smt::{ForestPersistentBackend, PersistentBackendConfig};
 #[cfg(feature = "rocksdb")]
-use miden_large_smt_backend_rocksdb::RocksDbStorage;
+use miden_large_smt_backend_rocksdb::{RocksDbStorage, SmtStorageReader};
 #[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
@@ -140,7 +140,7 @@ pub trait TreeStorageLoader: SmtStorage + Sized {
 /// For `ForestInMemoryBackend`, the forest is rebuilt from database entries on each startup. For
 /// `ForestPersistentBackend`, the forest is loaded directly from disk if data exists, otherwise it
 /// is rebuilt from the database and persisted.
-pub trait AccountForestLoader: Backend + Sized {
+pub(crate) trait AccountForestLoader: Backend + Sized {
     /// A configuration type for the implementation.
     type Config: std::fmt::Debug + std::default::Default;
 
@@ -465,9 +465,10 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
     let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
-    let chain_mmr = Blockchain::from_mmr_unchecked(Mmr::from(
-        block_commitments.iter().copied().map(BlockHeaderCommitment::word),
-    ));
+    let mmr =
+        Mmr::try_from_iter(block_commitments.iter().copied().map(BlockHeaderCommitment::word))
+            .expect("loaded MMR exceeds maximum allowed size");
+    let chain_mmr = Blockchain::from_mmr_unchecked(mmr);
 
     Ok(chain_mmr)
 }

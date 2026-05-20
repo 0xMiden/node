@@ -162,7 +162,7 @@ impl StoreClient {
             nullifiers: proven_tx.nullifiers().map(Into::into).collect(),
             unauthenticated_notes: proven_tx
                 .unauthenticated_notes()
-                .map(|note| note.to_commitment().into())
+                .map(|note| note.id().as_word().into())
                 .collect(),
         };
 

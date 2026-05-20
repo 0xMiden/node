@@ -490,13 +490,28 @@ impl api_server::Api for RpcService {
         let mut request = request;
         request.transaction = rebuilt_tx.to_bytes();
 
-        // Only allow deployment transactions for new network accounts
-        if tx.account_id().is_network()
-            && !tx.account_update().initial_state_commitment().is_empty()
-        {
-            return Err(Status::invalid_argument(
-                "Network transactions may not be submitted by users yet",
-            ));
+        // Block post-deployment network-account transactions from user RPC. First-deployment
+        // txs are allowed because the protocol-level allowlist only kicks in once the
+        // account exists. For non-deployment txs, ask the store whether the account is
+        // classified as a network account; the store is the source of truth because
+        // network-ness now lives in account storage and isn't derivable from an AccountId
+        // alone.
+        if !tx.account_update().initial_state_commitment().is_empty() {
+            let response = self
+                .store
+                .clone()
+                .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
+                    account_ids: vec![tx.account_id().into()],
+                }))
+                .await
+                .map_err(|err| {
+                    Status::internal(format!("network-account classification failed: {err}"))
+                })?;
+            if !response.into_inner().network_account_ids.is_empty() {
+                return Err(Status::invalid_argument(
+                    "Network transactions may not be submitted by users yet",
+                ));
+            }
         }
 
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
@@ -571,11 +586,28 @@ impl api_server::Api for RpcService {
             )));
         }
 
-        // Only allow deployment transactions for new network accounts.
-        for tx in proposed_batch.transactions() {
-            if tx.account_id().is_network()
-                && !tx.account_update().initial_state_commitment().is_empty()
-            {
+        // Same gate as `submit_proven_transaction`, applied to every post-deployment tx
+        // in the batch. One store round-trip filters the non-deployment account ids; any
+        // match fails the entire batch (matches the original loop semantics).
+        let non_deployment_ids: Vec<_> = proposed_batch
+            .transactions()
+            .iter()
+            .filter(|tx| !tx.account_update().initial_state_commitment().is_empty())
+            .map(|tx| proto::account::AccountId::from(tx.account_id()))
+            .collect();
+
+        if !non_deployment_ids.is_empty() {
+            let response = self
+                .store
+                .clone()
+                .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
+                    account_ids: non_deployment_ids,
+                }))
+                .await
+                .map_err(|err| {
+                    Status::internal(format!("network-account classification failed: {err}"))
+                })?;
+            if !response.into_inner().network_account_ids.is_empty() {
                 return Err(Status::invalid_argument(
                     "Network transactions may not be submitted by users yet",
                 ));

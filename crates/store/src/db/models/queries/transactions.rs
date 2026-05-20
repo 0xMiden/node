@@ -20,7 +20,7 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::NoteHeader;
+use miden_protocol::note::{NoteHeader, NoteId};
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
@@ -313,7 +313,7 @@ fn with_output_note_proofs(
     let mut all_note_commitments = Vec::new();
     for raw in &raw_transactions {
         let notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&raw.output_notes)?;
-        all_note_commitments.extend(notes.iter().map(NoteHeader::to_commitment));
+        all_note_commitments.extend(notes.iter().map(|h| h.id().as_word()));
         tx_output_notes.push(notes);
     }
 
@@ -332,7 +332,10 @@ fn with_output_note_proofs(
             // table were erased (created and consumed in the same batch).
             let output_note_proofs = output_notes
                 .iter()
-                .filter_map(|note| output_notes_by_id.get(&note.id()).cloned())
+                .filter_map(|note| {
+                    let key = NoteId::from_raw(note.details_commitment().as_word());
+                    output_notes_by_id.get(&key).cloned()
+                })
                 .collect();
 
             let header = TransactionHeader::new_unchecked(

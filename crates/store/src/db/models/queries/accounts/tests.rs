@@ -39,7 +39,7 @@ use miden_protocol::account::{
     StorageSlotType,
 };
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
@@ -144,7 +144,12 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         AccountStorageMode::Public,
     );
 
-    let storage_value = Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]);
+    let storage_value = Word::from([
+        Felt::new_unchecked(1),
+        Felt::new_unchecked(2),
+        Felt::new_unchecked(3),
+        Felt::new_unchecked(4),
+    ]);
     let component_storage = vec![StorageSlot::with_value(StorageSlotName::mock(0), storage_value)];
 
     let account_component_code = CodeBuilder::default()
@@ -175,7 +180,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
 fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
     use crate::db::schema::block_headers;
 
-    let secret_key = SecretKey::new();
+    let secret_key = SigningKey::new();
     let block_header = BlockHeader::new(
         1_u8.into(),
         Word::default(),
@@ -520,8 +525,12 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     upsert_accounts(&mut conn, &[account_update_1], block_num_1).expect("First upsert failed");
 
     // Create modified account with different storage value
-    let storage_value_modified =
-        Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]);
+    let storage_value_modified = Word::from([
+        Felt::new_unchecked(10),
+        Felt::new_unchecked(20),
+        Felt::new_unchecked(30),
+        Felt::new_unchecked(40),
+    ]);
     let component_storage_modified =
         vec![StorageSlot::with_value(StorageSlotName::mock(0), storage_value_modified)];
 
@@ -614,9 +623,24 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         AccountStorageMode::Public,
     );
 
-    let slot_value_1 = Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]);
-    let slot_value_2 = Word::from([Felt::new(5), Felt::new(6), Felt::new(7), Felt::new(8)]);
-    let slot_value_3 = Word::from([Felt::new(9), Felt::new(10), Felt::new(11), Felt::new(12)]);
+    let slot_value_1 = Word::from([
+        Felt::new_unchecked(1),
+        Felt::new_unchecked(2),
+        Felt::new_unchecked(3),
+        Felt::new_unchecked(4),
+    ]);
+    let slot_value_2 = Word::from([
+        Felt::new_unchecked(5),
+        Felt::new_unchecked(6),
+        Felt::new_unchecked(7),
+        Felt::new_unchecked(8),
+    ]);
+    let slot_value_3 = Word::from([
+        Felt::new_unchecked(9),
+        Felt::new_unchecked(10),
+        Felt::new_unchecked(11),
+        Felt::new_unchecked(12),
+    ]);
 
     let component_storage = vec![
         StorageSlot::with_value(StorageSlotName::mock(0), slot_value_1),
@@ -773,9 +797,9 @@ fn test_select_latest_account_storage_ordering_semantics() {
     let key_2 = StorageMapKey::from_index(2);
     let key_3 = StorageMapKey::from_index(3);
 
-    let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_3 = Word::from([Felt::new(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_1 = Word::from([Felt::new_unchecked(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_2 = Word::from([Felt::new_unchecked(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_3 = Word::from([Felt::new_unchecked(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
 
     let mut entries = vec![(key_2, value_2), (key_1, value_1), (key_3, value_3)];
     entries.reverse();
@@ -818,8 +842,8 @@ fn test_select_latest_account_storage_multiple_slots() {
     let key_a = StorageMapKey::from_index(1);
     let key_b = StorageMapKey::from_index(2);
 
-    let value_a = Word::from([Felt::new(11), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_b = Word::from([Felt::new(22), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_a = Word::from([Felt::new_unchecked(11), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_b = Word::from([Felt::new_unchecked(22), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
 
     let map_a = StorageMap::with_entries(vec![(key_a, value_a)]).unwrap();
     let map_b = StorageMap::with_entries(vec![(key_b, value_b)]).unwrap();
@@ -881,9 +905,9 @@ fn test_select_latest_account_storage_slot_updates() {
     let key_1 = StorageMapKey::from_index(1);
     let key_2 = StorageMapKey::from_index(2);
 
-    let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_3 = Word::from([Felt::new(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_1 = Word::from([Felt::new_unchecked(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_2 = Word::from([Felt::new_unchecked(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_3 = Word::from([Felt::new_unchecked(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
 
     let account = create_account_with_map_storage(slot_name.clone(), vec![(key_1, value_1)]);
     let account_id = account.id();
@@ -903,9 +927,13 @@ fn test_select_latest_account_storage_slot_updates() {
         StorageSlotDelta::Map(map_delta),
     )]));
 
-    let partial_delta =
-        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::new(1))
-            .unwrap();
+    let partial_delta = AccountDelta::new(
+        account_id,
+        storage_delta,
+        AccountVaultDelta::default(),
+        Felt::new_unchecked(1),
+    )
+    .unwrap();
 
     let mut expected_account = account.clone();
     expected_account.apply_delta(&partial_delta).unwrap();
@@ -1000,7 +1028,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
         .expect("Query at block 1 should succeed");
 
     assert_eq!(assets_at_block_1.len(), 1, "Should have 1 asset at block 1");
-    assert_matches!(&assets_at_block_1[0], Asset::Fungible(f) if f.amount() == 1000);
+    assert_matches!(&assets_at_block_1[0], Asset::Fungible(f) if f.amount().as_u64() == 1000);
 
     // Query at block 2: should see vault_key_1 with 2000 tokens AND vault_key_2 with 500 tokens
     let assets_at_block_2 = select_account_vault_at_block(&mut conn, account_id, block_2)
@@ -1011,7 +1039,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     // Find the amounts (order may vary)
     let amounts: Vec<u64> = assets_at_block_2
         .iter()
-        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount()))
+        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount().as_u64()))
         .collect();
 
     assert!(amounts.contains(&2000), "Block 2 should have vault_key_1 with 2000 tokens");
@@ -1025,7 +1053,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
 
     let amounts: Vec<u64> = assets_at_block_3
         .iter()
-        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount()))
+        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount().as_u64()))
         .collect();
 
     assert!(amounts.contains(&3000), "Block 3 should have vault_key_1 with 3000 tokens");
@@ -1082,7 +1110,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
         let expected_amount = 1u64 << index;
         assert_matches!(
             &assets_at_block[0],
-            Asset::Fungible(f) if f.amount() == expected_amount
+            Asset::Fungible(f) if f.amount().as_u64() == expected_amount
         );
     }
 }
@@ -1153,7 +1181,7 @@ fn test_select_account_vault_at_block_with_deletion() {
     let assets_at_block_3 = select_account_vault_at_block(&mut conn, account_id, block_3)
         .expect("Query at block 3 should succeed");
     assert_eq!(assets_at_block_3.len(), 1, "Should have 1 asset at block 3");
-    assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount() == 2000);
+    assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount().as_u64() == 2000);
 }
 
 // ACCOUNT CODE PRUNING TESTS
@@ -1208,7 +1236,7 @@ fn build_account_with_code(push_value: u32) -> Account {
         component_code,
         vec![StorageSlot::with_value(
             StorageSlotName::mock(0),
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            Word::from([Felt::new_unchecked(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
         )],
         AccountComponentMetadata::new(
             "code_prune_test",
@@ -1370,4 +1398,70 @@ fn test_prune_account_code_retains_revisited_code() {
         account_a.code().commitment(),
         "latest account must reference code A"
     );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn network_accounts_subset_classifies_correctly() {
+    use crate::db::models::queries::accounts::{
+        AccountRowInsert,
+        NetworkAccountType,
+        select_network_accounts_subset,
+    };
+
+    let mut conn = setup_test_db();
+    let block_num = BlockNumber::from(1);
+    insert_block_header(&mut conn, block_num);
+
+    // Three accounts with distinct classifications. AccountIds are dummies — the
+    // queries only care about the (account_id, network_account_type, is_latest)
+    // tuple, not protocol-level validity.
+    let network_id = AccountId::dummy(
+        [1u8; 15],
+        AccountIdVersion::Version1,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Public,
+    );
+    let public_id = AccountId::dummy(
+        [2u8; 15],
+        AccountIdVersion::Version1,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Public,
+    );
+    let private_id = AccountId::dummy(
+        [3u8; 15],
+        AccountIdVersion::Version1,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Private,
+    );
+    let unknown_id = AccountId::dummy(
+        [4u8; 15],
+        AccountIdVersion::Version1,
+        AccountType::RegularAccountImmutableCode,
+        AccountStorageMode::Public,
+    );
+
+    for (id, ty) in [
+        (network_id, NetworkAccountType::Network),
+        (public_id, NetworkAccountType::None),
+        (private_id, NetworkAccountType::None),
+    ] {
+        let row = AccountRowInsert::new_private(id, ty, Word::default(), block_num, block_num);
+        diesel::insert_into(crate::db::schema::accounts::table)
+            .values(&row)
+            .execute(&mut conn)
+            .unwrap();
+    }
+
+    // Batched lookup returns only the network-classified id; public, private, and
+    // unknown ids are all omitted.
+    let subset =
+        select_network_accounts_subset(&mut conn, &[network_id, public_id, private_id, unknown_id])
+            .unwrap();
+    assert_eq!(subset.len(), 1);
+    assert!(subset.contains(&network_id));
+
+    // Empty input slice short-circuits to an empty result.
+    let empty = select_network_accounts_subset(&mut conn, &[]).unwrap();
+    assert!(empty.is_empty());
 }

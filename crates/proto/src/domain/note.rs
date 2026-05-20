@@ -7,6 +7,7 @@ use miden_protocol::note::{
     NoteAttachmentScheme,
     NoteAttachments,
     NoteDetails,
+    NoteDetailsCommitment,
     NoteHeader,
     NoteId,
     NoteInclusionProof,
@@ -272,7 +273,7 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
         let note_id_word: Word = decode!(decoder, value.note_id)?;
         let metadata: NoteMetadata = decode!(decoder, value.metadata)?;
 
-        Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
+        Ok(NoteHeader::new(NoteDetailsCommitment::from_raw(note_id_word), metadata))
     }
 }
 

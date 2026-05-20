@@ -58,8 +58,7 @@ pub fn account_id_from_bytes(bytes: &[u8]) -> Result<AccountId, DatabaseError> {
 
 pub fn network_account_id_from_bytes(bytes: &[u8]) -> Result<NetworkAccountId, DatabaseError> {
     let account_id = account_id_from_bytes(bytes)?;
-    NetworkAccountId::try_from(account_id)
-        .map_err(|e| DatabaseError::deserialization("network account id", e))
+    Ok(NetworkAccountId::new_trusted(account_id))
 }
 
 pub fn word_to_bytes(word: &Word) -> Vec<u8> {

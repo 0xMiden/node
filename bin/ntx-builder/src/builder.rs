@@ -5,8 +5,10 @@ use anyhow::Context;
 use futures::Stream;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
+use miden_standards::account::auth::NetworkAccountNoteAllowlist;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -223,13 +225,18 @@ impl NetworkTransactionBuilder {
                     .await
                     .context("failed to write TransactionAdded to DB")?;
 
-                // Spawn new actors for newly created network accounts.
-                if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
-                    if delta.is_full_state() {
-                        if let Ok(network_id) = NetworkAccountId::try_from(delta.id()) {
-                            self.coordinator.spawn_actor(network_id, &self.actor_context);
-                        }
-                    }
+                // Spawn new actors for newly created network accounts. A delta carrying full
+                // state lets us reconstruct the Account and look for the standardized
+                // `NetworkAccountNoteAllowlist` slot in storage; that is the new protocol-level
+                // definition of a network account.
+                if let Some(AccountUpdateDetails::Delta(delta)) = account_delta
+                    && delta.is_full_state()
+                    && let Ok(account) = Account::try_from(delta)
+                    && account.is_public()
+                    && NetworkAccountNoteAllowlist::try_from(account.storage()).is_ok()
+                {
+                    let network_id = NetworkAccountId::new_trusted(account.id());
+                    self.coordinator.spawn_actor(network_id, &self.actor_context);
                 }
                 let inactive_targets = self.coordinator.send_targeted(&event);
                 for account_id in inactive_targets {

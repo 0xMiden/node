@@ -39,7 +39,7 @@ impl ValidatedTransactionRowInsert {
             output_notes: tx.output_notes().to_bytes(),
             initial_account_hash: tx.initial_account_hash().to_bytes(),
             final_account_hash: tx.final_account_hash().to_bytes(),
-            fee: tx.fee().amount().to_le_bytes().to_vec(),
+            fee: tx.fee().amount().as_u64().to_le_bytes().to_vec(),
         }
     }
 }

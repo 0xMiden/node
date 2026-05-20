@@ -470,6 +470,18 @@ impl Db {
         .await
     }
 
+    /// Returns the subset of the provided account IDs that currently classify as network accounts.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_network_accounts_subset(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<HashSet<AccountId>> {
+        self.transact("Filter network accounts subset", move |conn| {
+            queries::select_network_accounts_subset(conn, &account_ids)
+        })
+        .await
+    }
+
     /// Returns network account IDs within the specified block range (based on account creation
     /// block).
     ///

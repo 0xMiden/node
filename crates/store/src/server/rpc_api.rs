@@ -252,7 +252,7 @@ impl rpc_server::Rpc for StoreApi {
             SyncAccountVaultError,
         >(request.account_id)?;
 
-        if !account_id.has_public_state() {
+        if !account_id.is_public() {
             return Err(SyncAccountVaultError::AccountNotPublic(account_id).into());
         }
 
@@ -305,7 +305,7 @@ impl rpc_server::Rpc for StoreApi {
             SyncAccountStorageMapsError,
         >(request.account_id)?;
 
-        if !account_id.has_public_state() {
+        if !account_id.is_public() {
             Err(SyncAccountStorageMapsError::AccountNotPublic(account_id))?;
         }
 
@@ -372,6 +372,16 @@ impl rpc_server::Rpc for StoreApi {
         Ok(Response::new(proto::rpc::MaybeNoteScript {
             script: note_script.map(Into::into),
         }))
+    }
+
+    async fn are_network_accounts(
+        &self,
+        request: Request<proto::account::AccountIdList>,
+    ) -> Result<Response<proto::store::NetworkAccountIdSubset>, Status> {
+        let ids = read_account_ids::<Status, _>(request.into_inner().account_ids)?;
+        let subset = self.state.network_accounts_subset(&ids).await?;
+        let network_account_ids = subset.into_iter().map(proto::account::AccountId::from).collect();
+        Ok(Response::new(proto::store::NetworkAccountIdSubset { network_account_ids }))
     }
 
     async fn sync_transactions(

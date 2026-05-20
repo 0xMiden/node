@@ -28,7 +28,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetAmount, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
     BlockHeader,
@@ -38,11 +38,11 @@ use miden_protocol::block::{
     ProposedBlock,
     SignedBlock,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
-use miden_protocol::note::{Note, NoteAssets, NoteHeader, NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteAssets, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
@@ -62,7 +62,7 @@ use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
-    PolicyAuthority,
+    PolicyRegistration,
     TokenPolicyManager,
 };
 use miden_standards::account::wallets::BasicWallet;
@@ -205,7 +205,7 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
         SecretKey::with_rng(&mut *rng)
@@ -420,7 +420,7 @@ fn create_accounts_and_notes(
         AccountStorageMode::Public => {
             asset_faucet_ids.iter().take(vault_entries).copied().collect()
         },
-        AccountStorageMode::Private | AccountStorageMode::Network => vec![asset_faucet_ids[0]],
+        AccountStorageMode::Private => vec![asset_faucet_ids[0]],
     };
 
     (0..num_accounts)
@@ -573,7 +573,7 @@ fn create_benchmark_faucets(vault_entries: usize) -> Vec<Account> {
 
 fn create_faucet_with_seed(index: u64) -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
 
@@ -582,7 +582,7 @@ fn create_faucet_with_seed(index: u64) -> Account {
         .name(TokenName::new("TEST").unwrap())
         .symbol(token_symbol)
         .decimals(2)
-        .max_supply(AssetAmount::new(FungibleAsset::MAX_AMOUNT).unwrap())
+        .max_supply(FungibleAsset::MAX_AMOUNT)
         .build()
         .unwrap();
 
@@ -590,11 +590,13 @@ fn create_faucet_with_seed(index: u64) -> Account {
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
         .with_component(faucet)
-        .with_components(TokenPolicyManager::new(
-            PolicyAuthority::AuthControlled,
-            MintPolicyConfig::AllowAll,
-            BurnPolicyConfig::AllowAll,
-        ))
+        .with_components(
+            TokenPolicyManager::new()
+                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap()
+                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap(),
+        )
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
@@ -757,7 +759,10 @@ fn create_emit_note_tx(
     let slot = faucet.storage().get_item(token_config_slot).unwrap();
     faucet
         .storage_mut()
-        .set_item(token_config_slot, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
+        .set_item(
+            token_config_slot,
+            [slot[0] + Felt::new_unchecked(10), slot[1], slot[2], slot[3]].into(),
+        )
         .unwrap();
 
     faucet.increment_nonce(ONE).unwrap();
@@ -803,7 +808,7 @@ async fn get_batch_inputs(
     let batch_inputs = store_client
         .get_batch_inputs(
             vec![(block_ref.block_num(), block_ref.commitment())].into_iter(),
-            notes.iter().map(Note::commitment),
+            notes.iter().map(|n| n.id().as_word()),
         )
         .await
         .unwrap();
@@ -826,7 +831,7 @@ async fn get_block_inputs(
                 batch
                     .input_notes()
                     .into_iter()
-                    .filter_map(|note| note.header().map(NoteHeader::to_commitment))
+                    .filter_map(|note| note.header().map(|h| h.id().as_word()))
             }),
             batches.iter().map(ProvenBatch::reference_block_num),
         )

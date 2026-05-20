@@ -110,7 +110,7 @@ impl MockProvenTxBuilder {
     pub fn nullifiers_range(self, range: Range<u64>) -> Self {
         let nullifiers = range
             .map(|index| {
-                let nullifier = Word::from([ONE, ONE, ONE, Felt::new(index)]);
+                let nullifier = Word::from([ONE, ONE, ONE, Felt::new_unchecked(index)]);
 
                 Nullifier::from_raw(nullifier)
             })

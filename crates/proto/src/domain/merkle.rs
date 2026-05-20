@@ -94,7 +94,7 @@ impl TryFrom<proto::primitives::MmrDelta> for MmrDelta {
             .context("data")?;
 
         Ok(MmrDelta {
-            forest: Forest::new(value.forest as usize),
+            forest: Forest::new(value.forest as usize).context("forest")?,
             data,
         })
     }

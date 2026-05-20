@@ -112,7 +112,9 @@ impl AccountActorContext {
 
         let url = Url::parse("http://127.0.0.1:1").unwrap();
         let block_header = mock_block_header(0_u32.into());
-        let chain_mmr = PartialMmr::from_peaks(MmrPeaks::new(Forest::new(0), vec![]).unwrap());
+        let chain_mmr = PartialMmr::from_peaks(
+            MmrPeaks::new(Forest::new(0).expect("forest 0 is valid"), vec![]).unwrap(),
+        );
         let chain_state = Arc::new(SharedChainState::new(block_header, chain_mmr));
         let (request_tx, _request_rx) = mpsc::channel(1);
 

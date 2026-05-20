@@ -25,14 +25,14 @@ use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, ONE, Word};
+use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
-    PolicyAuthority,
+    PolicyRegistration,
     TokenPolicyManager,
 };
 use miden_standards::account::wallets::create_basic_wallet;
@@ -289,7 +289,7 @@ impl GenesisConfig {
             if total_issuance != 0 {
                 let current_faucet = FungibleFaucet::try_from(faucet_account.storage())?;
                 let new_token_supply = AssetAmount::new(total_issuance)?;
-                let max_supply = current_faucet.max_supply().as_canonical_u64();
+                let max_supply = current_faucet.max_supply().as_u64();
                 if max_supply < total_issuance {
                     return Err(GenesisConfigError::MaxIssuanceExceeded {
                         max_supply,
@@ -297,14 +297,9 @@ impl GenesisConfig {
                         total_issuance,
                     });
                 }
-                let new_token_config = Word::new([
-                    Felt::from(new_token_supply),
-                    current_faucet.max_supply(),
-                    Felt::from(current_faucet.decimals()),
-                    Felt::from(current_faucet.symbol()),
-                ]);
-                storage_delta
-                    .set_item(FungibleFaucet::token_config_slot().clone(), new_token_config)?;
+                let updated_faucet = current_faucet.with_token_supply(new_token_supply)?;
+                let slot = updated_faucet.token_config_slot_value();
+                storage_delta.set_item(slot.name().clone(), slot.value())?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
@@ -330,7 +325,7 @@ impl GenesisConfig {
 
             // sanity check the total issuance against
             let faucet = FungibleFaucet::try_from(faucet_account.storage())?;
-            let max_supply = faucet.max_supply().as_canonical_u64();
+            let max_supply = faucet.max_supply().as_u64();
             if max_supply < total_issuance {
                 return Err(GenesisConfigError::MaxIssuanceExceeded {
                     max_supply,
@@ -470,11 +465,11 @@ impl FungibleFaucetConfig {
             .storage_mode(storage_mode.into())
             .with_auth_component(auth)
             .with_component(faucet)
-            .with_components(TokenPolicyManager::new(
-                PolicyAuthority::AuthControlled,
-                MintPolicyConfig::AllowAll,
-                BurnPolicyConfig::AllowAll,
-            ))
+            .with_components(
+                TokenPolicyManager::new()
+                    .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)?
+                    .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)?,
+            )
             .build()?;
 
         debug_assert_eq!(faucet_account.nonce(), Felt::ZERO);
@@ -526,9 +521,10 @@ pub enum StorageMode {
 impl From<StorageMode> for AccountStorageMode {
     fn from(mode: StorageMode) -> AccountStorageMode {
         match mode {
-            StorageMode::Network => AccountStorageMode::Network,
+            // Network accounts must be public in the new protocol model; the network-ness is
+            // determined by the standardized `NetworkAccountNoteAllowlist` slot in storage.
+            StorageMode::Network | StorageMode::Public => AccountStorageMode::Public,
             StorageMode::Private => AccountStorageMode::Private,
-            StorageMode::Public => AccountStorageMode::Public,
         }
     }
 }

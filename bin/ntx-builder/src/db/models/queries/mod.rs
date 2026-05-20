@@ -146,11 +146,9 @@ pub fn add_transaction(
     for note in notes {
         let insert = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
-            account_id: conversions::network_account_id_to_bytes(
-                note.target_account_id()
-                    .try_into()
-                    .expect("network note's target account must be a network account"),
-            ),
+            account_id: conversions::network_account_id_to_bytes(NetworkAccountId::new_trusted(
+                note.target_account_id(),
+            )),
             note_data: note.as_note().to_bytes(),
             note_id: Some(conversions::note_id_to_bytes(&note.as_note().id())),
             attempt_count: 0,
