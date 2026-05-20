@@ -128,7 +128,7 @@ impl BlockBuilder {
             // Handle errors by propagating the error to the root span and rolling back the block.
             .inspect_err(|err| Span::current().set_error(err))
             .or_else(|err| async {
-                self.rollback_block(mempool, block_num)?;
+                Self::rollback_block(mempool, block_num)?;
                 Err(err)
             })
             .await
@@ -280,11 +280,7 @@ impl BlockBuilder {
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
-    fn rollback_block(
-        &self,
-        mempool: &SharedMempool,
-        block: BlockNumber,
-    ) -> Result<(), BuildBlockError> {
+    fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock()?.rollback_block(block);
         Ok(())
     }

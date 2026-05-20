@@ -301,6 +301,7 @@ impl BlockProducerRpcServer {
          skip_all,
          err
      )]
+    #[expect(clippy::let_and_return)]
     async fn submit_proven_tx(
         &self,
         request: proto::transaction::ProvenTransaction,
@@ -337,6 +338,7 @@ impl BlockProducerRpcServer {
             .map_err(MempoolSubmissionError::StateConflict)?;
 
         let shared_mempool = self.mempool.lock().await;
+        // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
@@ -351,6 +353,7 @@ impl BlockProducerRpcServer {
          skip_all,
          err
      )]
+    #[expect(clippy::let_and_return)]
     async fn submit_proven_tx_batch(
         &self,
         request: proto::transaction::TransactionBatch,
@@ -381,6 +384,7 @@ impl BlockProducerRpcServer {
         }
 
         let shared_mempool = self.mempool.lock().await;
+        // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
