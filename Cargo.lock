@@ -3510,7 +3510,6 @@ dependencies = [
  "build-rs",
  "clap",
  "diesel",
- "diesel_migrations",
  "futures",
  "humantime",
  "libsqlite3-sys",
