@@ -84,7 +84,7 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
 // SUBMISSION STATS
 // ================================================================================================
 
-/// Outcome of a single `submit_proven_transaction` RPC.
+/// Outcome of a single `submit_proven_tx` RPC.
 #[derive(Debug)]
 pub(crate) struct SubmitOutcome {
     /// Position of this tx in the original input vec — used to recover the
@@ -163,7 +163,7 @@ async fn submit_all(
                 transaction_inputs: Some(inputs),
             };
             let t0 = Instant::now();
-            let outcome = match client.submit_proven_transaction(request).await {
+            let outcome = match client.submit_proven_tx(request).await {
                 Ok(_) => SubmitOutcome {
                     index: i,
                     result: Ok(t0.elapsed()),
@@ -204,7 +204,7 @@ async fn submit_all(
 /// and therefore must arrive at the mempool in order — the block-producer's
 /// mempool will reject out-of-order submissions but happily chains in-order
 /// ones against its own pending state, so we only need to serialize the
-/// `submit_proven_transaction` calls themselves, not wait for block
+/// `submit_proven_tx` calls themselves, not wait for block
 /// inclusion in between.
 async fn submit_sequential(
     mut client: RpcClient,
@@ -222,7 +222,7 @@ async fn submit_sequential(
         };
 
         let t0 = Instant::now();
-        let outcome = match client.submit_proven_transaction(request).await {
+        let outcome = match client.submit_proven_tx(request).await {
             Ok(_) => SubmitOutcome {
                 index: i,
                 result: Ok(t0.elapsed()),
