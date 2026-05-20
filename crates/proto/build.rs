@@ -10,6 +10,7 @@ use miden_node_proto_build::{
     remote_prover_api_descriptor,
     replica_api_descriptor,
     rpc_api_descriptor,
+    sequencer_api_descriptor,
     store_api_descriptor,
     validator_api_descriptor,
 };
@@ -35,6 +36,7 @@ fn main() -> miette::Result<()> {
         validator_api_descriptor(),
         ntx_builder_api_descriptor(),
         replica_api_descriptor(),
+        sequencer_api_descriptor(),
     ];
 
     for file_descriptors in &descriptor_sets {

@@ -123,8 +123,8 @@ echo "=== Starting components ==="
 # The sequencer runs store + block-producer + rpc in a single process and exposes four endpoints:
 #   rpc.listen            → client-facing RPC API
 #   block-producer.listen → block-producer gRPC API (used by downstream rpc replicas)
-#   ntx-builder.listen    → NtxBuilder gRPC API (used by the standalone ntx-builder binary)
-#   replica.listen        → StoreReplica gRPC API (used by downstream store replicas)
+#   ntx-builder.listen    → sequencer.NtxBuilder gRPC API (used by the standalone ntx-builder binary)
+#   replica.listen        → replica.Api gRPC API (used by downstream store replicas)
 echo "Starting sequencer..."
 OTEL_SERVICE_NAME=miden-sequencer $BINARY sequencer start \
     --rpc.listen "0.0.0.0:$SEQUENCER_RPC_PORT" \
@@ -151,7 +151,7 @@ PIDS+=($!)
 # Give sequencer and validator a moment to bind their ports.
 sleep 2
 
-# Replica 1 syncs from the sequencer's StoreReplica endpoint.
+# Replica 1 syncs from the sequencer's replica.Api endpoint.
 echo "Starting store replica 1 (upstream: sequencer replica at 127.0.0.1:$SEQUENCER_REPLICA_PORT)..."
 OTEL_SERVICE_NAME=miden-store-replica-1 $BINARY store start-replica \
     --rpc.listen "0.0.0.0:$STORE_REPLICA_1_RPC_PORT" \

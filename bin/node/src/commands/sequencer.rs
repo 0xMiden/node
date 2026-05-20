@@ -15,6 +15,7 @@ use miden_node_store::{
     StoreApi,
     default_sqlite_connection_pool_size,
     serve_replica,
+    serve_sequencer_ntx_builder,
 };
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
@@ -28,6 +29,7 @@ use crate::commands::block_producer::BlockProducerConfig;
 
 const ENV_RPC_LISTEN: &str = "MIDEN_NODE_SEQUENCER_RPC_LISTEN";
 const ENV_BLOCK_PRODUCER_LISTEN: &str = "MIDEN_NODE_SEQUENCER_BLOCK_PRODUCER_LISTEN";
+const ENV_NTX_BUILDER_LISTEN: &str = "MIDEN_NODE_SEQUENCER_NTX_BUILDER_LISTEN";
 const ENV_REPLICA_LISTEN: &str = "MIDEN_NODE_SEQUENCER_REPLICA_LISTEN";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_SEQUENCER_VALIDATOR_URL";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_SEQUENCER_BLOCK_PROVER_URL";
@@ -59,6 +61,10 @@ pub enum SequencerCommand {
         /// Socket address at which to serve the block-producer gRPC API.
         #[arg(long = "block-producer.listen", env = ENV_BLOCK_PRODUCER_LISTEN, value_name = "LISTEN")]
         block_producer_listen: SocketAddr,
+
+        /// Socket address at which to serve the sequencer.NtxBuilder gRPC API for the ntx-builder.
+        #[arg(long = "ntx-builder.listen", env = ENV_NTX_BUILDER_LISTEN, value_name = "LISTEN")]
+        ntx_builder_listen: SocketAddr,
 
         /// Socket address at which to serve the replica streaming API.
         #[arg(long = "replica.listen", env = ENV_REPLICA_LISTEN, value_name = "LISTEN")]
@@ -118,6 +124,7 @@ impl SequencerCommand {
             Self::Start {
                 rpc_listen,
                 block_producer_listen,
+                ntx_builder_listen,
                 replica_listen,
                 validator_url,
                 block_prover_url,
@@ -145,6 +152,7 @@ impl SequencerCommand {
                 Self::start(
                     rpc_listen,
                     block_producer_listen,
+                    ntx_builder_listen,
                     replica_listen,
                     validator_url,
                     block_prover_url,
@@ -173,6 +181,7 @@ impl SequencerCommand {
     async fn start(
         rpc_listen: SocketAddr,
         block_producer_listen: SocketAddr,
+        ntx_builder_listen: SocketAddr,
         replica_listen: SocketAddr,
         validator_url: Url,
         block_prover_url: Option<Url>,
@@ -187,6 +196,9 @@ impl SequencerCommand {
         let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
             .await
             .context("Failed to bind to RPC gRPC socket")?;
+        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_listen)
+            .await
+            .context("Failed to bind to ntx-builder gRPC socket")?;
         let replica_listener = tokio::net::TcpListener::bind(replica_listen)
             .await
             .context("Failed to bind to replica gRPC socket")?;
@@ -213,6 +225,12 @@ impl SequencerCommand {
             replica_listener,
             block_prover_url,
             max_concurrent_proofs,
+            grpc_internal,
+        ));
+
+        let ntx_builder_task = tokio::spawn(serve_sequencer_ntx_builder(
+            Arc::clone(&state),
+            ntx_builder_listener,
             grpc_internal,
         ));
 
@@ -248,6 +266,9 @@ impl SequencerCommand {
         tokio::select! {
             result = replica_task => {
                 result.context("replica task panicked")?.context("replica task failed")
+            },
+            result = ntx_builder_task => {
+                result.context("ntx-builder task panicked")?.context("ntx-builder task failed")
             },
             result = block_producer_task => {
                 result.context("block-producer task panicked")?.context("block-producer task failed")

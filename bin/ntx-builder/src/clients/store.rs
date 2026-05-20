@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use miden_node_proto::clients::{Builder, StoreNtxBuilderClient};
+use miden_node_proto::clients::{Builder, SequencerNtxBuilderClient};
 use miden_node_proto::decode::ConversionResultExt;
 use miden_node_proto::domain::account::{AccountDetails, AccountResponse, NetworkAccountId};
 use miden_node_proto::errors::ConversionError;
@@ -38,12 +38,12 @@ use crate::COMPONENT;
 // STORE CLIENT
 // ================================================================================================
 
-/// Interface to the store's ntx-builder gRPC API.
+/// Interface to the sequencer's ntx-builder gRPC API.
 ///
 /// Essentially just a thin wrapper around the generated gRPC client which improves type safety.
 #[derive(Clone, Debug)]
 pub struct StoreClient {
-    inner: StoreNtxBuilderClient,
+    inner: SequencerNtxBuilderClient,
 }
 
 impl StoreClient {
@@ -57,7 +57,7 @@ impl StoreClient {
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<StoreNtxBuilderClient>();
+            .connect_lazy::<SequencerNtxBuilderClient>();
 
         Self { inner: store }
     }

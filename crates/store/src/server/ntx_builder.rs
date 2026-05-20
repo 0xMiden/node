@@ -7,6 +7,7 @@ use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
+use miden_node_proto::generated::sequencer::ntx_builder_server as sequencer_ntx_builder_server;
 use miden_node_proto::generated::store::ntx_builder_server;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::{StorageMapKey, StorageSlotName};
@@ -319,5 +320,80 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
             }),
             block_num: self.state.chain_tip(Finality::Committed).await.as_u32(),
         }))
+    }
+}
+
+// SEQUENCER NTX BUILDER ENDPOINTS
+// ================================================================================================
+
+/// Forwards `sequencer.NtxBuilder` calls to the same `store.NtxBuilder` implementation.
+///
+/// The two services expose an identical interface; the only difference is which proto package
+/// hosts the service declaration. The embedded sequencer serves `sequencer.NtxBuilder` so the
+/// ntx-builder binary can point its `--store.url` at the sequencer without depending on the
+/// standalone store binary.
+#[tonic::async_trait]
+impl sequencer_ntx_builder_server::NtxBuilder for StoreApi {
+    async fn get_block_header_by_number(
+        &self,
+        request: Request<proto::rpc::BlockHeaderByNumberRequest>,
+    ) -> Result<Response<proto::rpc::BlockHeaderByNumberResponse>, Status> {
+        ntx_builder_server::NtxBuilder::get_block_header_by_number(self, request).await
+    }
+
+    async fn get_current_blockchain_data(
+        &self,
+        request: Request<proto::blockchain::MaybeBlockNumber>,
+    ) -> Result<Response<proto::store::CurrentBlockchainData>, Status> {
+        ntx_builder_server::NtxBuilder::get_current_blockchain_data(self, request).await
+    }
+
+    async fn get_network_account_details_by_id(
+        &self,
+        request: Request<proto::account::AccountId>,
+    ) -> Result<Response<proto::store::MaybeAccountDetails>, Status> {
+        ntx_builder_server::NtxBuilder::get_network_account_details_by_id(self, request).await
+    }
+
+    async fn get_unconsumed_network_notes(
+        &self,
+        request: Request<proto::store::UnconsumedNetworkNotesRequest>,
+    ) -> Result<Response<proto::store::UnconsumedNetworkNotes>, Status> {
+        ntx_builder_server::NtxBuilder::get_unconsumed_network_notes(self, request).await
+    }
+
+    async fn get_network_account_ids(
+        &self,
+        request: Request<BlockRange>,
+    ) -> Result<Response<proto::store::NetworkAccountIdList>, Status> {
+        ntx_builder_server::NtxBuilder::get_network_account_ids(self, request).await
+    }
+
+    async fn get_account(
+        &self,
+        request: Request<proto::rpc::AccountRequest>,
+    ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
+        ntx_builder_server::NtxBuilder::get_account(self, request).await
+    }
+
+    async fn get_note_script_by_root(
+        &self,
+        request: Request<proto::note::NoteScriptRoot>,
+    ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
+        ntx_builder_server::NtxBuilder::get_note_script_by_root(self, request).await
+    }
+
+    async fn get_vault_asset_witnesses(
+        &self,
+        request: Request<proto::store::VaultAssetWitnessesRequest>,
+    ) -> Result<Response<proto::store::VaultAssetWitnessesResponse>, Status> {
+        ntx_builder_server::NtxBuilder::get_vault_asset_witnesses(self, request).await
+    }
+
+    async fn get_storage_map_witness(
+        &self,
+        request: Request<proto::store::StorageMapWitnessRequest>,
+    ) -> Result<Response<proto::store::StorageMapWitnessResponse>, Status> {
+        ntx_builder_server::NtxBuilder::get_storage_map_witness(self, request).await
     }
 }
