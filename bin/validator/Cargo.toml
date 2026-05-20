@@ -41,7 +41,7 @@ tower-http             = { features = ["util"], workspace = true }
 tracing                = { workspace = true }
 
 [build-dependencies]
-build-rs       = { workspace = true }
+build-rs      = { workspace = true }
 miden-node-db = { workspace = true }
 
 [dev-dependencies]

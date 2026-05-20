@@ -291,9 +291,9 @@ mod tests {
         }
 
         fn remove_files(&self) {
-            let _ = std::fs::remove_file(&self.path);
-            let _ = std::fs::remove_file(self.path.with_extension("sqlite3-wal"));
-            let _ = std::fs::remove_file(self.path.with_extension("sqlite3-shm"));
+            let _ = fs_err::remove_file(&self.path);
+            let _ = fs_err::remove_file(self.path.with_extension("sqlite3-wal"));
+            let _ = fs_err::remove_file(self.path.with_extension("sqlite3-shm"));
         }
     }
 
