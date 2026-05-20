@@ -181,10 +181,10 @@ async fn generate_blocks(
     asset_faucet_ids: Vec<AccountId>,
 ) -> SeedingMetrics {
     // Each block is composed of [`BATCHES_PER_BLOCK`] batches, and each batch is composed of
-    // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx
-    // from the faucet to (BATCHES_PER_BLOCK * TRANSACTIONS_PER_BATCH) - 1 accounts. The rest of
-    // the notes are consume note txs from the (BATCHES_PER_BLOCK * TRANSACTIONS_PER_BATCH) - 1
-    // accounts that were minted in the previous block.
+    // [`TRANSACTIONS_PER_BATCH`] txs. The first note of the block is always a send assets tx from
+    // the faucet to (BATCHES_PER_BLOCK * TRANSACTIONS_PER_BATCH) - 1 accounts. The rest of the
+    // notes are consume note txs from the (BATCHES_PER_BLOCK * TRANSACTIONS_PER_BATCH) - 1 accounts
+    // that were minted in the previous block.
     let mut metrics = SeedingMetrics::new(data_directory.database_path());
 
     let mut account_ids = vec![];
@@ -744,8 +744,8 @@ fn create_existing_account_delta(
     AccountDelta::new(account.id(), storage_delta, vault_delta, ONE).unwrap()
 }
 
-/// Creates a transaction from the faucet that creates the given output notes.
-/// Updates the faucet account to increase the issuance slot and it's nonce.
+/// Creates a transaction from the faucet that creates the given output notes. Updates the faucet
+/// account to increase the issuance slot and it's nonce.
 fn create_emit_note_tx(
     block_ref: &BlockHeader,
     faucet: &mut Account,

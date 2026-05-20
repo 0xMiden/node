@@ -214,8 +214,8 @@ struct BlockProducerRpcServer {
 
     store: StoreClient,
 
-    /// Cached mempool statistics that are updated periodically to avoid locking the mempool
-    /// for each status request.
+    /// Cached mempool statistics that are updated periodically to avoid locking the mempool for
+    /// each status request.
     cached_mempool_stats: Arc<RwLock<MempoolStats>>,
 }
 

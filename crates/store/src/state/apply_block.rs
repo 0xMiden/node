@@ -80,8 +80,8 @@ impl State {
         // Signals the write lock has been acquired, and the transaction can be committed.
         let (inform_acquire_done, acquire_done) = oneshot::channel::<()>();
 
-        // Extract public account updates with deltas before block is moved into async task.
-        // Private accounts are filtered out since they don't expose their state changes.
+        // Extract public account updates with deltas before block is moved into async task. Private
+        // accounts are filtered out since they don't expose their state changes.
         let account_deltas =
             Vec::from_iter(body.updated_accounts().iter().filter_map(
                 |update| match update.details() {
@@ -90,18 +90,16 @@ impl State {
                 },
             ));
 
-        // The DB and in-memory state updates need to be synchronized and are partially
-        // overlapping. Namely, the DB transaction only proceeds after this task acquires the
-        // in-memory write lock. This requires the DB update to run concurrently, so a new task is
-        // spawned.
+        // The DB and in-memory state updates need to be synchronized and are partially overlapping.
+        // Namely, the DB transaction only proceeds after this task acquires the in-memory write
+        // lock. This requires the DB update to run concurrently, so a new task is spawned.
         let db = Arc::clone(&self.db);
         let db_update_task = tokio::spawn(
             async move { db.apply_block(allow_acquire, acquire_done, signed_block, notes).await }
                 .in_current_span(),
         );
 
-        // Wait for the message from the DB update task, that we ready to commit the DB
-        // transaction.
+        // Wait for the message from the DB update task, that we ready to commit the DB transaction.
         acquired_allowed
             .instrument(info_span!(target: COMPONENT, "await_db_readiness"))
             .await
@@ -112,25 +110,24 @@ impl State {
 
         self.with_inner_write_blocking(|inner| {
             // We need to check that neither the nullifier tree nor the account tree have changed
-            // while we were waiting for the DB preparation task to complete. If either of them
-            // did change, we do not proceed with in-memory and database updates, since it may
-            // lead to an inconsistent state.
+            // while we were waiting for the DB preparation task to complete. If either of them did
+            // change, we do not proceed with in-memory and database updates, since it may lead to
+            // an inconsistent state.
             if inner.nullifier_tree.root() != nullifier_tree_old_root
                 || inner.account_tree.root_latest() != account_tree_old_root
             {
                 return Err(ApplyBlockError::ConcurrentWrite);
             }
 
-            // Notify the DB update task that the write lock has been acquired, so it can commit
-            // the DB transaction.
+            // Notify the DB update task that the write lock has been acquired, so it can commit the
+            // DB transaction.
             inform_acquire_done
                 .send(())
                 .map_err(|_| ApplyBlockError::DbUpdateTaskFailed("Receiver was dropped".into()))?;
 
-            // TODO: shutdown #91
-            // Await for successful commit of the DB transaction. If the commit fails, we mustn't
-            // change in-memory state, so we return a block applying error and don't proceed with
-            // in-memory updates.
+            // TODO: shutdown #91 Await for successful commit of the DB transaction. If the commit
+            // fails, we mustn't change in-memory state, so we return a block applying error and
+            // don't proceed with in-memory updates.
             tokio::runtime::Handle::current()
                 .block_on(db_update_task)?
                 .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;

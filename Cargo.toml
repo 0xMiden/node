@@ -19,6 +19,7 @@ members = [
   "crates/test-macro",
   "crates/utils",
   "proto",
+  "xtask",
 ]
 
 resolver = "2"

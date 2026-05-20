@@ -156,8 +156,8 @@ impl IncrementService {
         })
     }
 
-    /// Applies a successful increment: updates the wallet nonce, bumps counters, and returns
-    /// the next expected counter value.
+    /// Applies a successful increment: updates the wallet nonce, bumps counters, and returns the
+    /// next expected counter value.
     fn handle_increment_success(&mut self, final_account: &AccountHeader, tx_id: String) -> u64 {
         let updated_wallet = Account::new(
             self.tx.wallet_account.id(),
@@ -407,9 +407,9 @@ impl CounterTrackingService {
         })
     }
 
-    /// The increment service regenerates accounts on persistent failure and rewrites the
-    /// counter account file. If the file's account ID has changed, switch to the new account
-    /// and reset tracking state.
+    /// The increment service regenerates accounts on persistent failure and rewrites the counter
+    /// account file. If the file's account ID has changed, switch to the new account and reset
+    /// tracking state.
     async fn reload_counter_account_if_changed(&mut self) {
         let reloaded = match load_counter_account(&self.config.counter_filepath) {
             Ok(account) => account,
@@ -523,8 +523,8 @@ impl Service for CounterTrackingService {
     }
 
     fn interval(&self) -> Duration {
-        // Tracking polls twice per increment cadence so it catches freshly-incremented values
-        // soon after submission.
+        // Tracking polls twice per increment cadence so it catches freshly-incremented values soon
+        // after submission.
         self.config.counter_increment_interval / 2
     }
 
@@ -542,8 +542,8 @@ impl Service for CounterTrackingService {
 // SETUP
 // ================================================================================================
 
-/// Load wallet + counter accounts, fetch the genesis block header, and build the data store
-/// and increment script needed to produce network notes.
+/// Load wallet + counter accounts, fetch the genesis block header, and build the data store and
+/// increment script needed to produce network notes.
 async fn setup_increment_task(
     config: MonitorConfig,
     rpc_client: &mut RpcClient,

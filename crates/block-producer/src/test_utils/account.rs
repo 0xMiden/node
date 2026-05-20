@@ -54,8 +54,8 @@ impl<const NUM_STATES: usize> MockPrivateAccount<NUM_STATES> {
 }
 
 impl<const NUM_STATES: usize> From<u32> for MockPrivateAccount<NUM_STATES> {
-    /// Each index gives rise to a different account ID
-    /// Passing index 0 signifies that it's a new account
+    /// Each index gives rise to a different account ID Passing index 0 signifies that it's a new
+    /// account
     fn from(index: u32) -> Self {
         let mut lock = MOCK_ACCOUNTS.lock().expect("Poisoned mutex");
         if let Some(&(account_id, init_state)) = lock.get(&index) {

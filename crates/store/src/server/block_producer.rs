@@ -30,8 +30,8 @@ use crate::state::Finality;
 // BLOCK PRODUCER API
 // ================================================================================================
 
-/// Extends [`StoreApi`] with the proof-scheduler notification channel, which is only required
-/// by the `BlockProducer` gRPC service. Not used in replica mode.
+/// Extends [`StoreApi`] with the proof-scheduler notification channel, which is only required by
+/// the `BlockProducer` gRPC service. Not used in replica mode.
 #[derive(Clone)]
 pub(super) struct BlockProducerApi {
     pub(super) inner: StoreApi,
@@ -119,8 +119,7 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
             async move {
                 let signed_block = SignedBlock::new(header, body, signature)
                     .map_err(|err| Status::new(tonic::Code::Internal, err.as_report()))?;
-                // Note: This is an internal endpoint, so its safe to expose the full error
-                // report.
+                // Note: This is an internal endpoint, so its safe to expose the full error report.
                 this.inner
                     .state
                     .apply_block(signed_block)

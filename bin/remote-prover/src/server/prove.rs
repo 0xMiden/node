@@ -30,9 +30,8 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
     }
 
     fn decode(request: grpc::remote_prover::ProofRequest) -> tonic::Result<Self::Input> {
-        // Check that the proof type is supported.
-        // Protobuf enums return a default value if the enum is set to an unknown value.
-        // This round trip checks that the value is valid.
+        // Check that the proof type is supported. Protobuf enums return a default value if the enum
+        // is set to an unknown value. This round trip checks that the value is valid.
         if request.proof_type() as i32 != request.proof_type {
             return Err(tonic::Status::invalid_argument("unknown proof_type value"));
         }

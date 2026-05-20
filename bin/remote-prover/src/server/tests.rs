@@ -204,8 +204,8 @@ async fn legacy_behaviour_with_capacity_1() {
 
     let (first, second) = tokio::join!(a, b);
 
-    // We cannot know which got served and which got rejected.
-    // We can only assert that one of them is Ok and the other is Err.
+    // We cannot know which got served and which got rejected. We can only assert that one of them
+    // is Ok and the other is Err.
     assert!(first.is_ok() || second.is_ok());
     assert!(first.is_err() || second.is_err());
     // We also expect that the error is a resource exhaustion error.
@@ -240,8 +240,8 @@ async fn capacity_is_respected() {
 
     let (first, second, third) = tokio::join!(a, b, c);
 
-    // We cannot know which got served and which got rejected.
-    // We can only assert that two succeeded and one failed.
+    // We cannot know which got served and which got rejected. We can only assert that two succeeded
+    // and one failed.
     let mut expected = [true, true, false];
     let mut result = [first.is_ok(), second.is_ok(), third.is_ok()];
     expected.sort_unstable();

@@ -51,8 +51,8 @@ pub(crate) fn select_block_header_by_block_num(
         sel.filter(schema::block_headers::block_num.eq(block_num.to_raw_sql()))
             .get_result::<BlockHeaderRawRow>(conn)
             .optional()?
-        // invariant: only one block exists with the given block header, so the length is
-        // always zero or one
+        // invariant: only one block exists with the given block header, so the length is always
+        // zero or one
     } else {
         sel.order(schema::block_headers::block_num.desc())
             .limit(1)
