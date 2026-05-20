@@ -72,10 +72,7 @@ impl EmbeddedBlockProducer {
         let store = StoreClient::new_local(self.state.clone());
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
 
-        let chain_tip = self
-            .state
-            .chain_tip(miden_node_store::Finality::Committed)
-            .await;
+        let chain_tip = self.state.chain_tip(miden_node_store::Finality::Committed).await;
 
         let listener = TcpListener::bind(self.block_producer_address)
             .await

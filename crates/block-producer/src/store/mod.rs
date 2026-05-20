@@ -17,7 +17,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteHeader, Nullifier};
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Serializable;
 use tracing::{debug, info, instrument};
@@ -284,7 +284,7 @@ impl LocalStoreClient {
         let account_id = proven_tx.account_id();
         let nullifiers: Vec<Nullifier> = proven_tx.nullifiers().collect();
         let unauthenticated_notes: Vec<Word> =
-            proven_tx.unauthenticated_notes().map(|note| note.to_commitment()).collect();
+            proven_tx.unauthenticated_notes().map(NoteHeader::to_commitment).collect();
 
         let tx_inputs = self
             .state
@@ -413,10 +413,10 @@ impl LocalStoreClient {
 /// Supports two backends: a gRPC client for the legacy out-of-process store, and a direct
 /// in-process handle for the embedded sequencer.
 #[derive(Clone, Debug)]
-#[allow(private_interfaces)]
+#[expect(private_interfaces)]
 pub enum StoreClient {
     /// Connects to a remote store over gRPC.
-    Remote(RemoteStoreClient),
+    Remote(Box<RemoteStoreClient>),
     /// Calls an in-process `State` directly, bypassing gRPC.
     Local(LocalStoreClient),
 }
@@ -424,7 +424,7 @@ pub enum StoreClient {
 impl StoreClient {
     /// Creates a gRPC-backed store client with a lazy connection.
     pub fn new(store_url: Url) -> Self {
-        Self::Remote(RemoteStoreClient::new(store_url))
+        Self::Remote(RemoteStoreClient::new(store_url).into())
     }
 
     /// Creates an in-process store client backed by the given `State`.

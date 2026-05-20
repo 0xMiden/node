@@ -10,12 +10,12 @@ use miden_node_proto::clients::{
     StoreRpcClient,
     ValidatorClient,
 };
-use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
 use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
+use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
 use miden_node_utils::ErrorReport;
@@ -52,7 +52,7 @@ use crate::COMPONENT;
 
 /// Dispatches store read calls to either a remote gRPC store or an in-process `StoreApi`.
 enum StoreBackend {
-    Remote(StoreRpcClient),
+    Remote(Box<StoreRpcClient>),
     Embedded(Arc<miden_node_store::StoreApi>),
 }
 
@@ -151,9 +151,7 @@ impl StoreBackend {
     ) -> Result<Response<proto::rpc::SyncAccountVaultResponse>, Status> {
         match self {
             Self::Remote(c) => c.clone().sync_account_vault(request).await,
-            Self::Embedded(api) => {
-                rpc_server::Rpc::sync_account_vault(api.as_ref(), request).await
-            },
+            Self::Embedded(api) => rpc_server::Rpc::sync_account_vault(api.as_ref(), request).await,
         }
     }
 
@@ -173,9 +171,7 @@ impl StoreBackend {
     ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
         match self {
             Self::Remote(c) => c.clone().sync_transactions(request).await,
-            Self::Embedded(api) => {
-                rpc_server::Rpc::sync_transactions(api.as_ref(), request).await
-            },
+            Self::Embedded(api) => rpc_server::Rpc::sync_transactions(api.as_ref(), request).await,
         }
     }
 
@@ -219,7 +215,8 @@ impl RpcService {
                     .without_metadata_version()
                     .without_metadata_genesis()
                     .with_otel_context_injection()
-                    .connect_lazy::<StoreRpcClient>(),
+                    .connect_lazy::<StoreRpcClient>()
+                    .into(),
             )
         };
 
@@ -848,8 +845,7 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::RpcStatus>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let store_status =
-            self.store.status(Request::new(())).await.map(Response::into_inner).ok();
+        let store_status = self.store.status(Request::new(())).await.map(Response::into_inner).ok();
         let block_producer_status = if let Some(block_producer) = &self.block_producer {
             block_producer
                 .clone()

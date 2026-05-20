@@ -562,10 +562,8 @@ pub async fn serve_ntx_builder_and_replica(
 
     let store_api = api::StoreApi::new(state);
 
-    let replica_service =
-        store::store_replica_server::StoreReplicaServer::new(store_api.clone());
-    let ntx_builder_service =
-        store::ntx_builder_server::NtxBuilderServer::new(store_api);
+    let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api.clone());
+    let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_file_descriptor_set(store_api_descriptor())

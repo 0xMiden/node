@@ -9,8 +9,8 @@ use miden_node_rpc::EmbeddedRpc;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{
     ApplyBlockError,
-    DatabaseOptions,
     DEFAULT_MAX_CONCURRENT_PROOFS,
+    DatabaseOptions,
     State,
     StoreApi,
     default_sqlite_connection_pool_size,
@@ -158,7 +158,9 @@ impl SequencerCommand {
                     block_prover_url,
                     data_directory,
                     max_concurrent_proofs,
-                    DatabaseOptions { connection_pool_size: sqlite_connection_pool_size },
+                    DatabaseOptions {
+                        connection_pool_size: sqlite_connection_pool_size,
+                    },
                     block_producer,
                     grpc_options,
                     storage_options,
@@ -244,11 +246,11 @@ impl SequencerCommand {
         );
 
         // The embedded block producer exposes its own gRPC endpoint which the RPC connects to.
-        let block_producer_url =
-            Url::parse(&format!("http://{block_producer_listen}")).context("invalid block-producer URL")?;
+        let block_producer_url = Url::parse(&format!("http://{block_producer_listen}"))
+            .context("invalid block-producer URL")?;
         // Similarly, the embedded ntx-builder is reachable on its own gRPC endpoint.
-        let ntx_builder_url =
-            Url::parse(&format!("http://{ntx_builder_listen}")).context("invalid ntx-builder URL")?;
+        let ntx_builder_url = Url::parse(&format!("http://{ntx_builder_listen}"))
+            .context("invalid ntx-builder URL")?;
 
         let rpc_task = tokio::spawn(
             EmbeddedRpc {
