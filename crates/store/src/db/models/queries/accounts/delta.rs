@@ -46,8 +46,8 @@ struct AccountStateDeltaRow {
     storage_header: Option<Vec<u8>>,
 }
 
-/// Data needed for applying a delta update to an existing account.
-/// Fetches only the minimal data required, avoiding loading full code and storage.
+/// Data needed for applying a delta update to an existing account. Fetches only the minimal data
+/// required, avoiding loading full code and storage.
 #[derive(Debug, Clone)]
 pub(super) struct AccountStateHeadersForDelta {
     pub nonce: Felt,
@@ -55,8 +55,8 @@ pub(super) struct AccountStateHeadersForDelta {
     pub storage_header: AccountStorageHeader,
 }
 
-/// Minimal account state computed from a partial delta update.
-/// Contains only the fields needed for the accounts table row insert.
+/// Minimal account state computed from a partial delta update. Contains only the fields needed for
+/// the accounts table row insert.
 #[derive(Debug, Clone)]
 pub(super) struct PartialAccountState {
     pub nonce: Felt,
@@ -65,8 +65,8 @@ pub(super) struct PartialAccountState {
     pub vault_root: Word,
 }
 
-/// Represents the account state to be inserted, either from a full account
-/// or from a partial delta update.
+/// Represents the account state to be inserted, either from a full account or from a partial delta
+/// update.
 pub(super) enum AccountStateForInsert {
     /// Private account - no public state stored
     Private,

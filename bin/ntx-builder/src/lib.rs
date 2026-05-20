@@ -67,8 +67,8 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
 /// Default initial sleep applied between per-request retries on transient infrastructure failures
-/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles
-/// on each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles on
+/// each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
 const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 
 /// Default upper bound on the per-request retry backoff sleep.
@@ -100,19 +100,19 @@ pub struct NtxBuilderConfig {
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
 
-    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached
-    /// to avoid repeated gRPC calls.
+    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached to
+    /// avoid repeated gRPC calls.
     pub script_cache_size: NonZeroUsize,
 
-    /// Maximum number of network transactions which should be in progress concurrently across
-    /// all account actors.
+    /// Maximum number of network transactions which should be in progress concurrently across all
+    /// account actors.
     pub max_concurrent_txs: usize,
 
     /// Maximum number of network notes a single transaction is allowed to consume.
     pub max_notes_per_tx: NonZeroUsize,
 
-    /// Maximum number of attempts to execute a failing note before dropping it.
-    /// Notes use exponential backoff between attempts.
+    /// Maximum number of attempts to execute a failing note before dropping it. Notes use
+    /// exponential backoff between attempts.
     pub max_note_attempts: usize,
 
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
@@ -138,10 +138,10 @@ pub struct NtxBuilderConfig {
     /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
-    /// Initial sleep applied between per-request retries on transient infrastructure failures
-    /// (e.g. prover unreachable, validator/block-producer crash, transport error, store gRPC
-    /// hiccup). Doubles on each retry up to [`Self::request_backoff_max`]. Per-note
-    /// `attempt_count` is *not* advanced while retries are in progress.
+    /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
+    /// prover unreachable, validator/block-producer crash, transport error, store gRPC hiccup).
+    /// Doubles on each retry up to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not*
+    /// advanced while retries are in progress.
     pub request_backoff_initial: Duration,
 
     /// Upper bound on the per-request retry backoff sleep.
@@ -313,8 +313,8 @@ impl NtxBuilderConfig {
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
 
-        // Subscribe to mempool first to ensure we don't miss any events. The subscription
-        // replays all inflight transactions, so the subscriber's state is fully reconstructed.
+        // Subscribe to mempool first to ensure we don't miss any events. The subscription replays
+        // all inflight transactions, so the subscriber's state is fully reconstructed.
         let subscription = block_producer
             .subscribe_to_mempool_with_retry()
             .await

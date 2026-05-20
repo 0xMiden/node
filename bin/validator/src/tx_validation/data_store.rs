@@ -1,5 +1,5 @@
-/// NOTE: This module contains logic that will eventually be moved to the Validator component
-/// when it is added to this repository.
+/// NOTE: This module contains logic that will eventually be moved to the Validator component when
+/// it is added to this repository.
 use std::collections::BTreeSet;
 
 use miden_protocol::Word;

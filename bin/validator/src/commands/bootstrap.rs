@@ -45,8 +45,8 @@ pub async fn bootstrap(
     .await
 }
 
-/// Builds the genesis state, writes account secret files, signs the genesis block, writes it
-/// to disk, and initializes the validator's database with the genesis block as the chain tip.
+/// Builds the genesis state, writes account secret files, signs the genesis block, writes it to
+/// disk, and initializes the validator's database with the genesis block as the chain tip.
 async fn build_and_write_genesis(
     config: GenesisConfig,
     signer: ValidatorSigner,

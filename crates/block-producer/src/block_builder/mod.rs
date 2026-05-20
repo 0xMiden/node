@@ -160,10 +160,10 @@ impl BlockBuilder {
         let unauthenticated_notes_iter = batch_iter.clone().flat_map(|batch| {
             // Note: .cloned() shouldn't be necessary but not having it produces an odd lifetime
             // error in BlockProducer::serve. Not sure if there's a better fix. Error:
-            // implementation of `FnOnce` is not general enough
-            // closure with signature `fn(&InputNoteCommitment) -> miden_protocol::note::NoteId`
-            // must implement `FnOnce<(&InputNoteCommitment,)>` ...but it actually
-            // implements `FnOnce<(&InputNoteCommitment,)>`
+            // implementation of `FnOnce` is not general enough closure with signature
+            // `fn(&InputNoteCommitment) -> miden_protocol::note::NoteId` must implement
+            // `FnOnce<(&InputNoteCommitment,)>` ...but it actually implements
+            // `FnOnce<(&InputNoteCommitment,)>`
             batch
                 .input_notes()
                 .iter()
@@ -240,16 +240,16 @@ impl BlockBuilder {
             .map_err(|err| BuildBlockError::other(format!("task join error: {err}")))?
             .map_err(BuildBlockError::ProposeBlockFailed)?;
 
-        // Verify the signature against the built block to ensure that
-        // the validator has provided a valid signature for the relevant block.
+        // Verify the signature against the built block to ensure that the validator has provided a
+        // valid signature for the relevant block.
         if !signature.verify(header.commitment(), header.validator_key()) {
             return Err(BuildBlockError::InvalidSignature);
         }
 
         let (ordered_batches, ..) = proposed_block.into_parts();
         // SAFETY: The header, body, and signature are known to correspond to each other because the
-        // header and body are derived from the proposed block and the signature is verified
-        // against the corresponding commitment.
+        // header and body are derived from the proposed block and the signature is verified against
+        // the corresponding commitment.
         let signed_block = SignedBlock::new_unchecked(header, body, signature);
         Ok((ordered_batches, signed_block))
     }

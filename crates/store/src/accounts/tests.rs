@@ -351,8 +351,7 @@ mod account_tree_with_history_tests {
             .collect();
         hist.compute_and_apply_mutations(updates3).unwrap();
 
-        // Verify states at different blocks
-        // Check genesis - first 50 accounts exist, others don't
+        // Verify states at different blocks Check genesis - first 50 accounts exist, others don't
         for i in 0..50 {
             let witness = hist.open_at(account_ids[i], BlockNumber::GENESIS).unwrap();
             assert_eq!(witness.state_commitment(), Word::from([i as u32, 0, 0, 0]));

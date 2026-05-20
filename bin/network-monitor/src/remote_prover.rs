@@ -96,8 +96,8 @@ pub struct ProbeSnapshot {
 // PROVER STATUS SERVICE
 // ================================================================================================
 
-/// Parameters captured at construction time for spawning the probe task lazily, the first
-/// time the status service observes the prover reporting [`ProofType::Transaction`].
+/// Parameters captured at construction time for spawning the probe task lazily, the first time the
+/// status service observes the prover reporting [`ProofType::Transaction`].
 struct ProbeSpawner {
     client: RemoteProverClient,
     payload: proto::remote_prover::ProofRequest,
@@ -106,9 +106,9 @@ struct ProbeSpawner {
     name: String,
 }
 
-/// Polls the remote prover's proxy status endpoint and publishes the combined
-/// [`ServiceStatus`] (status + latest probe outcome). Spawns the probe task the first
-/// time the prover reports Transaction type.
+/// Polls the remote prover's proxy status endpoint and publishes the combined [`ServiceStatus`]
+/// (status + latest probe outcome). Spawns the probe task the first time the prover reports
+/// Transaction type.
 pub struct ProverStatusService {
     name: String,
     url: String,
@@ -154,8 +154,8 @@ impl ProverStatusService {
         }
     }
 
-    /// Spawns the probe task if the prover has just been observed to support Transaction
-    /// proofs and we haven't spawned it yet. No-op in all other cases.
+    /// Spawns the probe task if the prover has just been observed to support Transaction proofs and
+    /// we haven't spawned it yet. No-op in all other cases.
     fn maybe_spawn_probe(&mut self) {
         let Some(status) = &self.last_status else { return };
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
@@ -267,8 +267,8 @@ impl Service for ProverStatusService {
 // ================================================================================================
 
 /// Runs proof-test probes on the configured interval. The task is spawned by
-/// [`ProverStatusService::maybe_spawn_probe`] only after the prover has been observed to
-/// support Transaction proofs.
+/// [`ProverStatusService::maybe_spawn_probe`] only after the prover has been observed to support
+/// Transaction proofs.
 #[instrument(
     parent = None,
     target = COMPONENT,

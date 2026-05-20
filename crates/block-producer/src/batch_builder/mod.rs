@@ -177,8 +177,9 @@ impl BatchJob {
             .inspect_ok(TelemetryInjectorExt::inject_telemetry)
             .and_then(|proposed| self.prove_batch(proposed))
 
-            // Failure must be injected before the final pipeline stage i.e. before commit is called. The system cannot
-            // handle errors after it considers the process complete (which makes sense).
+            // Failure must be injected before the final pipeline stage i.e. before commit is
+            // called. The system cannot handle errors after it considers the process complete
+            // (which makes sense).
             .and_then(|x| self.inject_failure(x))
             .and_then(|proven_batch| async { self.commit_batch(proven_batch).await; Ok(()) })
             // Handle errors by propagating the error to the root span and rolling back the batch.

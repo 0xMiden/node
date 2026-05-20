@@ -14,10 +14,16 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
+anyhow          = { workspace = true }
+build-rs        = { workspace = true }
+codegen         = { workspace = true }
 deadpool        = { default-features = false, workspace = true }
 deadpool-diesel = { features = ["sqlite"], workspace = true }
 deadpool-sync   = { default-features = false, workspace = true }
 diesel          = { features = ["sqlite"], workspace = true }
+fs-err          = { workspace = true }
 miden-protocol  = { workspace = true }
+rusqlite        = { workspace = true }
+sha2            = { workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }

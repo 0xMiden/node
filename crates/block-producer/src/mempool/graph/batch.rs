@@ -111,8 +111,8 @@ impl BatchGraph {
         reverted
     }
 
-    /// Marks the given batch as proven, making it available for selection in a block
-    /// once it becomes a root.
+    /// Marks the given batch as proven, making it available for selection in a block once it
+    /// becomes a root.
     pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) {
         if self.inner.contains(&proof.id()) {
             self.proven.insert(proof.id(), proof);

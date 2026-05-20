@@ -76,9 +76,9 @@ pub enum NtxError {
 
 type NtxResult<T> = Result<T, NtxError>;
 
-/// Returns `true` for gRPC status codes that indicate a transient transport- or server-side
-/// problem worth retrying. Content-rejection codes (`InvalidArgument`, `FailedPrecondition`, ...)
-/// reflect the batch itself and are not retried.
+/// Returns `true` for gRPC status codes that indicate a transient transport- or server-side problem
+/// worth retrying. Content-rejection codes (`InvalidArgument`, `FailedPrecondition`, ...) reflect
+/// the batch itself and are not retried.
 fn is_transient_status(status: &tonic::Status) -> bool {
     matches!(
         status.code(),
@@ -92,14 +92,14 @@ fn is_transient_status(status: &tonic::Status) -> bool {
     )
 }
 
-/// Returns `true` for `StoreError`s that originate from a transient gRPC condition. All other
-/// store errors (deserialization, missing fields) are content errors and are not retried.
+/// Returns `true` for `StoreError`s that originate from a transient gRPC condition. All other store
+/// errors (deserialization, missing fields) are content errors and are not retried.
 fn is_transient_store_error(err: &StoreError) -> bool {
     matches!(err, StoreError::GrpcClientError(status) if is_transient_status(status))
 }
 
-/// Maximum number of retries applied to a single transient request before the error is
-/// propagated to the actor-level retry.
+/// Maximum number of retries applied to a single transient request before the error is propagated
+/// to the actor-level retry.
 const MAX_REQUEST_RETRIES: usize = 20;
 
 /// Builds the [`ExponentialBuilder`] used to back off retries on transient request failures.
@@ -486,8 +486,7 @@ struct NtxDataStore {
     script_cache: LruCache<Word, NoteScript>,
     /// Local database for persistent note script.
     db: Db,
-    /// Scripts fetched from the remote store during execution, to be persisted by the
-    /// coordinator.
+    /// Scripts fetched from the remote store during execution, to be persisted by the coordinator.
     fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///

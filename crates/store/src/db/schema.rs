@@ -107,8 +107,8 @@ diesel::table! {
 diesel::joinable!(accounts -> account_codes (code_commitment));
 diesel::joinable!(accounts -> block_headers (block_num));
 // Note: Cannot use diesel::joinable! with accounts table due to composite primary key
-// diesel::joinable!(notes -> accounts (sender));
-// diesel::joinable!(transactions -> accounts (account_id));
+// diesel::joinable!(notes -> accounts (sender)); diesel::joinable!(transactions -> accounts
+// (account_id));
 diesel::joinable!(notes -> block_headers (committed_at));
 diesel::joinable!(notes -> note_scripts (script_root));
 diesel::joinable!(nullifiers -> block_headers (block_num));
