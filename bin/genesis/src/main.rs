@@ -23,8 +23,8 @@ use rand::Rng;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
 
-/// Generate canonical Miden genesis accounts (bridge, bridge admin, GER manager)
-/// and a genesis.toml configuration file.
+/// Generate canonical Miden genesis accounts (bridge, bridge admin, GER manager) and a genesis.toml
+/// configuration file.
 #[derive(Parser)]
 #[command(name = "miden-genesis")]
 struct Cli {
@@ -32,13 +32,13 @@ struct Cli {
     #[arg(long, default_value = "./genesis")]
     output_dir: PathBuf,
 
-    /// Hex-encoded Falcon512 public key for the bridge admin account.
-    /// If omitted, a new keypair is generated and the secret key is included in the .mac file.
+    /// Hex-encoded Falcon512 public key for the bridge admin account. If omitted, a new keypair is
+    /// generated and the secret key is included in the .mac file.
     #[arg(long, value_name = "HEX", requires = "ger_manager_public_key")]
     bridge_admin_public_key: Option<String>,
 
-    /// Hex-encoded Falcon512 public key for the GER manager account.
-    /// If omitted, a new keypair is generated and the secret key is included in the .mac file.
+    /// Hex-encoded Falcon512 public key for the GER manager account. If omitted, a new keypair is
+    /// generated and the secret key is included in the .mac file.
     #[arg(long, value_name = "HEX", requires = "bridge_admin_public_key")]
     ger_manager_public_key: Option<String>,
 }
@@ -97,9 +97,8 @@ fn run(
     let bridge_seed = Word::from(bridge_seed.map(Felt::new));
     let bridge = create_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
 
-    // Bump bridge nonce to 1 (required for genesis accounts).
-    // File-loaded accounts via [[account]] in genesis.toml are included as-is,
-    // so we must set nonce=1 before writing the .mac file.
+    // Bump bridge nonce to 1 (required for genesis accounts). File-loaded accounts via [[account]]
+    // in genesis.toml are included as-is, so we must set nonce=1 before writing the .mac file.
     let bridge = bump_nonce_to_one(bridge).context("failed to bump bridge account nonce")?;
 
     // Write .mac files.
@@ -203,8 +202,8 @@ mod tests {
 
     use super::*;
 
-    /// Parses the generated genesis.toml, builds a genesis block, and asserts the bridge account
-    /// is included with nonce=1.
+    /// Parses the generated genesis.toml, builds a genesis block, and asserts the bridge account is
+    /// included with nonce=1.
     fn assert_valid_genesis_block(dir: &Path) {
         let bridge_id = AccountFile::read(dir.join("bridge.mac")).unwrap().account.id();
 

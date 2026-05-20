@@ -307,8 +307,8 @@ impl TryFrom<proto::note::NoteScript> for NoteScript {
 
 /// Decodes the `(sender, note_type, tag)` triple from a proto `NoteMetadata` into a
 /// [`PartialNoteMetadata`]. The attachment-related fields on the proto are ignored — when full
-/// attachments are also transmitted, the receiver derives the canonical headers and commitment
-/// from those instead.
+/// attachments are also transmitted, the receiver derives the canonical headers and commitment from
+/// those instead.
 fn partial_note_metadata_from_proto(
     value: proto::note::NoteMetadata,
 ) -> Result<PartialNoteMetadata, ConversionError> {
@@ -322,8 +322,8 @@ fn partial_note_metadata_from_proto(
     Ok(PartialNoteMetadata::new(sender, note_type).with_tag(tag))
 }
 
-/// Decodes a serialized [`NoteAttachments`] payload. Empty bytes are treated as an empty
-/// collection so that proto3's default value round-trips cleanly.
+/// Decodes a serialized [`NoteAttachments`] payload. Empty bytes are treated as an empty collection
+/// so that proto3's default value round-trips cleanly.
 fn decode_attachments(bytes: &[u8]) -> Result<NoteAttachments, ConversionError> {
     if bytes.is_empty() {
         Ok(NoteAttachments::empty())

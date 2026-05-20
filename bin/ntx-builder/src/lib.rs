@@ -92,19 +92,19 @@ pub struct NtxBuilderConfig {
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
 
-    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached
-    /// to avoid repeated gRPC calls.
+    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached to
+    /// avoid repeated gRPC calls.
     pub script_cache_size: NonZeroUsize,
 
-    /// Maximum number of network transactions which should be in progress concurrently across
-    /// all account actors.
+    /// Maximum number of network transactions which should be in progress concurrently across all
+    /// account actors.
     pub max_concurrent_txs: usize,
 
     /// Maximum number of network notes a single transaction is allowed to consume.
     pub max_notes_per_tx: NonZeroUsize,
 
-    /// Maximum number of attempts to execute a failing note before dropping it.
-    /// Notes use exponential backoff between attempts.
+    /// Maximum number of attempts to execute a failing note before dropping it. Notes use
+    /// exponential backoff between attempts.
     pub max_note_attempts: usize,
 
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
@@ -285,8 +285,8 @@ impl NtxBuilderConfig {
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
 
-        // Subscribe to mempool first to ensure we don't miss any events. The subscription
-        // replays all inflight transactions, so the subscriber's state is fully reconstructed.
+        // Subscribe to mempool first to ensure we don't miss any events. The subscription replays
+        // all inflight transactions, so the subscriber's state is fully reconstructed.
         let subscription = block_producer
             .subscribe_to_mempool_with_retry()
             .await

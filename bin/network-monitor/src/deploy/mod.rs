@@ -38,15 +38,14 @@ use crate::deploy::wallet::{create_wallet_account, save_wallet_account};
 pub mod counter;
 pub mod wallet;
 
-/// Create an RPC client configured with the correct genesis metadata in the
-/// `Accept` header so that write RPCs such as `SubmitProvenTx` are
-/// accepted by the node.
+/// Create an RPC client configured with the correct genesis metadata in the `Accept` header so that
+/// write RPCs such as `SubmitProvenTx` are accepted by the node.
 pub async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
 ) -> Result<RpcClient> {
-    // First, create a temporary client without genesis metadata to discover the
-    // genesis block header and its commitment.
+    // First, create a temporary client without genesis metadata to discover the genesis block
+    // header and its commitment.
     let mut rpc: RpcClient = Builder::new(rpc_url.clone())
         .with_tls()
         .context("Failed to configure TLS for RPC client")?
@@ -78,8 +77,8 @@ pub async fn create_genesis_aware_rpc_client(
     let genesis_commitment = genesis_header.commitment();
     let genesis = genesis_commitment.to_hex();
 
-    // Rebuild the client, this time including the required genesis metadata so that
-    // write RPCs like SubmitProvenTx are accepted by the node.
+    // Rebuild the client, this time including the required genesis metadata so that write RPCs like
+    // SubmitProvenTx are accepted by the node.
     let rpc_client = Builder::new(rpc_url.clone())
         .with_tls()
         .context("Failed to configure TLS for RPC client")?

@@ -908,8 +908,8 @@ fn notes() {
     assert_eq!(note_1.details, None);
 }
 
-/// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies
-/// all 3 blocks' notes are returned in a single query, ordered by block number.
+/// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'
+/// notes are returned in a single query, ordered by block number.
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn note_sync_across_multiple_blocks() {
@@ -1233,8 +1233,8 @@ fn select_storage_map_sync_values() {
             .unwrap();
     }
 
-    // Insert data across multiple blocks using individual inserts
-    // Block 1: key1 -> value1, key2 -> value2
+    // Insert data across multiple blocks using individual inserts Block 1: key1 -> value1, key2 ->
+    // value2
     queries::insert_account_storage_map_value(
         &mut conn,
         account_id,
@@ -1418,8 +1418,8 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     assert_eq!(page.values.len(), 1, "should include block 1 only");
 }
 
-/// Tests that `select_account_storage_map_values_paged` does not panic when all entries
-/// exceed the limit and are in genesis block (block 0). Previously, this caused
+/// Tests that `select_account_storage_map_values_paged` does not panic when all entries exceed the
+/// limit and are in genesis block (block 0). Previously, this caused
 /// `last_block_num.saturating_sub(1) = -1` which failed `BlockNumber::from_raw_sql`.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_genesis_block() {
@@ -1446,9 +1446,9 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
         .unwrap();
     }
 
-    // Query with limit=1 so that raw.len() (3) > limit (1), triggering the
-    // pagination branch. All entries are in block 0, so take_while produces
-    // nothing and last_block_num.saturating_sub(1) = -1.
+    // Query with limit=1 so that raw.len() (3) > limit (1), triggering the pagination branch. All
+    // entries are in block 0, so take_while produces nothing and last_block_num.saturating_sub(1) =
+    // -1.
     let result = queries::select_account_storage_map_values_paged(
         &mut conn,
         account_id,
@@ -1456,8 +1456,8 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
         1,
     );
 
-    // Should not error - should return a valid page (possibly with empty values
-    // indicating no progress, which the caller interprets as limit_exceeded)
+    // Should not error - should return a valid page (possibly with empty values indicating no
+    // progress, which the caller interprets as limit_exceeded)
     let page = result.expect("should not return an internal error for genesis block entries");
     // The page should indicate no progress was made (stuck at genesis)
     assert!(
@@ -1466,9 +1466,9 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
     );
 }
 
-/// Tests that single-block overflow works for non-genesis blocks too.
-/// All entries are in block 5 and exceed the limit. The function should
-/// signal no progress rather than returning incorrect data.
+/// Tests that single-block overflow works for non-genesis blocks too. All entries are in block 5
+/// and exceed the limit. The function should signal no progress rather than returning incorrect
+/// data.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     let mut conn = create_db();
@@ -1502,8 +1502,8 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     assert_eq!(page.last_block_included, block5, "should signal no progress at block 5");
 }
 
-/// Tests that normal multi-block pagination still works correctly:
-/// entries in blocks 1, 2, 3 with limit causing block 3 to be dropped.
+/// Tests that normal multi-block pagination still works correctly: entries in blocks 1, 2, 3 with
+/// limit causing block 3 to be dropped.
 #[test]
 fn select_storage_map_sync_values_multi_block_pagination() {
     let mut conn = create_db();
@@ -1633,10 +1633,10 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     });
 }
 
-/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when the first
-/// block in the range has more entries than the limit allows. Previously this returned
-/// `AllEntries([])` because the pagination loop exited immediately (`last_block_included` ==
-/// `block_num`) without checking that no values were actually returned.
+/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when the first block in the
+/// range has more entries than the limit allows. Previously this returned `AllEntries([])` because
+/// the pagination loop exited immediately (`last_block_included` == `block_num`) without checking
+/// that no values were actually returned.
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
 async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block_overflow() {
@@ -1674,8 +1674,8 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
     .await
     .unwrap();
 
-    // Use limit=1 so that 3 entries in a single block exceed the limit.
-    // block_range_start is block5 (the first block with data), and the target is also block5.
+    // Use limit=1 so that 3 entries in a single block exceed the limit. block_range_start is block5
+    // (the first block with data), and the target is also block5.
     let details = db
         .reconstruct_storage_map_from_db(account_id, slot_name.clone(), block5, Some(1))
         .await
@@ -2123,8 +2123,8 @@ async fn genesis_with_account_assets_and_storage() {
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
 
-/// Verifies genesis block with multiple accounts of different types.
-/// Tests realistic genesis scenario with basic accounts, assets, and storage.
+/// Verifies genesis block with multiple accounts of different types. Tests realistic genesis
+/// scenario with basic accounts, assets, and storage.
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
 async fn genesis_with_multiple_accounts() {
@@ -3027,8 +3027,8 @@ fn test_prune_history() {
         "block_tip storage map value should be retained"
     );
 
-    // Test that is_latest=true entries are never deleted, even if old
-    // Insert an old entry marked as latest
+    // Test that is_latest=true entries are never deleted, even if old Insert an old entry marked as
+    // latest
     let faucet_4 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
     let asset_old = Asset::Fungible(FungibleAsset::new(faucet_4, 9999).unwrap());
     let vault_key_old_latest = asset_old.vault_key();
@@ -3041,8 +3041,8 @@ fn test_prune_history() {
     )
     .unwrap();
 
-    // This entry at block 0 is marked as is_latest=true by insert_account_vault_asset
-    // Run cleanup again
+    // This entry at block 0 is marked as is_latest=true by insert_account_vault_asset Run cleanup
+    // again
     let (vault_deleted_2, ..) = queries::prune_history(conn, block_tip).unwrap();
 
     // The old latest entry should not be deleted (vault_deleted_2 should be 0)
@@ -3455,8 +3455,8 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     let initial_storage_map_root =
         forest.get_storage_map_root(account_id, &slot_map, block_1).unwrap();
 
-    // Blocks 2-100: Do nothing (no updates to this account)
-    // Simulate other activity by just advancing to block 100
+    // Blocks 2-100: Do nothing (no updates to this account) Simulate other activity by just
+    // advancing to block 100
 
     let block_100 = BlockNumber::from(100);
 
@@ -3481,8 +3481,8 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     let witness = forest.get_storage_map_witness(account_id, &slot_map, block_100, key1);
     assert!(witness.is_ok());
 
-    // Now add an update at block 51 (within retention window) to test that old entries
-    // get pruned when newer entries exist
+    // Now add an update at block 51 (within retention window) to test that old entries get pruned
+    // when newer entries exist
     let block_51 = BlockNumber::from(51);
 
     // Update with new values
@@ -3800,12 +3800,12 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
 
     forest.update_account(block_1, &delta_1).unwrap();
 
-    // Note: Value slots don't have roots in AccountStateForest - they're just part of the
-    // account storage header. The AccountStateForest only tracks map slots.
-    // So there's nothing to verify for value slots in the forest.
+    // Note: Value slots don't have roots in AccountStateForest - they're just part of the account
+    // storage header. The AccountStateForest only tracks map slots. So there's nothing to verify
+    // for value slots in the forest.
 
-    // This test documents that value slots are NOT tracked in AccountStateForest
-    // (they don't need to be, since their digest is 1:1 with the value)
+    // This test documents that value slots are NOT tracked in AccountStateForest (they don't need
+    // to be, since their digest is 1:1 with the value)
 
     // Advance 100 blocks without any updates
     let block_100 = BlockNumber::from(100);
@@ -3900,9 +3900,8 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     // Prune at block 100
     let total_roots_removed = forest.prune(block_100);
 
-    // Vault: block 1 is most recent, should NOT be pruned
-    // Map A: block 1 is old (block 51 is newer), SHOULD be pruned
-    // Map B: block 1 is most recent, should NOT be pruned
+    // Vault: block 1 is most recent, should NOT be pruned Map A: block 1 is old (block 51 is
+    // newer), SHOULD be pruned Map B: block 1 is most recent, should NOT be pruned
     assert_eq!(
         total_roots_removed, 0,
         "Vault root from block 1 should NOT be pruned (most recent)"

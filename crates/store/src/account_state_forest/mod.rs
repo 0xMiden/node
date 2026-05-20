@@ -88,8 +88,8 @@ pub enum AccountStorageMapResult {
 
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
-    /// `LargeSmtForest` for efficient account storage reconstruction.
-    /// Populated during block import with storage and vault SMTs.
+    /// `LargeSmtForest` for efficient account storage reconstruction. Populated during block import
+    /// with storage and vault SMTs.
     forest: LargeSmtForest<B>,
 
     /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
@@ -551,8 +551,8 @@ impl<B: Backend> AccountStateForest<B> {
         self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
     }
 
-    /// Inserts asset vault data into the forest for the specified account. Assumes that asset
-    /// vault for this account does not yet exist in the forest.
+    /// Inserts asset vault data into the forest for the specified account. Assumes that asset vault
+    /// for this account does not yet exist in the forest.
     fn insert_account_vault(
         &mut self,
         block_num: BlockNumber,

@@ -1,5 +1,5 @@
-//! Renders the explorer card. Compares the explorer's tip against the RPC's tip (passed in by
-//! the dispatcher) and surfaces a warning banner past `EXPLORER_LAG_TOLERANCE` blocks of drift.
+//! Renders the explorer card. Compares the explorer's tip against the RPC's tip (passed in by the
+//! dispatcher) and surfaces a warning banner past `EXPLORER_LAG_TOLERANCE` blocks of drift.
 
 use maud::{Markup, html};
 

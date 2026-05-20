@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use lru::LruCache as InnerCache;
 use tracing::instrument;
 
-/// A newtype wrapper around an LRU cache. Ensures that the cache lock is not held across
-/// await points.
+/// A newtype wrapper around an LRU cache. Ensures that the cache lock is not held across await
+/// points.
 #[derive(Clone)]
 pub struct LruCache<K, V>(Arc<Mutex<InnerCache<K, V>>>);
 
@@ -54,9 +54,9 @@ where
 
     #[instrument(name = "lru.lock", skip_all)]
     fn lock(&self) -> MutexGuard<'_, InnerCache<K, V>> {
-        // SAFETY: The mutex is only held for the duration of the get/put operation
-        // where panics are possible only if we're running out of memory, in which
-        // case the entire process is likely to be unstable anyway.
+        // SAFETY: The mutex is only held for the duration of the get/put operation where panics are
+        // possible only if we're running out of memory, in which case the entire process is likely
+        // to be unstable anyway.
         self.0.lock().expect("LRU cache mutex poisoned")
     }
 }

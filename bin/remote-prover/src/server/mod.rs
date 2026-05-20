@@ -34,8 +34,7 @@ pub struct Server {
     /// The proof type that the prover will be handling.
     #[arg(long, value_enum, env = "MIDEN_PROVER_KIND")]
     kind: ProofKind,
-    /// Maximum time allowed for a proof request to complete. Once exceeded, the request is
-    /// aborted.
+    /// Maximum time allowed for a proof request to complete. Once exceeded, the request is aborted.
     #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT", value_parser = humantime::parse_duration)]
     timeout: std::time::Duration,
     /// Maximum number of concurrent proof requests that the prover will allow.

@@ -400,8 +400,7 @@ struct NtxDataStore {
     script_cache: LruCache<Word, NoteScript>,
     /// Local database for persistent note script.
     db: Db,
-    /// Scripts fetched from the remote store during execution, to be persisted by the
-    /// coordinator.
+    /// Scripts fetched from the remote store during execution, to be persisted by the coordinator.
     fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///

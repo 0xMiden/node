@@ -25,8 +25,8 @@ pub enum RpcCommand {
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
         store_url: Url,
 
-        /// The block-producer's gRPC url. If unset, will run the RPC in read-only mode,
-        /// i.e. without a block-producer.
+        /// The block-producer's gRPC url. If unset, will run the RPC in read-only mode, i.e.
+        /// without a block-producer.
         #[arg(long = "block-producer.url", env = ENV_BLOCK_PRODUCER_URL, value_name = "URL")]
         block_producer_url: Option<Url>,
 

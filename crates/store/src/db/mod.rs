@@ -142,8 +142,8 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
     pub header: TransactionHeader,
-    /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without
-    /// a corresponding proof here were erased (created and consumed within the same batch).
+    /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without a
+    /// corresponding proof here were erased (created and consumed within the same batch).
     pub output_note_proofs: Vec<NoteSyncRecord>,
 }
 
@@ -586,8 +586,8 @@ impl Db {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(conn, &signed_block, &notes)?;
 
-            // XXX FIXME TODO free floating mutex MUST NOT exist
-            // it doesn't bind it properly to the data locked!
+            // XXX FIXME TODO free floating mutex MUST NOT exist it doesn't bind it properly to the
+            // data locked!
             {
                 let _span = tracing::info_span!(target: COMPONENT, "acquire_write_lock").entered();
                 if allow_acquire.send(()).is_err() {
@@ -665,8 +665,8 @@ impl Db {
         values.extend(page.values);
         let mut last_block_included = page.last_block_included;
 
-        // If the first page returned no values, the block at block_range_start has more
-        // entries than the limit allows (e.g. genesis accounts with large storage maps).
+        // If the first page returned no values, the block at block_range_start has more entries
+        // than the limit allows (e.g. genesis accounts with large storage maps).
         if values.is_empty() && last_block_included == block_range_start {
             return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
         }

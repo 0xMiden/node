@@ -76,10 +76,9 @@ impl KmsSigner {
 
     pub async fn sign(&self, commitment: Word) -> Result<Signature, KmsSignerError> {
         // The Validator produces Ethereum-style ECDSA (secp256k1) signatures over Keccak-256
-        // digests. AWS KMS does not support SHA-3 hashing for ECDSA keys
-        // (ECC_SECG_P256K1 being the corresponding AWS key-spec), so we pre-hash the
-        // message and pass MessageType::Digest. KMS signs the provided 32-byte digest
-        // verbatim.
+        // digests. AWS KMS does not support SHA-3 hashing for ECDSA keys (ECC_SECG_P256K1 being the
+        // corresponding AWS key-spec), so we pre-hash the message and pass MessageType::Digest. KMS
+        // signs the provided 32-byte digest verbatim.
         let msg = commitment.to_bytes();
         let digest = Keccak256::hash(&msg);
 

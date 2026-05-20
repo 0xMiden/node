@@ -63,9 +63,9 @@ async fn add_transaction_traces_are_correct() {
 
 #[test]
 fn children_of_failed_batches_are_ignored() {
-    // Batches are proved concurrently. This makes it possible for a child job to complete after
-    // the parent has been reverted (and therefore reverting the child job). Such a child job
-    // should be ignored.
+    // Batches are proved concurrently. This makes it possible for a child job to complete after the
+    // parent has been reverted (and therefore reverting the child job). Such a child job should be
+    // ignored.
     let txs = MockProvenTxBuilder::sequential();
 
     let (mut uut, _) = Mempool::for_tests();
@@ -354,8 +354,8 @@ fn pass_through_txs_on_an_empty_account() {
     ));
     itertools::assert_equal(batch.account_updates(), expected);
 
-    // Ensure the batch contains a,b and final. Final should also be the last tx since its order
-    // is required.
+    // Ensure the batch contains a,b and final. Final should also be the last tx since its order is
+    // required.
     assert!(batch.transactions().contains(&tx_pass_through_a));
     assert!(batch.transactions().contains(&tx_pass_through_b));
     assert_eq!(batch.transactions().last().unwrap(), &tx_final);
