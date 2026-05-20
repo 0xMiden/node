@@ -3,8 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::never::Never;
-use futures::{FutureExt, TryFutureExt};
+use futures::TryFutureExt;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -40,7 +39,7 @@ pub struct BatchBuilder {
     /// state and are immediately available for a new batch building job.
     ///
     /// See also: [`BatchBuilder::wait_for_available_worker`].
-    worker_pool: JoinSet<()>,
+    worker_pool: JoinSet<Result<(), BuildBatchError>>,
     batch_interval: Duration,
     /// The batch prover to use.
     ///
@@ -69,7 +68,7 @@ impl BatchBuilder {
 
         // It is important that the worker pool is filled to capacity with ready workers. See
         // `Self::worker_pool` and `Self::wait_for_available_worker` for more context.
-        let worker_pool = std::iter::repeat_n(std::future::ready(()), num_workers.get()).collect();
+        let worker_pool = (0..num_workers.get()).map(|_| std::future::ready(Ok(()))).collect();
 
         Self {
             batch_interval,
@@ -85,7 +84,7 @@ impl BatchBuilder {
     /// A pool of batch-proving workers is spawned, which are fed new batch jobs periodically.
     /// A batch is skipped if there are no available workers, or if there are no transactions
     /// available to batch.
-    pub async fn run(mut self, mempool: SharedMempool) {
+    pub async fn run(mut self, mempool: SharedMempool) -> anyhow::Result<()> {
         assert!(
             self.failure_rate < 1.0 && self.failure_rate.is_sign_positive(),
             "Failure rate must be a percentage"
@@ -99,15 +98,15 @@ impl BatchBuilder {
 
         loop {
             interval.tick().await;
-            self.build_batch(mempool.clone()).await;
+            self.build_batch(mempool.clone()).await?;
         }
     }
 
     #[instrument(parent = None, target = COMPONENT, name = "batch_builder.build_batch", skip_all)]
-    async fn build_batch(&mut self, mempool: SharedMempool) {
+    async fn build_batch(&mut self, mempool: SharedMempool) -> Result<(), BuildBatchError> {
         Span::current().set_attribute("workers.count", self.worker_pool.len());
 
-        self.wait_for_available_worker().await;
+        self.wait_for_available_worker().await?;
 
         let job = BatchJob {
             failure_rate: self.failure_rate,
@@ -118,6 +117,8 @@ impl BatchBuilder {
 
         self.worker_pool
             .spawn(async move { job.build_batch().await }.instrument(tracing::Span::current()));
+
+        Ok(())
     }
 
     /// Waits for a new batch building worker to become available.
@@ -132,13 +133,16 @@ impl BatchBuilder {
     /// design was chosen instead as it removes this branching logic by "always" having the pool
     /// at max capacity. Instead completed workers wait to be culled by this function.
     #[instrument(target = COMPONENT, name = "batch_builder.wait_for_available_worker", skip_all)]
-    async fn wait_for_available_worker(&mut self) {
+    async fn wait_for_available_worker(&mut self) -> Result<(), BuildBatchError> {
         // We must crash here because otherwise we have a batch that has been selected from the
         // mempool, but which is now in limbo. This effectively corrupts the mempool.
-        if let Err(crash) = self.worker_pool.join_next().await.expect("worker pool is never empty")
-        {
-            tracing::error!(message=%crash, "Batch worker pool panic'd");
-            panic!("Batch worker pool panic: {crash}");
+        match self.worker_pool.join_next().await.expect("worker pool is never empty") {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => Err(err),
+            Err(crash) => {
+                tracing::error!(message=%crash, "Batch worker pool panic'd");
+                panic!("Batch worker pool panic: {crash}");
+            },
         }
     }
 }
@@ -151,7 +155,7 @@ impl BatchBuilder {
 /// It is entirely self-contained and performs the full batch creation flow, from selecting the
 /// batch from the [`Mempool`] up to and including submitting the results back to the [`Mempool`].
 ///
-/// Errors are also handled internally and are not propagated up.
+/// Recoverable errors are handled internally. Mempool poison is propagated as a fatal error.
 struct BatchJob {
     /// Simulated block failure rate as a percentage.
     ///
@@ -163,17 +167,18 @@ struct BatchJob {
 }
 
 impl BatchJob {
-    async fn build_batch(&self) {
-        let Some(batch) = self.select_batch().instrument(Span::current()).await else {
+    async fn build_batch(&self) -> Result<(), BuildBatchError> {
+        let Some(batch) = self.select_batch()? else {
             tracing::info!("No transactions available.");
-            return;
+            return Ok(());
         };
 
         batch.inject_telemetry();
         let batch_id = batch.id();
 
-        self.get_batch_inputs(batch)
-            .and_then(|(txs, inputs)| Self::propose_batch(txs, inputs) )
+        let result = self
+            .get_batch_inputs(batch)
+            .and_then(|(txs, inputs)| Self::propose_batch(txs, inputs))
             .inspect_ok(TelemetryInjectorExt::inject_telemetry)
             .and_then(|proposed| self.prove_batch(proposed))
 
@@ -181,19 +186,26 @@ impl BatchJob {
             // called. The system cannot handle errors after it considers the process complete
             // (which makes sense).
             .and_then(|x| self.inject_failure(x))
-            .and_then(|proven_batch| async { self.commit_batch(proven_batch).await; Ok(()) })
+            .and_then(|proven_batch| async { self.commit_batch(proven_batch) })
             // Handle errors by propagating the error to the root span and rolling back the batch.
             .inspect_err(|err| Span::current().set_error(err))
-            .or_else(|_err| self.rollback_batch(batch_id).never_error())
-            // Error has been handled, this is just type manipulation to remove the result wrapper.
-            .unwrap_or_else(|_: Never| ())
             .instrument(Span::current())
             .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(err @ BuildBatchError::MempoolPoisoned(_)) => Err(err),
+            Err(err) => {
+                self.rollback_batch(batch_id)?;
+                Span::current().set_error(&err);
+                Ok(())
+            },
+        }
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
-    async fn select_batch(&self) -> Option<SelectedBatch> {
-        self.mempool.lock().await.select_batch()
+    fn select_batch(&self) -> Result<Option<SelectedBatch>, BuildBatchError> {
+        Ok(self.mempool.lock()?.select_batch())
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
@@ -286,13 +298,15 @@ impl BatchJob {
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
-    async fn commit_batch(&self, batch: Arc<ProvenBatch>) {
-        self.mempool.lock().await.commit_batch(batch);
+    fn commit_batch(&self, batch: Arc<ProvenBatch>) -> Result<(), BuildBatchError> {
+        self.mempool.lock()?.commit_batch(batch);
+        Ok(())
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
-    async fn rollback_batch(&self, batch_id: BatchId) {
-        self.mempool.lock().await.rollback_batch(batch_id);
+    fn rollback_batch(&self, batch_id: BatchId) -> Result<(), BuildBatchError> {
+        self.mempool.lock()?.rollback_batch(batch_id);
+        Ok(())
     }
 }
 

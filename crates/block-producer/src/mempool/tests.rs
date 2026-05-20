@@ -13,6 +13,20 @@ use crate::test_utils::batch::TransactionBatchConstructor;
 mod add_transaction;
 mod add_user_batch;
 
+#[test]
+fn shared_mempool_lock_is_poisoned_after_panic() {
+    let mempool = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
+    let poisoned = mempool.clone();
+
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoned.lock().expect("fresh mempool lock should not be poisoned");
+        panic!("poison shared mempool lock");
+    })
+    .join();
+
+    assert!(matches!(mempool.lock(), Err(MempoolPoisonError)));
+}
+
 impl Mempool {
     /// Returns an empty [`Mempool`] and a perfect clone intended for use as the Unit Under Test and
     /// the reference instance.
