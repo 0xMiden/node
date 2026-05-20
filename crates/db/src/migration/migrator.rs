@@ -11,28 +11,28 @@ use super::{MigratorBuilder, SchemaHash, schema};
 
 /// Applies versioned database migrations.
 ///
-/// A migrator is built from two ordered migration sets: base SQL migrations followed by code
-/// migrations. Base migrations are pure SQL snapshots of migrations whose resulting schema we
+/// A migrator is built from two ordered migration sets: retired SQL migrations followed by code
+/// migrations. Retired migrations are pure SQL snapshots of older migrations whose schema we
 /// retain, but whose Rust migration code we no longer want to support. Because that old migration
-/// path is intentionally unsupported, base migrations are only applied when creating a new database
-/// whose `PRAGMA user_version` is zero. Existing databases are never allowed to run only part of
-/// the base SQL set; once a database has a non-zero version, it must already be at or beyond the
-/// end of the base migrations.
+/// path is intentionally unsupported, retired migrations are only applied when creating a new
+/// database whose `PRAGMA user_version` is zero. Existing databases are never allowed to run only
+/// part of the retired SQL set; once a database has a non-zero version, it must already be at or
+/// beyond the end of the retired migrations.
 ///
-/// Code migrations run after the base SQL set. For existing databases, the migrator reads
+/// Code migrations run after the retired SQL set. For existing databases, the migrator reads
 /// `user_version`, verifies that the current schema hash matches the expected hash for that
 /// version, and then applies only the missing code migrations. Each migration runs in its own
 /// transaction and commits only after the resulting schema hash matches the hash computed by the
 /// builder.
 ///
-/// Construct a migrator with [`Migrator::builder`] by pushing base migrations first and code
+/// Construct a migrator with [`Migrator::builder`] by pushing retired migrations first and code
 /// migrations second, or call [`Migrator::generate`] from a `build.rs` to generate that builder
 /// chain from a migration directory. Callers should snapshot [`Migrator::schema_hashes`] in tests
 /// so accidental schema changes are caught, especially when replacing a code migration with
-/// equivalent base SQL.
+/// equivalent retired SQL.
 #[derive(Debug)]
 pub struct Migrator {
-    base_migrations: Vec<SqlMigration>,
+    retired_migrations: Vec<SqlMigration>,
     code_migrations: Vec<CodeMigration>,
     expected_schema_hashes: Vec<SchemaHash>,
 }
@@ -44,7 +44,7 @@ impl Migrator {
     /// least one migration was pushed before returning a migrator.
     pub(super) fn empty() -> Self {
         Self {
-            base_migrations: Vec::new(),
+            retired_migrations: Vec::new(),
             code_migrations: Vec::new(),
             expected_schema_hashes: Vec::new(),
         }
@@ -57,24 +57,28 @@ impl Migrator {
 
     /// Returns the version number that will be assigned to the next migration.
     ///
-    /// Versions are one-based and follow insertion order across base migrations first and then code
-    /// migrations.
+    /// Versions are one-based and follow insertion order across retired migrations first and then
+    /// code migrations.
     pub(super) fn next_version(&self) -> usize {
         self.expected_schema_hashes.len() + 1
     }
 
-    /// Adds a base SQL migration and the schema hash expected after it runs.
+    /// Adds a retired SQL migration and the schema hash expected after it runs.
     ///
     /// This is used by [`MigratorBuilder`] after it has already applied the migration to its
     /// in-memory reference database. The caller must ensure `schema_hash` is the hash of that
-    /// reference database after this migration. Base migrations must be added before any code
+    /// reference database after this migration. Retired migrations must be added before any code
     /// migration.
-    pub(super) fn push_base_unchecked(&mut self, migration: SqlMigration, schema_hash: SchemaHash) {
+    pub(super) fn push_retired_unchecked(
+        &mut self,
+        migration: SqlMigration,
+        schema_hash: SchemaHash,
+    ) {
         assert!(
             self.code_migrations.is_empty(),
-            "cannot add base migration after code migrations have started"
+            "cannot add retired migration after code migrations have started"
         );
-        self.base_migrations.push(migration);
+        self.retired_migrations.push(migration);
         self.expected_schema_hashes.push(schema_hash);
     }
 
@@ -97,7 +101,7 @@ impl Migrator {
     /// A migrator must contain at least one migration and must have exactly one expected schema
     /// hash for each migration.
     pub(super) fn validate(&self) -> Result<()> {
-        let migration_count = self.base_migrations.len() + self.code_migrations.len();
+        let migration_count = self.retired_migrations.len() + self.code_migrations.len();
         ensure!(
             !self.expected_schema_hashes.is_empty(),
             "cannot build migrator without migrations"
@@ -112,7 +116,7 @@ impl Migrator {
 
     /// Returns the schema hashes expected after each migration.
     ///
-    /// Callers can use these hashes in tests when converting a code migration into base SQL: the
+    /// Callers can use these hashes in tests when retiring a code migration into SQL: the
     /// replacement SQL should produce the same hash at the same migration index.
     pub fn schema_hashes(&self) -> &[SchemaHash] {
         &self.expected_schema_hashes
@@ -120,26 +124,27 @@ impl Migrator {
 
     /// Applies missing migrations to `conn`.
     ///
-    /// New databases, where `PRAGMA user_version` is zero, receive all base migrations followed by
-    /// all code migrations. Existing databases must already be past the base migration range; only
-    /// missing code migrations are applied. Every migration runs in its own transaction, updates
-    /// `user_version`, and commits only after the resulting schema hash matches the expected hash.
+    /// New databases, where `PRAGMA user_version` is zero, receive all retired migrations followed
+    /// by all code migrations. Existing databases must already be past the retired migration range;
+    /// only missing code migrations are applied. Every migration runs in its own transaction,
+    /// updates `user_version`, and commits only after the resulting schema hash matches the
+    /// expected hash.
     pub fn migrate(&self, conn: &mut Connection) -> Result<()> {
         let current_version = self.version_check(conn)?;
-        let base_versions = self.base_migrations.len();
+        let retired_versions = self.retired_migrations.len();
 
         let mut applied_version = current_version;
         if applied_version == 0 {
-            for (idx, migration) in self.base_migrations.iter().enumerate() {
+            for (idx, migration) in self.retired_migrations.iter().enumerate() {
                 let version = idx + 1;
                 self.apply_migration(conn, version, migration)?;
                 applied_version = version;
             }
         }
 
-        let code_start = applied_version.saturating_sub(base_versions);
+        let code_start = applied_version.saturating_sub(retired_versions);
         for (idx, migration) in self.code_migrations.iter().enumerate().skip(code_start) {
-            let version = base_versions + idx + 1;
+            let version = retired_versions + idx + 1;
             self.apply_migration(conn, version, migration)?;
         }
 
@@ -148,9 +153,9 @@ impl Migrator {
 
     /// Reads and validates the database version before any missing migrations are applied.
     ///
-    /// This rejects databases newer than the migrator, databases inside the base migration range,
-    /// and databases whose current schema hash does not match the expected hash for their current
-    /// version.
+    /// This rejects databases newer than the migrator, databases inside the retired migration
+    /// range, and databases whose current schema hash does not match the expected hash for their
+    /// current version.
     fn version_check(&self, conn: &Connection) -> Result<usize> {
         let current_version =
             schema::get_version(conn).context("failed to read database version")?;
@@ -161,12 +166,12 @@ impl Migrator {
             "database version {current_version} is newer than migrator version {total_versions}"
         );
 
-        let base_versions = self.base_migrations.len();
-        if current_version > 0 && current_version < base_versions {
+        let retired_versions = self.retired_migrations.len();
+        if current_version > 0 && current_version < retired_versions {
             let name = self.migration_name(current_version).unwrap_or("<unknown>");
             bail!(
-                "database version {current_version} \"{name}\" is inside the base migration range; \
-                 base migrations are only supported for new databases"
+                "database version {current_version} \"{name}\" is inside the retired migration \
+                 range; retired migrations can only initialize new databases"
             );
         }
 
@@ -212,12 +217,12 @@ impl Migrator {
             return None;
         }
 
-        if version <= self.base_migrations.len() {
-            return Some(self.base_migrations[version - 1].name());
+        if version <= self.retired_migrations.len() {
+            return Some(self.retired_migrations[version - 1].name());
         }
 
         self.code_migrations
-            .get(version - self.base_migrations.len() - 1)
+            .get(version - self.retired_migrations.len() - 1)
             .map(MigrationEntry::name)
     }
 }
@@ -262,9 +267,12 @@ mod tests {
     }
 
     #[test]
-    fn migrates_new_database_through_base_and_code() -> Result<()> {
+    fn migrates_new_database_through_retired_and_code() -> Result<()> {
         let migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_retired(
+                "create items",
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);",
+            )?
             .push_code("add item height", add_item_height)?
             .build()?;
 
@@ -292,7 +300,10 @@ mod tests {
     #[test]
     fn applies_missing_code_migrations_to_existing_database() -> Result<()> {
         let migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_retired(
+                "create items",
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);",
+            )?
             .push_code("index item values", add_items_index)?
             .build()?;
 
@@ -310,10 +321,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_existing_database_inside_base_migration_range() -> Result<()> {
+    fn rejects_existing_database_inside_retired_migration_range() -> Result<()> {
         let migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
-            .push_base("create notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);")?
+            .push_retired("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
+            .push_retired("create notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);")?
             .build()?;
 
         let mut conn = Connection::open_in_memory()?;
@@ -323,14 +334,14 @@ mod tests {
         )?;
 
         let err = migrator.migrate(&mut conn).expect_err("migration should fail");
-        assert!(err.to_string().contains("inside the base migration range"));
+        assert!(err.to_string().contains("inside the retired migration range"));
         Ok(())
     }
 
     #[test]
     fn verifies_current_schema_before_applying_missing_migrations() -> Result<()> {
         let migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
+            .push_retired("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
             .build()?;
 
         let mut conn = Connection::open_in_memory()?;
@@ -345,7 +356,7 @@ mod tests {
     #[test]
     fn rolls_back_code_migration_when_schema_hash_mismatches() -> Result<()> {
         let migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
+            .push_retired("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
             .push_code("conditionally create extra", create_extra_table_when_items_exist)?
             .build()?;
 

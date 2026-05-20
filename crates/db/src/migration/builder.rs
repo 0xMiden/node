@@ -17,7 +17,7 @@ use super::{Migrator, SchemaHash};
 ///
 /// fn migrator() -> anyhow::Result<Migrator> {
 ///     Migrator::builder()?
-///         .push_base(
+///         .push_retired(
 ///             "001_create_items",
 ///             "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);",
 ///         )?
@@ -57,14 +57,17 @@ impl MigratorBuilder {
         Ok(Self { reference, migrator: Migrator::empty() })
     }
 
-    /// Adds a pure SQL base migration.
-    pub fn push_base(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
+    /// Adds a pure SQL retired migration.
+    ///
+    /// Retired migrations initialize fresh databases from SQL that replaces old code migrations.
+    /// They must be pushed before any code migration.
+    pub fn push_retired(mut self, name: &'static str, sql: &'static str) -> Result<Self> {
         let version = self.migrator.next_version();
         let migration = SqlMigration::new(name, sql);
         let hash: SchemaHash = apply_migration(&mut self.reference, version, &migration)
-            .with_context(|| format!("failed to apply base migration {version} \"{name}\""))?;
+            .with_context(|| format!("failed to apply retired migration {version} \"{name}\""))?;
 
-        self.migrator.push_base_unchecked(migration, hash);
+        self.migrator.push_retired_unchecked(migration, hash);
         Ok(self)
     }
 
@@ -111,29 +114,32 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cannot add base migration after code migrations have started")]
-    fn panics_when_adding_base_after_code() {
+    #[should_panic(expected = "cannot add retired migration after code migrations have started")]
+    fn panics_when_adding_retired_after_code() {
         let _builder = Migrator::builder()
             .expect("builder should be created")
             .push_code("create items", create_items_table)
             .expect("code migration should be added")
-            .push_base("add notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);");
+            .push_retired("add notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);");
     }
 
     #[test]
     fn exposes_schema_hashes() -> Result<()> {
         let reference = Connection::open_in_memory()?;
         reference.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?;
-        let base_hash = SchemaHash::new(&reference)?;
+        let retired_hash = SchemaHash::new(&reference)?;
         reference.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
         let final_hash = SchemaHash::new(&reference)?;
 
         let migrator = Migrator::builder()?
-            .push_base("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);")?
+            .push_retired(
+                "create items",
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);",
+            )?
             .push_code("add item height", add_item_height)?
             .build()?;
 
-        assert_eq!(migrator.schema_hashes(), &[base_hash, final_hash]);
+        assert_eq!(migrator.schema_hashes(), &[retired_hash, final_hash]);
         Ok(())
     }
 }

@@ -56,7 +56,7 @@ impl Migrator {
     ///
     /// ```text
     /// migrations/
-    ///   base/
+    ///   retired/
     ///     001_initial.sql
     ///     002_indexes.sql
     ///   code/
@@ -64,12 +64,15 @@ impl Migrator {
     ///       migration.rs
     /// ```
     ///
-    /// Base migrations are loaded from lexicographically sorted `.sql` files in `base`; the
-    /// migration name is the file stem. Code migrations are loaded from lexicographically sorted
-    /// folders in `code`; the migration name is the folder name. Each code folder must contain
-    /// [`CODE_MIGRATION_FILE`] and that file must expose a `pub fn migrate(...)` matching
-    /// [`super::CodeMigrationFn`]. Relative migration paths are resolved from the package manifest
-    /// directory, i.e. the crate root.
+    /// Retired migrations are loaded from lexicographically sorted `.sql` files in `retired`;
+    /// the migration name is the file stem. Code migrations are loaded from lexicographically
+    /// sorted folders in `code`; the migration name is the folder name. Each code folder must
+    /// contain `migration.rs` and that file must expose a `pub fn migrate(...)` matching
+    /// [`super::CodeMigrationFn`].
+    ///
+    /// The `retired` directory contains SQL retained for fresh database initialization after the
+    /// corresponding code migrations no longer need to be supported. Relative migration paths are
+    /// resolved from the package manifest directory, i.e. the crate root.
     pub fn generate(migration_dir: impl AsRef<Path>) -> Result<PathBuf> {
         let migration_dir = migration_dir_path(migration_dir.as_ref());
         build_rs::output::rerun_if_changed(&migration_dir);
@@ -78,7 +81,7 @@ impl Migrator {
         let migrations = discover_migrations(&migration_dir)?;
         fs::write(
             &out_path,
-            render_migrator(&migrations.base_migrations, &migrations.code_migrations)?,
+            render_migrator(&migrations.retired_migrations, &migrations.code_migrations)?,
         )
         .with_context(|| format!("failed to write generated migrator to {}", out_path.display()))?;
         Ok(out_path)
@@ -95,7 +98,7 @@ fn migration_dir_path(migration_dir: &Path) -> PathBuf {
 
 #[derive(Debug)]
 struct DiscoveredMigrations {
-    base_migrations: Vec<SqlMigration>,
+    retired_migrations: Vec<SqlMigration>,
     code_migrations: Vec<CodeMigration>,
 }
 
@@ -119,36 +122,36 @@ fn discover_migrations(migration_dir: &Path) -> Result<DiscoveredMigrations> {
         migration_dir.display()
     );
 
-    let base_migrations = discover_base_migrations(migration_dir)?;
+    let retired_migrations = discover_retired_migrations(migration_dir)?;
     let code_migrations = discover_code_migrations(migration_dir)?;
     ensure!(
-        !base_migrations.is_empty() || !code_migrations.is_empty(),
+        !retired_migrations.is_empty() || !code_migrations.is_empty(),
         "migration directory contains no migrations: {}",
         migration_dir.display()
     );
 
-    Ok(DiscoveredMigrations { base_migrations, code_migrations })
+    Ok(DiscoveredMigrations { retired_migrations, code_migrations })
 }
 
-fn discover_base_migrations(migration_dir: &Path) -> Result<Vec<SqlMigration>> {
-    let base_dir = migration_dir.join("base");
-    if !base_dir.exists() {
+fn discover_retired_migrations(migration_dir: &Path) -> Result<Vec<SqlMigration>> {
+    let retired_dir = migration_dir.join("retired");
+    if !retired_dir.exists() {
         return Ok(Vec::new());
     }
 
     ensure!(
-        base_dir.is_dir(),
-        "base migration path is not a directory: {}",
-        base_dir.display()
+        retired_dir.is_dir(),
+        "retired migration path is not a directory: {}",
+        retired_dir.display()
     );
 
     let mut migrations = Vec::new();
-    for entry in read_dir_sorted(&base_dir)? {
+    for entry in read_dir_sorted(&retired_dir)? {
         let path = entry.path();
-        ensure!(path.is_file(), "base migration entry is not a file: {}", path.display());
+        ensure!(path.is_file(), "retired migration entry is not a file: {}", path.display());
         ensure!(
             path.extension() == Some(OsStr::new("sql")),
-            "base migration file must use .sql extension: {}",
+            "retired migration file must use .sql extension: {}",
             path.display()
         );
 
@@ -209,7 +212,7 @@ fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> 
 
 /// Renders the Rust source written by [`Migrator::generate`].
 ///
-/// For one base migration named `001_initial` and one code migration named `002_backfill`,
+/// For one retired migration named `001_initial` and one code migration named `002_backfill`,
 /// the generated file has this shape:
 ///
 /// ```ignore
@@ -218,13 +221,13 @@ fn discover_code_migrations(migration_dir: &Path) -> Result<Vec<CodeMigration>> 
 ///
 /// pub fn migrator() -> ::anyhow::Result<::miden_node_db::migration::Migrator> {
 ///     ::miden_node_db::migration::Migrator::builder()?
-///         .push_base("001_initial", include_str!("/path/to/migrations/base/001_initial.sql"))?
+///         .push_retired("001_initial", include_str!("/path/to/migrations/retired/001_initial.sql"))?
 ///         .push_code("002_backfill", migration_002_backfill::migrate)?
 ///         .build()
 /// }
 /// ```
 fn render_migrator(
-    base_migrations: &[SqlMigration],
+    retired_migrations: &[SqlMigration],
     code_migrations: &[CodeMigration],
 ) -> Result<String> {
     let mut scope = Scope::new();
@@ -239,10 +242,10 @@ fn render_migrator(
     function.ret("::anyhow::Result<::miden_node_db::migration::Migrator>");
     function.line("::miden_node_db::migration::Migrator::builder()?");
 
-    for migration in base_migrations {
+    for migration in retired_migrations {
         let name = format!("{:?}", migration.name);
         let path = format!("{:?}", rust_path(&migration.path)?);
-        function.line(format!("    .push_base({name}, include_str!({path}))?"));
+        function.line(format!("    .push_retired({name}, include_str!({path}))?"));
     }
 
     for migration in code_migrations {
@@ -326,18 +329,18 @@ mod tests {
     #[test]
     fn renders_migrations_in_lexicographic_order() -> Result<()> {
         let root = unique_temp_dir("renders_migrations_in_lexicographic_order")?;
-        fs::create_dir_all(root.join("base"))?;
+        fs::create_dir_all(root.join("retired"))?;
         fs::create_dir_all(root.join("code").join("003_backfill"))?;
-        fs::write(root.join("base").join("002_indexes.sql"), "CREATE INDEX idx ON t(id);")?;
-        fs::write(root.join("base").join("001_init.sql"), "CREATE TABLE t (id INTEGER);")?;
+        fs::write(root.join("retired").join("002_indexes.sql"), "CREATE INDEX idx ON t(id);")?;
+        fs::write(root.join("retired").join("001_init.sql"), "CREATE TABLE t (id INTEGER);")?;
         fs::write(
             root.join("code").join("003_backfill").join(CODE_MIGRATION_FILE),
             "pub fn migrate(_: &rusqlite::Transaction<'_>) -> anyhow::Result<()> { Ok(()) }",
         )?;
 
-        let base = discover_base_migrations(&root)?;
+        let retired = discover_retired_migrations(&root)?;
         let code = discover_code_migrations(&root)?;
-        let rendered = render_migrator(&base, &code)?;
+        let rendered = render_migrator(&retired, &code)?;
 
         let init = rendered.find("\"001_init\"").expect("init migration is rendered");
         let indexes = rendered.find("\"002_indexes\"").expect("index migration is rendered");
@@ -346,6 +349,8 @@ mod tests {
         assert!(init < indexes);
         assert!(indexes < backfill);
         assert!(rendered.contains("include_str!("));
+        assert!(rendered.contains(".push_retired("));
+        assert!(!rendered.contains(".push_base("));
         assert!(rendered.contains("migration_003_backfill::migrate"));
         assert!(rendered.contains(".build()\n}\n"));
         assert!(!rendered.contains("Ok(migrator)"));
@@ -366,12 +371,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_base_migration_entries() -> Result<()> {
-        let root = unique_temp_dir("rejects_invalid_base_migration_entries")?;
-        fs::create_dir_all(root.join("base"))?;
-        fs::write(root.join("base").join("001_init.txt"), "CREATE TABLE t (id INTEGER);")?;
+    fn rejects_invalid_retired_migration_entries() -> Result<()> {
+        let root = unique_temp_dir("rejects_invalid_retired_migration_entries")?;
+        fs::create_dir_all(root.join("retired"))?;
+        fs::write(root.join("retired").join("001_init.txt"), "CREATE TABLE t (id INTEGER);")?;
 
-        let err = discover_base_migrations(&root).expect_err("invalid base entry should fail");
+        let err =
+            discover_retired_migrations(&root).expect_err("invalid retired entry should fail");
 
         assert!(err.to_string().contains("must use .sql extension"));
         fs::remove_dir_all(root)?;
