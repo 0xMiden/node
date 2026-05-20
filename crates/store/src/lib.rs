@@ -24,7 +24,7 @@ pub use server::{
     Store,
     StoreApi,
     StoreMode,
-    serve_ntx_builder_and_replica,
+    serve_replica,
 };
 pub use state::{Finality, State};
 

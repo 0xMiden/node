@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
+use miden_node_proto::clients::BlockProducerClient;
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_utils::clap::GrpcOptionsExternal;
@@ -26,6 +27,12 @@ mod accept;
 mod api;
 mod health;
 
+/// Dispatches block-producer calls to either an in-process handle or a remote gRPC client.
+pub enum BlockProducerBackend {
+    Embedded(miden_node_block_producer::BlockProducerHandle),
+    Remote(BlockProducerClient),
+}
+
 /// The RPC server component.
 ///
 /// On startup, binds to the provided listener and starts serving the RPC API.
@@ -44,9 +51,8 @@ pub struct Rpc {
 pub struct EmbeddedRpc {
     pub listener: TcpListener,
     pub state: Arc<miden_node_store::StoreApi>,
-    pub block_producer_url: Option<Url>,
+    pub block_producer: Option<BlockProducerBackend>,
     pub validator_url: Url,
-    pub ntx_builder_url: Option<Url>,
     pub grpc_options: GrpcOptionsExternal,
 }
 
@@ -58,9 +64,8 @@ impl EmbeddedRpc {
     pub async fn serve(self) -> anyhow::Result<()> {
         let mut api = api::RpcService::new_embedded(
             self.state,
-            self.block_producer_url.clone(),
+            self.block_producer,
             self.validator_url,
-            self.ntx_builder_url.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
         );
 

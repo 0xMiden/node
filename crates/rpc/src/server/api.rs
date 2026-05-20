@@ -191,7 +191,7 @@ impl StoreBackend {
 
 pub struct RpcService {
     store: StoreBackend,
-    block_producer: Option<BlockProducerClient>,
+    block_producer: Option<super::BlockProducerBackend>,
     validator: ValidatorClient,
     ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
@@ -226,13 +226,15 @@ impl RpcService {
                 block_producer_endpoint = %block_producer_url,
                 "Initializing block producer client",
             );
-            Builder::new(block_producer_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<BlockProducerClient>()
+            super::BlockProducerBackend::Remote(
+                Builder::new(block_producer_url)
+                    .without_tls()
+                    .without_timeout()
+                    .without_metadata_version()
+                    .without_metadata_genesis()
+                    .with_otel_context_injection()
+                    .connect_lazy::<BlockProducerClient>(),
+            )
         });
 
         let validator = {
@@ -277,26 +279,10 @@ impl RpcService {
 
     pub(super) fn new_embedded(
         state: Arc<miden_node_store::StoreApi>,
-        block_producer_url: Option<Url>,
+        block_producer: Option<super::BlockProducerBackend>,
         validator_url: Url,
-        ntx_builder_url: Option<Url>,
         commitment_cache_capacity: NonZeroUsize,
     ) -> Self {
-        let block_producer = block_producer_url.map(|block_producer_url| {
-            info!(
-                target: COMPONENT,
-                block_producer_endpoint = %block_producer_url,
-                "Initializing block producer client",
-            );
-            Builder::new(block_producer_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<BlockProducerClient>()
-        });
-
         let validator = {
             info!(
                 target: COMPONENT,
@@ -312,26 +298,11 @@ impl RpcService {
                 .connect_lazy::<ValidatorClient>()
         };
 
-        let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
-            info!(
-                target: COMPONENT,
-                ntx_builder_endpoint = %ntx_builder_url,
-                "Initializing ntx-builder client",
-            );
-            Builder::new(ntx_builder_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<NtxBuilderClient>()
-        });
-
         Self {
             store: StoreBackend::Embedded(state),
             block_producer,
             validator,
-            ntx_builder,
+            ntx_builder: None,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
         }
@@ -646,7 +617,7 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::blockchain::BlockNumber>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        let Some(block_producer) = &self.block_producer else {
+        let Some(ref block_producer) = self.block_producer else {
             return Err(Status::unavailable(
                 "Transaction submission not available in read-only mode",
             ));
@@ -720,7 +691,14 @@ impl api_server::Api for RpcService {
             return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
-        block_producer.clone().submit_proven_tx(request).await
+        match block_producer {
+            super::BlockProducerBackend::Embedded(handle) => {
+                handle.clone().submit_proven_tx(request).await
+            },
+            super::BlockProducerBackend::Remote(client) => {
+                client.clone().submit_proven_tx(request).await
+            },
+        }
     }
 
     /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
@@ -729,7 +707,7 @@ impl api_server::Api for RpcService {
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        let Some(block_producer) = &self.block_producer else {
+        let Some(ref block_producer) = self.block_producer else {
             return Err(Status::unavailable("Batch submission not available in read-only mode"));
         };
 
@@ -811,7 +789,14 @@ impl api_server::Api for RpcService {
             self.validator.clone().submit_proven_transaction(request).await?;
         }
 
-        block_producer.clone().submit_proven_tx_batch(request).await
+        match block_producer {
+            super::BlockProducerBackend::Embedded(handle) => {
+                handle.clone().submit_proven_tx_batch(request).await
+            },
+            super::BlockProducerBackend::Remote(client) => {
+                client.clone().submit_proven_tx_batch(request).await
+            },
+        }
     }
 
     // -- Status & utility endpoints ----------------------------------------------------------
@@ -846,13 +831,21 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request);
 
         let store_status = self.store.status(Request::new(())).await.map(Response::into_inner).ok();
-        let block_producer_status = if let Some(block_producer) = &self.block_producer {
-            block_producer
-                .clone()
-                .status(Request::new(()))
-                .await
-                .map(Response::into_inner)
-                .ok()
+        let block_producer_status = if let Some(ref block_producer) = self.block_producer {
+            match block_producer {
+                super::BlockProducerBackend::Embedded(handle) => handle
+                    .clone()
+                    .status(Request::new(()))
+                    .await
+                    .map(Response::into_inner)
+                    .ok(),
+                super::BlockProducerBackend::Remote(client) => client
+                    .clone()
+                    .status(Request::new(()))
+                    .await
+                    .map(Response::into_inner)
+                    .ok(),
+            }
         } else {
             None
         };

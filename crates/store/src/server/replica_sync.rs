@@ -4,10 +4,10 @@ use std::time::Duration;
 use anyhow::Context;
 use async_trait::async_trait;
 use miden_crypto::utils::Deserializable;
-use miden_node_proto::generated::store::{
+use miden_node_proto::generated::replica::{
     BlockSubscriptionRequest,
     ProofSubscriptionRequest,
-    store_replica_client,
+    api_client,
 };
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio_stream::StreamExt;
@@ -18,7 +18,7 @@ use crate::state::{Finality, State};
 
 pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-type StoreReplicaClient = store_replica_client::StoreReplicaClient<tonic::transport::Channel>;
+type ReplicaApiClient = api_client::ApiClient<tonic::transport::Channel>;
 
 // REPLICA SYNC
 // ================================================================================================
@@ -40,7 +40,7 @@ pub(crate) trait ReplicaSync: Sized + Send + Sync + 'static {
 
     /// Subscribes to the upstream stream via `client` and processes events until the stream ends
     /// or an error occurs.
-    async fn subscribe(&self, client: StoreReplicaClient) -> anyhow::Result<()>;
+    async fn subscribe(&self, client: ReplicaApiClient) -> anyhow::Result<()>;
 
     /// Opens a connection to [`upstream_url`](Self::upstream_url) and calls
     /// [`subscribe`](Self::subscribe) with the resulting client.
@@ -48,7 +48,7 @@ pub(crate) trait ReplicaSync: Sized + Send + Sync + 'static {
         let channel = tonic::transport::Channel::from_shared(self.upstream_url().to_string())?
             .connect()
             .await?;
-        self.subscribe(StoreReplicaClient::new(channel)).await
+        self.subscribe(ReplicaApiClient::new(channel)).await
     }
 
     /// Runs [`sync`](Self::sync) in an infinite loop, sleeping [`RECONNECT_DELAY`] on failure.
@@ -98,7 +98,7 @@ impl ReplicaSync for BlockReplicaSync {
         &self.upstream_url
     }
 
-    async fn subscribe(&self, mut client: StoreReplicaClient) -> anyhow::Result<()> {
+    async fn subscribe(&self, mut client: ReplicaApiClient) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for blocks");
 
@@ -141,7 +141,7 @@ impl ReplicaSync for ProofReplicaSync {
         &self.upstream_url
     }
 
-    async fn subscribe(&self, mut client: StoreReplicaClient) -> anyhow::Result<()> {
+    async fn subscribe(&self, mut client: ReplicaApiClient) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Proven).await.as_u32().saturating_add(1);
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for proofs");
 

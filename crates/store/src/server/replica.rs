@@ -2,12 +2,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use miden_node_proto::generated::store::{
+use miden_node_proto::generated::replica::{
     BlockProof,
     BlockSubscriptionRequest,
     ProofSubscriptionRequest,
     SignedBlock,
-    store_replica_server,
+    api_server,
 };
 use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
@@ -39,11 +39,11 @@ impl<S: Stream> Stream for GuardedStream<S> {
     }
 }
 
-// STORE REPLICA API
+// REPLICA API
 // ================================================================================================
 
 #[tonic::async_trait]
-impl store_replica_server::StoreReplica for StoreApi {
+impl api_server::Api for StoreApi {
     type BlockSubscriptionStream = Pin<
         Box<
             dyn tonic::codegen::tokio_stream::Stream<Item = Result<SignedBlock, Status>>

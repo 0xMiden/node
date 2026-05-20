@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_proto::generated::replica::api_server as replica_api_server;
 use miden_node_proto::generated::store;
-use miden_node_proto_build::store_api_descriptor;
+use miden_node_proto_build::{replica_api_descriptor, store_api_descriptor};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::spawn::spawn_blocking_in_span;
@@ -324,14 +325,14 @@ impl Store {
         let mut join_set = JoinSet::new();
 
         let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
-        let replica_service =
-            store::store_replica_server::StoreReplicaServer::new(store_api.clone());
+        let replica_service = replica_api_server::ApiServer::new(store_api.clone());
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api);
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(block_producer_api);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_api_descriptor())
+            .register_file_descriptor_set(replica_api_descriptor())
             .build_v1()
             .context("failed to build reflection service")?;
 
@@ -380,10 +381,11 @@ impl Store {
         let mut join_set = JoinSet::new();
 
         let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
-        let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api);
+        let replica_service = replica_api_server::ApiServer::new(store_api);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_api_descriptor())
+            .register_file_descriptor_set(replica_api_descriptor())
             .build_v1()
             .context("failed to build reflection service")?;
 
@@ -525,7 +527,7 @@ impl DataDirectory {
 // EMBEDDED SEQUENCER SERVICES
 // ================================================================================================
 
-/// Runs the proof scheduler and serves the `StoreReplica` and `NtxBuilder` gRPC services.
+/// Runs the proof scheduler and serves the `replica.Api` gRPC service.
 ///
 /// Intended for use by the embedded sequencer, where the store's `BlockProducer` and `Rpc` gRPC
 /// services are replaced by in-process equivalents. The proof scheduler subscribes directly to the
@@ -533,10 +535,9 @@ impl DataDirectory {
 /// legacy `BlockProducerApi`.
 ///
 /// Runs until any service encounters a fatal error.
-pub async fn serve_ntx_builder_and_replica(
+pub async fn serve_replica(
     state: Arc<State>,
     proven_tip: crate::proven_tip::ProvenTipWriter,
-    ntx_builder_listener: TcpListener,
     replica_listener: TcpListener,
     block_prover_url: Option<Url>,
     max_concurrent_proofs: NonZeroUsize,
@@ -561,12 +562,10 @@ pub async fn serve_ntx_builder_and_replica(
     );
 
     let store_api = api::StoreApi::new(state);
-
-    let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api.clone());
-    let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api);
+    let replica_service = replica_api_server::ApiServer::new(store_api);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_file_descriptor_set(store_api_descriptor())
+        .register_file_descriptor_set(replica_api_descriptor())
         .build_v1()
         .context("failed to build reflection service")?;
 
@@ -582,15 +581,8 @@ pub async fn serve_ntx_builder_and_replica(
     grpc_servers.spawn(
         make_server()
             .add_service(replica_service)
-            .add_service(reflection_service.clone())
-            .serve_with_incoming(TcpListenerStream::new(replica_listener)),
-    );
-
-    grpc_servers.spawn(
-        make_server()
-            .add_service(ntx_builder_service)
             .add_service(reflection_service)
-            .serve_with_incoming(TcpListenerStream::new(ntx_builder_listener)),
+            .serve_with_incoming(TcpListenerStream::new(replica_listener)),
     );
 
     tokio::select! {

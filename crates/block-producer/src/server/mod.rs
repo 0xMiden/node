@@ -35,6 +35,94 @@ use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
 
+// BLOCK PRODUCER HANDLE
+// ================================================================================================
+
+/// A cloneable in-process handle to the embedded block producer.
+///
+/// Exposes the same submission and status interface as the gRPC `block_producer.Api` client, but
+/// routes calls directly to the in-process mempool without any gRPC round-trip.
+#[derive(Clone)]
+pub struct BlockProducerHandle {
+    mempool: SharedMempool,
+    store: StoreClient,
+    cached_mempool_stats: Arc<RwLock<MempoolStats>>,
+}
+
+impl BlockProducerHandle {
+    pub async fn submit_proven_tx(
+        &self,
+        request: proto::transaction::ProvenTransaction,
+    ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
+        let tx = ProvenTransaction::read_from_bytes(&request.transaction)
+            .map_err(MempoolSubmissionError::DeserializationFailed)?;
+
+        let inputs = self
+            .store
+            .get_tx_inputs(&tx)
+            .await
+            .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
+
+        let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
+            .map(Arc::new)
+            .map_err(MempoolSubmissionError::StateConflict)?;
+
+        self.mempool
+            .lock()
+            .await
+            .add_transaction(tx)
+            .map(Into::into)
+            .map(tonic::Response::new)
+            .map_err(Into::into)
+    }
+
+    pub async fn submit_proven_tx_batch(
+        &self,
+        request: proto::transaction::TransactionBatch,
+    ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
+        let proposed = request
+            .proposed_batch
+            .expect("proposed batch existence is enforced by RPC component");
+        let batch = ProposedBatch::read_from_bytes(&proposed)
+            .map_err(MempoolSubmissionError::DeserializationFailed)?;
+
+        let mut txs = Vec::with_capacity(batch.transactions().len());
+        for tx in batch.transactions() {
+            let inputs = self
+                .store
+                .get_tx_inputs(tx)
+                .await
+                .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
+
+            let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
+                .map(Arc::new)
+                .map_err(MempoolSubmissionError::StateConflict)?;
+            txs.push(tx);
+        }
+
+        self.mempool
+            .lock()
+            .await
+            .add_user_batch(&txs)
+            .map(Into::into)
+            .map(tonic::Response::new)
+            .map_err(Into::into)
+    }
+
+    pub async fn status(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<proto::rpc::BlockProducerStatus>, Status> {
+        let stats = *self.cached_mempool_stats.read().await;
+        Ok(tonic::Response::new(proto::rpc::BlockProducerStatus {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            status: "connected".to_string(),
+            chain_tip: stats.chain_tip.as_u32(),
+            mempool_stats: Some(stats.into()),
+        }))
+    }
+}
+
 // EMBEDDED BLOCK PRODUCER
 // ================================================================================================
 
@@ -63,22 +151,22 @@ pub struct EmbeddedBlockProducer {
 }
 
 impl EmbeddedBlockProducer {
-    /// Serves the block-producer RPC API, the batch-builder and the block-builder.
+    /// Initialises the block producer internals and returns an in-process [`BlockProducerHandle`]
+    /// together with a future that runs the gRPC server, batch builder, and block builder.
     ///
-    /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
-    /// encountered.
-    pub async fn serve(self) -> anyhow::Result<()> {
+    /// Use this when the caller needs to submit transactions directly to the mempool without a
+    /// gRPC round-trip (e.g. the embedded sequencer's RPC).
+    pub async fn start(
+        self,
+    ) -> anyhow::Result<(
+        BlockProducerHandle,
+        impl Future<Output = anyhow::Result<()>> + Send,
+    )> {
         info!(target: COMPONENT, endpoint=?self.block_producer_address, "Initializing embedded server");
         let store = StoreClient::new_local(self.state.clone());
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
 
         let chain_tip = self.state.chain_tip(miden_node_store::Finality::Committed).await;
-
-        let listener = TcpListener::bind(self.block_producer_address)
-            .await
-            .context("failed to bind to block producer address")?;
-
-        info!(target: COMPONENT, "Embedded server initialized");
 
         let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
@@ -87,7 +175,7 @@ impl EmbeddedBlockProducer {
             self.batch_prover_url,
             self.batch_interval,
         );
-        let mempool = MempoolConfig {
+        let mempool = Mempool::shared(chain_tip, MempoolConfig {
             batch_budget: BatchBudget {
                 transactions: self.max_txs_per_batch,
                 ..BatchBudget::default()
@@ -95,59 +183,86 @@ impl EmbeddedBlockProducer {
             block_budget: BlockBudget { batches: self.max_batches_per_block },
             tx_capacity: self.mempool_tx_capacity,
             ..Default::default()
+        });
+
+        let cached_mempool_stats = Arc::new(RwLock::new(MempoolStats::default()));
+        let handle = BlockProducerHandle {
+            mempool: mempool.clone(),
+            store: store.clone(),
+            cached_mempool_stats: Arc::clone(&cached_mempool_stats),
         };
-        let mempool = Mempool::shared(chain_tip, mempool);
 
-        let mut tasks = tokio::task::JoinSet::new();
+        let grpc_options = self.grpc_options;
+        let block_producer_address = self.block_producer_address;
 
-        let rpc_id = tasks
-            .spawn({
-                let mempool = mempool.clone();
-                async move {
-                    BlockProducerRpcServer::new(mempool, store)
-                        .serve(listener, self.grpc_options)
-                        .await
-                }
-            })
-            .id();
+        let serve = async move {
+            let listener = TcpListener::bind(block_producer_address)
+                .await
+                .context("failed to bind to block producer address")?;
 
-        let batch_builder_id = tasks
-            .spawn({
-                let mempool = mempool.clone();
-                async {
-                    batch_builder.run(mempool).await;
-                    Ok(())
-                }
-            })
-            .id();
-        let block_builder_id = tasks
-            .spawn({
-                let mempool = mempool.clone();
-                async { block_builder.run(mempool).await }
-            })
-            .id();
+            info!(target: COMPONENT, "Embedded server initialized");
 
-        let task_ids = HashMap::from([
-            (batch_builder_id, "batch-builder"),
-            (block_builder_id, "block-builder"),
-            (rpc_id, "rpc"),
-        ]);
+            let rpc_server = BlockProducerRpcServer {
+                mempool: Mutex::new(mempool.clone()),
+                store: store.clone(),
+                cached_mempool_stats,
+            };
 
-        let task_result = tasks.join_next_with_id().await.unwrap();
+            let mut tasks = tokio::task::JoinSet::new();
 
-        let task_id = match &task_result {
-            Ok((id, _)) => *id,
-            Err(err) => err.id(),
+            let rpc_id = tasks
+                .spawn(async move { rpc_server.serve(listener, grpc_options).await })
+                .id();
+
+            let batch_builder_id = tasks
+                .spawn({
+                    let mempool = mempool.clone();
+                    async {
+                        batch_builder.run(mempool).await;
+                        Ok(())
+                    }
+                })
+                .id();
+
+            let block_builder_id = tasks
+                .spawn({
+                    async { block_builder.run(mempool).await }
+                })
+                .id();
+
+            let task_ids = HashMap::from([
+                (batch_builder_id, "batch-builder"),
+                (block_builder_id, "block-builder"),
+                (rpc_id, "rpc"),
+            ]);
+
+            let task_result = tasks.join_next_with_id().await.unwrap();
+
+            let task_id = match &task_result {
+                Ok((id, _)) => *id,
+                Err(err) => err.id(),
+            };
+            let task = task_ids.get(&task_id).unwrap_or(&"unknown");
+
+            task_result
+                .map_err(|source| BlockProducerError::JoinError { task, source })
+                .map(|(_, result)| match result {
+                    Ok(_) => Err(BlockProducerError::UnexpectedTaskCompletion { task }),
+                    Err(source) => Err(BlockProducerError::TaskError { task, source }),
+                })
+                .and_then(|x| x)?
         };
-        let task = task_ids.get(&task_id).unwrap_or(&"unknown");
 
-        task_result
-            .map_err(|source| BlockProducerError::JoinError { task, source })
-            .map(|(_, result)| match result {
-                Ok(_) => Err(BlockProducerError::UnexpectedTaskCompletion { task }),
-                Err(source) => Err(BlockProducerError::TaskError { task, source }),
-            })
-            .and_then(|x| x)?
+        Ok((handle, serve))
+    }
+
+    /// Serves the block-producer RPC API, the batch-builder and the block-builder.
+    ///
+    /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
+    /// encountered.
+    pub async fn serve(self) -> anyhow::Result<()> {
+        let (_handle, serve) = self.start().await?;
+        serve.await
     }
 }
 

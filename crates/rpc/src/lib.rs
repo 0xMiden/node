@@ -2,7 +2,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use server::{EmbeddedRpc, Rpc};
+pub use server::{BlockProducerBackend, EmbeddedRpc, Rpc};
 
 // CONSTANTS
 // =================================================================================================

@@ -1,0 +1,59 @@
+// Internal gRPC API for replica synchronization.
+syntax = "proto3";
+package replica;
+
+// API for replica synchronization.
+//
+// Any sequencer exposes this service so that replicas can subscribe to a continuous stream
+// of committed blocks and block proofs. Replicas connect, specify their current local tip (or 0
+// for genesis), receive historical blocks first (catch-up), and then receive live blocks as they
+// are committed.
+service Api {
+    // Streams committed blocks starting from the given block number (inclusive).
+    //
+    // Replays historical blocks first, then streams live blocks as they are committed.
+    // On lag (replica falls too far behind), the stream is closed with a DATA_LOSS error and
+    // the client should reconnect from its local tip.
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream SignedBlock) {}
+
+    // Streams block proofs starting from the given block number (inclusive).
+    //
+    // Replays existing proofs first, then streams new proofs as they are generated.
+    // On lag, the stream is closed with a DATA_LOSS error.
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream BlockProof) {}
+}
+
+// BLOCK SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the committed block stream.
+message BlockSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A committed block streamed to a replica.
+message SignedBlock {
+    // The block encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::SignedBlock].
+    bytes block = 1;
+}
+
+// PROOF SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the block proof stream.
+message ProofSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A block proof streamed to a replica.
+message BlockProof {
+    // The block number this proof corresponds to.
+    fixed32 block_num = 1;
+
+    // The block proof encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::BlockProof].
+    bytes proof = 2;
+}
