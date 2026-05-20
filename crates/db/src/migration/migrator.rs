@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
@@ -122,14 +124,22 @@ impl Migrator {
         &self.expected_schema_hashes
     }
 
-    /// Applies missing migrations to `conn`.
+    /// Applies missing migrations to the database at `database_filepath`.
     ///
     /// New databases, where `PRAGMA user_version` is zero, receive all retired migrations followed
     /// by all code migrations. Existing databases must already be past the retired migration range;
     /// only missing code migrations are applied. Every migration runs in its own transaction,
     /// updates `user_version`, and commits only after the resulting schema hash matches the
     /// expected hash.
-    pub fn migrate(&self, conn: &mut Connection) -> Result<()> {
+    pub fn migrate(&self, database_filepath: impl AsRef<Path>) -> Result<()> {
+        let database_filepath = database_filepath.as_ref();
+        let mut conn = Connection::open(database_filepath)
+            .with_context(|| format!("failed to open database {}", database_filepath.display()))?;
+
+        self.migrate_connection(&mut conn)
+    }
+
+    fn migrate_connection(&self, conn: &mut Connection) -> Result<()> {
         let current_version = self.version_check(conn)?;
         let retired_versions = self.retired_migrations.len();
 
@@ -229,6 +239,8 @@ impl Migrator {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use anyhow::Result;
     use rusqlite::{Connection, Transaction};
 
@@ -266,6 +278,40 @@ mod tests {
         Ok(exists)
     }
 
+    struct TestDatabase {
+        path: PathBuf,
+    }
+
+    impl TestDatabase {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("miden-node-db-migrator-{name}-{}.sqlite3", std::process::id()));
+            let db = Self { path };
+            db.remove_files();
+            db
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn open(&self) -> Result<Connection> {
+            Connection::open(&self.path).map_err(Into::into)
+        }
+
+        fn remove_files(&self) {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.path.with_extension("sqlite3-wal"));
+            let _ = std::fs::remove_file(self.path.with_extension("sqlite3-shm"));
+        }
+    }
+
+    impl Drop for TestDatabase {
+        fn drop(&mut self) {
+            self.remove_files();
+        }
+    }
+
     #[test]
     fn migrates_new_database_through_retired_and_code() -> Result<()> {
         let migrator = Migrator::builder()?
@@ -276,9 +322,10 @@ mod tests {
             .push_code("add item height", add_item_height)?
             .build()?;
 
-        let mut conn = Connection::open_in_memory()?;
-        migrator.migrate(&mut conn)?;
+        let db = TestDatabase::new("migrates_new_database_through_retired_and_code");
+        migrator.migrate(db.path())?;
 
+        let conn = db.open()?;
         assert_eq!(schema::get_version(&conn)?, 2);
         conn.execute("INSERT INTO items (id, value, height) VALUES (1, 'a', 10)", [])?;
         Ok(())
@@ -289,9 +336,10 @@ mod tests {
         let migrator =
             Migrator::builder()?.push_code("create items", create_items_table)?.build()?;
 
-        let mut conn = Connection::open_in_memory()?;
-        migrator.migrate(&mut conn)?;
+        let db = TestDatabase::new("migrates_new_database_with_code_only_migration");
+        migrator.migrate(db.path())?;
 
+        let conn = db.open()?;
         assert_eq!(schema::get_version(&conn)?, 1);
         conn.execute("INSERT INTO items (id, value) VALUES (1, 'a')", [])?;
         Ok(())
@@ -307,14 +355,18 @@ mod tests {
             .push_code("index item values", add_items_index)?
             .build()?;
 
-        let mut conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);
-             PRAGMA user_version = 1;",
-        )?;
+        let db = TestDatabase::new("applies_missing_code_migrations_to_existing_database");
+        {
+            let conn = db.open()?;
+            conn.execute_batch(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);
+                 PRAGMA user_version = 1;",
+            )?;
+        }
 
-        migrator.migrate(&mut conn)?;
+        migrator.migrate(db.path())?;
 
+        let conn = db.open()?;
         assert_eq!(schema::get_version(&conn)?, 2);
         assert!(object_exists(&conn, "idx_items_value")?);
         Ok(())
@@ -327,13 +379,16 @@ mod tests {
             .push_retired("create notes", "CREATE TABLE notes (id INTEGER PRIMARY KEY);")?
             .build()?;
 
-        let mut conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY);
-             PRAGMA user_version = 1;",
-        )?;
+        let db = TestDatabase::new("rejects_existing_database_inside_retired_migration_range");
+        {
+            let conn = db.open()?;
+            conn.execute_batch(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY);
+                 PRAGMA user_version = 1;",
+            )?;
+        }
 
-        let err = migrator.migrate(&mut conn).expect_err("migration should fail");
+        let err = migrator.migrate(db.path()).expect_err("migration should fail");
         assert!(err.to_string().contains("inside the retired migration range"));
         Ok(())
     }
@@ -344,11 +399,14 @@ mod tests {
             .push_retired("create items", "CREATE TABLE items (id INTEGER PRIMARY KEY);")?
             .build()?;
 
-        let mut conn = Connection::open_in_memory()?;
-        migrator.migrate(&mut conn)?;
-        conn.execute_batch("CREATE TABLE tampered (id INTEGER PRIMARY KEY);")?;
+        let db = TestDatabase::new("verifies_current_schema_before_applying_missing_migrations");
+        migrator.migrate(db.path())?;
+        {
+            let conn = db.open()?;
+            conn.execute_batch("CREATE TABLE tampered (id INTEGER PRIMARY KEY);")?;
+        }
 
-        let err = migrator.migrate(&mut conn).expect_err("migration should fail");
+        let err = migrator.migrate(db.path()).expect_err("migration should fail");
         assert!(err.to_string().contains("schema hash mismatch at database version 1"));
         Ok(())
     }
@@ -360,16 +418,21 @@ mod tests {
             .push_code("conditionally create extra", create_extra_table_when_items_exist)?
             .build()?;
 
-        let mut conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY);
-             INSERT INTO items (id) VALUES (1);
-             PRAGMA user_version = 1;",
-        )?;
+        let db = TestDatabase::new("rolls_back_code_migration_when_schema_hash_mismatches");
+        {
+            let conn = db.open()?;
+            conn.execute_batch(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY);
+                 INSERT INTO items (id) VALUES (1);
+                 PRAGMA user_version = 1;",
+            )?;
+        }
 
-        let err = migrator.migrate(&mut conn).expect_err("migration should fail");
+        let err = migrator.migrate(db.path()).expect_err("migration should fail");
         assert!(err.to_string().contains("failed to apply migration 2"));
         assert!(err.chain().any(|cause| cause.to_string().contains("schema hash mismatch")));
+
+        let conn = db.open()?;
         assert_eq!(schema::get_version(&conn)?, 1);
         assert!(!object_exists(&conn, "unexpected")?);
         Ok(())

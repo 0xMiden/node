@@ -3807,7 +3807,6 @@ dependencies = [
  "build-rs",
  "clap",
  "diesel",
- "diesel_migrations",
  "fs-err",
  "hex",
  "miden-node-db",

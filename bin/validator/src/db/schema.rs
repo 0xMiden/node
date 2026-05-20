@@ -1,16 +1,4 @@
-diesel::table! {
-    validated_transactions (id) {
-        id -> Binary,
-        block_num -> BigInt,
-        account_id -> Binary,
-        account_delta -> Binary,
-        input_notes -> Binary,
-        output_notes -> Binary,
-        initial_account_hash -> Binary,
-        final_account_hash -> Binary,
-        fee -> Binary,
-    }
-}
+// @generated automatically by Diesel CLI.
 
 diesel::table! {
     block_headers (block_num) {
@@ -18,3 +6,19 @@ diesel::table! {
         block_header -> Binary,
     }
 }
+
+diesel::table! {
+    validated_transactions (id) {
+        id -> Binary,
+        block_num -> BigInt,
+        account_id -> Binary,
+        account_delta -> Nullable<Binary>,
+        input_notes -> Nullable<Binary>,
+        output_notes -> Nullable<Binary>,
+        initial_account_hash -> Binary,
+        final_account_hash -> Binary,
+        fee -> Binary,
+    }
+}
+
+diesel::allow_tables_to_appear_in_same_query!(block_headers, validated_transactions,);

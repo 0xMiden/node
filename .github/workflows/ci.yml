@@ -139,6 +139,29 @@ jobs:
       - name: Doc tests
         run: cargo test --doc --workspace --all-features
 
+  # Temporary Diesel schema drift checks. Delete this job once Diesel is removed.
+  diesel-schema:
+    name: diesel schema
+    runs-on: warp-ubuntu-latest-x64-8x
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
+      - name: Install diesel CLI
+        run: cargo install diesel_cli@2.3.9 --no-default-features --features sqlite --locked
+      - name: Check Diesel schemas
+        run: |
+          cargo test --locked --workspace --all-features \
+            diesel_schema_is_in_sync_with_migrations -- --ignored
+
   doc:
     runs-on: warp-ubuntu-latest-x64-8x
     steps:

@@ -1,6 +1,6 @@
 CREATE TABLE validated_transactions (
     id                    BLOB NOT NULL,
-    block_num             INTEGER NOT NULL,
+    block_num             BIGINT NOT NULL,
     account_id            BLOB NOT NULL,
     account_delta         BLOB,
     input_notes           BLOB,
@@ -15,6 +15,6 @@ CREATE INDEX idx_validated_transactions_account_id ON validated_transactions(acc
 CREATE INDEX idx_validated_transactions_block_num ON validated_transactions(block_num);
 
 CREATE TABLE block_headers (
-    block_num    INTEGER PRIMARY KEY,
+    block_num    BIGINT PRIMARY KEY,
     block_header BLOB NOT NULL
 ) WITHOUT ROWID;
