@@ -28,7 +28,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, AssetAmount, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
     BlockHeader,
@@ -58,8 +58,7 @@ use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthSingleSig;
-use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
-use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
+use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
@@ -455,7 +454,7 @@ fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomC
         target_id,
         assets,
         miden_protocol::note::NoteType::Public,
-        miden_protocol::note::NoteAttachment::default(),
+        miden_protocol::note::NoteAttachments::empty(),
         rng,
     )
     .expect("note creation failed")
@@ -579,20 +578,18 @@ fn create_faucet_with_seed(index: u64) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
 
     let token_symbol = TokenSymbol::new("TEST").unwrap();
-    let token_metadata = FungibleTokenMetadata::builder(
-        TokenName::new("TEST").unwrap(),
-        token_symbol,
-        2,
-        FungibleAsset::MAX_AMOUNT,
-    )
-    .build()
-    .unwrap();
+    let faucet = FungibleFaucet::builder()
+        .name(TokenName::new("TEST").unwrap())
+        .symbol(token_symbol)
+        .decimals(2)
+        .max_supply(AssetAmount::new(FungibleAsset::MAX_AMOUNT).unwrap())
+        .build()
+        .unwrap();
 
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Private)
-        .with_component(token_metadata)
-        .with_component(BasicFungibleFaucet)
+        .with_component(faucet)
         .with_components(TokenPolicyManager::new(
             PolicyAuthority::AuthControlled,
             MintPolicyConfig::AllowAll,
@@ -756,11 +753,11 @@ fn create_emit_note_tx(
 ) -> ProvenTransaction {
     let initial_account_hash = faucet.to_commitment();
 
-    let metadata_slot_name = TokenMetadata::metadata_slot();
-    let slot = faucet.storage().get_item(metadata_slot_name).unwrap();
+    let token_config_slot = FungibleFaucet::token_config_slot();
+    let slot = faucet.storage().get_item(token_config_slot).unwrap();
     faucet
         .storage_mut()
-        .set_item(metadata_slot_name, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
+        .set_item(token_config_slot, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
         .unwrap();
 
     faucet.increment_nonce(ONE).unwrap();
@@ -873,6 +870,7 @@ pub async fn start_store(
                 max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::bench(),
             storage_options: StorageOptions::bench(),
         }

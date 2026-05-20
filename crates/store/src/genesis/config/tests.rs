@@ -45,11 +45,11 @@ fn parsing_yields_expected_default_values() -> TestResult {
     assert_eq!(wallet2.nonce(), ONE);
 
     {
-        let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
+        let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
 
-        assert_eq!(metadata.max_supply(), Felt::new(100_000_000_000_000_000));
-        assert_eq!(metadata.decimals(), 6);
-        assert_eq!(*metadata.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
+        assert_eq!(faucet.decimals(), 6);
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // check account balance, and ensure ordering is retained
@@ -61,8 +61,8 @@ fn parsing_yields_expected_default_values() -> TestResult {
     });
 
     // check total issuance of the faucet
-    let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
-    assert_eq!(metadata.token_supply(), Felt::new(999_777), "Issuance mismatch");
+    let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
+    assert_eq!(faucet.token_supply(), Felt::new(999_777), "Issuance mismatch");
 
     Ok(())
 }
@@ -147,8 +147,8 @@ path = "test_account.mac"
 fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountBuilder, AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::asset::AssetAmount;
     use miden_standards::account::auth::AuthSingleSig;
-    use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
     use miden_standards::account::policies::{
         BurnPolicyConfig,
         MintPolicyConfig,
@@ -169,20 +169,18 @@ fn parsing_native_faucet_from_file() -> TestResult {
     );
     let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
-    let token_metadata = FungibleTokenMetadata::builder(
-        TokenName::new("MIDEN").unwrap(),
-        TokenSymbol::new("MIDEN").unwrap(),
-        6,
-        1_000_000_000,
-    )
-    .build()?;
+    let faucet = FungibleFaucet::builder()
+        .name(TokenName::new("MIDEN").unwrap())
+        .symbol(TokenSymbol::new("MIDEN").unwrap())
+        .decimals(6)
+        .max_supply(AssetAmount::new(1_000_000_000)?)
+        .build()?;
 
     let faucet_account = AccountBuilder::new(init_seed)
         .account_type(AccountType::FungibleFaucet)
         .storage_mode(AccountStorageMode::Public)
         .with_auth_component(auth)
-        .with_component(token_metadata)
-        .with_component(BasicFungibleFaucet)
+        .with_component(faucet)
         .with_components(TokenPolicyManager::new(
             PolicyAuthority::AuthControlled,
             MintPolicyConfig::AllowAll,
@@ -350,8 +348,8 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
 
     // Verify native faucet symbol
     {
-        let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
-        assert_eq!(*metadata.symbol(), TokenSymbol::new("MIDEN").unwrap());
+        let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
+        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // Bridge account is a regular account (not a faucet)

@@ -20,16 +20,15 @@ use miden_protocol::account::{
     FungibleAssetDelta,
     NonFungibleAssetDelta,
 };
-use miden_protocol::asset::{FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{AssetAmount, FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, ONE};
+use miden_protocol::{Felt, ONE, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
-use miden_standards::account::faucets::{BasicFungibleFaucet, TokenMetadata};
-use miden_standards::account::metadata::{FungibleTokenMetadata, TokenName};
+use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
@@ -288,11 +287,24 @@ impl GenesisConfig {
             let mut storage_delta = AccountStorageDelta::default();
 
             if total_issuance != 0 {
-                let current_metadata = TokenMetadata::try_from(faucet_account.storage())?;
-                let updated_metadata =
-                    current_metadata.with_token_supply(Felt::new(total_issuance))?;
+                let current_faucet = FungibleFaucet::try_from(faucet_account.storage())?;
+                let new_token_supply = AssetAmount::new(total_issuance)?;
+                let max_supply = current_faucet.max_supply().as_canonical_u64();
+                if max_supply < total_issuance {
+                    return Err(GenesisConfigError::MaxIssuanceExceeded {
+                        max_supply,
+                        symbol: symbol.clone(),
+                        total_issuance,
+                    });
+                }
+                let new_token_config = Word::new([
+                    Felt::from(new_token_supply),
+                    current_faucet.max_supply(),
+                    Felt::from(current_faucet.decimals()),
+                    Felt::from(current_faucet.symbol()),
+                ]);
                 storage_delta
-                    .set_item(TokenMetadata::metadata_slot().clone(), updated_metadata.into())?;
+                    .set_item(FungibleFaucet::token_config_slot().clone(), new_token_config)?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
@@ -317,8 +329,8 @@ impl GenesisConfig {
             debug_assert_eq!(faucet_account.nonce(), ONE);
 
             // sanity check the total issuance against
-            let metadata = TokenMetadata::try_from(faucet_account.storage())?;
-            let max_supply = metadata.max_supply().as_canonical_u64();
+            let faucet = FungibleFaucet::try_from(faucet_account.storage())?;
+            let max_supply = faucet.max_supply().as_canonical_u64();
             if max_supply < total_issuance {
                 return Err(GenesisConfigError::MaxIssuanceExceeded {
                     max_supply,
@@ -400,9 +412,9 @@ impl NativeFaucetConfig {
                     return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
                 }
 
-                let metadata = TokenMetadata::try_from(account.storage())
+                let faucet = FungibleFaucet::try_from(account.storage())
                     .expect("validated as fungible faucet above");
-                let symbol = TokenSymbolStr::from(metadata.symbol().clone());
+                let symbol = TokenSymbolStr::from(faucet.symbol().clone());
                 Ok((account, symbol, None))
             },
         }
@@ -442,22 +454,22 @@ impl FungibleFaucetConfig {
             AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
         let init_seed: [u8; 32] = rng.random();
 
-        let token_metadata = FungibleTokenMetadata::builder(
-            TokenName::new(&symbol.to_string())
-                .expect("token symbol fits within token name byte limit"),
-            symbol.as_ref().clone(),
-            decimals,
-            max_supply,
-        )
-        .build()?;
+        let faucet = FungibleFaucet::builder()
+            .name(
+                TokenName::new(&symbol.to_string())
+                    .expect("token symbol fits within token name byte limit"),
+            )
+            .symbol(symbol.as_ref().clone())
+            .decimals(decimals)
+            .max_supply(AssetAmount::new(max_supply)?)
+            .build()?;
 
         // It's similar to `fn create_basic_fungible_faucet`, but we need to cover more cases.
         let faucet_account = AccountBuilder::new(init_seed)
             .account_type(AccountType::FungibleFaucet)
             .storage_mode(storage_mode.into())
             .with_auth_component(auth)
-            .with_component(token_metadata)
-            .with_component(BasicFungibleFaucet)
+            .with_component(faucet)
             .with_components(TokenPolicyManager::new(
                 PolicyAuthority::AuthControlled,
                 MintPolicyConfig::AllowAll,

@@ -1,6 +1,8 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
+use miden_node_proto::generated::remote_prover::api_server::ApiServer;
+use miden_node_proto::generated::remote_prover::worker_status_api_server::WorkerStatusApiServer;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -12,10 +14,10 @@ use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::generated::api_server::ApiServer;
 use crate::server::service::ProverService;
 
 mod proof_kind;
+mod prove;
 mod prover;
 mod service;
 mod status;
@@ -66,7 +68,7 @@ impl Server {
             "proof server listening"
         );
 
-        let status_service = status::StatusService::new(self.kind);
+        let status_service = WorkerStatusApiServer::new(status::StatusService::new(self.kind));
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
         let prover_service = ApiServer::new(prover_service);
 

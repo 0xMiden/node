@@ -44,14 +44,14 @@ service Api {
     // --------------------------------------------------------------------------------------------
 
     // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTx(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
     // Submits a batch of transactions to the Miden network.
     //
     // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTxBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
     // STATE SYNCHRONIZATION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -469,41 +469,39 @@ message SyncNotesResponse {
 // SYNC CHAIN MMR
 // ================================================================================================
 
-// The chain tip variant to sync up to.
-enum ChainTip {
-    CHAIN_TIP_UNSPECIFIED = 0;
+// Finality level we'd like to sync up to.
+enum FinalityLevel {
+    FINALITY_LEVEL_UNSPECIFIED = 0;
     // Sync up to the latest committed block (chain tip).
-    CHAIN_TIP_COMMITTED = 1;
+    FINALITY_LEVEL_COMMITTED = 1;
     // Sync up to the latest proven block.
-    CHAIN_TIP_PROVEN = 2;
+    FINALITY_LEVEL_PROVEN = 2;
 }
 
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
-    // Block number from which to synchronize (inclusive). Set this to the last block
+    // Block number from which to synchronize. Set this to the last block
     // already present in the caller's MMR so the delta begins at the next block.
-    fixed32 block_from = 1;
+    fixed32 current_client_block_height = 1;
 
-    // Upper bound for the block range. Determines how far ahead to sync.
-    oneof upper_bound {
-        // Sync up to this specific block number (inclusive), clamped to the committed chain tip.
-        fixed32 block_num = 2;
-        // Sync up to a chain tip variant (committed or proven).
-        ChainTip chain_tip = 3;
-    }
-
-    reserved 4;
+    // Sync target: either the committed or the proven tip.
+    FinalityLevel finality_level = 2;
 }
 
 // Represents the result of syncing chain MMR.
 message SyncChainMmrResponse {
     // For which block range the MMR delta is returned.
     BlockRange block_range = 1;
-    // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    // `response.block_range.block_to` or the chain tip.
+
+    // Data needed to update the partial MMR from `request.current_client_block_height + 1` to
+    // the sync target.
     primitives.MmrDelta mmr_delta = 2;
-    // Block header for `block_range.block_to`.
+
+    // Block header for the sync target.
     blockchain.BlockHeader block_header = 3;
+
+    // Validator signature for the sync target.
+    blockchain.BlockSignature block_signature = 4;
 }
 
 // SYNC ACCOUNT STORAGE MAP

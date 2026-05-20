@@ -244,6 +244,18 @@ body {
     letter-spacing: 0.5px;
 }
 
+.service-status.healthy {
+    color: var(--color-healthy);
+}
+
+.service-status.unhealthy {
+    color: var(--color-unhealthy);
+}
+
+.service-status.unknown {
+    color: var(--color-text-secondary);
+}
+
 .service-content {
     flex: 1;
     margin-bottom: 8px;

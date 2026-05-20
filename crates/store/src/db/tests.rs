@@ -2,8 +2,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use assert_matches::assert_matches;
-use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
-use miden_node_proto::BlockProofRequest;
+use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee, test_fee_params};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
@@ -28,11 +27,9 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
-    BlockInputs,
     BlockNoteIndex,
     BlockNoteTree,
     BlockNumber,
@@ -45,6 +42,7 @@ use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
+    NoteAttachments,
     NoteDetails,
     NoteHeader,
     NoteId,
@@ -52,6 +50,7 @@ use miden_protocol::note::{
     NoteTag,
     NoteType,
     Nullifier,
+    PartialNoteMetadata,
 };
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
@@ -67,7 +66,6 @@ use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
-    PartialBlockchain,
     TransactionHeader,
     TransactionId,
 };
@@ -85,7 +83,6 @@ use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
-use crate::db::schema;
 use crate::errors::DatabaseError;
 
 fn create_db() -> SqliteConnection {
@@ -112,28 +109,8 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
 
-    let proving_inputs = if block_num == BlockNumber::GENESIS {
-        None
-    } else {
-        Some(dummy_proving_inputs(&block_header))
-    };
-
     conn.transaction(|conn| {
-        queries::insert_block_header(conn, &block_header, &dummy_signature, proving_inputs)?;
-        // For non-genesis blocks, simulate the block having been proven and marked in sequence
-        // so that tests which don't care about proving state get a fully-proven chain.
-        if block_num != BlockNumber::GENESIS {
-            use crate::db::models::conv::SqlTypeConvert;
-            diesel::update(
-                schema::block_headers::table
-                    .filter(schema::block_headers::block_num.eq(block_num.to_raw_sql())),
-            )
-            .set((
-                schema::block_headers::proving_inputs.eq(None::<Vec<u8>>),
-                schema::block_headers::proven_in_sequence.eq(true),
-            ))
-            .execute(conn)?;
-        }
+        queries::insert_block_header(conn, &block_header, &dummy_signature)?;
         Ok::<_, DatabaseError>(())
     })
     .unwrap();
@@ -233,7 +210,7 @@ pub fn create_note(account_id: AccountId) -> Note {
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 10).unwrap(),
         )],
         NoteType::Public,
-        NoteAttachment::default(),
+        NoteAttachments::empty(),
         &mut *rng,
     )
     .expect("Failed to create note")
@@ -265,8 +242,9 @@ fn sql_select_notes() {
             note_index: BlockNoteIndex::new(0, i.try_into().unwrap()).unwrap(),
             note_id: num_to_word(u64::try_from(i).unwrap()),
             note_commitment: num_to_word(u64::try_from(i).unwrap()),
-            metadata: new_note.metadata().clone(),
+            metadata: *new_note.metadata(),
             details: Some(NoteDetails::from(&new_note)),
+            attachments: new_note.attachments().clone(),
             inclusion_path: SparseMerklePath::default(),
         };
         state.push(note.clone());
@@ -309,8 +287,9 @@ fn sql_select_note_script_by_root() {
         note_index: BlockNoteIndex::new(0, 0.try_into().unwrap()).unwrap(),
         note_id: num_to_word(0),
         note_commitment: num_to_word(0),
-        metadata: new_note.metadata().clone(),
+        metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
+        attachments: new_note.attachments().clone(),
         inclusion_path: SparseMerklePath::default(),
     };
     state.push(note.clone());
@@ -380,14 +359,19 @@ fn sql_unconsumed_network_notes() {
 
     // Create an unconsumed note in each block.
     let notes = Vec::from_iter((0..2).map(|i: u32| {
+        let attachments = NoteAttachments::from(attachment.clone());
+        let metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(account_note.0, NoteType::Public),
+            &attachments,
+        );
         let note = NoteRecord {
             block_num: 0.into(), // Created on same block.
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
             note_id: num_to_word(i.into()),
             note_commitment: num_to_word(i.into()),
-            metadata: NoteMetadata::new(account_note.0, NoteType::Public)
-                .with_attachment(attachment.clone()),
+            metadata,
             details: None,
+            attachments,
             inclusion_path: SparseMerklePath::default(),
         };
         (note, Some(num_to_nullifier(i.into())))
@@ -457,7 +441,7 @@ fn sql_select_accounts() {
     for i in 0..10u8 {
         let account_id = AccountId::dummy(
             [i; 15],
-            AccountIdVersion::Version0,
+            AccountIdVersion::Version1,
             AccountType::RegularAccountImmutableCode,
             AccountStorageMode::Private,
         );
@@ -774,13 +758,7 @@ fn db_block_header() {
     // test insertion
 
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    queries::insert_block_header(
-        conn,
-        &block_header,
-        &dummy_signature,
-        Some(dummy_proving_inputs(&block_header)),
-    )
-    .unwrap();
+    queries::insert_block_header(conn, &block_header, &dummy_signature).unwrap();
 
     // test fetch unknown block header
     let block_number = 1;
@@ -812,13 +790,7 @@ fn db_block_header() {
     );
 
     let dummy_signature = SecretKey::new().sign(block_header2.commitment());
-    queries::insert_block_header(
-        conn,
-        &block_header2,
-        &dummy_signature,
-        Some(dummy_proving_inputs(&block_header2)),
-    )
-    .unwrap();
+    queries::insert_block_header(conn, &block_header2, &dummy_signature).unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
@@ -854,9 +826,13 @@ fn notes() {
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 2).unwrap();
     let tag = 5u32;
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
+    let note_metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+        &NoteAttachments::default(),
+    );
 
-    let values = [(note_index, new_note.id(), &note_metadata)];
+    let note_header = NoteHeader::new(new_note.id(), note_metadata);
+    let values = [(note_index, &note_header)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
     let inclusion_path = notes_db.open(note_index);
 
@@ -865,8 +841,9 @@ fn notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+        metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
+        attachments: NoteAttachments::default(),
         inclusion_path: inclusion_path.clone(),
     };
 
@@ -895,8 +872,9 @@ fn notes() {
         note_index: note.note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: note.metadata.clone(),
+        metadata: note.metadata,
         details: None,
+        attachments: NoteAttachments::default(),
         inclusion_path: inclusion_path.clone(),
     };
 
@@ -955,8 +933,12 @@ fn note_sync_across_multiple_blocks() {
         .unwrap();
 
         let new_note = create_note(sender);
-        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
-        let values = [(note_index, new_note.id(), &note_metadata)];
+        let note_metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+            &NoteAttachments::default(),
+        );
+        let note_header = NoteHeader::new(new_note.id(), note_metadata);
+        let values = [(note_index, &note_header)];
         let notes_db = BlockNoteTree::with_entries(values).unwrap();
         let inclusion_path = notes_db.open(note_index);
 
@@ -967,6 +949,7 @@ fn note_sync_across_multiple_blocks() {
             note_commitment: new_note.commitment(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
+            attachments: NoteAttachments::default(),
             inclusion_path,
         };
         queries::insert_scripts(conn, [&note]).unwrap();
@@ -1032,8 +1015,12 @@ fn note_sync_multi_respects_payload_limit() {
         .unwrap();
 
         let new_note = create_note(sender);
-        let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag.into());
-        let values = [(note_index, new_note.id(), &note_metadata)];
+        let note_metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
+            &NoteAttachments::default(),
+        );
+        let note_header = NoteHeader::new(new_note.id(), note_metadata);
+        let values = [(note_index, &note_header)];
         let notes_db = BlockNoteTree::with_entries(values).unwrap();
         let inclusion_path = notes_db.open(note_index);
 
@@ -1044,6 +1031,7 @@ fn note_sync_multi_respects_payload_limit() {
             note_commitment: new_note.commitment(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
+            attachments: NoteAttachments::default(),
             inclusion_path,
         };
         queries::insert_scripts(conn, [&note]).unwrap();
@@ -1085,8 +1073,12 @@ fn note_sync_no_matching_tags() {
     // Insert a note with tag 10.
     let new_note = create_note(sender);
     let note_index = BlockNoteIndex::new(0, 0).unwrap();
-    let note_metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into());
-    let values = [(note_index, new_note.id(), &note_metadata)];
+    let note_metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into()),
+        &NoteAttachments::default(),
+    );
+    let note_header = NoteHeader::new(new_note.id(), note_metadata);
+    let values = [(note_index, &note_header)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
     let inclusion_path = notes_db.open(note_index);
 
@@ -1097,6 +1089,7 @@ fn note_sync_no_matching_tags() {
         note_commitment: new_note.commitment(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
+        attachments: NoteAttachments::default(),
         inclusion_path,
     };
     queries::insert_scripts(conn, [&note]).unwrap();
@@ -1753,7 +1746,11 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
             Word::try_from([num, num, 0, 0]).unwrap(),
             Word::try_from([0, 0, num, num]).unwrap(),
         ),
-        NoteMetadata::new(account_id, NoteType::Public).with_tag(NoteTag::new(num as u32)),
+        NoteMetadata::new(
+            PartialNoteMetadata::new(account_id, NoteType::Public)
+                .with_tag(NoteTag::new(num as u32)),
+            &NoteAttachments::default(),
+        ),
     )];
 
     let fee = test_fee();
@@ -2377,7 +2374,10 @@ fn serialization_symmetry_note_metadata() {
     // Use a tag that roundtrips properly - NoteTag::LocalAny stores the full u32 including type
     // bits
     let tag = NoteTag::with_account_target(sender);
-    let metadata = NoteMetadata::new(sender, NoteType::Public).with_tag(tag);
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag),
+        &NoteAttachments::default(),
+    );
 
     let bytes = metadata.to_bytes();
     let restored = NoteMetadata::read_from_bytes(&bytes).unwrap();
@@ -2423,13 +2423,7 @@ fn db_roundtrip_block_header() {
 
     // Insert
     let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    queries::insert_block_header(
-        &mut conn,
-        &block_header,
-        &dummy_signature,
-        Some(dummy_proving_inputs(&block_header)),
-    )
-    .unwrap();
+    queries::insert_block_header(&mut conn, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
     let retrieved =
@@ -2522,8 +2516,9 @@ fn db_roundtrip_notes() {
         note_index,
         note_id: new_note.id().as_word(),
         note_commitment: new_note.commitment(),
-        metadata: new_note.metadata().clone(),
+        metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
+        attachments: new_note.attachments().clone(),
         inclusion_path: SparseMerklePath::default(),
     };
 
@@ -2771,16 +2766,18 @@ fn db_roundtrip_note_metadata_attachment() {
     let attachment: NoteAttachment = target.into();
 
     // Create NoteMetadata with the attachment
+    let attachments = NoteAttachments::from(attachment.clone());
     let metadata =
-        NoteMetadata::new(account_id, NoteType::Public).with_attachment(attachment.clone());
+        NoteMetadata::new(PartialNoteMetadata::new(account_id, NoteType::Public), &attachments);
 
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0).unwrap(),
         note_id: num_to_word(1),
         note_commitment: num_to_word(1),
-        metadata: metadata.clone(),
+        metadata,
         details: None,
+        attachments: attachments.clone(),
         inclusion_path: SparseMerklePath::default(),
     };
 
@@ -2793,15 +2790,14 @@ fn db_roundtrip_note_metadata_attachment() {
 
     assert_eq!(retrieved.len(), 1, "Should retrieve exactly one note");
 
-    let retrieved_metadata = &retrieved[0].metadata;
+    let retrieved_attachments = &retrieved[0].attachments;
     assert_eq!(
-        retrieved_metadata.attachment(),
-        metadata.attachment(),
-        "Attachment should be preserved after DB roundtrip"
+        retrieved_attachments, &attachments,
+        "Attachments should be preserved after DB roundtrip"
     );
 
-    let retrieved_target = NetworkAccountTarget::try_from(retrieved_metadata.attachment())
-        .expect("Should be able to parse NetworkAccountTarget from retrieved attachment");
+    let retrieved_target = NetworkAccountTarget::try_from(retrieved_attachments)
+        .expect("Should be able to parse NetworkAccountTarget from retrieved attachments");
     assert_eq!(
         retrieved_target.target_id(),
         account_id,
@@ -3616,8 +3612,9 @@ fn db_roundtrip_transactions() {
                     note_index: BlockNoteIndex::new(0, idx).unwrap(),
                     note_id: note.id().as_word(),
                     note_commitment: note.to_commitment(),
-                    metadata: note.metadata().clone(),
+                    metadata: *note.metadata(),
                     details: None,
+                    attachments: NoteAttachments::default(),
                     inclusion_path: SparseMerklePath::default(),
                 },
                 None,
@@ -3640,7 +3637,7 @@ fn db_roundtrip_transactions() {
             block_num,
             note_index: BlockNoteIndex::new(0, idx).unwrap(),
             note_id: note.id().as_word(),
-            metadata: note.metadata().clone(),
+            metadata: *note.metadata(),
             inclusion_path: SparseMerklePath::default(),
         })
         .collect();
@@ -3665,7 +3662,7 @@ fn db_roundtrip_transactions() {
             initial_state_commitment: Some(tx.initial_state_commitment().into()),
             final_state_commitment: Some(tx.final_state_commitment().into()),
             input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: tx.output_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: tx.output_notes().iter().copied().map(Into::into).collect(),
             fee: Some(Asset::from(tx.fee()).into()),
         }),
         output_note_proofs: expected_sync_records
@@ -3937,197 +3934,4 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     // Verify map_a block 1 is no longer accessible
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
-}
-
-// PROVEN IN SEQUENCE TESTS
-// ================================================================================================
-
-/// Creates a minimal dummy `BlockProofRequest` for test purposes.
-fn dummy_proving_inputs(block_header: &BlockHeader) -> BlockProofRequest {
-    BlockProofRequest {
-        tx_batches: OrderedBatches::new(vec![]),
-        block_header: block_header.clone(),
-        block_inputs: BlockInputs::new(
-            BlockHeader::mock(0, None, None, &[], EMPTY_WORD),
-            PartialBlockchain::default(),
-            std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::new(),
-        ),
-    }
-}
-
-fn create_unproven_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
-    let block_header = BlockHeader::new(
-        1_u8.into(),
-        num_to_word(2),
-        block_num,
-        num_to_word(4),
-        num_to_word(5),
-        num_to_word(6),
-        num_to_word(7),
-        num_to_word(8),
-        num_to_word(9),
-        SecretKey::new().public_key(),
-        test_fee_params(),
-        11_u8.into(),
-    );
-
-    let dummy_signature = SecretKey::new().sign(block_header.commitment());
-    conn.transaction(|conn| {
-        queries::insert_block_header(
-            conn,
-            &block_header,
-            &dummy_signature,
-            Some(dummy_proving_inputs(&block_header)),
-        )
-    })
-    .unwrap();
-}
-
-#[test]
-fn select_latest_proven_block_num_only_genesis() {
-    let mut conn = create_db();
-
-    // Genesis block (block 0) is proven at insert time (proving_inputs = None).
-    create_block(&mut conn, BlockNumber::GENESIS);
-
-    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
-    assert_eq!(latest, BlockNumber::GENESIS);
-}
-
-#[test]
-fn mark_block_proven_advances_in_sequence_for_consecutive_blocks() {
-    let mut conn = create_db();
-
-    // Insert genesis (proven + in-sequence) and three unproven blocks.
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=3 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-
-    // Mark all three as proven in order. Each call atomically advances the in-sequence tip.
-    for i in 1u32..=3 {
-        let new_tip =
-            super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(i)).unwrap();
-        assert_eq!(new_tip, BlockNumber::from(i));
-    }
-
-    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
-    assert_eq!(latest, BlockNumber::from(3u32));
-}
-
-#[test]
-fn mark_block_proven_with_hole_does_not_advance_past_gap() {
-    let mut conn = create_db();
-
-    // Insert genesis + blocks 1..=4 as unproven.
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=4 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-
-    // Prove block 1 — advances tip to 1.
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-
-    // Prove blocks 3, 4 (skipping 2) — cannot advance past the gap.
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-
-    // Latest proven in sequence should be 1 (blocks 3, 4 are proven but not in sequence).
-    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
-    assert_eq!(latest, BlockNumber::from(1u32));
-}
-
-#[test]
-fn mark_block_proven_filling_hole_advances_through_all_consecutive() {
-    let mut conn = create_db();
-
-    // Insert genesis + blocks 1..=4 as unproven.
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=4 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-
-    // Prove blocks out of order: 1, 3, 4 first.
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(4u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-
-    assert_eq!(
-        queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap(),
-        BlockNumber::from(1u32),
-    );
-
-    // Now prove block 2, filling the hole. Should advance tip through to 4.
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(2u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(4u32));
-
-    // Now all blocks through 4 are proven in sequence.
-    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
-    assert_eq!(latest, BlockNumber::from(4u32));
-}
-
-#[test]
-fn select_unproven_blocks_skips_proven() {
-    let mut conn = create_db();
-
-    // Genesis is proven. Add blocks 1..=5, some proven and some not.
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=5 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-
-    // Prove blocks 1 and 3.
-    super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(3u32)).unwrap();
-
-    // Unproven blocks after genesis should be 2, 4, 5.
-    let unproven = queries::select_unproven_blocks(&mut conn, BlockNumber::GENESIS, 10).unwrap();
-    assert_eq!(
-        unproven,
-        vec![BlockNumber::from(2u32), BlockNumber::from(4u32), BlockNumber::from(5u32),]
-    );
-}
-
-#[test]
-fn select_unproven_blocks_respects_limit() {
-    let mut conn = create_db();
-
-    create_block(&mut conn, BlockNumber::GENESIS);
-    for i in 1u32..=5 {
-        create_unproven_block(&mut conn, BlockNumber::from(i));
-    }
-
-    let unproven = queries::select_unproven_blocks(&mut conn, BlockNumber::GENESIS, 2).unwrap();
-    assert_eq!(unproven, vec![BlockNumber::from(1u32), BlockNumber::from(2u32)]);
-}
-
-#[test]
-fn mark_block_proven_is_idempotent_for_in_sequence() {
-    let mut conn = create_db();
-
-    create_block(&mut conn, BlockNumber::GENESIS);
-    create_unproven_block(&mut conn, BlockNumber::from(1u32));
-
-    // First call marks block 1 proven and advances it in-sequence.
-    let new_tip =
-        super::mark_proven_and_advance_sequence(&mut conn, BlockNumber::from(1u32)).unwrap();
-    assert_eq!(new_tip, BlockNumber::from(1u32));
-
-    let latest = queries::select_latest_proven_in_sequence_block_num(&mut conn).unwrap();
-    assert_eq!(latest, BlockNumber::from(1u32));
 }

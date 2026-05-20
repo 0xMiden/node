@@ -1,5 +1,6 @@
 use miden_block_prover::LocalBlockProver;
 use miden_node_proto::BlockProofRequest;
+use miden_node_proto::generated::remote_prover as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
@@ -12,7 +13,6 @@ use miden_tx_batch_prover::LocalBatchProver;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
-use crate::generated::{self as proto};
 use crate::server::proof_kind::ProofKind;
 
 /// An enum representing the different types of provers available.

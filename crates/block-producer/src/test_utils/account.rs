@@ -35,14 +35,14 @@ impl<const NUM_STATES: usize> MockPrivateAccount<NUM_STATES> {
             init_seed,
             AccountType::RegularAccountUpdatableCode,
             AccountStorageMode::Private,
-            AccountIdVersion::Version0,
+            AccountIdVersion::Version1,
             Word::empty(),
             Word::empty(),
         )
         .unwrap();
 
         Self::new(
-            AccountId::new(account_seed, AccountIdVersion::Version0, Word::empty(), Word::empty())
+            AccountId::new(account_seed, AccountIdVersion::Version1, Word::empty(), Word::empty())
                 .unwrap(),
             if new_account {
                 Word::empty()

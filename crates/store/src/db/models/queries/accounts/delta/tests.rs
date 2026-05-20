@@ -606,7 +606,7 @@ fn upsert_private_account() {
     // Create a private account ID
     let account_id = AccountId::dummy(
         ACCOUNT_ID_SEED,
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Private,
     );

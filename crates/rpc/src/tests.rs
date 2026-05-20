@@ -76,7 +76,7 @@ fn build_test_proven_tx(
 ) -> ProvenTransaction {
     let account_id = AccountId::dummy(
         [0; 15],
-        AccountIdVersion::Version0,
+        AccountIdVersion::Version1,
         AccountType::RegularAccountImmutableCode,
         AccountStorageMode::Public,
     );
@@ -329,7 +329,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -374,7 +374,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -414,7 +414,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_transaction(request).await;
+    let response = rpc_client.submit_proven_tx(request).await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -559,6 +559,7 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::test(),
             storage_options: StorageOptions::default(),
         }
@@ -600,6 +601,7 @@ async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path)
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             data_directory: dir,
+            database_options: miden_node_store::DatabaseOptions::default(),
             grpc_options: GrpcOptionsInternal::test(),
             storage_options: StorageOptions::default(),
         }
@@ -685,10 +687,8 @@ async fn sync_chain_mmr_returns_delta() {
     let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
 
     let request = proto::rpc::SyncChainMmrRequest {
-        block_from: 0,
-        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::ChainTip(
-            proto::rpc::ChainTip::Committed.into(),
-        )),
+        current_client_block_height: 0,
+        finality_level: proto::rpc::FinalityLevel::Committed.into(),
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();

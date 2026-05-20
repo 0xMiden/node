@@ -132,6 +132,8 @@ pub enum StateInitializationError {
     DataDirectoryLoadError(#[source] std::io::Error),
     #[error("failed to load block store")]
     BlockStoreLoadError(#[source] std::io::Error),
+    #[error("failed to load proven tip")]
+    ProvenTipLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
     DatabaseLoadError(#[source] DatabaseError),
     #[error("account state forest error")]
@@ -276,7 +278,7 @@ pub enum SyncChainMmrError {
     #[error("start block is not known")]
     FutureBlock {
         chain_tip: BlockNumber,
-        block_from: BlockNumber,
+        current_client_block_height: BlockNumber,
     },
     #[error("malformed block number")]
     DeserializationFailed(#[source] ConversionError),

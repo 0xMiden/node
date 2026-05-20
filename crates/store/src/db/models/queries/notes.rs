@@ -36,7 +36,7 @@ use miden_protocol::block::{BlockNoteIndex, BlockNumber};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     NoteAssets,
-    NoteAttachment,
+    NoteAttachments,
     NoteDetails,
     NoteId,
     NoteInclusionProof,
@@ -47,6 +47,7 @@ use miden_protocol::note::{
     NoteTag,
     NoteType,
     Nullifier,
+    PartialNoteMetadata,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
@@ -611,7 +612,7 @@ impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
 
         let note_id = Word::read_from_bytes(&self.note_id[..])?;
         let inclusion_path = SparseMerklePath::read_from_bytes(&self.inclusion_path[..])?;
-        let metadata = self.metadata.try_into()?;
+        let (metadata, _attachments) = self.metadata.try_into()?;
         Ok(NoteSyncRecord {
             block_num,
             note_index,
@@ -729,7 +730,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         let metadata = NoteMetadataRawRow { note_type, sender, tag, attachment };
         let details = NoteDetailsRawRow { assets, storage, serial_num };
 
-        let metadata = metadata.try_into()?;
+        let (metadata, attachments) = metadata.try_into()?;
         let committed_at = BlockNumber::from_raw_sql(committed_at)?;
         let note_id = Word::read_from_bytes(&note_id[..])?;
         let note_commitment = Word::read_from_bytes(&note_commitment[..])?;
@@ -765,6 +766,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
             note_commitment,
             metadata,
             details,
+            attachments,
             inclusion_path,
         })
     }
@@ -804,15 +806,21 @@ pub struct NoteMetadataRawRow {
 }
 
 #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-impl TryInto<NoteMetadata> for NoteMetadataRawRow {
+impl TryInto<(NoteMetadata, NoteAttachments)> for NoteMetadataRawRow {
     type Error = DatabaseError;
-    fn try_into(self) -> Result<NoteMetadata, Self::Error> {
+    fn try_into(self) -> Result<(NoteMetadata, NoteAttachments), Self::Error> {
         let sender = AccountId::read_from_bytes(&self.sender[..])?;
         let note_type = NoteType::try_from(self.note_type as u8)
             .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
-        let attachment = NoteAttachment::read_from_bytes(&self.attachment)?;
-        Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
+        let attachments = if self.attachment.is_empty() {
+            NoteAttachments::empty()
+        } else {
+            NoteAttachments::read_from_bytes(&self.attachment)?
+        };
+        let partial = PartialNoteMetadata::new(sender, note_type).with_tag(tag);
+        let metadata = NoteMetadata::new(partial, &attachments);
+        Ok((metadata, attachments))
     }
 }
 
@@ -932,16 +940,14 @@ pub struct NoteInsertRow {
 
 impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
     fn from((note, nullifier): (NoteRecord, Option<Nullifier>)) -> Self {
-        let attachment = note.metadata.attachment();
-
-        let target_account_id = NetworkAccountTarget::try_from(attachment).ok();
+        let target_account_id = NetworkAccountTarget::try_from(&note.attachments).ok();
         let network_note_type = if target_account_id.is_some() && !note.metadata.is_private() {
             NetworkNoteType::SingleTarget
         } else {
             NetworkNoteType::None
         };
 
-        let attachment_bytes = attachment.to_bytes();
+        let attachment_bytes = note.attachments.to_bytes();
 
         Self {
             committed_at: note.block_num.to_raw_sql(),

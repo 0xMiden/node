@@ -611,23 +611,16 @@ async fn sync_transactions_paginated(
 /// - `data_directory`: directory that contains the database dump file.
 /// - `iterations`: number of requests to send.
 /// - `concurrency`: number of requests to send in parallel.
-/// - `block_range_size`: number of blocks to include per request.
-pub async fn bench_sync_chain_mmr(
-    data_directory: PathBuf,
-    iterations: usize,
-    concurrency: usize,
-    block_range_size: u32,
-) {
+pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, concurrency: usize) {
     let (store_client, _) = start_store(data_directory).await;
 
     wait_for_store(&store_client).await.unwrap();
 
     let chain_tip = store_client.clone().status(()).await.unwrap().into_inner().chain_tip;
-    let block_range_size = block_range_size.max(1);
 
     let request = |_| {
         let mut client = store_client.clone();
-        tokio::spawn(async move { sync_chain_mmr(&mut client, chain_tip, block_range_size).await })
+        tokio::spawn(async move { sync_chain_mmr(&mut client, chain_tip).await })
     };
 
     let results = stream::iter(0..iterations)
@@ -652,12 +645,11 @@ pub async fn bench_sync_chain_mmr(
 /// - the response.
 async fn sync_chain_mmr(
     api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    block_from: u32,
-    block_to: u32,
+    current_client_block_height: u32,
 ) -> SyncChainMmrRun {
     let sync_request = proto::rpc::SyncChainMmrRequest {
-        block_from,
-        upper_bound: Some(proto::rpc::sync_chain_mmr_request::UpperBound::BlockNum(block_to)),
+        current_client_block_height,
+        finality_level: proto::rpc::FinalityLevel::Committed.into(),
     };
 
     let start = Instant::now();
