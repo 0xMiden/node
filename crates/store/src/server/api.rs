@@ -41,7 +41,7 @@ pub struct StoreApi {
 }
 
 impl StoreApi {
-    pub(super) fn new(state: Arc<State>) -> Self {
+    pub fn new(state: Arc<State>) -> Self {
         let committed_tip_rx = state.subscribe_committed_tip();
         let proven_tip_rx = state.subscribe_proven_tip();
         let block_cache = state.block_cache.clone();

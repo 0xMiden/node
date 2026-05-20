@@ -182,6 +182,8 @@ pub enum StoreError {
     MalformedResponse(String),
     #[error("failed to parse response")]
     DeserializationError(#[from] ConversionError),
+    #[error("{0}")]
+    Internal(String),
 }
 
 impl From<tonic::Status> for StoreError {

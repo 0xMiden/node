@@ -32,6 +32,10 @@ pub enum Command {
     /// Commands related to the node's block-producer component.
     #[command(subcommand)]
     BlockProducer(commands::block_producer::BlockProducerCommand),
+
+    /// Commands related to the sequencer (store + block-producer + rpc in one process).
+    #[command(subcommand)]
+    Sequencer(commands::sequencer::SequencerCommand),
 }
 
 impl Command {
@@ -43,6 +47,7 @@ impl Command {
             Command::Store(subcommand) => subcommand.is_open_telemetry_enabled(),
             Command::Rpc(subcommand) => subcommand.is_open_telemetry_enabled(),
             Command::BlockProducer(subcommand) => subcommand.is_open_telemetry_enabled(),
+            Command::Sequencer(subcommand) => subcommand.is_open_telemetry_enabled(),
         } {
             OpenTelemetry::Enabled
         } else {
@@ -55,6 +60,7 @@ impl Command {
             Command::Rpc(rpc_command) => rpc_command.handle().await,
             Command::Store(store_command) => store_command.handle().await,
             Command::BlockProducer(block_producer_command) => block_producer_command.handle().await,
+            Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
         }
     }
 }

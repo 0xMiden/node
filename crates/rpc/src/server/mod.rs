@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
@@ -37,6 +38,83 @@ pub struct Rpc {
     pub validator_url: Url,
     pub ntx_builder_url: Option<Url>,
     pub grpc_options: GrpcOptionsExternal,
+}
+
+/// RPC server variant that reads from an in-process `StoreApi` instead of a remote gRPC store.
+pub struct EmbeddedRpc {
+    pub listener: TcpListener,
+    pub state: Arc<miden_node_store::StoreApi>,
+    pub block_producer_url: Option<Url>,
+    pub validator_url: Url,
+    pub ntx_builder_url: Option<Url>,
+    pub grpc_options: GrpcOptionsExternal,
+}
+
+impl EmbeddedRpc {
+    /// Serves the RPC API using an in-process store.
+    ///
+    /// Note: Executes in place (i.e. not spawned) and will run indefinitely until
+    ///       a fatal error is encountered.
+    pub async fn serve(self) -> anyhow::Result<()> {
+        let mut api = api::RpcService::new_embedded(
+            self.state,
+            self.block_producer_url.clone(),
+            self.validator_url,
+            self.ntx_builder_url.clone(),
+            NonZeroUsize::new(1_000_000).unwrap(),
+        );
+
+        let genesis = api
+            .get_genesis_header_with_retry()
+            .await
+            .context("Fetching genesis header from embedded store")?;
+
+        api.set_genesis_commitment(genesis.commitment())?;
+
+        let api_service = api_server::ApiServer::new(api);
+        let reflection_service = server::Builder::configure()
+            .register_file_descriptor_set(rpc_api_descriptor())
+            .build_v1()
+            .context("failed to build reflection service")?;
+
+        info!(target: COMPONENT, endpoint=?self.listener, "Embedded RPC server initialized");
+
+        let rpc_version = env!("CARGO_PKG_VERSION");
+        let rpc_version =
+            semver::Version::parse(rpc_version).context("failed to parse crate version")?;
+
+        tonic::transport::Server::builder()
+            .accept_http1(true)
+            .max_connection_age(self.grpc_options.max_connection_age)
+            .timeout(self.grpc_options.request_timeout)
+            .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(
+                TraceLayer::new(SharedClassifier::new(
+                    GrpcErrorsAsFailures::new()
+                        .with_success(GrpcCode::InvalidArgument)
+                        .with_success(GrpcCode::NotFound)
+                        .with_success(GrpcCode::ResourceExhausted)
+                        .with_success(GrpcCode::Unimplemented)
+                        .with_success(GrpcCode::Unknown),
+                ))
+                .make_span_with(grpc_trace_fn),
+            )
+            .layer(HealthCheckLayer)
+            .layer(cors_for_grpc_web_layer())
+            .layer(GrpcWebLayer::new())
+            .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
+            .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
+            .layer(
+                AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
+                    .with_genesis_enforced_method("SubmitProvenTx")
+                    .with_genesis_enforced_method("SubmitProvenTxBatch"),
+            )
+            .add_service(api_service)
+            .add_service(reflection_service)
+            .serve_with_incoming(TcpListenerStream::new(self.listener))
+            .await
+            .context("failed to serve embedded RPC API")
+    }
 }
 
 impl Rpc {

@@ -1,5 +1,6 @@
 pub mod block_producer;
 pub mod rpc;
+pub mod sequencer;
 pub mod store;
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";

@@ -1,5 +1,5 @@
 use std::num::NonZeroUsize;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -10,6 +10,7 @@ use miden_node_proto::clients::{
     StoreRpcClient,
     ValidatorClient,
 };
+use miden_node_proto::generated::store::rpc_server;
 use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
 use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
@@ -46,11 +47,154 @@ use url::Url;
 
 use crate::COMPONENT;
 
+// STORE BACKEND
+// ================================================================================================
+
+/// Dispatches store read calls to either a remote gRPC store or an in-process `StoreApi`.
+enum StoreBackend {
+    Remote(StoreRpcClient),
+    Embedded(Arc<miden_node_store::StoreApi>),
+}
+
+impl StoreBackend {
+    async fn sync_nullifiers(
+        &self,
+        request: Request<proto::rpc::SyncNullifiersRequest>,
+    ) -> Result<Response<proto::rpc::SyncNullifiersResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().sync_nullifiers(request).await,
+            Self::Embedded(api) => rpc_server::Rpc::sync_nullifiers(api.as_ref(), request).await,
+        }
+    }
+
+    async fn get_block_header_by_number(
+        &self,
+        request: Request<proto::rpc::BlockHeaderByNumberRequest>,
+    ) -> Result<Response<proto::rpc::BlockHeaderByNumberResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().get_block_header_by_number(request).await,
+            Self::Embedded(api) => {
+                rpc_server::Rpc::get_block_header_by_number(api.as_ref(), request).await
+            },
+        }
+    }
+
+    async fn get_block_by_number(
+        &self,
+        request: Request<proto::blockchain::BlockRequest>,
+    ) -> Result<Response<proto::blockchain::MaybeBlock>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().get_block_by_number(request.into_inner()).await,
+            Self::Embedded(api) => {
+                rpc_server::Rpc::get_block_by_number(api.as_ref(), request).await
+            },
+        }
+    }
+
+    async fn sync_chain_mmr(
+        &self,
+        request: Request<proto::rpc::SyncChainMmrRequest>,
+    ) -> Result<Response<proto::rpc::SyncChainMmrResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().sync_chain_mmr(request).await,
+            Self::Embedded(api) => rpc_server::Rpc::sync_chain_mmr(api.as_ref(), request).await,
+        }
+    }
+
+    async fn sync_notes(
+        &self,
+        request: Request<proto::rpc::SyncNotesRequest>,
+    ) -> Result<Response<proto::rpc::SyncNotesResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().sync_notes(request).await,
+            Self::Embedded(api) => rpc_server::Rpc::sync_notes(api.as_ref(), request).await,
+        }
+    }
+
+    async fn get_notes_by_id(
+        &self,
+        request: Request<proto::note::NoteIdList>,
+    ) -> Result<Response<proto::note::CommittedNoteList>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().get_notes_by_id(request).await,
+            Self::Embedded(api) => rpc_server::Rpc::get_notes_by_id(api.as_ref(), request).await,
+        }
+    }
+
+    async fn get_note_script_by_root(
+        &self,
+        request: Request<proto::note::NoteScriptRoot>,
+    ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().get_note_script_by_root(request).await,
+            Self::Embedded(api) => {
+                rpc_server::Rpc::get_note_script_by_root(api.as_ref(), request).await
+            },
+        }
+    }
+
+    async fn sync_account_storage_maps(
+        &self,
+        request: Request<proto::rpc::SyncAccountStorageMapsRequest>,
+    ) -> Result<Response<proto::rpc::SyncAccountStorageMapsResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().sync_account_storage_maps(request).await,
+            Self::Embedded(api) => {
+                rpc_server::Rpc::sync_account_storage_maps(api.as_ref(), request).await
+            },
+        }
+    }
+
+    async fn sync_account_vault(
+        &self,
+        request: Request<proto::rpc::SyncAccountVaultRequest>,
+    ) -> Result<Response<proto::rpc::SyncAccountVaultResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().sync_account_vault(request).await,
+            Self::Embedded(api) => {
+                rpc_server::Rpc::sync_account_vault(api.as_ref(), request).await
+            },
+        }
+    }
+
+    async fn get_account(
+        &self,
+        request: Request<proto::rpc::AccountRequest>,
+    ) -> Result<Response<proto::rpc::AccountResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().get_account(request.into_inner()).await,
+            Self::Embedded(api) => rpc_server::Rpc::get_account(api.as_ref(), request).await,
+        }
+    }
+
+    async fn sync_transactions(
+        &self,
+        request: Request<proto::rpc::SyncTransactionsRequest>,
+    ) -> Result<Response<proto::rpc::SyncTransactionsResponse>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().sync_transactions(request).await,
+            Self::Embedded(api) => {
+                rpc_server::Rpc::sync_transactions(api.as_ref(), request).await
+            },
+        }
+    }
+
+    async fn status(
+        &self,
+        request: Request<()>,
+    ) -> Result<Response<proto::rpc::StoreStatus>, Status> {
+        match self {
+            Self::Remote(c) => c.clone().status(request).await,
+            Self::Embedded(api) => rpc_server::Rpc::status(api.as_ref(), request).await,
+        }
+    }
+}
+
 // RPC SERVICE
 // ================================================================================================
 
 pub struct RpcService {
-    store: StoreRpcClient,
+    store: StoreBackend,
     block_producer: Option<BlockProducerClient>,
     validator: ValidatorClient,
     ntx_builder: Option<NtxBuilderClient>,
@@ -68,13 +212,15 @@ impl RpcService {
     ) -> Self {
         let store = {
             info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
-            Builder::new(store_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<StoreRpcClient>()
+            StoreBackend::Remote(
+                Builder::new(store_url)
+                    .without_tls()
+                    .without_timeout()
+                    .without_metadata_version()
+                    .without_metadata_genesis()
+                    .with_otel_context_injection()
+                    .connect_lazy::<StoreRpcClient>(),
+            )
         };
 
         let block_producer = block_producer_url.map(|block_producer_url| {
@@ -124,6 +270,68 @@ impl RpcService {
 
         Self {
             store,
+            block_producer,
+            validator,
+            ntx_builder,
+            genesis_commitment: None,
+            block_commitment_cache: LruCache::new(commitment_cache_capacity),
+        }
+    }
+
+    pub(super) fn new_embedded(
+        state: Arc<miden_node_store::StoreApi>,
+        block_producer_url: Option<Url>,
+        validator_url: Url,
+        ntx_builder_url: Option<Url>,
+        commitment_cache_capacity: NonZeroUsize,
+    ) -> Self {
+        let block_producer = block_producer_url.map(|block_producer_url| {
+            info!(
+                target: COMPONENT,
+                block_producer_endpoint = %block_producer_url,
+                "Initializing block producer client",
+            );
+            Builder::new(block_producer_url)
+                .without_tls()
+                .without_timeout()
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<BlockProducerClient>()
+        });
+
+        let validator = {
+            info!(
+                target: COMPONENT,
+                validator_endpoint = %validator_url,
+                "Initializing validator client",
+            );
+            Builder::new(validator_url)
+                .without_tls()
+                .without_timeout()
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<ValidatorClient>()
+        };
+
+        let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
+            info!(
+                target: COMPONENT,
+                ntx_builder_endpoint = %ntx_builder_url,
+                "Initializing ntx-builder client",
+            );
+            Builder::new(ntx_builder_url)
+                .without_tls()
+                .without_timeout()
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<NtxBuilderClient>()
+        });
+
+        Self {
+            store: StoreBackend::Embedded(state),
             block_producer,
             validator,
             ntx_builder,
@@ -203,7 +411,6 @@ impl RpcService {
 
         let header = self
             .store
-            .clone()
             .get_block_header_by_number(Request::new(proto::rpc::BlockHeaderByNumberRequest {
                 block_num: Some(block.as_u32()),
                 include_mmr_proof: false.into(),
@@ -261,7 +468,7 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamNullifierPrefixLimit>(request.get_ref().nullifiers.len())?;
 
-        self.store.clone().sync_nullifiers(request).await
+        self.store.sync_nullifiers(request).await
     }
 
     // -- Block endpoints ---------------------------------------------------------------------
@@ -274,7 +481,7 @@ impl api_server::Api for RpcService {
 
         Span::current().set_attribute("block.number", request.get_ref().block_num());
 
-        self.store.clone().get_block_header_by_number(request).await
+        self.store.get_block_header_by_number(request).await
     }
 
     async fn get_block_by_number(
@@ -287,7 +494,7 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, ?request);
 
-        self.store.clone().get_block_by_number(request).await
+        self.store.get_block_by_number(Request::new(request)).await
     }
 
     async fn sync_chain_mmr(
@@ -302,7 +509,7 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request_ref);
 
-        self.store.clone().sync_chain_mmr(request).await
+        self.store.sync_chain_mmr(request).await
     }
 
     // -- Note endpoints ----------------------------------------------------------------------
@@ -320,7 +527,7 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
 
-        self.store.clone().sync_notes(request).await
+        self.store.sync_notes(request).await
     }
 
     async fn get_notes_by_id(
@@ -341,7 +548,7 @@ impl api_server::Api for RpcService {
                     Status::invalid_argument(err.as_report_context("invalid NoteId"))
                 })?;
 
-        self.store.clone().get_notes_by_id(request).await
+        self.store.get_notes_by_id(request).await
     }
 
     async fn get_note_script_by_root(
@@ -350,7 +557,7 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        self.store.clone().get_note_script_by_root(request).await
+        self.store.get_note_script_by_root(request).await
     }
 
     // -- Account endpoints -------------------------------------------------------------------
@@ -374,7 +581,7 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_account_storage_maps(request).await
+        self.store.sync_account_storage_maps(request).await
     }
 
     async fn sync_account_vault(
@@ -395,7 +602,7 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_account_vault(request).await
+        self.store.sync_account_vault(request).await
     }
 
     /// Validates storage map key limits before forwarding the account request to the store.
@@ -428,7 +635,7 @@ impl api_server::Api for RpcService {
             check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
         }
 
-        self.store.clone().get_account(raw_request).await
+        self.store.get_account(Request::new(raw_request)).await
     }
 
     // -- Transaction submission --------------------------------------------------------------
@@ -632,7 +839,7 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
 
-        self.store.clone().sync_transactions(request).await
+        self.store.sync_transactions(request).await
     }
 
     async fn status(
@@ -642,7 +849,7 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request);
 
         let store_status =
-            self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
+            self.store.status(Request::new(())).await.map(Response::into_inner).ok();
         let block_producer_status = if let Some(block_producer) = &self.block_producer {
             block_producer
                 .clone()

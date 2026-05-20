@@ -18,7 +18,7 @@ pub mod errors;
 mod errors;
 
 pub mod server;
-pub use server::BlockProducer;
+pub use server::{BlockProducer, EmbeddedBlockProducer};
 
 // CONSTANTS
 // =================================================================================================

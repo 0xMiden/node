@@ -222,5 +222,5 @@ pub struct BlockProducerConfig {
         env = ENV_MEMPOOL_TX_CAPACITY,
         value_name = "NUM"
     )]
-    mempool_tx_capacity: NonZeroUsize,
+    pub mempool_tx_capacity: NonZeroUsize,
 }

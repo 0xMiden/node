@@ -2,7 +2,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use server::Rpc;
+pub use server::{EmbeddedRpc, Rpc};
 
 // CONSTANTS
 // =================================================================================================

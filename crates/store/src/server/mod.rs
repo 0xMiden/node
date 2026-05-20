@@ -40,6 +40,8 @@ pub mod proof_scheduler;
 mod replica;
 mod rpc_api;
 
+pub use api::StoreApi;
+
 /// Determines how the store receives new blocks.
 ///
 /// The two modes are mutually exclusive: a store either accepts blocks from a block producer
@@ -517,5 +519,92 @@ impl DataDirectory {
 
     pub fn display(&self) -> std::path::Display<'_> {
         self.0.display()
+    }
+}
+
+// EMBEDDED SEQUENCER SERVICES
+// ================================================================================================
+
+/// Runs the proof scheduler and serves the `StoreReplica` and `NtxBuilder` gRPC services.
+///
+/// Intended for use by the embedded sequencer, where the store's `BlockProducer` and `Rpc` gRPC
+/// services are replaced by in-process equivalents. The proof scheduler subscribes directly to the
+/// state's committed-tip watch channel, eliminating the need for the explicit sender used in the
+/// legacy `BlockProducerApi`.
+///
+/// Runs until any service encounters a fatal error.
+pub async fn serve_ntx_builder_and_replica(
+    state: Arc<State>,
+    proven_tip: crate::proven_tip::ProvenTipWriter,
+    ntx_builder_listener: TcpListener,
+    replica_listener: TcpListener,
+    block_prover_url: Option<Url>,
+    max_concurrent_proofs: NonZeroUsize,
+    grpc_options: GrpcOptionsInternal,
+) -> anyhow::Result<()> {
+    let proof_cache = state.proof_cache.clone();
+    let chain_tip_rx = state.subscribe_committed_tip();
+
+    let block_prover = if let Some(url) = block_prover_url {
+        Arc::new(BlockProver::remote(url))
+    } else {
+        Arc::new(BlockProver::local())
+    };
+
+    let proof_scheduler_task = proof_scheduler::spawn(
+        block_prover,
+        state.block_store(),
+        chain_tip_rx,
+        proven_tip,
+        max_concurrent_proofs,
+        proof_cache,
+    );
+
+    let store_api = api::StoreApi::new(state);
+
+    let replica_service =
+        store::store_replica_server::StoreReplicaServer::new(store_api.clone());
+    let ntx_builder_service =
+        store::ntx_builder_server::NtxBuilderServer::new(store_api);
+
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_file_descriptor_set(store_api_descriptor())
+        .build_v1()
+        .context("failed to build reflection service")?;
+
+    let make_server = || {
+        tonic::transport::Server::builder()
+            .timeout(grpc_options.request_timeout)
+            .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+    };
+
+    let mut grpc_servers = JoinSet::new();
+
+    grpc_servers.spawn(
+        make_server()
+            .add_service(replica_service)
+            .add_service(reflection_service.clone())
+            .serve_with_incoming(TcpListenerStream::new(replica_listener)),
+    );
+
+    grpc_servers.spawn(
+        make_server()
+            .add_service(ntx_builder_service)
+            .add_service(reflection_service)
+            .serve_with_incoming(TcpListenerStream::new(ntx_builder_listener)),
+    );
+
+    tokio::select! {
+        result = grpc_servers.join_next() => {
+            result.expect("grpc_servers joinset is not empty")?.map_err(Into::into)
+        },
+        result = proof_scheduler_task => {
+            match result {
+                Ok(Ok(())) => Err(anyhow::anyhow!("proof scheduler exited unexpectedly")),
+                Ok(Err(err)) => Err(err).context("proof scheduler fatal error"),
+                Err(join_err) => Err(anyhow::anyhow!(join_err)).context("proof scheduler panicked"),
+            }
+        }
     }
 }
