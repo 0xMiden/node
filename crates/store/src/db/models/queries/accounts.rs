@@ -42,7 +42,7 @@ use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
-use miden_standards::account::auth::NetworkAccountNoteAllowlist;
+use miden_standards::account::auth::NetworkAccount;
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
@@ -367,9 +367,9 @@ pub struct PublicAccountStateRootsPage {
 /// Returns up to `page_size` public account IDs, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
-/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
-/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+/// Public accounts are those with `AccountStorageMode::Public`. We identify them by checking
+/// against the store. Public accounts store their `code_commitment`, while private accounts only
+/// store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -427,9 +427,9 @@ pub(crate) fn select_public_account_ids_paged(
 /// Returns up to `page_size` public account states, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
-/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
-/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+/// Public accounts are those with `AccountStorageMode::Public`. We identify them by checking
+/// against the store. Public accounts store their `code_commitment`, while private accounts only
+/// store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -1402,9 +1402,7 @@ pub(crate) fn upsert_accounts(
         let network_account_type = match &account_state {
             AccountStateForInsert::Private => NetworkAccountType::None,
             AccountStateForInsert::FullAccount(account) => {
-                if account.is_public()
-                    && NetworkAccountNoteAllowlist::try_from(account.storage()).is_ok()
-                {
+                if NetworkAccount::new(account.clone()).is_ok() {
                     NetworkAccountType::Network
                 } else {
                     NetworkAccountType::None

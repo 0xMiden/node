@@ -8,7 +8,7 @@ use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_protocol::account::Account;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::BlockHeader;
-use miden_standards::account::auth::NetworkAccountNoteAllowlist;
+use miden_standards::account::auth::NetworkAccount;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -232,10 +232,9 @@ impl NetworkTransactionBuilder {
                 if let Some(AccountUpdateDetails::Delta(delta)) = account_delta
                     && delta.is_full_state()
                     && let Ok(account) = Account::try_from(delta)
-                    && account.is_public()
-                    && NetworkAccountNoteAllowlist::try_from(account.storage()).is_ok()
+                    && let Ok(network_account) = NetworkAccount::new(account)
                 {
-                    let network_id = NetworkAccountId::new_trusted(account.id());
+                    let network_id = NetworkAccountId::new_trusted(network_account.id());
                     self.coordinator.spawn_actor(network_id, &self.actor_context);
                 }
                 let inactive_targets = self.coordinator.send_targeted(&event);

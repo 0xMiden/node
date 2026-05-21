@@ -506,12 +506,9 @@ struct AssetEntry {
 /// for details
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Default)]
 pub enum StorageMode {
-    /// Monitor for `Notes` related to the account, in addition to being `Public`.
-    #[serde(alias = "network")]
-    #[default]
-    Network,
     /// A publicly stored account, lives on-chain.
     #[serde(alias = "public")]
+    #[default]
     Public,
     /// A private account, which must be known by interactors.
     #[serde(alias = "private")]
@@ -521,9 +518,7 @@ pub enum StorageMode {
 impl From<StorageMode> for AccountStorageMode {
     fn from(mode: StorageMode) -> AccountStorageMode {
         match mode {
-            // Network accounts must be public in the new protocol model; the network-ness is
-            // determined by the standardized `NetworkAccountNoteAllowlist` slot in storage.
-            StorageMode::Network | StorageMode::Public => AccountStorageMode::Public,
+            StorageMode::Public => AccountStorageMode::Public,
             StorageMode::Private => AccountStorageMode::Private,
         }
     }

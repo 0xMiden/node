@@ -378,7 +378,7 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     // Verify the genesis state can be converted to a block
     let block = state.into_block(&signer)?;
 
-    // Verify that non-private accounts (Public and Network) get full Delta details.
+    // Verify that non-private (Public) accounts get full Delta details.
     for update in block.inner().body().updated_accounts() {
         let is_private = update.account_id().is_private();
         match update.details() {
