@@ -31,6 +31,8 @@ pub async fn load_with_pool_size(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
 ) -> Result<Db, DatabaseError> {
+    apply_migrations(&database_filepath)?;
+
     let db = Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
     tracing::info!(
         target: COMPONENT,
@@ -38,8 +40,6 @@ pub async fn load_with_pool_size(
         connection_pool_size = %connection_pool_size,
         "Connected to the database"
     );
-
-    db.query("migrations", apply_migrations).await?;
     Ok(db)
 }
 

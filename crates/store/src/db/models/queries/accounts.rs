@@ -10,6 +10,8 @@ use diesel::{
     BoolExpressionMethods,
     ExpressionMethods,
     Insertable,
+    JoinOnDsl,
+    NullableExpressionMethods,
     OptionalExtension,
     QueryDsl,
     RunQueryDsl,
@@ -176,15 +178,17 @@ pub(crate) fn select_full_account(
     account_id: AccountId,
 ) -> Result<Account, DatabaseError> {
     // Get account metadata (nonce, code_commitment) and code in a single join query
-    let (nonce, code_bytes): (Option<i64>, Vec<u8>) = SelectDsl::select(
-        schema::accounts::table.inner_join(schema::account_codes::table),
-        (schema::accounts::nonce, schema::account_codes::code),
-    )
-    .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
-    .filter(schema::accounts::is_latest.eq(true))
-    .get_result(conn)
-    .optional()?
-    .ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
+    let joined = schema::accounts::table.inner_join(schema::account_codes::table.on(
+        schema::accounts::code_commitment.eq(schema::account_codes::code_commitment.nullable()),
+    ));
+
+    let (nonce, code_bytes): (Option<i64>, Vec<u8>) =
+        SelectDsl::select(joined, (schema::accounts::nonce, schema::account_codes::code))
+            .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
+            .filter(schema::accounts::is_latest.eq(true))
+            .get_result(conn)
+            .optional()?
+            .ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
 
     let nonce = raw_sql_to_nonce(nonce.ok_or_else(|| {
         DatabaseError::DataCorrupted(format!("No nonce found for account {account_id}"))

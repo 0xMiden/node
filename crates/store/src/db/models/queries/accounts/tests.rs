@@ -3,15 +3,7 @@
 use std::collections::BTreeMap;
 
 use diesel::query_dsl::methods::SelectDsl;
-use diesel::{
-    BoolExpressionMethods,
-    Connection,
-    ExpressionMethods,
-    OptionalExtension,
-    QueryDsl,
-    RunQueryDsl,
-};
-use diesel_migrations::MigrationHarness;
+use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
@@ -46,18 +38,12 @@ use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
 use super::*;
-use crate::db::migrations::MIGRATIONS;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::schema;
 use crate::errors::DatabaseError;
 
 fn setup_test_db() -> SqliteConnection {
-    let mut conn =
-        SqliteConnection::establish(":memory:").expect("Failed to create in-memory database");
-
-    conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
-
-    conn
+    crate::db::migrations::test_connection()
 }
 
 /// Test helper: reconstructs account storage at a given block from DB.
