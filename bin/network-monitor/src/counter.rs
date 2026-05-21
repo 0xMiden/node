@@ -66,6 +66,11 @@ const REGENERATE_FAILURE_THRESHOLD: usize = 10;
 /// Minimum time between account regeneration attempts.
 const REGENERATE_COOLDOWN: Duration = Duration::from_secs(3600);
 
+/// Number of consecutive polls observing the pending-increments gap above
+/// [`MonitorConfig::counter_pending_unhealthy_threshold`] before flipping the Network Transactions
+/// card to unhealthy. Buffers against a single in-flight batch of notes flapping the card.
+const PENDING_UNHEALTHY_CONFIRMATION_POLLS: u32 = 3;
+
 // SHARED STATE
 // ================================================================================================
 
@@ -402,6 +407,9 @@ pub struct CounterTrackingService {
     details: CounterTrackingDetails,
     expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
+    /// Consecutive polls that observed `pending_increments > counter_pending_unhealthy_threshold`.
+    /// Used to confirm a real backlog before flipping the card to unhealthy.
+    over_threshold_streak: u32,
 }
 
 impl CounterTrackingService {
@@ -432,6 +440,7 @@ impl CounterTrackingService {
             details,
             expected_counter_value,
             latency_state,
+            over_threshold_streak: 0,
         })
     }
 
@@ -453,6 +462,7 @@ impl CounterTrackingService {
         );
         self.counter_account = reloaded;
         self.details = CounterTrackingDetails::default();
+        self.over_threshold_streak = 0;
         initialize_tracking_state(
             &mut self.rpc_client,
             &self.counter_account,
@@ -558,7 +568,32 @@ impl Service for CounterTrackingService {
     async fn check(&mut self) -> ServiceStatus {
         self.reload_counter_account_if_changed().await;
         let last_error = self.poll_counter_once().await;
-        build_tracking_status(&self.details, last_error)
+        self.update_over_threshold_streak();
+        build_tracking_status(
+            &self.details,
+            last_error,
+            self.over_threshold_streak,
+            self.config.counter_pending_unhealthy_threshold,
+        )
+    }
+}
+
+impl CounterTrackingService {
+    /// Update the over-threshold streak using the most recent pending-increments observation.
+    ///
+    /// - A fresh observation strictly above the threshold extends the streak.
+    /// - A fresh observation at or below the threshold resets it.
+    /// - No fresh observation (RPC error, counter not yet observed) leaves the streak unchanged
+    ///   so a single missing tick doesn't paper over a real backlog.
+    fn update_over_threshold_streak(&mut self) {
+        let Some(pending) = self.details.pending_increments else {
+            return;
+        };
+        if pending > self.config.counter_pending_unhealthy_threshold {
+            self.over_threshold_streak = self.over_threshold_streak.saturating_add(1);
+        } else {
+            self.over_threshold_streak = 0;
+        }
     }
 }
 
@@ -642,15 +677,36 @@ fn build_increment_status(details: &IncrementDetails, last_error: Option<String>
 }
 
 /// Build a `ServiceStatus` snapshot from the current tracking details and last error.
+///
+/// Health priority:
+/// 1. Explicit RPC errors from this poll flip the card to unhealthy immediately.
+/// 2. A sustained backlog (the pending-increments gap exceeded the configured threshold for at
+///    least [`PENDING_UNHEALTHY_CONFIRMATION_POLLS`] polls in a row) flips the card to
+///    unhealthy. A single in-flight batch of notes won't hit this; a network silently dropping
+///    notes will.
+/// 3. Otherwise healthy if we have observed a counter value, unknown if we haven't yet.
 fn build_tracking_status(
     details: &CounterTrackingDetails,
     last_error: Option<String>,
+    over_threshold_streak: u32,
+    threshold: u64,
 ) -> ServiceStatus {
     let service_details = ServiceDetails::NtxTracking(details.clone());
 
     if let Some(err) = last_error {
-        ServiceStatus::unhealthy("Network Transactions", err, service_details)
-    } else if details.current_value.is_some() {
+        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+    }
+
+    if over_threshold_streak >= PENDING_UNHEALTHY_CONFIRMATION_POLLS {
+        let pending = details.pending_increments.unwrap_or(0);
+        let err = format!(
+            "counter trailing expected by {pending} (> {threshold}) for {over_threshold_streak} \
+             consecutive polls",
+        );
+        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+    }
+
+    if details.current_value.is_some() {
         ServiceStatus::healthy("Network Transactions", service_details)
     } else {
         ServiceStatus::unknown("Network Transactions", service_details)
@@ -979,5 +1035,83 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
         Ok(store_status.chain_tip)
     } else {
         anyhow::bail!("RPC status response did not include a chain tip")
+    }
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use crate::counter::{PENDING_UNHEALTHY_CONFIRMATION_POLLS, build_tracking_status};
+    use crate::status::{CounterTrackingDetails, Status};
+
+    const THRESHOLD: u64 = 5;
+
+    fn details(current: u64, expected: u64) -> CounterTrackingDetails {
+        let pending = expected.saturating_sub(current);
+        CounterTrackingDetails {
+            current_value: Some(current),
+            expected_value: Some(expected),
+            last_updated: Some(1),
+            pending_increments: Some(pending),
+        }
+    }
+
+    #[test]
+    fn healthy_when_pending_under_threshold() {
+        // When pending sits at or below the threshold, `update_over_threshold_streak` keeps the
+        // streak at zero, so the card stays green regardless of how long we have been polling.
+        let status = build_tracking_status(&details(100, 102), None, 0, THRESHOLD);
+        assert_eq!(status.status, Status::Healthy);
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn healthy_while_streak_below_confirmation_window() {
+        // Pending is over threshold this tick (8 > 5) but the streak hasn't crossed the window yet,
+        // so we keep the card green until we've confirmed sustained backlog.
+        let streak = PENDING_UNHEALTHY_CONFIRMATION_POLLS - 1;
+        let status = build_tracking_status(&details(10, 18), None, streak, THRESHOLD);
+        assert_eq!(status.status, Status::Healthy);
+    }
+
+    #[test]
+    fn unhealthy_when_streak_reaches_window() {
+        let status = build_tracking_status(
+            &details(10, 20),
+            None,
+            PENDING_UNHEALTHY_CONFIRMATION_POLLS,
+            THRESHOLD,
+        );
+        assert_eq!(status.status, Status::Unhealthy);
+        let err = status.error.expect("error message should be set");
+        assert!(err.contains("10"), "should mention pending count, got: {err}");
+        assert!(err.contains('5'), "should mention threshold, got: {err}");
+    }
+
+    #[test]
+    fn rpc_error_wins_over_streak() {
+        let status = build_tracking_status(
+            &details(10, 20),
+            Some("fetch counter value failed".to_string()),
+            PENDING_UNHEALTHY_CONFIRMATION_POLLS,
+            THRESHOLD,
+        );
+        assert_eq!(status.status, Status::Unhealthy);
+        let err = status.error.expect("error message should be set");
+        assert!(err.contains("fetch counter value failed"));
+    }
+
+    #[test]
+    fn unknown_when_no_observation_yet() {
+        let blank = CounterTrackingDetails {
+            current_value: None,
+            expected_value: None,
+            last_updated: None,
+            pending_increments: None,
+        };
+        let status = build_tracking_status(&blank, None, 0, THRESHOLD);
+        assert_eq!(status.status, Status::Unknown);
     }
 }

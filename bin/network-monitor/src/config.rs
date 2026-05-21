@@ -138,6 +138,18 @@ pub struct MonitorConfig {
     )]
     pub counter_latency_timeout: Duration,
 
+    /// Maximum allowed gap between the expected and observed counter values before the Network
+    /// Transactions card is flipped to unhealthy. A small backlog while transactions are in flight
+    /// is expected; this threshold guards against the network silently dropping notes.
+    #[arg(
+        long = "counter-pending-unhealthy-threshold",
+        env = "MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD",
+        default_value_t = 5,
+        help = "Mark the counter card unhealthy when the gap between expected and observed values \
+                stays above this threshold for several consecutive polls"
+    )]
+    pub counter_pending_unhealthy_threshold: u64,
+
     /// The timeout for the outgoing requests.
     #[arg(
         long = "request-timeout",

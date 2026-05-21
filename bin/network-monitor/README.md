@@ -43,6 +43,7 @@ miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 - `--port, -p`: Web server port (default: `3000`)
 - `--enable-otel`: Enable OpenTelemetry tracing
 - `--counter-increment-interval`: Interval at which to send the increment counter transaction (default: `30s`)
+- `--counter-pending-unhealthy-threshold`: Mark the Network Transactions card unhealthy when the gap between expected and observed counter values stays above this for several consecutive polls (default: `5`)
 - `--counter-latency-timeout`: Maximum time to wait for a counter update after submitting a transaction (default: `2m`)
 - `--help, -h`: Show help information
 - `--version, -V`: Show version information
@@ -67,6 +68,7 @@ If command-line arguments are not provided, the application falls back to enviro
 - `MIDEN_MONITOR_PORT`: Web server port
 - `MIDEN_MONITOR_ENABLE_OTEL`: Enable OpenTelemetry tracing
 - `MIDEN_MONITOR_COUNTER_INCREMENT_INTERVAL`: Interval at which to send the increment counter transaction
+- `MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD`: Mark the Network Transactions card unhealthy when the gap between expected and observed counter values stays above this for several consecutive polls
 - `MIDEN_MONITOR_COUNTER_LATENCY_TIMEOUT`: Maximum time to wait for a counter update after submitting a transaction
 
 ## Commands
