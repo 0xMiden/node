@@ -14,7 +14,8 @@ use tokio::{runtime, task};
 use tonic::transport::{Channel, Endpoint};
 use url::Url;
 
-use crate::{BlockProducer, DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
+use crate::server::BlockProducer;
+use crate::{DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
 
 /// Tests that the block producer starts up correctly even when the store is not initially
 /// available. The block producer should retry with exponential backoff until the store becomes
