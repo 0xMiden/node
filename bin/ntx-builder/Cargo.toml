@@ -22,7 +22,6 @@ anyhow                     = { workspace = true }
 backon                     = { workspace = true }
 clap                       = { features = ["env", "string"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
-diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
 humantime                  = { workspace = true }
 libsqlite3-sys             = { workspace = true }
@@ -44,7 +43,8 @@ tracing                    = { workspace = true }
 url                        = { workspace = true }
 
 [build-dependencies]
-build-rs = { workspace = true }
+build-rs      = { workspace = true }
+miden-node-db = { workspace = true }
 
 [dev-dependencies]
 miden-node-utils = { features = ["testing"], workspace = true }
