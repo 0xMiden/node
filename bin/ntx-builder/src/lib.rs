@@ -303,7 +303,7 @@ impl NtxBuilderConfig {
 
         let block_from = stored_chain_state
             .as_ref()
-            .map_or(BlockNumber::GENESIS, |(num, _, _)| num.child());
+            .map_or(BlockNumber::GENESIS, |(num, ..)| num.child());
 
         tracing::info!(
             %block_from,
@@ -318,37 +318,36 @@ impl NtxBuilderConfig {
             .context("failed to subscribe to committed blocks")?;
         let mut block_stream: BlockStream = Box::pin(block_stream_inner);
 
-        let (chain_state, last_applied_block) = if let Some((block_num, header, mmr)) =
-            stored_chain_state
-        {
-            let cs = Arc::new(SharedChainState::new(header, mmr));
-            (cs, block_num)
-        } else {
-            // Fresh DB: consume the genesis block from the subscription, apply it with an empty
-            // chain MMR (the MMR for tip=GENESIS has no leaves by the one-block-lag convention),
-            // and bootstrap the in-memory chain state.
-            let genesis = block_stream
-                .next()
-                .await
-                .context("block stream ended before delivering the genesis block")?
-                .context("block stream failed before delivering the genesis block")?;
-            let genesis_header = genesis.header().clone();
-            anyhow::ensure!(
-                genesis_header.block_num() == BlockNumber::GENESIS,
-                "expected genesis block from subscription but got block {}",
-                genesis_header.block_num()
-            );
+        let (chain_state, last_applied_block) =
+            if let Some((block_num, header, mmr)) = stored_chain_state {
+                let cs = Arc::new(SharedChainState::new(header, mmr));
+                (cs, block_num)
+            } else {
+                // Fresh DB: consume the genesis block from the subscription, apply it with an empty
+                // chain MMR (the MMR for tip=GENESIS has no leaves by the one-block-lag
+                // convention), and bootstrap the in-memory chain state.
+                let genesis = block_stream
+                    .next()
+                    .await
+                    .context("block stream ended before delivering the genesis block")?
+                    .context("block stream failed before delivering the genesis block")?;
+                let genesis_header = genesis.header().clone();
+                anyhow::ensure!(
+                    genesis_header.block_num() == BlockNumber::GENESIS,
+                    "expected genesis block from subscription but got block {}",
+                    genesis_header.block_num()
+                );
 
-            let effects = CommittedBlockEffects::from_signed_block(&genesis);
-            db.apply_committed_block(effects, PartialMmr::default())
-                .await
-                .context("failed to apply genesis block during bootstrap")?;
+                let effects = CommittedBlockEffects::from_signed_block(&genesis);
+                db.apply_committed_block(effects, PartialMmr::default())
+                    .await
+                    .context("failed to apply genesis block during bootstrap")?;
 
-            let cs = Arc::new(SharedChainState::from_state(ChainState::bootstrap_genesis(
-                genesis_header,
-            )));
-            (cs, BlockNumber::GENESIS)
-        };
+                let cs = Arc::new(SharedChainState::from_state(ChainState::bootstrap_genesis(
+                    genesis_header,
+                )));
+                (cs, BlockNumber::GENESIS)
+            };
 
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
@@ -387,4 +386,3 @@ impl NtxBuilderConfig {
         ))
     }
 }
-

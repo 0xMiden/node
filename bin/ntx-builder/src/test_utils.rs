@@ -52,4 +52,3 @@ pub fn mock_single_target_note(
 pub fn mock_block_header(block_num: BlockNumber) -> miden_protocol::block::BlockHeader {
     miden_protocol::block::BlockHeader::mock(block_num, None, None, &[], Word::default())
 }
-

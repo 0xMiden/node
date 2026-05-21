@@ -173,9 +173,7 @@ impl Db {
 
     /// Reads the singleton chain state row, returning the last synced block number, its header,
     /// and the persisted chain MMR if any block has been applied locally.
-    pub async fn get_chain_state(
-        &self,
-    ) -> Result<Option<(BlockNumber, BlockHeader, PartialMmr)>> {
+    pub async fn get_chain_state(&self) -> Result<Option<(BlockNumber, BlockHeader, PartialMmr)>> {
         self.inner.query("get_chain_state", queries::select_chain_state).await
     }
 

@@ -178,9 +178,7 @@ impl NetworkTransactionBuilder {
 
         // Compute the chain MMR that will result from advancing to this block, then persist it
         // atomically with the block effects so the DB stays consistent across restarts.
-        let next_mmr = self
-            .chain_state
-            .next_chain_mmr(&header, self.config.max_block_count);
+        let next_mmr = self.chain_state.next_chain_mmr(&header, self.config.max_block_count);
 
         let result = self
             .coordinator
@@ -234,4 +232,3 @@ impl NetworkTransactionBuilder {
         Ok(())
     }
 }
-

@@ -33,6 +33,7 @@ use tracing::{info, instrument};
 use crate::COMPONENT;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::conv::SqlTypeConvert;
+use crate::db::models::queries;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
     NullifiersPage,
@@ -40,7 +41,6 @@ pub use crate::db::models::queries::{
     PublicAccountStateRootsPage,
 };
 use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
-use crate::db::models::queries;
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 

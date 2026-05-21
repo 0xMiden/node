@@ -80,6 +80,5 @@ pub fn partial_mmr_to_bytes(mmr: &PartialMmr) -> Vec<u8> {
 }
 
 pub fn partial_mmr_from_bytes(bytes: &[u8]) -> Result<PartialMmr, DatabaseError> {
-    PartialMmr::read_from_bytes(bytes)
-        .map_err(|e| DatabaseError::deserialization("partial mmr", e))
+    PartialMmr::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("partial mmr", e))
 }
