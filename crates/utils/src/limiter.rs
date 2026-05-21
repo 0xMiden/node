@@ -22,8 +22,8 @@ pub struct QueryLimitError {
     limit: usize,
 }
 
-/// Checks limits against the desired query parameters, per query parameter and
-/// bails if they exceed a defined value.
+/// Checks limits against the desired query parameters, per query parameter and bails if they exceed
+/// a defined value.
 pub trait QueryParamLimiter {
     /// Name of the parameter to mention in the error.
     const PARAM_NAME: &'static str;
@@ -42,8 +42,7 @@ pub trait QueryParamLimiter {
     }
 }
 
-/// Maximum payload size (in bytes) for paginated responses returned by the
-/// store.
+/// Maximum payload size (in bytes) for paginated responses returned by the store.
 pub const MAX_RESPONSE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 
 /// Used for the following RPC endpoints:

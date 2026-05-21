@@ -701,8 +701,8 @@ impl api_server::Api for RpcService {
         }
     }
 
-    /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds
-    /// the batch, then forwards it to the block producer.
+    /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds the
+    /// batch, then forwards it to the block producer.
     async fn submit_proven_tx_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
@@ -833,18 +833,12 @@ impl api_server::Api for RpcService {
         let store_status = self.store.status(Request::new(())).await.map(Response::into_inner).ok();
         let block_producer_status = if let Some(ref block_producer) = self.block_producer {
             match block_producer {
-                super::BlockProducerBackend::Embedded(handle) => handle
-                    .clone()
-                    .status(Request::new(()))
-                    .await
-                    .map(Response::into_inner)
-                    .ok(),
-                super::BlockProducerBackend::Remote(client) => client
-                    .clone()
-                    .status(Request::new(()))
-                    .await
-                    .map(Response::into_inner)
-                    .ok(),
+                super::BlockProducerBackend::Embedded(handle) => {
+                    handle.clone().status(Request::new(())).await.map(Response::into_inner).ok()
+                },
+                super::BlockProducerBackend::Remote(client) => {
+                    client.clone().status(Request::new(())).await.map(Response::into_inner).ok()
+                },
             }
         } else {
             None

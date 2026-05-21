@@ -140,9 +140,9 @@ pub fn add_transaction(
         }
     }
 
-    // Insert notes with created_by = tx_id.
-    // Uses INSERT OR IGNORE to make this idempotent if the same event is delivered twice
-    // (the nullifier PK would otherwise cause a constraint violation).
+    // Insert notes with created_by = tx_id. Uses INSERT OR IGNORE to make this idempotent if the
+    // same event is delivered twice (the nullifier PK would otherwise cause a constraint
+    // violation).
     for note in notes {
         let insert = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
@@ -218,8 +218,8 @@ pub fn commit_block(
     for tx_id in tx_ids {
         let tx_id_bytes = conversions::transaction_id_to_bytes(tx_id);
 
-        // Promote inflight account rows: delete old committed, set transaction_id = NULL.
-        // Find accounts that have an inflight row for this tx.
+        // Promote inflight account rows: delete old committed, set transaction_id = NULL. Find
+        // accounts that have an inflight row for this tx.
         let inflight_account_ids: Vec<Vec<u8>> = schema::accounts::table
             .filter(schema::accounts::transaction_id.eq(&tx_id_bytes))
             .select(schema::accounts::account_id)
@@ -236,8 +236,8 @@ pub fn commit_block(
             )
             .execute(conn)?;
 
-            // Promote the inflight row to committed (set transaction_id = NULL).
-            // Only promote the row for this specific tx.
+            // Promote the inflight row to committed (set transaction_id = NULL). Only promote the
+            // row for this specific tx.
             diesel::update(
                 schema::accounts::table
                     .filter(schema::accounts::account_id.eq(account_id_bytes))

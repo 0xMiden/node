@@ -400,8 +400,8 @@ impl rpc_server::Rpc for StoreApi {
             .await
             .map_err(SyncTransactionsError::from)?;
 
-        // Convert database TransactionRecords directly to proto TransactionRecords.
-        // All data needed for the proto TransactionHeader is stored in the transactions table.
+        // Convert database TransactionRecords directly to proto TransactionRecords. All data needed
+        // for the proto TransactionHeader is stored in the transactions table.
         let transactions: Vec<_> = transaction_records_db
             .into_iter()
             .map(crate::db::TransactionRecord::into_proto)

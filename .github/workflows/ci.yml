@@ -258,8 +258,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
       - name: Rustup +nightly
         run: rustup toolchain install --no-self-update nightly --component rustfmt
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
       - name: Fmt
         run: make format-check
 

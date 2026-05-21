@@ -219,8 +219,8 @@ pub fn select_transactions_records(
 
     let desired_account_ids = serialize_vec(account_ids);
 
-    // Read transactions in chunks to prevent loading excessive data and to stop
-    // as soon as we approach the size limit
+    // Read transactions in chunks to prevent loading excessive data and to stop as soon as we
+    // approach the size limit
     let mut all_transactions = Vec::new();
     let mut total_size = 0i64;
     let mut last_block_num: Option<i64> = None;
@@ -276,8 +276,8 @@ pub fn select_transactions_records(
         }
     }
 
-    // Ensure block consistency: remove the last block if it's incomplete
-    // (we may have stopped loading mid-block due to size constraints)
+    // Ensure block consistency: remove the last block if it's incomplete (we may have stopped
+    // loading mid-block due to size constraints)
     if total_size >= max_payload_bytes {
         // SAFETY: We're guaranteed to have at least one transaction since total_size > 0
         let last_block_num = last_block_num.expect(
@@ -291,9 +291,9 @@ pub fn select_transactions_records(
                 .collect(),
         )?;
 
-        // SAFETY: block_num came from the database and was previously validated.
-        // Subtraction is safe under the assumption that genesis block (where it could fail) does
-        // not have any transactions.
+        // SAFETY: block_num came from the database and was previously validated. Subtraction is
+        // safe under the assumption that genesis block (where it could fail) does not have any
+        // transactions.
         let last_included_block = BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?;
         Ok((last_included_block, filtered_transactions))
     } else {
@@ -328,8 +328,8 @@ fn with_output_note_proofs(
         .zip(tx_output_notes)
         .map(|(raw, output_notes)| {
             let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
-            // Collect inclusion proofs for committed output notes. Notes not found in
-            // the `notes` table were erased (created and consumed in the same batch).
+            // Collect inclusion proofs for committed output notes. Notes not found in the `notes`
+            // table were erased (created and consumed in the same batch).
             let output_note_proofs = output_notes
                 .iter()
                 .filter_map(|note| output_notes_by_id.get(&note.id()).cloned())

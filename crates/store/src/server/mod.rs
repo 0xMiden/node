@@ -8,7 +8,11 @@ use anyhow::Context;
 use miden_node_proto::generated::replica::api_server as replica_api_server;
 use miden_node_proto::generated::sequencer::ntx_builder_server as sequencer_ntx_builder_server;
 use miden_node_proto::generated::store;
-use miden_node_proto_build::{replica_api_descriptor, sequencer_api_descriptor, store_api_descriptor};
+use miden_node_proto_build::{
+    replica_api_descriptor,
+    sequencer_api_descriptor,
+    store_api_descriptor,
+};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::spawn::spawn_blocking_in_span;
@@ -403,8 +407,8 @@ impl Store {
 
         Ok(join_set)
     }
-    /// Spawns a background task that periodically records the on-disk size of every store data
-    /// path as `OTel` span attributes.
+    /// Spawns a background task that periodically records the on-disk size of every store data path
+    /// as `OTel` span attributes.
     fn spawn_disk_monitor(data_directory: PathBuf) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_mins(5));

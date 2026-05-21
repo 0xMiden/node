@@ -160,8 +160,7 @@ pub enum BuildBlockError {
 }
 
 impl BuildBlockError {
-    /// Creates a custom error using the [`BuildBlockError::Other`] variant from an
-    /// error message.
+    /// Creates a custom error using the [`BuildBlockError::Other`] variant from an error message.
     pub fn other(message: impl Into<String>) -> Self {
         let message: String = message.into();
         Self::Other { error_msg: message.into(), source: None }

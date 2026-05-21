@@ -86,8 +86,7 @@ pub async fn validate_block(
             .map_err(BlockValidationError::DatabaseError)?
             .ok_or(BlockValidationError::NoPrevBlockHeader)?
     } else {
-        // Proposed block is a new block.
-        // Block number must be sequential.
+        // Proposed block is a new block. Block number must be sequential.
         let expected_block_num = chain_tip.block_num().child();
         if proposed_header.block_num() != expected_block_num {
             return Err(BlockValidationError::BlockNumberMismatch {

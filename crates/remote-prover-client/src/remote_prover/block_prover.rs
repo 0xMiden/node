@@ -36,8 +36,8 @@ pub struct RemoteBlockProver {
 }
 
 impl RemoteBlockProver {
-    /// Creates a new [`RemoteBlockProver`] with the specified gRPC server endpoint. The
-    /// endpoint should be in the format `{protocol}://{hostname}:{port}`.
+    /// Creates a new [`RemoteBlockProver`] with the specified gRPC server endpoint. The endpoint
+    /// should be in the format `{protocol}://{hostname}:{port}`.
     pub fn new(endpoint: impl Into<String>) -> Self {
         RemoteBlockProver {
             endpoint: endpoint.into(),
@@ -61,9 +61,9 @@ impl RemoteBlockProver {
         self
     }
 
-    /// Establishes a connection to the remote block prover server. The connection is
-    /// maintained for the lifetime of the prover. If the connection is already established, this
-    /// method does nothing.
+    /// Establishes a connection to the remote block prover server. The connection is maintained for
+    /// the lifetime of the prover. If the connection is already established, this method does
+    /// nothing.
     async fn connect(&self) -> Result<(), RemoteProverClientError> {
         let mut client = self.client.lock().await;
         if client.is_some() {

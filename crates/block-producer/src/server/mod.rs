@@ -158,10 +158,8 @@ impl EmbeddedBlockProducer {
     /// gRPC round-trip (e.g. the embedded sequencer's RPC).
     pub async fn start(
         self,
-    ) -> anyhow::Result<(
-        BlockProducerHandle,
-        impl Future<Output = anyhow::Result<()>> + Send,
-    )> {
+    ) -> anyhow::Result<(BlockProducerHandle, impl Future<Output = anyhow::Result<()>> + Send)>
+    {
         info!(target: COMPONENT, endpoint=?self.block_producer_address, "Initializing embedded server");
         let store = StoreClient::new_local(self.state.clone());
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
@@ -175,15 +173,18 @@ impl EmbeddedBlockProducer {
             self.batch_prover_url,
             self.batch_interval,
         );
-        let mempool = Mempool::shared(chain_tip, MempoolConfig {
-            batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch,
-                ..BatchBudget::default()
+        let mempool = Mempool::shared(
+            chain_tip,
+            MempoolConfig {
+                batch_budget: BatchBudget {
+                    transactions: self.max_txs_per_batch,
+                    ..BatchBudget::default()
+                },
+                block_budget: BlockBudget { batches: self.max_batches_per_block },
+                tx_capacity: self.mempool_tx_capacity,
+                ..Default::default()
             },
-            block_budget: BlockBudget { batches: self.max_batches_per_block },
-            tx_capacity: self.mempool_tx_capacity,
-            ..Default::default()
-        });
+        );
 
         let cached_mempool_stats = Arc::new(RwLock::new(MempoolStats::default()));
         let handle = BlockProducerHandle {
@@ -210,9 +211,8 @@ impl EmbeddedBlockProducer {
 
             let mut tasks = tokio::task::JoinSet::new();
 
-            let rpc_id = tasks
-                .spawn(async move { rpc_server.serve(listener, grpc_options).await })
-                .id();
+            let rpc_id =
+                tasks.spawn(async move { rpc_server.serve(listener, grpc_options).await }).id();
 
             let batch_builder_id = tasks
                 .spawn({
@@ -224,11 +224,7 @@ impl EmbeddedBlockProducer {
                 })
                 .id();
 
-            let block_builder_id = tasks
-                .spawn({
-                    async { block_builder.run(mempool).await }
-                })
-                .id();
+            let block_builder_id = tasks.spawn(async { block_builder.run(mempool).await } ).id();
 
             let task_ids = HashMap::from([
                 (batch_builder_id, "batch-builder"),
@@ -445,8 +441,8 @@ struct BlockProducerRpcServer {
 
     store: StoreClient,
 
-    /// Cached mempool statistics that are updated periodically to avoid locking the mempool
-    /// for each status request.
+    /// Cached mempool statistics that are updated periodically to avoid locking the mempool for
+    /// each status request.
     cached_mempool_stats: Arc<RwLock<MempoolStats>>,
 }
 
