@@ -1,14 +1,11 @@
 //! Counter program account creation functionality.
 
-use std::path::Path;
-
 use anyhow::Result;
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountComponent,
-    AccountFile,
     AccountId,
     AccountStorageMode,
     AccountType,
@@ -70,11 +67,4 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
         .build()?;
 
     Ok(counter_account)
-}
-
-/// Save counter program account to disk without extra auth material.
-pub fn save_counter_account(account: &Account, file_path: &Path) -> Result<()> {
-    let account_file = AccountFile::new(account.clone(), vec![]);
-    account_file.write(file_path)?;
-    Ok(())
 }

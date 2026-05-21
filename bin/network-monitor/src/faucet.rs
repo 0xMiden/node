@@ -259,8 +259,8 @@ async fn perform_faucet_test(
     Ok((tokens_response, metadata))
 }
 
-/// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path
-/// (e.g. `max_supply`, `explorer_url`) is included in the error message. Combined with
+/// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path (e.g.
+/// `max_supply`, `explorer_url`) is included in the error message. Combined with
 /// `#[serde(deny_unknown_fields)]` on each response type, this means renamed, removed, or newly
 /// added fields all surface a precise field name rather than a generic "unexpected response".
 fn parse_faucet_response<T>(body: &str) -> anyhow::Result<T>

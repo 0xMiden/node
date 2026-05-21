@@ -13,9 +13,9 @@ use crate::COMPONENT;
 use crate::service::Service;
 use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus};
 
-/// Fetches network-wide totals from `overviewStats` together with the latest block header
-/// (number + timestamp + commitments). The latest block is still needed for tip-drift detection
-/// against the RPC.
+/// Fetches network-wide totals from `overviewStats` together with the latest block header (number +
+/// timestamp + commitments). The latest block is still needed for tip-drift detection against the
+/// RPC.
 const NETWORK_OVERVIEW_QUERY: &str = "
 query NetworkOverview {
     overviewStats {

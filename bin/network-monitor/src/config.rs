@@ -3,7 +3,6 @@
 //! This module contains the configuration structures and constants for the network monitor.
 //! Configuration for the monitor.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
@@ -118,24 +117,6 @@ pub struct MonitorConfig {
         incremented by sending a transaction to it."
     )]
     pub disable_ntx_service: bool,
-
-    /// Path for the counter program network account file.
-    #[arg(
-        long = "counter-filepath",
-        env = "MIDEN_MONITOR_COUNTER_FILEPATH",
-        default_value = "counter_program.mac",
-        help = "Path where the counter account is located"
-    )]
-    pub counter_filepath: PathBuf,
-
-    /// Path for the wallet account file.
-    #[arg(
-        long = "wallet-filepath",
-        env = "MIDEN_MONITOR_WALLET_FILEPATH",
-        default_value = "wallet_account.mac",
-        help = "Path where the wallet account is located"
-    )]
-    pub wallet_filepath: PathBuf,
 
     /// The interval at which to send the increment counter transaction.
     #[arg(

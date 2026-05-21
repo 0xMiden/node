@@ -3,7 +3,6 @@
 //! This module contains the implementation for periodically incrementing the counter
 //! of the network account deployed at startup by creating and submitting network notes.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -13,7 +12,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountCode, AccountFile, AccountHeader, AccountId};
+use miden_protocol::account::{Account, AccountCode, AccountHeader, AccountId};
 use miden_protocol::asset::AssetVault;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -38,12 +37,16 @@ use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tracing::{error, info, instrument, warn};
 
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
-use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client};
+use crate::deploy::{
+    MonitorDataStore,
+    create_and_deploy_accounts,
+    create_genesis_aware_rpc_client,
+};
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -134,17 +137,27 @@ pub struct IncrementService {
     details: IncrementDetails,
     expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
+    /// Publishes the current counter account to [`CounterTrackingService`]. A new value is sent
+    /// whenever the increment task regenerates accounts after persistent failures, so the tracker
+    /// can switch to the new account ID without polling disk.
+    counter_sender: watch::Sender<Account>,
 }
 
 impl IncrementService {
     pub async fn new(
         config: MonitorConfig,
+        wallet_account: Account,
+        secret_key: SecretKey,
+        counter_account: Account,
+        counter_sender: watch::Sender<Account>,
         expected_counter_value: Arc<AtomicU64>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let mut rpc_client =
             create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
-        let (tx, details) = setup_increment_task(config.clone(), &mut rpc_client).await?;
+        let (tx, details) =
+            setup_increment_task(wallet_account, secret_key, counter_account, &mut rpc_client)
+                .await?;
         Ok(Self {
             config,
             rpc_client,
@@ -153,6 +166,7 @@ impl IncrementService {
             details,
             expected_counter_value,
             latency_state,
+            counter_sender,
         })
     }
 
@@ -205,6 +219,10 @@ impl IncrementService {
     }
 
     /// Regenerate accounts from scratch when re-sync is ineffective.
+    ///
+    /// Builds a fresh wallet/counter pair in memory, deploys the counter to the network, swaps
+    /// the local [`TxBuilder`] state, and publishes the new counter on [`Self::counter_sender`]
+    /// so the tracker switches over without polling disk.
     #[instrument(
         parent = None,
         target = COMPONENT,
@@ -214,17 +232,24 @@ impl IncrementService {
         err,
     )]
     async fn try_regenerate_accounts(&mut self) -> Result<()> {
-        crate::deploy::force_recreate_accounts(
-            &self.config.wallet_filepath,
-            &self.config.counter_filepath,
-            &self.config.rpc_url,
-        )
-        .await
-        .context("failed to regenerate accounts")?;
+        let (wallet_account, secret_key, counter_account) =
+            create_and_deploy_accounts(&self.config.rpc_url)
+                .await
+                .context("failed to regenerate accounts")?;
 
-        let (tx, details) = setup_increment_task(self.config.clone(), &mut self.rpc_client).await?;
+        let (tx, details) = setup_increment_task(
+            wallet_account,
+            secret_key,
+            counter_account.clone(),
+            &mut self.rpc_client,
+        )
+        .await?;
         self.tx = tx;
         self.details = details;
+
+        self.counter_sender
+            .send(counter_account)
+            .context("counter tracker dropped before regeneration completed")?;
 
         info!("account regeneration completed, increment task re-initialized");
         Ok(())
@@ -372,6 +397,8 @@ pub struct CounterTrackingService {
     config: MonitorConfig,
     rpc_client: RpcClient,
     counter_account: Account,
+    /// Observes regenerations of the counter account from [`IncrementService`].
+    counter_receiver: watch::Receiver<Account>,
     details: CounterTrackingDetails,
     expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
@@ -380,13 +407,13 @@ pub struct CounterTrackingService {
 impl CounterTrackingService {
     pub async fn new(
         config: MonitorConfig,
+        counter_receiver: watch::Receiver<Account>,
         expected_counter_value: Arc<AtomicU64>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let mut rpc_client =
             create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
-        let counter_account = load_counter_account(&config.counter_filepath)
-            .context("Failed to load counter account")?;
+        let counter_account = counter_receiver.borrow().clone();
 
         let mut details = CounterTrackingDetails::default();
         initialize_tracking_state(
@@ -401,24 +428,20 @@ impl CounterTrackingService {
             config,
             rpc_client,
             counter_account,
+            counter_receiver,
             details,
             expected_counter_value,
             latency_state,
         })
     }
 
-    /// The increment service regenerates accounts on persistent failure and rewrites the counter
-    /// account file. If the file's account ID has changed, switch to the new account and reset
+    /// If [`IncrementService`] regenerated accounts and published a new counter, adopt it and reset
     /// tracking state.
     async fn reload_counter_account_if_changed(&mut self) {
-        let reloaded = match load_counter_account(&self.config.counter_filepath) {
-            Ok(account) => account,
-            Err(e) => {
-                warn!(err = ?e, "failed to reload counter account file");
-                return;
-            },
-        };
-
+        if !self.counter_receiver.has_changed().unwrap_or(false) {
+            return;
+        }
+        let reloaded = self.counter_receiver.borrow_and_update().clone();
         if reloaded.id() == self.counter_account.id() {
             return;
         }
@@ -426,7 +449,7 @@ impl CounterTrackingService {
         info!(
             old.id = %self.counter_account.id(),
             new.id = %reloaded.id(),
-            "counter account file changed, resetting tracking state",
+            "counter account changed, resetting tracking state",
         );
         self.counter_account = reloaded;
         self.details = CounterTrackingDetails::default();
@@ -542,30 +565,15 @@ impl Service for CounterTrackingService {
 // SETUP
 // ================================================================================================
 
-/// Load wallet + counter accounts, fetch the genesis block header, and build the data store and
-/// increment script needed to produce network notes.
+/// Fetch the genesis block header and build the data store + increment script needed to produce
+/// network notes from a freshly-created wallet/counter pair. The accounts are passed in already
+/// constructed by [`create_and_deploy_accounts`]; there is no file I/O.
 async fn setup_increment_task(
-    config: MonitorConfig,
+    wallet_account: Account,
+    secret_key: SecretKey,
+    counter_account: Account,
     rpc_client: &mut RpcClient,
 ) -> Result<(TxBuilder, IncrementDetails)> {
-    let wallet_account_file =
-        AccountFile::read(config.wallet_filepath).context("Failed to read wallet account file")?;
-    let wallet_account = fetch_wallet_account(rpc_client, wallet_account_file.account.id())
-        .await?
-        .unwrap_or(wallet_account_file.account.clone());
-
-    let AuthSecretKey::Falcon512Poseidon2(secret_key) = wallet_account_file
-        .auth_secret_keys
-        .first()
-        .expect("wallet account file should have one auth secret key")
-        .clone()
-    else {
-        anyhow::bail!("Failed to load wallet account, auth secret key not found")
-    };
-
-    let counter_account = load_counter_account(&config.counter_filepath)
-        .inspect_err(|e| error!("Failed to load counter account: {:?}", e))?;
-
     let block_header = get_genesis_block_header(rpc_client).await?;
 
     let increment_script = create_increment_script()?;
@@ -908,14 +916,6 @@ fn build_account_storage(
     }
 
     AccountStorage::new(slots).context("failed to create account storage")
-}
-
-/// Load counter account from file.
-fn load_counter_account(file_path: &Path) -> Result<Account> {
-    let account_file =
-        AccountFile::read(file_path).context("Failed to read counter account file")?;
-
-    Ok(account_file.account.clone())
 }
 
 /// Create the increment procedure script.

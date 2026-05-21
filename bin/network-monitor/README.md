@@ -42,8 +42,6 @@ miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 - `--stale-chain-tip-threshold`: Maximum time without a chain tip update before marking RPC as unhealthy (default: `1m`)
 - `--port, -p`: Web server port (default: `3000`)
 - `--enable-otel`: Enable OpenTelemetry tracing
-- `--wallet-filepath`: Path where the wallet account is located (default: `wallet_account.mac`)
-- `--counter-filepath`: Path where the network account is located (default: `counter_program.mac`)
 - `--counter-increment-interval`: Interval at which to send the increment counter transaction (default: `30s`)
 - `--counter-latency-timeout`: Maximum time to wait for a counter update after submitting a transaction (default: `2m`)
 - `--help, -h`: Show help information
@@ -68,8 +66,6 @@ If command-line arguments are not provided, the application falls back to enviro
 - `MIDEN_MONITOR_STALE_CHAIN_TIP_THRESHOLD`: Maximum time without a chain tip update before marking RPC as unhealthy
 - `MIDEN_MONITOR_PORT`: Web server port
 - `MIDEN_MONITOR_ENABLE_OTEL`: Enable OpenTelemetry tracing
-- `MIDEN_MONITOR_WALLET_FILEPATH`: Path where the wallet account is located
-- `MIDEN_MONITOR_COUNTER_FILEPATH`: Path where the network account is located
 - `MIDEN_MONITOR_COUNTER_INCREMENT_INTERVAL`: Interval at which to send the increment counter transaction
 - `MIDEN_MONITOR_COUNTER_LATENCY_TIMEOUT`: Maximum time to wait for a counter update after submitting a transaction
 
@@ -96,20 +92,17 @@ miden-network-monitor start
   --port 8080 \
   --rpc.url "http://localhost:50051"
 
-# Enable network transaction service (both increment and tracking) with custom account file paths
+# Enable network transaction service (both increment and tracking)
 miden-network-monitor start \
-  --wallet-filepath my_wallet.mac \
-  --counter-filepath my_network_account.mac \
   --rpc-url https://testnet.miden.io:443
 ```
 
-**Optional Counter Account Management (only when counter is enabled):**
-When `--disable-ntx-service=false` or unset, the monitor ensures required network transaction service account exists before starting the task:
-1. If file is missing, creates new counter account:
-   - Network account with the increment procedure
-2. Saves network account to the specified file using the Miden `AccountFile` format
-3. Deploys accounts to the network via RPC (if not already deployed)
-4. The network account contract authorizes increments only from a whitelisted wallet account
+**Counter Account Management (only when counter is enabled):**
+When `--disable-ntx-service=false` or unset, the monitor creates a fresh wallet and counter
+account in memory on every startup, deploys the counter to the network, and holds both
+accounts entirely in memory. The accounts are never persisted to disk; restarting the monitor
+always provisions new ones, and the counter value on the dashboard restarts from zero. The
+counter contract authorizes increments only from the wallet that owns it.
 
 ## Usage
 
@@ -128,8 +121,6 @@ miden-network-monitor start \
   --faucet-test-interval 2m \
   --status-check-interval 3s \
   --port 8080 \
-  --wallet-filepath my_wallet.mac \
-  --counter-filepath my_counter.mac \
   --enable-otel
 
 # Get help
@@ -145,8 +136,6 @@ MIDEN_MONITOR_REMOTE_PROVER_URLS="http://localhost:50052" miden-network-monitor 
 # Multiple remote provers, faucet testing, and network transaction service
 MIDEN_MONITOR_REMOTE_PROVER_URLS="http://localhost:50052,http://localhost:50053,http://localhost:50054" \
 MIDEN_MONITOR_FAUCET_URL="http://localhost:8080" \
-MIDEN_MONITOR_WALLET_FILEPATH="my_wallet.mac" \
-MIDEN_MONITOR_COUNTER_FILEPATH="my_counter.mac" \
 MIDEN_MONITOR_DISABLE_NTX_SERVICE=false \
 miden-network-monitor start
 ```
@@ -269,46 +258,31 @@ The dashboard automatically probes RPC and Remote Prover services every 30 secon
 
 ## Account Management
 
-When the network transaction service is enabled, the monitor manages the necessary Miden accounts:
+When the network transaction service is enabled, the monitor provisions the necessary Miden
+accounts entirely in memory.
 
 ### Created Accounts
 
 **Network Account:**
 - Implements a simple counter with increment functionality
-- Includes authentication logic that restricts access to the network account
-- Uses custom MASM script with account ID-based authorization
-- Automatically created if not present
+- Authorizes increments only from the wallet account that owns it (account ID-based check)
+- Uses a custom MASM script
 
 **Wallet Account:**
 - Uses RpoFalcon512 authentication scheme
-- Contains authentication keys for transaction signing
-- Automatically created if not present
+- Holds the authentication keys for signing increment transactions
 
-### Account File Management
+### Lifecycle
 
-The monitor automatically:
-1. Checks for existing account files on startup
-2. Creates new accounts if files don't exist
-3. Deploys accounts to the network via RPC
-4. Saves the wallet and counter contract account in the specified file paths (default: `wallet_account.mac` and `counter_program.mac`)
+On every startup the monitor:
+1. Generates a fresh wallet/counter account pair in memory.
+2. Deploys the counter to the network via RPC.
+3. Holds both accounts in memory; they are never written to disk.
 
-### Example Usage
-
-```bash
-# Start monitor with counter task and default account files
-miden-network-monitor start --rpc-url https://testnet.miden.io:443
-
-# Start monitor with custom account file paths
-miden-network-monitor start \
-  --disable-ntx-service=false \
-  --rpc-url https://testnet.miden.io:443 \
-  --wallet-filepath my_wallet.mac \
-  --counter-filepath my_counter.mac
-
-# The generated files can be loaded in Miden applications:
-# - wallet_account.mac: Contains the wallet account with authentication keys
-# - counter_program.mac: Contains the counter program account
-```
+If increment transactions fail repeatedly, the monitor regenerates both accounts in memory
+(same flow as startup) and the tracker switches to the new counter automatically. Restarting
+the monitor always provisions fresh accounts, so the dashboard's counter value starts at
+zero after each restart.
 
 ## Future Monitor Items
 
