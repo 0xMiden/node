@@ -1,17 +1,12 @@
 CREATE TABLE block_headers (
-    block_num           INTEGER NOT NULL,
-    block_header        BLOB    NOT NULL,
-    signature           BLOB    NOT NULL,
-    commitment          BLOB    NOT NULL,
-    proving_inputs      BLOB,             -- Serialized BlockProofRequest needed for deferred proving. NULL if it has been proven or never proven (genesis block).
-    proven_in_sequence  BOOLEAN NOT NULL DEFAULT FALSE, -- TRUE when this block and all its ancestors have been proven.
+    block_num    BIGINT NOT NULL,
+    block_header BLOB   NOT NULL,
+    signature    BLOB   NOT NULL,
+    commitment   BLOB   NOT NULL,
 
     PRIMARY KEY (block_num),
     CONSTRAINT block_header_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );
-
-CREATE INDEX block_headers_proven_desc ON block_headers(block_num DESC) WHERE proving_inputs IS NULL;
-CREATE INDEX block_headers_proven_in_sequence ON block_headers(block_num DESC) WHERE proven_in_sequence = TRUE;
 
 CREATE TABLE account_codes (
     code_commitment BLOB NOT NULL,
@@ -22,14 +17,14 @@ CREATE TABLE account_codes (
 CREATE TABLE accounts (
     account_id                              BLOB    NOT NULL,
     network_account_type                    INTEGER NOT NULL, -- 0-not a network account, 1-network account
-    block_num                               INTEGER NOT NULL,
+    block_num                               BIGINT  NOT NULL,
     account_commitment                      BLOB    NOT NULL,
     code_commitment                         BLOB,
-    nonce                                   INTEGER,
+    nonce                                   BIGINT,
     storage_header                          BLOB,             -- Serialized AccountStorageHeader from miden-objects
     vault_root                              BLOB,             -- Vault root commitment
     is_latest                               BOOLEAN NOT NULL DEFAULT 0, -- Indicates if this is the latest state for this account_id
-    created_at_block                        INTEGER NOT NULL,
+    created_at_block                        BIGINT  NOT NULL,
 
     PRIMARY KEY (account_id, block_num),
     CONSTRAINT all_null_or_none_null CHECK
@@ -49,11 +44,15 @@ CREATE INDEX idx_accounts_created_at_block ON accounts(created_at_block);
 CREATE INDEX idx_accounts_block_num ON accounts(block_num);
 -- Index for joining with account_codes
 CREATE INDEX idx_accounts_code_commitment ON accounts(code_commitment) WHERE code_commitment IS NOT NULL;
--- Covering index for the prune_account_codes subquery: filters rows by block_num/is_latest and projects code_commitment
-CREATE INDEX idx_accounts_prune_code ON accounts(block_num, is_latest, code_commitment) WHERE code_commitment IS NOT NULL;
+-- Covering index for the prune_account_codes recent-history branch.
+CREATE INDEX idx_accounts_prune_code ON accounts(block_num, code_commitment) WHERE code_commitment IS NOT NULL;
+-- Covering index for the prune_account_codes latest-state branch.
+CREATE INDEX idx_accounts_latest_code_commitment
+    ON accounts(code_commitment)
+    WHERE is_latest = 1 AND code_commitment IS NOT NULL;
 
 CREATE TABLE notes (
-    committed_at                  INTEGER NOT NULL, -- Block number when the note was committed
+    committed_at                  BIGINT  NOT NULL, -- Block number when the note was committed
     batch_index                   INTEGER NOT NULL, -- Index of batch in block, starting from 0
     note_index                    INTEGER NOT NULL, -- Index of note in batch, starting from 0
     note_id                       BLOB    NOT NULL,
@@ -65,7 +64,7 @@ CREATE TABLE notes (
     target_account_id             BLOB,             -- Full target account ID for single-target network notes
     attachment                    BLOB    NOT NULL, -- Serialized note attachment data
     inclusion_path                BLOB    NOT NULL, -- Serialized sparse Merkle path of the note in the block's note tree
-    consumed_at                   INTEGER,          -- Block number when the note was consumed
+    consumed_at                   BIGINT,           -- Block number when the note was consumed
     nullifier                     BLOB,             -- Only known for public notes, null for private notes
     assets                        BLOB,
     storage                       BLOB,
@@ -102,7 +101,7 @@ CREATE TABLE note_scripts (
 
 CREATE TABLE account_storage_map_values (
     account_id          BLOB    NOT NULL,
-    block_num           INTEGER NOT NULL,
+    block_num           BIGINT  NOT NULL,
     slot_name           TEXT    NOT NULL,
     key                 BLOB    NOT NULL,
     value               BLOB    NOT NULL,
@@ -119,7 +118,7 @@ CREATE INDEX idx_account_storage_latest ON account_storage_map_values(account_id
 
 CREATE TABLE account_vault_assets (
     account_id          BLOB    NOT NULL,
-    block_num           INTEGER NOT NULL,
+    block_num           BIGINT  NOT NULL,
     vault_key           BLOB    NOT NULL,
     asset               BLOB,
     is_latest           BOOLEAN NOT NULL,
@@ -136,7 +135,7 @@ CREATE INDEX idx_vault_assets_latest ON account_vault_assets(account_id, is_late
 CREATE TABLE nullifiers (
     nullifier        BLOB    NOT NULL,
     nullifier_prefix INTEGER NOT NULL,
-    block_num        INTEGER NOT NULL,
+    block_num        BIGINT  NOT NULL,
 
     PRIMARY KEY (nullifier),
     CONSTRAINT nullifiers_nullifier_is_digest CHECK (length(nullifier) = 32),
@@ -148,15 +147,15 @@ CREATE INDEX idx_nullifiers_prefix ON nullifiers(nullifier_prefix);
 CREATE INDEX idx_nullifiers_block_num ON nullifiers(block_num);
 
 CREATE TABLE transactions (
-    transaction_id               BLOB    NOT NULL,
-    account_id                   BLOB    NOT NULL,
-    block_num                    INTEGER NOT NULL, -- Block number in which the transaction was included.
-    initial_state_commitment     BLOB    NOT NULL, -- State of the account before applying the transaction.
-    final_state_commitment       BLOB    NOT NULL, -- State of the account after applying the transaction.
-    input_notes                  BLOB    NOT NULL, -- Serialized Vec<InputNoteCommitment> (nullifier + optional NoteHeader).
-    output_notes                 BLOB    NOT NULL, -- Serialized Vec<NoteHeader> (NoteId + NoteMetadata).
-    size_in_bytes                INTEGER NOT NULL, -- Estimated size of the row in bytes, considering the size of the input and output notes.
-    fee                          BLOB    NOT NULL, -- Serialized FungibleAsset representing the fee paid by the transaction.
+    transaction_id               BLOB   NOT NULL,
+    account_id                   BLOB   NOT NULL,
+    block_num                    BIGINT NOT NULL, -- Block number in which the transaction was included.
+    initial_state_commitment     BLOB   NOT NULL, -- State of the account before applying the transaction.
+    final_state_commitment       BLOB   NOT NULL, -- State of the account after applying the transaction.
+    input_notes                  BLOB   NOT NULL, -- Serialized Vec<InputNoteCommitment> (nullifier + optional NoteHeader).
+    output_notes                 BLOB   NOT NULL, -- Serialized Vec<NoteHeader> (NoteId + NoteMetadata).
+    size_in_bytes                BIGINT NOT NULL, -- Estimated size of the row in bytes, considering the size of the input and output notes.
+    fee                          BLOB   NOT NULL, -- Serialized FungibleAsset representing the fee paid by the transaction.
 
     PRIMARY KEY (transaction_id)
 ) WITHOUT ROWID;
@@ -165,6 +164,9 @@ CREATE TABLE transactions (
 CREATE INDEX idx_transactions_account_id ON transactions(account_id);
 -- Index for joining with block_headers
 CREATE INDEX idx_transactions_block_num ON transactions(block_num);
+-- Composite index to speed up select_transactions_records.
+CREATE INDEX idx_transactions_account_block_txid
+    ON transactions(account_id, block_num, transaction_id);
 
 CREATE INDEX idx_vault_cleanup ON account_vault_assets(block_num) WHERE is_latest = 0;
 CREATE INDEX idx_storage_cleanup ON account_storage_map_values(block_num) WHERE is_latest = 0;

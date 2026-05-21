@@ -1,4 +1,5 @@
 use http::header::HeaderName;
+use tower_governor::key_extractor::{KeyExtractor, SmartIpKeyExtractor};
 use tracing::field;
 
 use crate::tracing::OpenTelemetrySpanExt;
@@ -20,20 +21,12 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
 
     // Create a span with a generic, static name. Fields to be recorded after needs to be
     // initialized as empty since otherwise the assignment will have no effect.
-    let span = match method {
-        "SyncState" | "SyncNullifiers" => tracing::debug_span!(
-            "rpc",
-            otel.name = field::Empty,
-            rpc.service = service,
-            rpc.method = method
-        ),
-        _ => tracing::info_span!(
-            "rpc",
-            otel.name = field::Empty,
-            rpc.service = service,
-            rpc.method = method
-        ),
-    };
+    let span = tracing::info_span!(
+        "rpc",
+        otel.name = field::Empty,
+        rpc.service = service,
+        rpc.method = method
+    );
 
     // Set the span name via otel.name
     let otel_name = format!("{service}/{method}");
@@ -63,9 +56,17 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         .extensions()
         .get::<tonic::transport::server::TcpConnectInfo>()
         .and_then(tonic::transport::server::TcpConnectInfo::remote_addr);
-    if let Some(addr) = remote_addr {
+
+    // client.address should be the resolved IP address of the client, if available. In the case of
+    // a reverse proxy, this may not be the same as the remote address.
+    if let Ok(ip) = SmartIpKeyExtractor.extract(request) {
+        span.set_attribute("client.address", ip);
+    } else if let Some(addr) = remote_addr {
         span.set_attribute("client.address", addr.ip());
         span.set_attribute("client.port", addr.port());
+    }
+
+    if let Some(addr) = remote_addr {
         span.set_attribute("network.peer.address", addr.ip());
         span.set_attribute("network.peer.port", addr.port());
         span.set_attribute("network.transport", "tcp");

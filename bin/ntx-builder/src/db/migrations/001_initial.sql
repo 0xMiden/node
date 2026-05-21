@@ -4,7 +4,7 @@ CREATE TABLE chain_state (
     -- Singleton constraint: only one row allowed.
     id              INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
     -- Block number of the chain tip.
-    block_num       INTEGER NOT NULL,
+    block_num       BIGINT NOT NULL,
     -- Serialized BlockHeader.
     block_header    BLOB    NOT NULL,
 
@@ -33,7 +33,7 @@ CREATE UNIQUE INDEX idx_accounts_inflight ON accounts(account_id, transaction_id
 CREATE INDEX idx_accounts_account ON accounts(account_id);
 CREATE INDEX idx_accounts_tx ON accounts(transaction_id) WHERE transaction_id IS NOT NULL;
 
--- Notes: committed, inflight, and nullified — all in one table.
+-- Notes: committed, inflight, and nullified - all in one table.
 -- created_by = NULL means committed note; non-NULL means created by inflight tx.
 -- consumed_by = NULL means unconsumed; non-NULL means consumed by inflight tx.
 -- committed_at = block number when the consuming transaction was committed on-chain.
@@ -49,7 +49,7 @@ CREATE TABLE notes (
     -- Backoff tracking: number of failed execution attempts.
     attempt_count   INTEGER NOT NULL DEFAULT 0,
     -- Backoff tracking: block number of the last failed attempt. NULL if never attempted.
-    last_attempt    INTEGER,
+    last_attempt    BIGINT,
     -- Latest execution error message. NULL if no error recorded.
     last_error      TEXT,
     -- NULL if the note came from a committed block; transaction ID if created by inflight tx.
@@ -58,7 +58,7 @@ CREATE TABLE notes (
     consumed_by     BLOB,
     -- Block number at which the note's consuming transaction was committed.
     -- NULL while the note is still pending or in-flight; set on block commit.
-    committed_at    INTEGER,
+    committed_at    BIGINT,
 
     CONSTRAINT notes_attempt_count_non_negative CHECK (attempt_count >= 0),
     CONSTRAINT notes_last_attempt_is_u32 CHECK (last_attempt BETWEEN 0 AND 0xFFFFFFFF),

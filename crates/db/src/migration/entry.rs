@@ -72,6 +72,47 @@ impl fmt::Debug for CodeMigration {
     }
 }
 
+/// An active migration that remains supported for existing databases.
+pub(super) enum Migration {
+    Sql(SqlMigration),
+    Code(CodeMigration),
+}
+
+impl Migration {
+    pub(super) fn sql(name: &'static str, sql: &'static str) -> Self {
+        Self::Sql(SqlMigration::new(name, sql))
+    }
+
+    pub(super) fn code(name: &'static str, apply: CodeMigrationFn) -> Self {
+        Self::Code(CodeMigration::new(name, apply))
+    }
+}
+
+impl MigrationEntry for Migration {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Sql(migration) => migration.name(),
+            Self::Code(migration) => migration.name(),
+        }
+    }
+
+    fn execute_migration(&self, tx: &Transaction<'_>) -> Result<()> {
+        match self {
+            Self::Sql(migration) => migration.execute_migration(tx),
+            Self::Code(migration) => migration.execute_migration(tx),
+        }
+    }
+}
+
+impl fmt::Debug for Migration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sql(migration) => fmt::Debug::fmt(migration, f),
+            Self::Code(migration) => fmt::Debug::fmt(migration, f),
+        }
+    }
+}
+
 /// Applies `migration`, sets `user_version`, commits, and returns the resulting schema hash.
 pub(super) fn apply_migration(
     conn: &mut Connection,

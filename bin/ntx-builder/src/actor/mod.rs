@@ -81,6 +81,12 @@ pub struct ActorConfig {
     pub idle_timeout: Duration,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures
+    /// (prover unreachable, validator/block-producer transport error, store gRPC hiccup). Doubles
+    /// each retry up to [`Self::request_backoff_max`].
+    pub request_backoff_initial: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
 }
 
 // ACCOUNT ACTOR CONTEXT
@@ -135,6 +141,8 @@ impl AccountActorContext {
                 max_note_attempts: 1,
                 idle_timeout: Duration::from_secs(60),
                 max_cycles: 1 << 18,
+                request_backoff_initial: Duration::from_millis(1),
+                request_backoff_max: Duration::from_millis(10),
             },
             request_tx,
         }
@@ -403,6 +411,11 @@ impl AccountActor {
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Returns the new actor mode based on the execution result.
+    ///
+    /// Transient infrastructure failures (prover unreachable, validator/block-producer transport
+    /// hiccup, store gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
+    /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
+    /// are marked failed and the actor moves on.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
@@ -420,6 +433,8 @@ impl AccountActor {
             self.state.script_cache.clone(),
             self.state.db.clone(),
             self.config.max_cycles,
+            self.config.request_backoff_initial,
+            self.config.request_backoff_max,
         );
 
         let notes = tx_candidate.notes.clone();

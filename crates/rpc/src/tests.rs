@@ -45,6 +45,129 @@ use url::Url;
 
 use crate::Rpc;
 
+/// A wrapper around the store runtime and data directory.
+///
+/// Guarantees that the store runtime is shut down _before_ the data directory is dropped and thus removed.
+struct TestStore {
+    runtime: Option<Runtime>,
+    data_directory: Option<TempDir>,
+    genesis_commitment: Word,
+    store_addr: SocketAddr,
+}
+
+impl TestStore {
+    fn genesis_commitment(&self) -> Word {
+        self.genesis_commitment
+    }
+
+    fn store_addr(&self) -> SocketAddr {
+        self.store_addr
+    }
+
+    fn data_directory_path(&self) -> &std::path::Path {
+        self.data_directory.as_ref().expect("data_directory should be set").path()
+    }
+
+    async fn shutdown(mut self) -> TempDir {
+        if let Some(runtime) = self.runtime.take() {
+            shutdown_store_runtime(runtime).await;
+        }
+        self.data_directory.take().expect("data_directory should be set")
+    }
+
+    async fn start(store_listener: TcpListener) -> Self {
+        let data_directory = tempfile::tempdir().expect("tempdir should be created");
+        let genesis_commitment = Self::bootstrap(data_directory.path());
+        Self::start_without_bootstrap(data_directory, genesis_commitment, store_listener).await
+    }
+
+    fn bootstrap(path: &std::path::Path) -> Word {
+        let config = GenesisConfig::default();
+        let signer = SigningKey::new();
+        let (genesis_state, _) = config.into_state(signer.public_key()).unwrap();
+        let genesis_block = genesis_state
+            .clone()
+            .into_block(&signer)
+            .expect("genesis block should be created");
+        let genesis_commitment = genesis_block.inner().header().commitment();
+
+        Store::bootstrap(genesis_block, path).expect("store should bootstrap");
+
+        genesis_commitment
+    }
+
+    async fn start_without_bootstrap(
+        data_directory: TempDir,
+        genesis_commitment: Word,
+        store_listener: TcpListener,
+    ) -> Self {
+        let dir = data_directory.path().to_path_buf();
+        let store_addr =
+            store_listener.local_addr().expect("store listener should get a local address");
+        let rpc_listener = store_listener;
+        let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind store ntx-builder gRPC endpoint");
+        let block_producer_listener =
+            TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
+
+        // In order to later kill the store, we need to spawn a new runtime and run the store on it.
+        // That allows us to kill all the tasks spawned by the store when we kill the runtime.
+        let store_runtime =
+            runtime::Builder::new_multi_thread().enable_time().enable_io().build().unwrap();
+        store_runtime.spawn(async move {
+            Store {
+                rpc_listener,
+                mode: StoreMode::BlockProducer {
+                    block_producer_listener,
+                    ntx_builder_listener,
+                    block_prover_url: None,
+                    max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
+                },
+                data_directory: dir,
+                database_options: miden_node_store::DatabaseOptions::default(),
+                grpc_options: GrpcOptionsInternal::test(),
+                storage_options: StorageOptions::default(),
+            }
+            .serve()
+            .await
+            .expect("store should start serving");
+        });
+
+        Self {
+            runtime: Some(store_runtime),
+            data_directory: Some(data_directory),
+            genesis_commitment,
+            store_addr,
+        }
+    }
+}
+
+impl Drop for TestStore {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            shutdown_store_runtime_blocking(runtime);
+        }
+    }
+}
+
+/// Shuts down the store runtime properly to allow `RocksDB` to flush before the temp directory is
+/// deleted.
+async fn shutdown_store_runtime(store_runtime: Runtime) {
+    spawn_blocking_in_current_span(move || shutdown_store_runtime_blocking(store_runtime))
+        .await
+        .expect("shutdown should complete");
+}
+
+fn shutdown_store_runtime_blocking(store_runtime: Runtime) {
+    std::thread::spawn(move || {
+        store_runtime.shutdown_timeout(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(200));
+    })
+    .join()
+    .expect("store runtime shutdown thread should complete");
+}
+
 /// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
 /// `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
 const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
@@ -137,7 +260,7 @@ fn build_test_proven_tx_with_id(
 async fn rpc_server_accepts_requests_without_accept_header() {
     // Start the RPC.
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let _store = TestStore::start(store_listener).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client = {
@@ -155,9 +278,6 @@ async fn rpc_server_accepts_requests_without_accept_header() {
 
     // Assert that the server did not reject our request.
     assert!(response.is_ok());
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
@@ -168,7 +288,7 @@ async fn rpc_rate_limits_per_ip() {
         ..GrpcOptionsExternal::test()
     };
     let (_, rpc_addr, store_listener) = start_rpc_with_options(grpc_options).await;
-    let (store_runtime, data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let _store = TestStore::start(store_listener).await;
 
     let url = rpc_addr.to_string();
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
@@ -189,25 +309,19 @@ async fn rpc_rate_limits_per_ip() {
         last_error.is_some_and(|code| code == tonic::Code::ResourceExhausted),
         "expected rate limit error but got: {last_error:?}"
     );
-
-    shutdown_store(store_runtime).await;
-    drop(data_directory);
 }
 
 #[tokio::test]
 async fn rpc_server_accepts_requests_with_accept_header() {
     // Start the RPC.
     let (mut rpc_client, _, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let _store = TestStore::start(store_listener).await;
 
     // Send any request to the RPC.
     let response = send_request(&mut rpc_client).await;
 
     // Assert the server does not reject our request on the basis of missing accept header.
     assert!(response.is_ok());
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
@@ -215,8 +329,7 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
     for version in ["1.9.0", "0.8.1", "0.8.0", "0.999.0", "99.0.0"] {
         // Start the RPC.
         let (_, rpc_addr, store_listener) = start_rpc().await;
-        let (store_runtime, _data_directory, _genesis, _store_addr) =
-            start_store(store_listener).await;
+        let _store = TestStore::start(store_listener).await;
 
         // Recreate the RPC client with an invalid version.
         let url = rpc_addr.to_string();
@@ -239,9 +352,6 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
         assert!(response.is_err());
         assert_eq!(response.as_ref().err().unwrap().code(), tonic::Code::InvalidArgument);
         assert!(response.as_ref().err().unwrap().message().contains("server does not support"),);
-
-        // Shutdown to avoid runtime drop error.
-        shutdown_store(store_runtime).await;
     }
 }
 
@@ -258,31 +368,33 @@ async fn rpc_startup_is_robust_to_network_failures() {
     assert!(response.is_err());
 
     // Start the store.
-    let (store_runtime, data_directory, _genesis, store_addr) = start_store(store_listener).await;
+    let store = TestStore::start(store_listener).await;
 
     // Test: send request against RPC api and should succeed
     let response = send_request_until_success(&mut rpc_client).await;
     assert!(response.unwrap().into_inner().block_header.is_some());
 
     // Test: shutdown the store and should fail
-    shutdown_store(store_runtime).await;
+    let store_addr = store.store_addr();
+    let genesis_commitment = store.genesis_commitment();
+    let data_directory = store.shutdown().await;
     let response = send_request(&mut rpc_client).await;
     assert!(response.is_err());
 
     // Test: restart the store and request should succeed
-    let store_runtime = restart_store(store_addr, data_directory.path()).await;
+    let store_listener = TcpListener::bind(store_addr).await.expect("Failed to bind store");
+    let _store =
+        TestStore::start_without_bootstrap(data_directory, genesis_commitment, store_listener)
+            .await;
     let response = send_request_until_success(&mut rpc_client).await;
     assert_eq!(response.unwrap().into_inner().block_header.unwrap().block_num, 0);
-
-    // Shutdown the store before data_directory is dropped to allow RocksDB to flush properly
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
 async fn rpc_server_has_web_support() {
     // Start server
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let _store = TestStore::start(store_listener).await;
 
     // Send a status request
     let client = reqwest::Client::new();
@@ -318,14 +430,14 @@ async fn rpc_server_has_web_support() {
     assert!(headers.get("access-control-allow-credentials").is_some());
     assert!(headers.get("access-control-expose-headers").is_some());
     assert!(headers.get("vary").is_some());
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     // Start the RPC.
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, genesis, _store_addr) = start_store(store_listener).await;
+    let store = TestStore::start(store_listener).await;
+    let genesis = store.genesis_commitment();
 
     // Wait for the store to be ready before sending requests.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -370,16 +482,14 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
         err.contains("failed to validate account delta in transaction account update"),
         "expected error message to contain delta commitment error but got: {err}"
     );
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
     // Start the RPC.
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, genesis, _store_addr) = start_store(store_listener).await;
+    let store = TestStore::start(store_listener).await;
+    let genesis = store.genesis_commitment();
 
     // Wait for the store to be ready before sending requests.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -415,15 +525,13 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
         err.contains("does not match the chain's commitment of"),
         "expected error message to contain reference block error but got: {err}"
     );
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
 async fn rpc_rejects_post_deployment_network_account_tx() {
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, data_directory, genesis, _store_addr) = start_store(store_listener).await;
+    let store = TestStore::start(store_listener).await;
+    let genesis = store.genesis_commitment();
 
     // Wait for the store to be ready before sending requests.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -448,7 +556,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         AccountStorageMode::Public,
     );
     miden_node_store::test_support::seed_network_account(
-        &data_directory.path().join("miden-store.sqlite3"),
+        &store.data_directory_path().join("miden-store.sqlite3"),
         network_account_id,
     );
 
@@ -467,8 +575,6 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         err.contains("Network transactions may not be submitted by users yet"),
         "expected the network-tx gate error, got: {err}"
     );
-
-    shutdown_store(store_runtime).await;
 }
 
 // Batch-path coverage for the network-account gate is provided manually. Building a valid
@@ -481,7 +587,8 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
     // Start the RPC.
     let (_, rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, genesis, _store_addr) = start_store(store_listener).await;
+    let store = TestStore::start(store_listener).await;
+    let genesis = store.genesis_commitment();
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -514,9 +621,6 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         ),
         "expected error message to reference incompatible content media types but got: {err:?}"
     );
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 /// Sends an arbitrary / irrelevant request to the RPC.
@@ -609,100 +713,11 @@ async fn start_rpc_with_options(
     (rpc_client, rpc_addr, store_listener)
 }
 
-async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, SocketAddr) {
-    // Start the store.
-    let data_directory = tempfile::tempdir().expect("tempdir should be created");
-
-    let config = GenesisConfig::default();
-    let signer = SigningKey::new();
-    let (genesis_state, _) = config.into_state(signer.public_key()).unwrap();
-    let genesis_block = genesis_state
-        .clone()
-        .into_block(&signer)
-        .expect("genesis block should be created");
-    let genesis_commitment = genesis_block.inner().header().commitment();
-    Store::bootstrap(genesis_block, data_directory.path()).expect("store should bootstrap");
-    let dir = data_directory.path().to_path_buf();
-    let store_addr =
-        store_listener.local_addr().expect("store listener should get a local address");
-    let rpc_listener = store_listener;
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
-    let block_producer_listener =
-        TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-    // In order to later kill the store, we need to spawn a new runtime and run the store on it.
-    // That allows us to kill all the tasks spawned by the store when we kill the runtime.
-    let store_runtime =
-        runtime::Builder::new_multi_thread().enable_time().enable_io().build().unwrap();
-    store_runtime.spawn(async move {
-        Store {
-            rpc_listener,
-            mode: StoreMode::BlockProducer {
-                block_producer_listener,
-                ntx_builder_listener,
-                block_prover_url: None,
-                max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
-            },
-            data_directory: dir,
-            database_options: miden_node_store::DatabaseOptions::default(),
-            grpc_options: GrpcOptionsInternal::test(),
-            storage_options: StorageOptions::default(),
-        }
-        .serve()
-        .await
-        .expect("store should start serving");
-    });
-    (store_runtime, data_directory, genesis_commitment, store_addr)
-}
-
-/// Shuts down the store runtime properly to allow `RocksDB` to flush before the temp directory is
-/// deleted.
-async fn shutdown_store(store_runtime: Runtime) {
-    spawn_blocking_in_current_span(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
-        .await
-        .expect("shutdown should complete");
-    // Give RocksDB time to release its lock file after the runtime shutdown
-    tokio::time::sleep(Duration::from_millis(200)).await;
-}
-
-/// Restarts a store using an existing data directory. Returns the runtime handle for shutdown.
-async fn restart_store(store_addr: SocketAddr, data_directory: &std::path::Path) -> Runtime {
-    let rpc_listener = TcpListener::bind(store_addr).await.expect("Failed to bind store");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
-    let block_producer_listener =
-        TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-    let dir = data_directory.to_path_buf();
-    let store_runtime =
-        runtime::Builder::new_multi_thread().enable_time().enable_io().build().unwrap();
-    store_runtime.spawn(async move {
-        Store {
-            rpc_listener,
-            mode: StoreMode::BlockProducer {
-                block_producer_listener,
-                ntx_builder_listener,
-                block_prover_url: None,
-                max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
-            },
-            data_directory: dir,
-            database_options: miden_node_store::DatabaseOptions::default(),
-            grpc_options: GrpcOptionsInternal::test(),
-            storage_options: StorageOptions::default(),
-        }
-        .serve()
-        .await
-        .expect("store should start serving");
-    });
-    store_runtime
-}
-
 #[tokio::test]
 async fn get_limits_endpoint() {
     // Start the RPC and store
     let (mut rpc_client, _rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let _store = TestStore::start(store_listener).await;
 
     // Call the get_limits endpoint
     let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");
@@ -762,15 +777,12 @@ async fn get_limits_endpoint() {
         QueryParamNoteIdLimit::PARAM_NAME,
         QueryParamNoteIdLimit::LIMIT
     );
-
-    // Shutdown to avoid runtime drop error.
-    shutdown_store(store_runtime).await;
 }
 
 #[tokio::test]
 async fn sync_chain_mmr_returns_delta() {
     let (mut rpc_client, _rpc_addr, store_listener) = start_rpc().await;
-    let (store_runtime, _data_directory, _genesis, _store_addr) = start_store(store_listener).await;
+    let _store = TestStore::start(store_listener).await;
 
     let request = proto::rpc::SyncChainMmrRequest {
         current_client_block_height: 0,
@@ -782,8 +794,6 @@ async fn sync_chain_mmr_returns_delta() {
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
     assert!(mmr_delta.data.is_empty());
-
-    shutdown_store(store_runtime).await;
 }
 
 #[test]

@@ -1,10 +1,8 @@
 # Block Producer Component
 
 The block-producer is responsible for ordering transactions into batches, and batches into blocks, and creating the
-proofs for these. Proving is usually outsourced to a remote prover but can be done locally if throughput isn't
+proofs for batches. Proving is usually outsourced to a remote prover but can be done locally if throughput isn't
 essential, e.g. for test purposes on a local node.
-
-It hosts a single gRPC endpoint to which the RPC component can forward new transactions.
 
 The core of the block-producer revolves around the mempool which forms a DAG of all in-flight transactions and batches.
 It also ensures all invariants of the transactions are upheld e.g. account's current state matches the transaction's
@@ -17,8 +15,22 @@ the mempool where it can be included in a block.
 
 ## Block production
 
-Proven batches are selected from the mempool periodically to form the next block. The block is then proven and committed
-to the store. At this point all transactions and batches in the block are removed from the mempool as committed.
+Proven batches are selected from the mempool periodically to form the next block. The block is then built and sent to the
+validator for verification and signing.
+This signed block is then submitted to the store where it gets proven and committed. Proof
+generation in production is typically 
+outsourced to a remote machine with appropriate resources. For convenience,
+it is also possible to perform proving in-process. This is useful when running a local node for test purposes.
+
+Once the block is committed,  all transactions and batches in the block are marked in the mempool as committed.
+
+## Mempool data pruning
+
+The mempool keeps the `N` most recent blocks locally, to allow incoming transactions a grace period so we can verify their
+state against the store, and the local state deltas in the mempool. Without this overlap, we would constantly be racing
+transaction check against the store with newly committed blocks.
+
+After each now block, the `N+1`th oldest block and its batches and transactionsa are pruned from the mempool state.
 
 ## Transaction lifecycle
 
@@ -42,5 +54,5 @@ above lifecycle (which effectively shows the happy path). This can occur if:
 
 - The transaction expires before being included in a block.
 - Any parent transaction is dropped (which will revert the state, invalidating child transactions).
-- It causes proving or any part of block/batch creation to fail. This is a fail-safe against unforeseen bugs, removing
+- It causes proving or any part of block/batch creation to fail repeatedly. This is a fail-safe against unforeseen bugs, removing
   problematic (but potentially valid) transactions from the mempool to prevent outages.

@@ -2,7 +2,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
-use futures::FutureExt;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
@@ -81,12 +80,16 @@ impl BlockBuilder {
             // Exit if a fatal error occurred.
             //
             // No need for error logging since this is handled inside the function.
-            if let err @ Err(BuildBlockError::Desync { local_chain_tip, .. }) =
-                self.build_block(&mempool).await
-            {
-                return err.with_context(|| {
-                    format!("fatal error while building block {}", local_chain_tip.child())
-                });
+            match self.build_block(&mempool).await {
+                Err(err @ BuildBlockError::Desync { local_chain_tip, .. }) => {
+                    return Err(err).with_context(|| {
+                        format!("fatal error while building block {}", local_chain_tip.child())
+                    });
+                },
+                Err(err @ BuildBlockError::MempoolPoisoned(_)) => {
+                    return Err(err).context("fatal error while accessing mempool");
+                },
+                Err(_) | Ok(()) => {},
             }
         }
     }
@@ -106,7 +109,8 @@ impl BlockBuilder {
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
-        let selected = Self::select_block(mempool).inspect(SelectedBlock::inject_telemetry).await;
+        let selected = Self::select_block(mempool)?;
+        selected.inject_telemetry();
         let block_num = selected.block_number;
 
         self.get_block_inputs(selected)
@@ -120,15 +124,15 @@ impl BlockBuilder {
             // Handle errors by propagating the error to the root span and rolling back the block.
             .inspect_err(|err| Span::current().set_error(err))
             .or_else(|err| async {
-                self.rollback_block(mempool, block_num).await;
+                Self::rollback_block(mempool, block_num)?;
                 Err(err)
             })
             .await
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
-    async fn select_block(mempool: &SharedMempool) -> SelectedBlock {
-        mempool.lock().await.select_block()
+    fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
+        Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
 
     /// Fetches block inputs from the store for the [`SelectedBlock`].
@@ -266,14 +270,15 @@ impl BlockBuilder {
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
         let (header, ..) = signed_block.into_parts();
-        mempool.lock().await.commit_block(header);
+        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(header);
 
         Ok(())
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
-    async fn rollback_block(&self, mempool: &SharedMempool, block: BlockNumber) {
-        mempool.lock().await.rollback_block(block);
+    fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
+        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
+        Ok(())
     }
 }
 

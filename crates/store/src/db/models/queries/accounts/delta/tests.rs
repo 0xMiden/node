@@ -4,8 +4,7 @@
 use std::collections::BTreeMap;
 
 use assert_matches::assert_matches;
-use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
-use diesel_migrations::MigrationHarness;
+use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
@@ -40,7 +39,6 @@ use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
-use crate::db::migrations::MIGRATIONS;
 use crate::db::models::queries::accounts::tests::select_account_vault_at_block;
 use crate::db::models::queries::accounts::{
     select_account_header_with_storage_header_at_block,
@@ -50,12 +48,7 @@ use crate::db::models::queries::accounts::{
 use crate::db::schema::accounts;
 
 fn setup_test_db() -> SqliteConnection {
-    let mut conn =
-        SqliteConnection::establish(":memory:").expect("Failed to create in-memory database");
-
-    conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
-
-    conn
+    crate::db::migrations::test_connection()
 }
 
 fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {

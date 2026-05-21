@@ -23,7 +23,6 @@ aws-config             = { version = "1.8.14" }
 aws-sdk-kms            = { version = "1.100" }
 clap                   = { features = ["env", "string"], workspace = true }
 diesel                 = { workspace = true }
-diesel_migrations      = { workspace = true }
 fs-err                 = { workspace = true }
 hex                    = { workspace = true }
 miden-node-db          = { workspace = true }
@@ -42,7 +41,8 @@ tower-http             = { features = ["util"], workspace = true }
 tracing                = { workspace = true }
 
 [build-dependencies]
-build-rs = { workspace = true }
+build-rs      = { workspace = true }
+miden-node-db = { workspace = true }
 
 [dev-dependencies]
 miden-node-store = { workspace = true }

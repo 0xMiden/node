@@ -45,6 +45,8 @@ pub enum DatabaseError {
     },
     #[error(transparent)]
     Diesel(#[from] diesel::result::Error),
+    #[error("failed to apply database migrations")]
+    Migration(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("schema verification failed")]
     SchemaVerification(#[from] SchemaVerificationError),
     #[error("I/O error")]
@@ -69,6 +71,13 @@ impl DatabaseError {
     pub fn interact(msg: &(impl ToString + ?Sized), e: &InteractError) -> Self {
         let msg = msg.to_string();
         Self::InteractError(format!("{msg} failed: {e:?}"))
+    }
+
+    /// Creates a database migration error with the original source error.
+    pub fn migration(
+        source: impl Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ) -> Self {
+        Self::Migration(source.into())
     }
 
     /// Failed to convert an SQL entry to a rust representation

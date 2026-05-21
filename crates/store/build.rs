@@ -1,6 +1,3 @@
-// This build.rs is required to trigger the `diesel_migrations::embed_migrations!` proc-macro in
-// `store/src/db/migrations.rs` to include the latest version of the migrations into the binary, see <https://docs.rs/diesel_migrations/latest/diesel_migrations/macro.embed_migrations.html#automatic-rebuilds>.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,8 +15,9 @@ use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
 
-fn main() {
-    build_rs::output::rerun_if_changed("src/db/migrations");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    miden_node_db::migration::Migrator::generate("src/db/migrations")?;
+
     // If we do one re-write, the default rules are disabled,
     // hence we need to trigger explicitly on `Cargo.toml`.
     // <https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-changed>
@@ -27,6 +25,8 @@ fn main() {
 
     // Generate sample agglayer account files for genesis config samples.
     generate_agglayer_sample_accounts();
+
+    Ok(())
 }
 
 /// Generates sample agglayer account files for the `02-with-account-files` genesis config sample.
