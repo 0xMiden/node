@@ -15,7 +15,7 @@
 - Refactored the remote prover gRPC API implementation to use the new per-method trait implementations ([#1975](https://github.com/0xMiden/node/issues/1975)).
 - Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, extended `GetLimits` test coverage, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
 - Added a `replica` mode to the store, which streams blocks from an upstream master store ([#1987](https://github.com/0xMiden/node/pull/1987)).
-- Added `StoreReplica` gRPC service with endpoints for streaming blocks and proofs ([#1987](https://github.com/0xMiden/node/pull/1987)).
+- Added public and store `Rpc` streaming endpoints for replica block/proof synchronization ([#1987](https://github.com/0xMiden/node/pull/1987)).
 - Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 - [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).

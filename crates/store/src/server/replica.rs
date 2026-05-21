@@ -2,12 +2,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use miden_node_proto::generated::store::{
-    BlockProof,
+use miden_node_proto::generated::rpc::{
     BlockSubscriptionRequest,
+    BlockSubscriptionResponse,
     ProofSubscriptionRequest,
-    SignedBlock,
-    store_replica_server,
+    ProofSubscriptionResponse,
 };
 use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
@@ -39,37 +38,36 @@ impl<S: Stream> Stream for GuardedStream<S> {
     }
 }
 
-// STORE REPLICA API
+// RPC SUBSCRIPTION API
 // ================================================================================================
 
-#[tonic::async_trait]
-impl store_replica_server::StoreReplica for StoreApi {
-    type BlockSubscriptionStream = Pin<
-        Box<
-            dyn tonic::codegen::tokio_stream::Stream<Item = Result<SignedBlock, Status>>
-                + Send
-                + 'static,
-        >,
-    >;
+pub(super) type BlockSubscriptionStream = Pin<
+    Box<
+        dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockSubscriptionResponse, Status>>
+            + Send
+            + 'static,
+    >,
+>;
 
-    type ProofSubscriptionStream = Pin<
-        Box<
-            dyn tonic::codegen::tokio_stream::Stream<Item = Result<BlockProof, Status>>
-                + Send
-                + 'static,
-        >,
-    >;
+pub(super) type ProofSubscriptionStream = Pin<
+    Box<
+        dyn tonic::codegen::tokio_stream::Stream<Item = Result<ProofSubscriptionResponse, Status>>
+            + Send
+            + 'static,
+    >,
+>;
 
+impl StoreApi {
     /// Streams committed blocks to a replica starting from `from_block_number`.
     ///
     /// Subscribes to the committed-tip watch channel and maintains a sequential counter. On each
     /// tip advance it emits all blocks from the current position up to the new tip, falling back to
     /// the block store for any entry not in the in-memory cache. The stream closes only when the
     /// client disconnects or the server shuts down.
-    async fn block_subscription(
+    pub(super) async fn block_subscription_inner(
         &self,
         request: Request<BlockSubscriptionRequest>,
-    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+    ) -> Result<Response<BlockSubscriptionStream>, Status> {
         let permit = Arc::clone(&self.block_subscription_semaphore)
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
@@ -82,18 +80,20 @@ impl store_replica_server::StoreReplica for StoreApi {
             self.committed_tip_rx.clone(),
             Arc::clone(&self.state),
         );
-        Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
+        let stream: BlockSubscriptionStream =
+            Box::pin(GuardedStream { inner: stream, _permit: permit });
+        Ok(Response::new(stream))
     }
 
     /// Streams block proofs to a replica starting from `from_block_number`.
     ///
-    /// Uses the same watch-channel approach as [`Self::block_subscription`]: waits for the
+    /// Uses the same watch-channel approach as [`Self::block_subscription_inner`]: waits for the
     /// proven-in-sequence tip to advance, then emits all proofs from the current position up to
     /// the new tip, falling back to the block store for cache misses.
-    async fn proof_subscription(
+    pub(super) async fn proof_subscription_inner(
         &self,
         request: Request<ProofSubscriptionRequest>,
-    ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
+    ) -> Result<Response<ProofSubscriptionStream>, Status> {
         let permit = Arc::clone(&self.proof_subscription_semaphore)
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("maximum proof subscriptions reached"))?;
@@ -106,7 +106,9 @@ impl store_replica_server::StoreReplica for StoreApi {
             self.proven_tip_rx.clone(),
             Arc::clone(&self.state),
         );
-        Ok(Response::new(Box::pin(GuardedStream { inner: stream, _permit: permit })))
+        let stream: ProofSubscriptionStream =
+            Box::pin(GuardedStream { inner: stream, _permit: permit });
+        Ok(Response::new(stream))
     }
 }
 
@@ -119,7 +121,7 @@ fn build_block_stream(
     cache: BlockCache,
     tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
-) -> impl Stream<Item = Result<SignedBlock, Status>> + Send + 'static {
+) -> impl Stream<Item = Result<BlockSubscriptionResponse, Status>> + Send + 'static {
     let (tx, rx) = mpsc::channel(32);
     tokio::spawn(async move {
         if let Err(status) = run_block_stream(from, cache, tip_rx, state, &tx).await {
@@ -136,7 +138,7 @@ fn build_proof_stream(
     cache: ProofCache,
     tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
-) -> impl Stream<Item = Result<BlockProof, Status>> + Send + 'static {
+) -> impl Stream<Item = Result<ProofSubscriptionResponse, Status>> + Send + 'static {
     let (tx, rx) = mpsc::channel(32);
     tokio::spawn(async move {
         if let Err(status) = run_proof_stream(from, cache, tip_rx, state, &tx).await {
@@ -159,7 +161,7 @@ async fn run_block_stream(
     cache: BlockCache,
     mut tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
-    tx: &mpsc::Sender<Result<SignedBlock, Status>>,
+    tx: &mpsc::Sender<Result<BlockSubscriptionResponse, Status>>,
 ) -> Result<(), Status> {
     let mut next = from;
     loop {
@@ -167,7 +169,14 @@ async fn run_block_stream(
         let tip = *tip_rx.borrow_and_update();
         while next <= tip {
             let bytes = fetch_block(next, &cache, &state).await?;
-            if tx.send(Ok(SignedBlock { block: bytes })).await.is_err() {
+            if tx
+                .send(Ok(BlockSubscriptionResponse {
+                    block: bytes,
+                    committed_chain_tip: tip.as_u32(),
+                }))
+                .await
+                .is_err()
+            {
                 // Client disconnected.
                 return Ok(());
             }
@@ -190,7 +199,7 @@ async fn run_proof_stream(
     cache: ProofCache,
     mut tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
-    tx: &mpsc::Sender<Result<BlockProof, Status>>,
+    tx: &mpsc::Sender<Result<ProofSubscriptionResponse, Status>>,
 ) -> Result<(), Status> {
     let mut next = from;
     loop {
@@ -198,7 +207,15 @@ async fn run_proof_stream(
         let tip = *tip_rx.borrow_and_update();
         while next <= tip {
             let proof = fetch_proof(next, &cache, &state).await?;
-            if tx.send(Ok(BlockProof { block_num: next.as_u32(), proof })).await.is_err() {
+            if tx
+                .send(Ok(ProofSubscriptionResponse {
+                    block_num: next.as_u32(),
+                    proof,
+                    proven_chain_tip: tip.as_u32(),
+                }))
+                .await
+                .is_err()
+            {
                 // Client disconnected.
                 return Ok(());
             }

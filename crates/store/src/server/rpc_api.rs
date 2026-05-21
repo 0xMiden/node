@@ -35,6 +35,7 @@ use crate::errors::{
     SyncTransactionsError,
 };
 use crate::server::api::{StoreApi, internal_error};
+use crate::server::replica::{BlockSubscriptionStream, ProofSubscriptionStream};
 use crate::state::Finality;
 
 // CLIENT ENDPOINTS
@@ -42,6 +43,23 @@ use crate::state::Finality;
 
 #[tonic::async_trait]
 impl rpc_server::Rpc for StoreApi {
+    type BlockSubscriptionStream = BlockSubscriptionStream;
+    type ProofSubscriptionStream = ProofSubscriptionStream;
+
+    async fn block_subscription(
+        &self,
+        request: Request<proto::rpc::BlockSubscriptionRequest>,
+    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+        self.block_subscription_inner(request).await
+    }
+
+    async fn proof_subscription(
+        &self,
+        request: Request<proto::rpc::ProofSubscriptionRequest>,
+    ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
+        self.proof_subscription_inner(request).await
+    }
+
     /// Returns block header for the specified block number.
     ///
     /// If the block number is not provided, block header for the latest block is returned.
