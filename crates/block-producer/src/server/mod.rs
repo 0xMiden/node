@@ -160,10 +160,7 @@ impl BlockProducer {
         let batch_builder_id = tasks
             .spawn({
                 let mempool = mempool.clone();
-                async {
-                    batch_builder.run(mempool).await;
-                    Ok(())
-                }
+                async { batch_builder.run(mempool).await }
             })
             .id();
         let block_builder_id = tasks
@@ -275,7 +272,10 @@ impl BlockProducerRpcServer {
                 interval.tick().await;
 
                 let (chain_tip, unbatched_transactions, proposed_batches, proven_batches) = {
-                    let mempool = mempool.lock().await;
+                    let Ok(mempool) = mempool.lock() else {
+                        tracing::error!("mempool lock poisoned, stopping mempool stats updater");
+                        return;
+                    };
                     (
                         mempool.chain_tip(),
                         mempool.unbatched_transactions_count() as u64,
@@ -304,6 +304,7 @@ impl BlockProducerRpcServer {
          skip_all,
          err
      )]
+    #[expect(clippy::let_and_return)]
     async fn submit_proven_tx(
         &self,
         request: proto::transaction::ProvenTransaction,
@@ -339,7 +340,14 @@ impl BlockProducerRpcServer {
             .map(Arc::new)
             .map_err(MempoolSubmissionError::StateConflict)?;
 
-        self.mempool.lock().await.lock().await.add_transaction(tx).map(Into::into)
+        let shared_mempool = self.mempool.lock().await;
+        // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
+        let result = shared_mempool
+            .lock()
+            .map_err(MempoolSubmissionError::MempoolPoisoned)?
+            .add_transaction(tx)
+            .map(Into::into);
+        result
     }
 
     #[instrument(
@@ -348,6 +356,7 @@ impl BlockProducerRpcServer {
          skip_all,
          err
      )]
+    #[expect(clippy::let_and_return)]
     async fn submit_proven_tx_batch(
         &self,
         request: proto::transaction::TransactionBatch,
@@ -377,7 +386,14 @@ impl BlockProducerRpcServer {
             txs.push(tx);
         }
 
-        self.mempool.lock().await.lock().await.add_user_batch(&txs).map(Into::into)
+        let shared_mempool = self.mempool.lock().await;
+        // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
+        let result = shared_mempool
+            .lock()
+            .map_err(MempoolSubmissionError::MempoolPoisoned)?
+            .add_user_batch(&txs)
+            .map(Into::into);
+        result
     }
 }
 
@@ -425,7 +441,11 @@ impl api_server::Api for BlockProducerRpcServer {
         &self,
         _request: tonic::Request<()>,
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
-        let subscription = self.mempool.lock().await.lock().await.subscribe();
+        let shared_mempool = self.mempool.lock().await;
+        let subscription = shared_mempool
+            .lock()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?
+            .subscribe();
         let subscription = ReceiverStream::new(subscription);
 
         Ok(tonic::Response::new(MempoolEventSubscription { inner: subscription }))

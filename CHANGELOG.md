@@ -19,6 +19,7 @@
 - Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 - [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
+- Replaced local store block proving with `spawn_blocking` to avoid starving the Tokio runtime ([#1976](https://github.com/0xMiden/node/issues/1976)).
 - Implemented persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
 - [BREAKING] Replaced binding URL env vars and CLI flags with listen socket addresses ([#2054](https://github.com/0xMiden/node/pull/2054)).
 - [BREAKING] `BlockRange.block_to` is now required for all RPC endpoints ([#2056](https://github.com/0xMiden/node/pull/2056)).
@@ -33,6 +34,11 @@
 - Added `--batch.workers` flag (env `MIDEN_NODE_BLOCK_PRODUCER_BATCH_WORKERS`) to the block-producer to make the previously-hardcoded batch-builder worker pool size configurable; default remains 2 ([#2073](https://github.com/0xMiden/node/pull/2073)).
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+## v0.14.11 (TBD)
+
+- Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
+- Implement persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
+- Fixed network transaction builder permanently dropping notes after transient infrastructure failures. These now retry with exponential backoff at the actor level instead of consuming per-note retry budget ([#2052](https://github.com/0xMiden/node/issues/2052)).
 
 ## v0.14.10 (2026-05-29)
 
@@ -40,6 +46,7 @@
 - Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982)).
 - Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
 - Fixed occasional mempool panic during transaction submission, causing the lock to be held for longer than expected ([#1984](https://github.com/0xMiden/node/pull/1984)).
+- Optimize `GetAccount` implementation: `all_entries` requests now mostly use state from `AccountStateForest` ([#2012](https://github.com/0xMiden/node/pull/2012)).
 
 ## v0.14.9 (2026-04-21)
 

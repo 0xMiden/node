@@ -77,12 +77,8 @@ pub struct TransactionGraph {
     /// used to identify potentially buggy transactions that should be evicted.
     failures: HashMap<TransactionId, u32>,
 
-    /// Defines the transactions that belong to a user batch.
-    user_batch_txs: HashMap<BatchId, Vec<TransactionId>>,
-    /// A mapping of transactions to their user batch (if any).
-    ///
-    /// Inverse map of `user_batch_txs`.
-    txs_user_batch: HashMap<TransactionId, BatchId>,
+    /// Bijective mapping of user batches and their transactions.
+    user_batches: BatchTxMap,
 }
 
 impl TransactionGraph {
@@ -93,6 +89,9 @@ impl TransactionGraph {
         self.inner.append(tx)
     }
 
+    /// Appends the transactions into the graph as an atomic unit.
+    ///
+    /// These transactions can only be selected as a batch, and are reverted and pruned together.
     pub fn append_user_batch(
         &mut self,
         batch: &[Arc<AuthenticatedTransaction>],
@@ -115,67 +114,66 @@ impl TransactionGraph {
         }
 
         let txs = batch.iter().map(GraphNode::id).collect::<Vec<_>>();
-        for tx in &txs {
-            self.txs_user_batch.insert(*tx, batch_id);
-        }
-        self.user_batch_txs.insert(batch_id, txs);
+        self.user_batches.insert(batch_id, txs);
 
         Ok(())
     }
 
     pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
-        self.select_user_batch().or_else(|| self.select_conventional_batch(budget))
+        self.select_user_batch().or_else(|| self.select_internal_batch(budget))
     }
 
     fn select_user_batch(&mut self) -> Option<SelectedBatch> {
-        // Comb through all user batch candidates.
-        let candidate_batches = self
-            .inner
-            .selection_candidates()
-            .values()
-            .filter_map(|tx| self.txs_user_batch.get(&tx.id()))
-            .copied()
-            .collect::<HashSet<_>>();
-
-        'outer: for candidate in candidate_batches {
-            let mut selected = SelectedBatch::builder();
-
-            let txs = self
-                .user_batch_txs
-                .get(&candidate)
-                .cloned()
-                .expect("bi-directional mapping should be coherent");
-
-            for tx in txs {
-                let Some(tx) = self.inner.selection_candidates().get(&tx).copied() else {
-                    // Rollback this batch selection since it cannot complete.
-                    for tx in selected.txs.into_iter().rev() {
-                        self.inner.deselect(tx.id());
-                    }
-
-                    continue 'outer;
-                };
-                let tx = Arc::clone(tx);
-
-                self.inner.select_candidate(tx.id());
-                selected.push(tx);
+        let candidate_batches = self.user_batches.batches().copied().collect::<HashSet<_>>();
+        for candidate in candidate_batches {
+            if let Some(batch) = self.try_select_user_batch_candidate(candidate) {
+                return Some(batch);
             }
-
-            assert!(!selected.is_empty(), "User batch should not be empty");
-            return Some(selected.build());
         }
 
         None
     }
 
-    fn select_conventional_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
+    /// Attempts to select all transactions from the candidate user batch.
+    ///
+    /// This action succeeds if all transactions in the batch can be sequentially selected.
+    /// If any transaction cannot be selected, then all previous selections are rolled back,
+    /// and `None` is returned. This makes this function atomic.
+    ///
+    /// Transactions can fail selection if they depend on any external transactions that have
+    /// not yet been selected.
+    fn try_select_user_batch_candidate(&mut self, candidate: BatchId) -> Option<SelectedBatch> {
+        let mut selected = SelectedBatch::builder();
+
+        let txs = self.user_batches.get_txs_contained_in_batch(&candidate)?;
+
+        for tx in txs {
+            let Some(tx) = self.inner.selection_candidates().get(&tx).copied() else {
+                // Rollback this batch selection since it cannot complete.
+                for tx in selected.txs.into_iter().rev() {
+                    self.inner.deselect(tx.id());
+                }
+
+                return None;
+            };
+            let tx = Arc::clone(tx);
+
+            self.inner.select_candidate(tx.id());
+            selected.push(tx);
+        }
+
+        assert!(!selected.is_empty(), "User batch should not be empty");
+        Some(selected.build())
+    }
+
+    fn select_internal_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
         let mut selected = SelectedBatch::builder();
 
         loop {
             // Select arbitrary candidate which is _not_ part of a user batch.
             let candidates = self.inner.selection_candidates();
             let Some(candidate) =
-                candidates.values().find(|tx| !self.txs_user_batch.contains_key(&tx.id()))
+                candidates.values().find(|tx| !self.user_batches.contains_tx(&tx.id()))
             else {
                 break;
             };
@@ -213,7 +211,6 @@ impl TransactionGraph {
     /// _before_ calling this function. i.e. first revert expired batches and deselect their
     /// transactions, then call this.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> HashSet<TransactionId> {
-        // We only revert transactions which are _not_ included in batches.
         let mut to_revert = self.inner.expired(chain_tip);
         to_revert.retain(|tx| !self.inner.is_selected(tx));
 
@@ -256,10 +253,10 @@ impl TransactionGraph {
                 // transactions in, which will result in at least the current transaction being
                 // duplicated in `to_revert`. This isn't a concern though since we skip already
                 // processed transactions at the top of the loop.
-                if let Some(batch) = self.txs_user_batch.remove(&tx.id()) {
-                    if let Some(batch) = self.user_batch_txs.remove(&batch) {
-                        to_revert.extend(batch);
-                    }
+                if let Some(batch_id) = self.user_batches.get_batch_containing_tx(&tx.id()).copied()
+                {
+                    let batch_txs = self.user_batches.remove(&batch_id);
+                    to_revert.extend_from_slice(&batch_txs);
                 }
             }
 
@@ -322,9 +319,8 @@ impl TransactionGraph {
         for tx in batch.transactions() {
             self.inner.prune(tx.id());
             self.failures.remove(&tx.id());
-            self.txs_user_batch.remove(&tx.id());
         }
-        self.user_batch_txs.remove(&batch.id());
+        self.user_batches.remove(&batch.id());
     }
 
     /// Number of transactions which have not been selected for inclusion in a batch.
@@ -347,5 +343,49 @@ impl TransactionGraph {
 
     pub fn output_note_count(&self) -> usize {
         self.inner.output_note_count()
+    }
+}
+
+// BIJECTIVE <USER BATCH, TRANSACTION> MAP
+// ================================================================================================
+
+/// A bijective mapping of batches and their transactions.
+#[derive(Clone, Debug, PartialEq, Default)]
+struct BatchTxMap {
+    by_batch: HashMap<BatchId, Vec<TransactionId>>,
+    by_tx: HashMap<TransactionId, BatchId>,
+}
+
+impl BatchTxMap {
+    fn insert(&mut self, batch: BatchId, txs: Vec<TransactionId>) {
+        for tx in &txs {
+            assert!(self.by_tx.insert(*tx, batch).is_none());
+        }
+        assert!(self.by_batch.insert(batch, txs).is_none());
+    }
+
+    fn remove(&mut self, batch: &BatchId) -> Vec<TransactionId> {
+        let txs = self.by_batch.remove(batch).unwrap_or_default();
+        for tx in &txs {
+            self.by_tx.remove(tx);
+        }
+        txs
+    }
+
+    fn batches(&self) -> impl Iterator<Item = &BatchId> {
+        self.by_batch.keys()
+    }
+
+    /// Returns the [`BatchId`] mapped to this transaction, if any.
+    fn get_batch_containing_tx(&self, tx: &TransactionId) -> Option<&BatchId> {
+        self.by_tx.get(tx)
+    }
+
+    fn get_txs_contained_in_batch(&self, batch: &BatchId) -> Option<&[TransactionId]> {
+        self.by_batch.get(batch).map(Vec::as_slice)
+    }
+
+    fn contains_tx(&self, tx: &TransactionId) -> bool {
+        self.by_tx.contains_key(tx)
     }
 }

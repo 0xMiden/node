@@ -29,7 +29,7 @@ can be used so long as the checksum file and the package file are in the same fo
 
 ## Install using `cargo`
 
-Install Rust version **1.89** or greater using the official Rust installation
+Install Rust using the official Rust installation
 [instructions](https://www.rust-lang.org/tools/install).
 
 Depending on the platform, you may need to install additional libraries. For example, on Ubuntu 22.04 the following

@@ -8,13 +8,13 @@ Network accounts are a special type of fully public account which contains no au
 whose state can therefore be updated by anyone (in theory). Such accounts are required when publicly
 mutable state is needed.
 
-The issue with publicly mutable state is that transactions against an account must be sequential
+An issue with publicly mutable state is that transactions against an account must be sequential
 and require the previous account commitment in order to create the transaction proof. This conflicts
 with Miden's client side proving and concurrency model since users would race each other to submit
 transactions against such an account.
 
-Instead the solution is to have the network be responsible for driving the account state forward,
-and users can interact with the account using notes. Notes don't require a specific ordering and
+Instead our solution is to have the network be responsible for driving the account state forward,
+and users can interact with the account only indirectly using notes. Notes don't require a specific ordering and
 can be created concurrently without worrying about conflicts. We call these network notes and they
 always target a specific network account.
 
@@ -53,9 +53,8 @@ argument (default: 5 minutes).
 Deactivated actors are re-spawned when new notes targeting their account are detected by the
 coordinator (via the `send_targeted` path).
 
-If an actor repeatedly crashes (shuts down due to a database error), its crash count is tracked by
-the coordinator. Once the count reaches the configurable threshold, the account is **deactivated**
-and no new actor will be spawned for it. This prevents resource exhaustion from a persistently
+Each actors crash count is tracked, and once the count reaches a configurable threshold, the account is 
+**deactivated** and no new actor will be spawned for it. This prevents resource exhaustion from a persistently
 failing account. The threshold is configurable via the `--ntx-builder.max-account-crashes` CLI
 argument (default: 10).
 

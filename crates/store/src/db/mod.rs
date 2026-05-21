@@ -52,7 +52,6 @@ fn default_storage_map_entries_limit() -> usize {
 }
 
 mod migrations;
-mod schema_hash;
 
 #[cfg(test)]
 mod tests;
@@ -61,23 +60,8 @@ pub(crate) mod models;
 
 /// [diesel](https://diesel.rs) generated schema
 ///
-/// ```sh
-/// cargo binstall diesel_cli
-/// sqlite3 -init ./src/db/migrations/001-init.sql ephemeral_setup.db ""
-/// diesel setup --database-url=./ephemeral_setup.db
-/// diesel print-schema > src/db/schema.rs
-/// ```
-///
-/// which assumes an _existing_ database.
-///
-/// Unfortunately, there is no systematic way of modifying the schema other
-/// than patching (in the diff sense) which is brittle at best.
-/// So the above must be followed by a manual editing step, for now it's
-/// limited to:
-///
-/// * `i64`/`u64` being represented as `BigInt`
-///
-/// The list might be extended.
+/// The ignored `diesel_schema_is_in_sync_with_migrations` test verifies that this file matches the
+/// schema produced by the current migrations.
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
@@ -261,20 +245,17 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
-        // Create database.
-        //
-        // This will create the file if it does not exist, but will also happily open it if already
-        // exists. In the latter case we will error out when attempting to insert the genesis
-        // block so this isn't such a problem.
+        apply_migrations(&database_filepath).context("failed to apply database migrations")?;
+
+        // Open the database. This will create the file if it does not exist, but will also happily
+        // open it if already exists. In the latter case we will error out when attempting to insert
+        // the genesis block so this isn't such a problem.
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
         )
         .context("failed to open a database connection")?;
 
         miden_node_db::configure_connection_on_creation(&mut conn)?;
-
-        // Run migrations.
-        apply_migrations(&mut conn).context("failed to apply database migrations")?;
 
         // Insert genesis block data.
         let genesis_block = genesis.into_inner();
@@ -296,6 +277,8 @@ impl Db {
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
     ) -> Result<Self, DatabaseError> {
+        apply_migrations(&database_filepath)?;
+
         let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
             target: COMPONENT,
@@ -304,7 +287,6 @@ impl Db {
             "Connected to the database"
         );
 
-        db.query("migrations", apply_migrations).await?;
         Ok(Self { db })
     }
 

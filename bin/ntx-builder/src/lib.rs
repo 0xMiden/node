@@ -66,6 +66,14 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
+/// Default initial sleep applied between per-request retries on transient infrastructure failures
+/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles on
+/// each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
+
+/// Default upper bound on the per-request retry backoff sleep.
+const DEFAULT_REQUEST_BACKOFF_MAX: Duration = Duration::from_secs(30);
+
 /// Default maximum number of VM execution cycles allowed for a network transaction.
 ///
 /// This limits the computational cost of network transactions. The protocol maximum is
@@ -130,6 +138,15 @@ pub struct NtxBuilderConfig {
     /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
+    /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
+    /// prover unreachable, validator/block-producer crash, transport error, store gRPC hiccup).
+    /// Doubles on each retry up to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not*
+    /// advanced while retries are in progress.
+    pub request_backoff_initial: Duration,
+
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 
@@ -158,6 +175,8 @@ impl NtxBuilderConfig {
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
+            request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
+            request_backoff_max: DEFAULT_REQUEST_BACKOFF_MAX,
             database_filepath,
             sqlite_connection_pool_size: miden_node_db::default_connection_pool_size(),
         }
@@ -247,6 +266,15 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the per-request retry backoff bounds (initial sleep and cap) used when retrying
+    /// transient infrastructure failures inside a single transaction attempt.
+    #[must_use]
+    pub fn with_request_backoff(mut self, initial: Duration, max: Duration) -> Self {
+        self.request_backoff_initial = initial;
+        self.request_backoff_max = max;
+        self
+    }
+
     /// Sets the SQLite connection pool size.
     #[must_use]
     pub fn with_sqlite_connection_pool_size(mut self, size: NonZeroUsize) -> Self {
@@ -325,6 +353,8 @@ impl NtxBuilderConfig {
                 max_note_attempts: self.max_note_attempts,
                 idle_timeout: self.idle_timeout,
                 max_cycles: self.max_cycles,
+                request_backoff_initial: self.request_backoff_initial,
+                request_backoff_max: self.request_backoff_max,
             },
             request_tx,
         };
