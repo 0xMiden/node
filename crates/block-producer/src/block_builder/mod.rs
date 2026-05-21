@@ -159,7 +159,7 @@ impl BlockBuilder {
 
         let unauthenticated_notes_iter = batch_iter.clone().flat_map(|batch| {
             // Note: .cloned() shouldn't be necessary but not having it produces an odd lifetime
-            // error in BlockProducer::serve. Not sure if there's a better fix. Error:
+            // error in RemoteBlockProducer::serve. Not sure if there's a better fix. Error:
             // implementation of `FnOnce` is not general enough closure with signature
             // `fn(&InputNoteCommitment) -> miden_protocol::note::NoteId` must implement
             // `FnOnce<(&InputNoteCommitment,)>` ...but it actually implements

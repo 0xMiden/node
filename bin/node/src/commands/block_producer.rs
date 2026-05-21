@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::{
-    BlockProducer,
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
+    RemoteBlockProducer,
 };
 use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
 use url::Url;
@@ -84,7 +84,7 @@ impl BlockProducerCommand {
             );
         }
 
-        BlockProducer {
+        RemoteBlockProducer {
             block_producer_address,
             store_url,
             validator_url,

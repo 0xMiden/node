@@ -14,7 +14,7 @@ use tokio::{runtime, task};
 use tonic::transport::{Channel, Endpoint};
 use url::Url;
 
-use crate::server::BlockProducer;
+use crate::server::RemoteBlockProducer;
 use crate::{DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
 
 /// Tests that the block producer starts up correctly even when the store is not initially
@@ -66,7 +66,7 @@ async fn block_producer_startup_is_robust_to_network_failures() {
     let validator_url =
         Url::parse(&format!("http://{validator_addr}")).expect("Failed to parse validator URL");
     task::spawn(async move {
-        BlockProducer {
+        RemoteBlockProducer {
             block_producer_address: block_producer_addr,
             store_url,
             validator_url,

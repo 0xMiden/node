@@ -28,13 +28,13 @@ use crate::store::StoreClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT};
 
 pub mod embedded;
-pub mod rpc;
+pub mod remote;
 
 #[cfg(test)]
 mod tests;
 
 pub use embedded::EmbeddedBlockProducer;
-pub use rpc::BlockProducer;
+pub use remote::RemoteBlockProducer;
 
 // BLOCK PRODUCER HANDLE
 // ================================================================================================
