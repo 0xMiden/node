@@ -12,7 +12,7 @@ use url::Url;
 const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
-const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
+const ENV_SEQUENCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_SEQUENCER_URL";
 const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
 const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
 const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
@@ -33,9 +33,9 @@ pub enum NtxBuilderCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: SocketAddr,
 
-        /// The store's ntx-builder service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
-        store_url: Url,
+        /// The sequencer's NtxBuilderApi gRPC url.
+        #[arg(long = "sequencer.url", env = ENV_SEQUENCER_URL, value_name = "URL")]
+        sequencer_url: Url,
 
         /// The block-producer's gRPC url.
         #[arg(long = "block-producer.url", env = ENV_BLOCK_PRODUCER_URL, value_name = "URL")]
@@ -117,7 +117,7 @@ impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
             listen,
-            store_url,
+            sequencer_url,
             block_producer_url,
             validator_url,
             tx_prover_url,
@@ -137,7 +137,7 @@ impl NtxBuilderCommand {
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
         let config = miden_ntx_builder::NtxBuilderConfig::new(
-            store_url,
+            sequencer_url,
             block_producer_url,
             validator_url,
             database_filepath,

@@ -48,10 +48,10 @@ pub struct StoreClient {
 
 impl StoreClient {
     /// Creates a new store client with a lazy connection.
-    pub fn new(store_url: Url) -> Self {
-        info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
+    pub fn new(sequencer_url: Url) -> Self {
+        info!(target: COMPONENT, store_endpoint = %sequencer_url, "Initializing store client");
 
-        let store = Builder::new(store_url)
+        let store = Builder::new(sequencer_url)
             .without_tls()
             .without_timeout()
             .without_metadata_version()

@@ -127,7 +127,7 @@ services:
       - miden-ntx-builder
       - start
       - --listen=0.0.0.0:50301
-      - --store.url=http://store:50002
+      - --sequencer.url=http://store:50002
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101
       - --data-directory=/data/ntx-builder

@@ -192,7 +192,7 @@ PIDS+=($!)
 echo "Starting network transaction builder..."
 OTEL_SERVICE_NAME=miden-ntx-builder $NTX_BUILDER_BINARY start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
-    --store.url "http://127.0.0.1:$SEQUENCER_NTX_BUILDER_PORT" \
+    --sequencer.url "http://127.0.0.1:$SEQUENCER_NTX_BUILDER_PORT" \
     --block-producer.url "http://127.0.0.1:$SEQUENCER_BLOCK_PRODUCER_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
     --data-directory "$NTX_BUILDER_DIR" \

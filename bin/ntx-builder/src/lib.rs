@@ -80,8 +80,8 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 /// This struct contains all the settings needed to create and run a `NetworkTransactionBuilder`.
 #[derive(Debug, Clone)]
 pub struct NtxBuilderConfig {
-    /// Address of the store gRPC server (ntx-builder API).
-    pub store_url: Url,
+    /// Address of the sequencer's NtxBuilderApi gRPC server.
+    pub sequencer_url: Url,
 
     /// Address of the block producer gRPC server.
     pub block_producer_url: Url,
@@ -139,13 +139,13 @@ pub struct NtxBuilderConfig {
 
 impl NtxBuilderConfig {
     pub fn new(
-        store_url: Url,
+        sequencer_url: Url,
         block_producer_url: Url,
         validator_url: Url,
         database_filepath: PathBuf,
     ) -> Self {
         Self {
-            store_url,
+            sequencer_url,
             block_producer_url,
             validator_url,
             tx_prover_url: None,
@@ -280,7 +280,7 @@ impl NtxBuilderConfig {
         let coordinator =
             Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
 
-        let store = StoreClient::new(self.store_url.clone());
+        let store = StoreClient::new(self.sequencer_url.clone());
         let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
         let validator = ValidatorClient::new(self.validator_url.clone());
         let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
