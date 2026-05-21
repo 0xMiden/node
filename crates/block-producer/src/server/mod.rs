@@ -224,7 +224,7 @@ impl EmbeddedBlockProducer {
                 })
                 .id();
 
-            let block_builder_id = tasks.spawn(async { block_builder.run(mempool).await } ).id();
+            let block_builder_id = tasks.spawn(async { block_builder.run(mempool).await }).id();
 
             let task_ids = HashMap::from([
                 (batch_builder_id, "batch-builder"),

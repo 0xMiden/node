@@ -71,12 +71,12 @@ pub enum SequencerCommand {
         replica_listen: SocketAddr,
 
         /// The validator's gRPC url.
-        #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
-        validator_url: Url,
+        #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL", value_parser = parse_boxed_url)]
+        validator_url: Box<Url>,
 
         /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
-        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
-        block_prover_url: Option<Url>,
+        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL", value_parser = parse_boxed_url)]
+        block_prover_url: Option<Box<Url>>,
 
         /// Directory in which to store the database and raw block data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
@@ -104,13 +104,13 @@ pub enum SequencerCommand {
         sqlite_connection_pool_size: NonZeroUsize,
 
         #[command(flatten)]
-        block_producer: BlockProducerConfig,
+        block_producer: Box<BlockProducerConfig>,
 
         #[command(flatten)]
-        grpc_options: GrpcOptionsExternal,
+        grpc_options: Box<GrpcOptionsExternal>,
 
         #[command(flatten)]
-        storage_options: StorageOptions,
+        storage_options: Box<StorageOptions>,
     },
 }
 
@@ -154,16 +154,16 @@ impl SequencerCommand {
                     block_producer_listen,
                     ntx_builder_listen,
                     replica_listen,
-                    validator_url,
-                    block_prover_url,
+                    *validator_url,
+                    block_prover_url.map(|b| *b),
                     data_directory,
                     max_concurrent_proofs,
                     DatabaseOptions {
                         connection_pool_size: sqlite_connection_pool_size,
                     },
-                    block_producer,
-                    grpc_options,
-                    storage_options,
+                    *block_producer,
+                    *grpc_options,
+                    *storage_options,
                 )
                 .await
             },
@@ -291,4 +291,8 @@ fn bootstrap_sequencer(data_directory: &Path, genesis_block_path: &Path) -> anyh
         GenesisBlock::try_from(signed_block).context("genesis block validation failed")?;
 
     miden_node_store::Store::bootstrap(genesis_block, data_directory)
+}
+
+fn parse_boxed_url(s: &str) -> Result<Box<Url>, url::ParseError> {
+    s.parse::<Url>().map(Box::new)
 }
