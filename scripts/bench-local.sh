@@ -89,7 +89,11 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-for bin in miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark; do
+required_bins=(miden-node miden-validator miden-ntx-builder miden-benchmark)
+if [ "$USE_REMOTE_PROVER" = "1" ]; then
+    required_bins+=(miden-remote-prover)
+fi
+for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
 
