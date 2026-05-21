@@ -204,7 +204,7 @@ impl BatchJob {
 
     #[instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
     fn select_batch(&self) -> Result<Option<SelectedBatch>, BuildBatchError> {
-        Ok(self.mempool.lock()?.select_batch())
+        Ok(self.mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_batch())
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
@@ -298,13 +298,19 @@ impl BatchJob {
 
     #[instrument(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
     fn commit_batch(&self, batch: Arc<ProvenBatch>) -> Result<(), BuildBatchError> {
-        self.mempool.lock()?.commit_batch(batch);
+        self.mempool
+            .lock()
+            .map_err(BuildBatchError::MempoolPoisoned)?
+            .commit_batch(batch);
         Ok(())
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
     fn rollback_batch(&self, batch_id: BatchId) -> Result<(), BuildBatchError> {
-        self.mempool.lock()?.rollback_batch(batch_id);
+        self.mempool
+            .lock()
+            .map_err(BuildBatchError::MempoolPoisoned)?
+            .rollback_batch(batch_id);
         Ok(())
     }
 }

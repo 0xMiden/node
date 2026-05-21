@@ -130,7 +130,7 @@ pub enum BuildBatchError {
     SecurityLevelTooLow(u32, u32),
 
     #[error("mempool lock is poisoned")]
-    MempoolPoisoned(#[from] MempoolPoisonError),
+    MempoolPoisoned(#[source] MempoolPoisonError),
 }
 
 // Block building errors
@@ -157,7 +157,7 @@ pub enum BuildBlockError {
     InvalidSignature,
 
     #[error("mempool lock is poisoned")]
-    MempoolPoisoned(#[from] MempoolPoisonError),
+    MempoolPoisoned(#[source] MempoolPoisonError),
 
     /// We sometimes randomly inject errors into the batch building process to test our failure
     /// responses.
