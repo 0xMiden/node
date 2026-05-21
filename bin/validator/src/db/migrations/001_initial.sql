@@ -2,7 +2,7 @@ CREATE TABLE validated_transactions (
     id                    BLOB NOT NULL,
     block_num             BIGINT NOT NULL,
     account_id            BLOB NOT NULL,
-    account_delta         BLOB,
+    account_delta         BLOB NOT NULL,
     input_notes           BLOB,
     output_notes          BLOB,
     initial_account_hash  BLOB NOT NULL,

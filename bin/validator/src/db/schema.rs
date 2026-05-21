@@ -12,7 +12,7 @@ diesel::table! {
         id -> Binary,
         block_num -> BigInt,
         account_id -> Binary,
-        account_delta -> Nullable<Binary>,
+        account_delta -> Binary,
         input_notes -> Nullable<Binary>,
         output_notes -> Nullable<Binary>,
         initial_account_hash -> Binary,
