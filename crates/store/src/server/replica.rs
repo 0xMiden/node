@@ -165,10 +165,10 @@ async fn run_block_stream(
 ) -> Result<(), Status> {
     let mut next = from;
     loop {
-        // Read tip.
-        let tip = *tip_rx.borrow_and_update();
+        let mut tip = *tip_rx.borrow_and_update();
         while next <= tip {
             let bytes = fetch_block(next, &cache, &state).await?;
+            tip = *tip_rx.borrow_and_update();
             if tx
                 .send(Ok(BlockSubscriptionResponse {
                     block: bytes,
@@ -203,10 +203,10 @@ async fn run_proof_stream(
 ) -> Result<(), Status> {
     let mut next = from;
     loop {
-        // Read tip.
-        let tip = *tip_rx.borrow_and_update();
+        let mut tip = *tip_rx.borrow_and_update();
         while next <= tip {
             let proof = fetch_proof(next, &cache, &state).await?;
+            tip = *tip_rx.borrow_and_update();
             if tx
                 .send(Ok(ProofSubscriptionResponse {
                     block_num: next.as_u32(),
