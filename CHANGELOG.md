@@ -31,6 +31,7 @@
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- Added `miden-node sequencer` command ([#2102](https://github.com/0xMiden/node/pull/2102)).
 
 ## v0.14.10 (2026-05-29)
 

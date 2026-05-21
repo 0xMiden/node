@@ -62,7 +62,8 @@ pub enum SequencerCommand {
         #[arg(long = "block-producer.listen", env = ENV_BLOCK_PRODUCER_LISTEN, value_name = "LISTEN")]
         block_producer_listen: SocketAddr,
 
-        /// Socket address at which to serve the sequencer.NtxBuilderApi gRPC API for the ntx-builder.
+        /// Socket address at which to serve the sequencer.NtxBuilderApi gRPC API for the
+        /// ntx-builder.
         #[arg(long = "ntx-builder.listen", env = ENV_NTX_BUILDER_LISTEN, value_name = "LISTEN")]
         ntx_builder_listen: SocketAddr,
 

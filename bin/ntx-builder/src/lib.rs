@@ -80,7 +80,7 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 /// This struct contains all the settings needed to create and run a `NetworkTransactionBuilder`.
 #[derive(Debug, Clone)]
 pub struct NtxBuilderConfig {
-    /// Address of the sequencer's NtxBuilderApi gRPC server.
+    /// Address of the sequencer's `NtxBuilderApi` gRPC server.
     pub sequencer_url: Url,
 
     /// Address of the block producer gRPC server.

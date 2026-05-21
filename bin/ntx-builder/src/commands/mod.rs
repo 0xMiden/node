@@ -33,7 +33,7 @@ pub enum NtxBuilderCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: SocketAddr,
 
-        /// The sequencer's NtxBuilderApi gRPC url.
+        /// The sequencer's `NtxBuilderApi` gRPC url.
         #[arg(long = "sequencer.url", env = ENV_SEQUENCER_URL, value_name = "URL")]
         sequencer_url: Url,
 
