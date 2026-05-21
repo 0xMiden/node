@@ -133,7 +133,7 @@ pub async fn seed_store(
 
     // start the store
     let (_, store_url) = start_store(data_directory.clone()).await;
-    let store_client = StoreClient::new(store_url);
+    let store_client = StoreClient::new_remote(store_url);
 
     // start generating blocks
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);

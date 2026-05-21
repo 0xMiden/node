@@ -423,7 +423,7 @@ pub enum StoreClient {
 
 impl StoreClient {
     /// Creates a gRPC-backed store client with a lazy connection.
-    pub fn new(store_url: Url) -> Self {
+    pub fn new_remote(store_url: Url) -> Self {
         Self::Remote(RemoteStoreClient::new(store_url).into())
     }
 

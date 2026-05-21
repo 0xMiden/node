@@ -57,7 +57,7 @@ impl RemoteBlockProducer {
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
         info!(target: COMPONENT, endpoint=?self.block_producer_address, store=%self.store_url, "Initializing server");
-        let store = StoreClient::new(self.store_url.clone());
+        let store = StoreClient::new_remote(self.store_url.clone());
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
 
         // Retry fetching the chain tip from the store until it succeeds.
