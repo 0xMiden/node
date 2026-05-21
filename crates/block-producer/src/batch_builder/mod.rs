@@ -195,9 +195,8 @@ impl BatchJob {
         match result {
             Ok(()) => Ok(()),
             Err(err @ BuildBatchError::MempoolPoisoned(_)) => Err(err),
-            Err(err) => {
+            Err(_) => {
                 self.rollback_batch(batch_id)?;
-                Span::current().set_error(&err);
                 Ok(())
             },
         }

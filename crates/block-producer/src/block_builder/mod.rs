@@ -90,9 +90,7 @@ impl BlockBuilder {
                 Err(err @ BuildBlockError::MempoolPoisoned(_)) => {
                     return Err(err).context("fatal error while accessing mempool");
                 },
-                Err(err) => {
-                    Span::current().set_error(&err);
-                },
+                Err(_) => {},
                 Ok(()) => {},
             }
         }
