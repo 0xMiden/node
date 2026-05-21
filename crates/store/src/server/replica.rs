@@ -2,21 +2,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use miden_node_proto::generated::rpc::{
-    BlockSubscriptionRequest,
-    BlockSubscriptionResponse,
-    ProofSubscriptionRequest,
-    ProofSubscriptionResponse,
-};
+use miden_node_proto::generated::rpc::{BlockSubscriptionResponse, ProofSubscriptionResponse};
 use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
 use pin_project::pin_project;
 use tokio::sync::{OwnedSemaphorePermit, mpsc, watch};
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status};
+use tonic::Status;
 
-use crate::server::api::StoreApi;
 use crate::state::{BlockCache, ProofCache, State};
 
 // GUARDED STREAM
@@ -24,10 +18,16 @@ use crate::state::{BlockCache, ProofCache, State};
 
 /// Wraps a stream and holds a semaphore permit for its lifetime, releasing it on drop.
 #[pin_project]
-struct GuardedStream<S: Stream> {
+pub(super) struct GuardedStream<S: Stream> {
     #[pin]
     inner: S,
     _permit: OwnedSemaphorePermit,
+}
+
+impl<S: Stream> GuardedStream<S> {
+    pub(super) fn new(inner: S, permit: OwnedSemaphorePermit) -> Self {
+        Self { inner, _permit: permit }
+    }
 }
 
 impl<S: Stream> Stream for GuardedStream<S> {
@@ -57,66 +57,11 @@ pub(super) type ProofSubscriptionStream = Pin<
     >,
 >;
 
-impl StoreApi {
-    /// Streams committed blocks to a replica starting from `from_block_number`.
-    ///
-    /// Subscribes to the committed-tip watch channel and maintains a sequential counter. On each
-    /// tip advance it emits all blocks from the current position up to the new tip, falling back to
-    /// the block store for any entry not in the in-memory cache. The stream closes only when the
-    /// client disconnects or the server shuts down.
-    pub(super) async fn block_subscription_inner(
-        &self,
-        request: Request<BlockSubscriptionRequest>,
-    ) -> Result<Response<BlockSubscriptionStream>, Status> {
-        let permit = Arc::clone(&self.block_subscription_semaphore)
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
-
-        let from = BlockNumber::from(request.into_inner().block_from);
-
-        let stream = build_block_stream(
-            from,
-            self.block_cache.clone(),
-            self.committed_tip_rx.clone(),
-            Arc::clone(&self.state),
-        );
-        let stream: BlockSubscriptionStream =
-            Box::pin(GuardedStream { inner: stream, _permit: permit });
-        Ok(Response::new(stream))
-    }
-
-    /// Streams block proofs to a replica starting from `from_block_number`.
-    ///
-    /// Uses the same watch-channel approach as [`Self::block_subscription_inner`]: waits for the
-    /// proven-in-sequence tip to advance, then emits all proofs from the current position up to
-    /// the new tip, falling back to the block store for cache misses.
-    pub(super) async fn proof_subscription_inner(
-        &self,
-        request: Request<ProofSubscriptionRequest>,
-    ) -> Result<Response<ProofSubscriptionStream>, Status> {
-        let permit = Arc::clone(&self.proof_subscription_semaphore)
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("maximum proof subscriptions reached"))?;
-
-        let from = BlockNumber::from(request.into_inner().block_from);
-
-        let stream = build_proof_stream(
-            from,
-            self.proof_cache.clone(),
-            self.proven_tip_rx.clone(),
-            Arc::clone(&self.state),
-        );
-        let stream: ProofSubscriptionStream =
-            Box::pin(GuardedStream { inner: stream, _permit: permit });
-        Ok(Response::new(stream))
-    }
-}
-
 // STREAM BUILDERS
 // ================================================================================================
 
 /// Spawns the block-stream task and returns its output as a [`ReceiverStream`].
-fn build_block_stream(
+pub(super) fn build_block_stream(
     from: BlockNumber,
     cache: BlockCache,
     tip_rx: watch::Receiver<BlockNumber>,
@@ -133,7 +78,7 @@ fn build_block_stream(
 }
 
 /// Spawns the proof-stream task and returns its output as a [`ReceiverStream`].
-fn build_proof_stream(
+pub(super) fn build_proof_stream(
     from: BlockNumber,
     cache: ProofCache,
     tip_rx: watch::Receiver<BlockNumber>,
