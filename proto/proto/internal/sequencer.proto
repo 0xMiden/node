@@ -1,0 +1,48 @@
+// Internal gRPC API for the embedded sequencer component.
+syntax = "proto3";
+package sequencer;
+
+import "types/account.proto";
+import "types/blockchain.proto";
+import "types/note.proto";
+import "rpc.proto";
+import "internal/store.proto";
+
+// NTX BUILDER API
+// ================================================================================================
+
+// Sequencer-side store API for the network transaction builder.
+//
+// Mirrors store.NtxBuilder but is served by the embedded sequencer rather than the standalone
+// store. Point the ntx-builder's --store.url at the sequencer's --ntx-builder.listen address.
+service NtxBuilder {
+    // Retrieves block header by given block number. Optionally, it also returns the MMR path
+    // and current chain length to authenticate the block's inclusion.
+    rpc GetBlockHeaderByNumber(rpc.BlockHeaderByNumberRequest) returns (rpc.BlockHeaderByNumberResponse) {}
+
+    // Returns a paginated list of unconsumed network notes.
+    rpc GetUnconsumedNetworkNotes(store.UnconsumedNetworkNotesRequest) returns (store.UnconsumedNetworkNotes) {}
+
+    // Returns the block header at the chain tip, as well as the MMR peaks corresponding to this
+    // header for executing network transactions. If the block number is not provided, the latest
+    // header and peaks will be retrieved.
+    rpc GetCurrentBlockchainData(blockchain.MaybeBlockNumber) returns (store.CurrentBlockchainData) {}
+
+    // Returns the latest state of a network account with the specified account ID.
+    rpc GetNetworkAccountDetailsById(account.AccountId) returns (store.MaybeAccountDetails) {}
+
+    // Returns a list of all network account ids.
+    rpc GetNetworkAccountIds(rpc.BlockRange) returns (store.NetworkAccountIdList) {}
+
+    // Returns the latest details of the specified account.
+    rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
+
+    // Returns the script for a note by its root.
+    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (rpc.MaybeNoteScript) {}
+
+    // Returns vault asset witnesses for the specified account.
+    rpc GetVaultAssetWitnesses(store.VaultAssetWitnessesRequest) returns (store.VaultAssetWitnessesResponse) {}
+
+    // Returns a storage map witness for the specified account and storage map entry.
+    rpc GetStorageMapWitness(store.StorageMapWitnessRequest) returns (store.StorageMapWitnessResponse) {}
+}
