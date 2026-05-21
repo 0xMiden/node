@@ -106,6 +106,9 @@ impl RemoteBatchProver {
 }
 
 impl RemoteBatchProver {
+    /// # Errors
+    ///
+    /// Returns an error if remote proof generation fails.
     pub async fn prove(
         &self,
         proposed_batch: ProposedBatch,

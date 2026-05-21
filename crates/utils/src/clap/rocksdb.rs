@@ -23,7 +23,7 @@ impl From<CliRocksDbDurabilityMode> for RocksDbDurabilityMode {
     }
 }
 
-/// Per usage options for rocksdb configuration
+/// Per usage options for rocksdb configuration.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct NullifierTreeRocksDbOptions {
     #[arg(

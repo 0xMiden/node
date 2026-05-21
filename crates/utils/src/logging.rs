@@ -56,6 +56,14 @@ impl Drop for OtelGuard {
 ///
 /// Returns an [`OtelGuard`] if open-telemetry is enabled, otherwise `None`. When this guard is
 /// dropped, the tracer provider is shutdown.
+///
+/// # Errors
+///
+/// Returns an error if logging initialization fails.
+///
+/// # Panics
+///
+/// Panics if tracing is initialized more than once.
 pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     if otel.is_enabled() {
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
@@ -112,6 +120,9 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     Ok(tracer_provider.map(|tracer_provider| OtelGuard { tracer_provider }))
 }
 
+/// # Errors
+///
+/// Returns an error if logging initialization fails.
 fn init_tracer_provider() -> anyhow::Result<SdkTracerProvider> {
     let builder = opentelemetry_otlp::SpanExporter::builder().with_tonic();
 
@@ -130,6 +141,10 @@ fn init_tracer_provider() -> anyhow::Result<SdkTracerProvider> {
 /// This forces serialization of all such tests. Otherwise, the tested spans could
 /// be interleaved during runtime. Also, the global exporter could be re-initialized in
 /// the middle of a concurrently running test.
+///
+/// # Errors
+///
+/// Returns an error if logging initialization fails.
 #[cfg(feature = "testing")]
 pub fn setup_test_tracing() -> anyhow::Result<(
     tokio::sync::mpsc::UnboundedReceiver<opentelemetry_sdk::trace::SpanData>,

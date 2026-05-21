@@ -102,6 +102,9 @@ impl RemoteBlockProver {
 }
 
 impl RemoteBlockProver {
+    /// # Errors
+    ///
+    /// Returns an error if remote proof generation fails.
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,

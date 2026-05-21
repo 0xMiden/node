@@ -30,6 +30,10 @@ pub trait QueryParamLimiter {
     /// Limit that causes a bail if exceeded.
     const LIMIT: usize;
     /// Do the actual check.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request exceeds the rate limit.
     fn check(size: usize) -> Result<(), QueryLimitError> {
         if size > Self::LIMIT {
             Err(QueryLimitError {

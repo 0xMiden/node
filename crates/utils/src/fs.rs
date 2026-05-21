@@ -1,6 +1,10 @@
 use std::path::Path;
 
 /// Validates that a directory either does not exist (and creates it) or exists and is empty.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be removed or created.
 pub fn ensure_empty_directory(directory: &Path) -> anyhow::Result<()> {
     if fs_err::exists(directory)? {
         let is_empty = fs_err::read_dir(directory)?.next().is_none();

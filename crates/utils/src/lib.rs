@@ -42,7 +42,11 @@ impl<T: std::error::Error> ErrorReport for T {}
 pub trait FlattenResult<V, OuterError, InnerError>
 where
     InnerError: Into<OuterError>,
+    OuterError: From<InnerError>,
 {
+    /// # Errors
+    ///
+    /// Returns an error if flattening the nested result fails.
     fn flatten_result(self) -> Result<V, OuterError>;
 }
 

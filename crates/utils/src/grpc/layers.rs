@@ -18,6 +18,10 @@ pub fn rate_limit_concurrent_connections(
 }
 
 /// Creates a per-IP rate limit layer using the configured governor settings.
+///
+/// # Errors
+///
+/// Returns an error if the gRPC rate limit layer cannot be created.
 pub fn rate_limit_per_ip(
     grpc_options: GrpcOptionsExternal,
 ) -> anyhow::Result<

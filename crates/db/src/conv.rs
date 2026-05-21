@@ -52,6 +52,10 @@ pub trait SqlTypeConvert: Sized {
     type Raw: Sized;
 
     fn to_raw_sql(self) -> Self::Raw;
+
+    /// # Errors
+    ///
+    /// Returns an error if conversion from raw SQL fails.
     fn from_raw_sql(_raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError>;
 
     fn map_err<E: std::error::Error + Send + Sync + 'static>(

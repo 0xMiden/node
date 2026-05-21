@@ -5,6 +5,9 @@ use anyhow::Context;
 /// A sealed extension trait for [`url::Url`] that adds convenience functions for binding and
 /// connecting to the url.
 pub trait UrlExt: private::Sealed {
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be converted to a socket address.
     fn to_socket(&self) -> anyhow::Result<SocketAddr>;
 }
 

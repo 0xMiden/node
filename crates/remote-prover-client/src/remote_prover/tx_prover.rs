@@ -102,6 +102,9 @@ impl RemoteTransactionProver {
 }
 
 impl RemoteTransactionProver {
+    /// # Errors
+    ///
+    /// Returns an error if transaction proof generation fails.
     pub fn prove(
         &self,
         tx_inputs: &TransactionInputs,

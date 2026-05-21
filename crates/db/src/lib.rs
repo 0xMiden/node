@@ -18,6 +18,10 @@ pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 ///
 /// Defaults to twice the available CPU parallelism. If the OS cannot report the available
 /// parallelism, fall back to two connections.
+///
+/// # Panics
+///
+/// Panics if the computed connection count is zero.
 pub fn default_connection_pool_size() -> NonZeroUsize {
     let available_cores = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     let connection_count = available_cores.saturating_mul(2);
@@ -33,11 +37,22 @@ pub struct Db {
 
 impl Db {
     /// Creates a new database instance with the provided connection pool.
+    /// # Errors
+    ///
+    /// Returns an error if the database connection pool cannot be created.
     pub fn new(database_filepath: &Path) -> Result<Self, DatabaseError> {
         Self::new_with_pool_size(database_filepath, default_connection_pool_size())
     }
 
     /// Creates a new database instance with the provided connection pool size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database connection pool cannot be created.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the database file path is not valid UTF-8.
     pub fn new_with_pool_size(
         database_filepath: &Path,
         connection_pool_size: NonZeroUsize,
@@ -50,6 +65,10 @@ impl Db {
     }
 
     /// Create and commit a transaction with the queries added in the provided closure
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database access fails.
     pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send
@@ -78,6 +97,10 @@ impl Db {
     }
 
     /// Run the query _without_ a transaction
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring a database connection fails or if the query fails.
     pub async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
         Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,

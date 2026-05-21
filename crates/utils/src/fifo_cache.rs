@@ -34,11 +34,19 @@ where
     }
 
     /// Returns a clone of the value associated with `key`, or `None` if not present.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cache lock is poisoned.
     pub fn get(&self, key: &K) -> Option<V> {
         self.0.lock().expect("fifo cache lock poisoned").map.get(key).cloned()
     }
 
     /// Inserts a key-value pair, evicting the oldest entry if the cache is at capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cache lock is poisoned.
     pub fn push(&self, key: K, value: V) {
         let mut inner = self.0.lock().expect("fifo cache lock poisoned");
         if inner.eviction.len() >= inner.capacity.get() {

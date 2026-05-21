@@ -74,7 +74,9 @@ impl deadpool::managed::Manager for ConnectionManager {
         Ok(())
     }
 }
-
+/// # Errors
+///
+/// Returns an error if configuring the database connection fails.
 pub fn configure_connection_on_creation(
     conn: &mut SqliteConnection,
 ) -> Result<(), ConnectionManagerError> {

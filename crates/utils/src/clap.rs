@@ -118,26 +118,6 @@ impl Default for GrpcOptionsExternal {
     }
 }
 
-impl GrpcOptionsExternal {
-    pub fn test() -> Self {
-        Self {
-            request_timeout: TEST_REQUEST_TIMEOUT,
-            ..Default::default()
-        }
-    }
-
-    /// Return a gRPC config for benchmarking.
-    pub fn bench() -> Self {
-        Self {
-            request_timeout: Duration::from_hours(24),
-            max_connection_age: Duration::from_hours(24),
-            burst_size: NonZeroU32::new(100_000).unwrap(),
-            replenish_n_per_second_per_ip: NonZeroU64::new(100_000).unwrap(),
-            max_concurrent_connections: u64::MAX,
-        }
-    }
-}
-
 /// Collection of per usage storage backend configurations.
 ///
 /// Note: Currently only contains `rocksdb` related configuration.
@@ -154,10 +134,34 @@ pub struct StorageOptions {
     pub account_state_forest: AccountStateForestRocksDbOptions,
 }
 
+impl GrpcOptionsExternal {
+    pub fn test() -> Self {
+        Self {
+            request_timeout: TEST_REQUEST_TIMEOUT,
+            ..Default::default()
+        }
+    }
+
+    /// Return a gRPC config for benchmarking.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the hard-coded non-zero benchmark limits are changed to zero.
+    pub fn bench() -> Self {
+        Self {
+            request_timeout: Duration::from_hours(24),
+            max_connection_age: Duration::from_hours(24),
+            burst_size: NonZeroU32::new(100_000).unwrap(),
+            replenish_n_per_second_per_ip: NonZeroU64::new(100_000).unwrap(),
+            max_concurrent_connections: u64::MAX,
+        }
+    }
+}
+
 impl StorageOptions {
     /// Benchmark setup.
     ///
-    /// These values were determined during development of `LargeSmt`
+    /// These values were determined during development of `LargeSmt`.
     pub fn bench() -> Self {
         #[cfg(feature = "rocksdb")]
         {

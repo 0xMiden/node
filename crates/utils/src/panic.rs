@@ -10,6 +10,10 @@ use crate::tracing::OpenTelemetrySpanExt;
 /// [`tower_http::catch_panic::ResponseForPanic`] trait.
 ///
 /// This should be added to tonic server builder as a layer via [`CatchPanicLayer::custom()`].
+///
+/// # Panics
+///
+/// Panics if building the panic response fails.
 #[track_caller]
 pub fn catch_panic_layer_fn(err: Box<dyn Any + Send + 'static>) -> Response<Full<bytes::Bytes>> {
     // Log the panic error details.
