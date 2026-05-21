@@ -122,7 +122,7 @@ type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<Int
 type GeneratedValidatorClient = generated::validator::api_client::ApiClient<InterceptedChannel>;
 type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<InterceptedChannel>;
 type GeneratedSequencerNtxBuilderClient =
-    generated::sequencer::ntx_builder_client::NtxBuilderClient<InterceptedChannel>;
+    generated::sequencer::ntx_builder_api_client::NtxBuilderApiClient<InterceptedChannel>;
 
 // gRPC CLIENTS
 // ================================================================================================

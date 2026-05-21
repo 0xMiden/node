@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::generated::replica::api_server as replica_api_server;
-use miden_node_proto::generated::sequencer::ntx_builder_server as sequencer_ntx_builder_server;
+use miden_node_proto::generated::sequencer::ntx_builder_api_server as sequencer_ntx_builder_server;
 use miden_node_proto::generated::store;
 use miden_node_proto_build::{
     replica_api_descriptor,
@@ -604,7 +604,7 @@ pub async fn serve_replica(
     }
 }
 
-/// Serves the `sequencer.NtxBuilder` gRPC service for the embedded sequencer.
+/// Serves the `sequencer.NtxBuilderApi` gRPC service for the embedded sequencer.
 ///
 /// The ntx-builder binary connects here (via `--store.url`) to get chain data and network notes.
 /// This mirrors `store.NtxBuilder` in functionality but is served on its own listener so the
@@ -615,7 +615,7 @@ pub async fn serve_sequencer_ntx_builder(
     grpc_options: GrpcOptionsInternal,
 ) -> anyhow::Result<()> {
     let store_api = api::StoreApi::new(state);
-    let ntx_builder_service = sequencer_ntx_builder_server::NtxBuilderServer::new(store_api);
+    let ntx_builder_service = sequencer_ntx_builder_server::NtxBuilderApiServer::new(store_api);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_file_descriptor_set(sequencer_api_descriptor())

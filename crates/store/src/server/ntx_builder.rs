@@ -7,7 +7,7 @@ use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockRange;
-use miden_node_proto::generated::sequencer::ntx_builder_server as sequencer_ntx_builder_server;
+use miden_node_proto::generated::sequencer::ntx_builder_api_server as sequencer_ntx_builder_server;
 use miden_node_proto::generated::store::ntx_builder_server;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::{StorageMapKey, StorageSlotName};
@@ -326,14 +326,14 @@ impl ntx_builder_server::NtxBuilder for StoreApi {
 // SEQUENCER NTX BUILDER ENDPOINTS
 // ================================================================================================
 
-/// Forwards `sequencer.NtxBuilder` calls to the same `store.NtxBuilder` implementation.
+/// Forwards `sequencer.NtxBuilderApi` calls to the same `store.NtxBuilder` implementation.
 ///
 /// The two services expose an identical interface; the only difference is which proto package
-/// hosts the service declaration. The embedded sequencer serves `sequencer.NtxBuilder` so the
-/// ntx-builder binary can point its `--store.url` at the sequencer without depending on the
+/// hosts the service declaration. The embedded sequencer serves `sequencer.NtxBuilderApi` so
+/// the ntx-builder binary can point its `--store.url` at the sequencer without depending on the
 /// standalone store binary.
 #[tonic::async_trait]
-impl sequencer_ntx_builder_server::NtxBuilder for StoreApi {
+impl sequencer_ntx_builder_server::NtxBuilderApi for StoreApi {
     async fn get_block_header_by_number(
         &self,
         request: Request<proto::rpc::BlockHeaderByNumberRequest>,

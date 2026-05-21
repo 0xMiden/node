@@ -15,7 +15,7 @@ import "internal/store.proto";
 //
 // Mirrors store.NtxBuilder but is served by the embedded sequencer rather than the standalone
 // store. Point the ntx-builder's --store.url at the sequencer's --ntx-builder.listen address.
-service NtxBuilder {
+service NtxBuilderApi {
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
     rpc GetBlockHeaderByNumber(rpc.BlockHeaderByNumberRequest) returns (rpc.BlockHeaderByNumberResponse) {}
