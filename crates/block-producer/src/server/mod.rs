@@ -35,6 +35,9 @@ use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
 
+#[cfg(test)]
+mod tests;
+
 // BLOCK PRODUCER HANDLE
 // ================================================================================================
 
@@ -304,8 +307,7 @@ impl EmbeddedBlockProducer {
                     })
                     .id();
 
-                let block_builder_id =
-                    tasks.spawn(async { block_builder.run(mempool).await }).id();
+                let block_builder_id = tasks.spawn(async { block_builder.run(mempool).await }).id();
 
                 let task_ids = HashMap::from([
                     (batch_builder_id, "batch-builder"),
@@ -343,9 +345,6 @@ impl EmbeddedBlockProducer {
         serve.await
     }
 }
-
-#[cfg(test)]
-mod tests;
 
 // BLOCK PRODUCER
 // ================================================================================================
