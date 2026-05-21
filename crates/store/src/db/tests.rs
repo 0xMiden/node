@@ -80,15 +80,12 @@ use tempfile::tempdir;
 
 use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
 use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
-use crate::db::migrations::apply_migrations;
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
 
 fn create_db() -> SqliteConnection {
-    let mut conn = SqliteConnection::establish(":memory:").expect("In memory sqlite always works");
-    apply_migrations(&mut conn).expect("Migrations always work on an empty database");
-    conn
+    crate::db::migrations::test_connection()
 }
 
 fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
@@ -1584,7 +1581,6 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     let slot_name_for_db = slot_name.clone();
     db.query("insert paged values", move |db_conn| {
         db_conn.transaction(|db_conn| {
-            apply_migrations(db_conn)?;
             create_block(db_conn, block1);
             create_block(db_conn, block2);
             create_block(db_conn, block3);
@@ -1652,7 +1648,6 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
     let slot_name_for_db = slot_name.clone();
     db.query("insert entries in single block", move |db_conn| {
         db_conn.transaction(|db_conn| {
-            apply_migrations(db_conn)?;
             create_block(db_conn, block5);
 
             queries::upsert_accounts(db_conn, &[mock_block_account_update(account_id, 0)], block5)?;
@@ -2010,7 +2005,9 @@ async fn genesis_with_account_assets() {
         GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
     let genesis_block = genesis_state.into_block(&signer).unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
@@ -2066,7 +2063,9 @@ async fn genesis_with_account_storage_map() {
         GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
     let genesis_block = genesis_state.into_block(&signer).unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
@@ -2120,7 +2119,9 @@ async fn genesis_with_account_assets_and_storage() {
         GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
     let genesis_block = genesis_state.into_block(&signer).unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types. Tests realistic genesis
@@ -2217,7 +2218,9 @@ async fn genesis_with_multiple_accounts() {
     );
     let genesis_block = genesis_state.into_block(&signer).unwrap();
 
-    crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
 }
 
 #[test]
