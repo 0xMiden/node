@@ -1,6 +1,3 @@
-// This build.rs is required to trigger the `diesel_migrations::embed_migrations!` proc-macro in
-// `store/src/db/migrations.rs` to include the latest version of the migrations into the binary, see <https://docs.rs/diesel_migrations/latest/diesel_migrations/macro.embed_migrations.html#automatic-rebuilds>.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,8 +15,9 @@ use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
 
-fn main() {
-    build_rs::output::rerun_if_changed("src/db/migrations");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    miden_node_db::migration::Migrator::generate("src/db/migrations")?;
+
     // If we do one re-write, the default rules are disabled,
     // hence we need to trigger explicitly on `Cargo.toml`.
     // <https://doc.rust-lang.org/cargo/reference/build-scripts.html#rerun-if-changed>
@@ -27,6 +25,8 @@ fn main() {
 
     // Generate sample agglayer account files for genesis config samples.
     generate_agglayer_sample_accounts();
+
+    Ok(())
 }
 
 /// Generates sample agglayer account files for the `02-with-account-files` genesis config sample.
@@ -44,14 +44,13 @@ fn generate_agglayer_sample_accounts() {
     // Create the directory if it doesn't exist
     fs_err::create_dir_all(&samples_dir).expect("Failed to create samples directory");
 
-    // Use deterministic seeds for reproducible builds.
-    // WARNING: DO NOT USE THESE IN PRODUCTION
+    // Use deterministic seeds for reproducible builds. WARNING: DO NOT USE THESE IN PRODUCTION
     let bridge_seed: Word = Word::new([Felt::new(1u64); 4]);
     let eth_faucet_seed: Word = Word::new([Felt::new(2u64); 4]);
     let usdc_faucet_seed: Word = Word::new([Felt::new(3u64); 4]);
 
-    // Create bridge admin and GER manager as proper wallet accounts.
-    // WARNING: DO NOT USE THESE IN PRODUCTION
+    // Create bridge admin and GER manager as proper wallet accounts. WARNING: DO NOT USE THESE IN
+    // PRODUCTION
     let bridge_admin_key =
         SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(4u64); 4])));
     let ger_manager_key =
@@ -80,19 +79,19 @@ fn generate_agglayer_sample_accounts() {
     let bridge_admin_id = bridge_admin.id();
     let ger_manager_id = ger_manager.id();
 
-    // Create the bridge account first (faucets need to reference it)
-    // Use "existing" variant so accounts have nonce > 0 (required for genesis)
+    // Create the bridge account first (faucets need to reference it) Use "existing" variant so
+    // accounts have nonce > 0 (required for genesis)
     let bridge_account =
         create_existing_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
     let bridge_account_id = bridge_account.id();
 
-    // Placeholder Ethereum addresses for sample faucets.
-    // WARNING: DO NOT USE THESE ADDRESSES IN PRODUCTION
+    // Placeholder Ethereum addresses for sample faucets. WARNING: DO NOT USE THESE ADDRESSES IN
+    // PRODUCTION
     let eth_origin_address = EthAddress::new([1u8; 20]);
     let usdc_origin_address = EthAddress::new([2u8; 20]);
 
-    // Create AggLayer faucets using "existing" variant
-    // ETH: 8 decimals (protocol max is 12), max supply of 1 billion tokens
+    // Create AggLayer faucets using "existing" variant ETH: 8 decimals (protocol max is 12), max
+    // supply of 1 billion tokens
     let eth_faucet = create_existing_agglayer_faucet(
         eth_faucet_seed,
         "ETH",

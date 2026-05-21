@@ -127,8 +127,8 @@ impl NetworkTransactionBuilder {
 
         join_set.spawn(self.run_event_loop());
 
-        // Wait for either the event loop or the gRPC server to complete.
-        // Any completion is treated as fatal.
+        // Wait for either the event loop or the gRPC server to complete. Any completion is treated
+        // as fatal.
         if let Some(result) = join_set.join_next().await {
             result.context("ntx-builder task panicked")??;
         }

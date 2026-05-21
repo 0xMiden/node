@@ -8,16 +8,19 @@ get rejected _before_ reaching the store and block-producer, reducing their load
 the proofs of submitting transactions. This allows the block-producer to skip proof verification (it trusts the RPC
 component), reducing the load in this critical component.
 
-## RPC Versioning
+## RPC Versioning and the HTTP `ACCEPT` header
 
-The RPC server enforces version requirements against connecting clients that provide the HTTP ACCEPT header. When this header is provided, its corresponding value must follow this format: `application/vnd.miden.0.9.0+grpc`.
+The RPC component allows clients to negotiate their desired Miden RPC version using the well-known HTTP `ACCEPT` header, using the following format:
 
-If there is a mismatch in version, clients will encounter an error while executing gRPC requests against the RPC server with the following details:
+```sh
+application/vnd.miden; version=<version-req>; genesis=<genesis-commitment>
+```
 
-- gRPC status code: 3 (Invalid Argument)
-- gRPC message: Missing required ACCEPT header
+The `version` lets the client specify their supported version and the server will attempt to comply if it can. At this early stage, only client versions which are semver compatible with the
+server version are likely to be accepted i.e. the server in all likely only supports a _single version_.
 
-The server will reject any version that does not have the same major and minor version to it. This behaviour will change after v1.0.0., at which point only the major version will be taken into account.
+The `genesis` property is intended to let the client confirm they are on the correct network, by specifying the network's genesis commitment. This guards against operating on the wrong network,
+as well as against network resets.
 
 ## Query limits (`GetLimits`)
 

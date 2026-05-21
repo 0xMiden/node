@@ -1,5 +1,5 @@
-//! Renders the faucet card: HTTP test outcome plus the metadata block (token id, supply,
-//! decimals, …) when the faucet exposed it.
+//! Renders the faucet card: HTTP test outcome plus the metadata block (token id, supply, decimals,
+//! …) when the faucet exposed it.
 
 use maud::{Markup, html};
 

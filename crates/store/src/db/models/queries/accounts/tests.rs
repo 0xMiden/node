@@ -3,15 +3,7 @@
 use std::collections::BTreeMap;
 
 use diesel::query_dsl::methods::SelectDsl;
-use diesel::{
-    BoolExpressionMethods,
-    Connection,
-    ExpressionMethods,
-    OptionalExtension,
-    QueryDsl,
-    RunQueryDsl,
-};
-use diesel_migrations::MigrationHarness;
+use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
@@ -46,18 +38,12 @@ use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
 use super::*;
-use crate::db::migrations::MIGRATIONS;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::schema;
 use crate::errors::DatabaseError;
 
 fn setup_test_db() -> SqliteConnection {
-    let mut conn =
-        SqliteConnection::establish(":memory:").expect("Failed to create in-memory database");
-
-    conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
-
-    conn
+    crate::db::migrations::test_connection()
 }
 
 /// Test helper: reconstructs account storage at a given block from DB.
@@ -677,8 +663,8 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         "Expected 5 storage slots (3 component + 2 auth)"
     );
 
-    // The storage commitment matching proves that all values are correctly preserved.
-    // We don't check individual slot values by index since slot ordering may vary.
+    // The storage commitment matching proves that all values are correctly preserved. We don't
+    // check individual slot values by index since slot ordering may vary.
 }
 
 #[test]
@@ -1087,8 +1073,8 @@ fn test_select_account_vault_at_block_exponential_updates() {
     }
 }
 
-/// Tests that deleted vault assets (asset = None) are correctly excluded from results,
-/// and that the deduplication handles deletion entries properly.
+/// Tests that deleted vault assets (asset = None) are correctly excluded from results, and that the
+/// deduplication handles deletion entries properly.
 #[test]
 fn test_select_account_vault_at_block_with_deletion() {
     use assert_matches::assert_matches;
@@ -1274,8 +1260,8 @@ fn test_prune_account_code_retains_latest_after_code_change() {
 
     assert_eq!(count_account_codes(&mut conn), 2, "both codes must exist before pruning");
 
-    // Advance past retention window and prune.
-    // cutoff = block_prunable - RETENTION = 2*RETENTION+1 - RETENTION = RETENTION+1 = block_code_b
+    // Advance past retention window and prune. cutoff = block_prunable - RETENTION = 2*RETENTION+1
+    // - RETENTION = RETENTION+1 = block_code_b
     let (_, _, codes_deleted) =
         prune_history(&mut conn, block_prunable).expect("prune_history failed");
 
@@ -1299,8 +1285,8 @@ fn test_prune_account_code_retains_latest_after_code_change() {
     );
 }
 
-/// Prune test 3: code A → code B → code A; after the retention window, code B must be pruned
-/// but code A must be retained because it is still the latest.
+/// Prune test 3: code A → code B → code A; after the retention window, code B must be pruned but
+/// code A must be retained because it is still the latest.
 #[test]
 fn test_prune_account_code_retains_revisited_code() {
     let mut conn = setup_test_db();
@@ -1354,8 +1340,8 @@ fn test_prune_account_code_retains_revisited_code() {
     let (_, _, codes_deleted) =
         prune_history(&mut conn, block_prunable).expect("prune_history failed");
 
-    // Code B is no longer referenced by any account row within the retention window → pruned.
-    // Code A is still referenced by the block_code_a_again accounts row (within cutoff) → retained.
+    // Code B is no longer referenced by any account row within the retention window → pruned. Code
+    // A is still referenced by the block_code_a_again accounts row (within cutoff) → retained.
     assert_eq!(codes_deleted, 1, "exactly one code (B) must be pruned");
     assert!(account_code_exists(&mut conn, code_commitment_a), "code A must be retained");
     assert!(!account_code_exists(&mut conn, code_commitment_b), "code B must be pruned");

@@ -87,10 +87,10 @@ mod tests {
 
     #[test]
     fn overwrite_key_evicts_on_next_push() {
-        // Pushing the same key twice leaves a ghost entry in the eviction queue.
-        // The ghost is a no-op when it surfaces as the oldest entry: the key is
-        // already absent from the map so map.remove() does nothing. The important
-        // invariant is that no *other* key is spuriously evicted.
+        // Pushing the same key twice leaves a ghost entry in the eviction queue. The ghost is a
+        // no-op when it surfaces as the oldest entry: the key is already absent from the map so
+        // map.remove() does nothing. The important invariant is that no *other* key is spuriously
+        // evicted.
         let c = cache(2);
         c.push(1, "a");
         c.push(1, "b"); // eviction queue: [1, 1], map: {1: "b"}

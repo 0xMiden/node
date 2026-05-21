@@ -519,10 +519,8 @@ pub struct NoteDetailsRawRow {
     pub serial_num: Option<Vec<u8>>,
 }
 
-// Note: One cannot use `#[diesel(embed)]` to structure
-// this, it will yield a significant amount of errors
-// when used with join and debugging is painful to put it
-// mildly.
+// Note: One cannot use `#[diesel(embed)]` to structure this, it will yield a significant amount of
+// errors when used with join and debugging is painful to put it mildly.
 #[derive(Debug, Clone, PartialEq, Queryable)]
 pub struct NoteRecordWithScriptRawJoined {
     pub committed_at: i64,
@@ -608,7 +606,7 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
             assets,
             storage,
             serial_num,
-            //details ^^^,
+            // details ^^^,
             inclusion_path,
             script,
             ..

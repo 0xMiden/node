@@ -20,7 +20,6 @@ use crate::{COMPONENT, NoteError};
 pub(crate) mod models;
 
 mod migrations;
-mod schema_hash;
 
 /// [diesel](https://diesel.rs) generated schema.
 pub(crate) mod schema;
@@ -58,6 +57,8 @@ impl Db {
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
     ) -> anyhow::Result<Self> {
+        apply_migrations(&database_filepath).context("failed to apply migrations")?;
+
         let inner = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)
             .context("failed to build connection pool")?;
 
@@ -68,12 +69,7 @@ impl Db {
             "Connected to the database"
         );
 
-        let me = Db { inner };
-        me.inner
-            .query("migrations", apply_migrations)
-            .await
-            .context("failed to apply migrations on pool connection")?;
-        Ok(me)
+        Ok(Db { inner })
     }
 
     // PUBLIC QUERY METHODS
@@ -213,10 +209,10 @@ impl Db {
 
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("test.sqlite3");
+        apply_migrations(&db_path).expect("migrations should apply on empty database");
         let mut conn = SqliteConnection::establish(db_path.to_str().unwrap())
             .expect("temp file sqlite should always work");
         configure_connection_on_creation(&mut conn).expect("connection configuration should work");
-        apply_migrations(&mut conn).expect("migrations should apply on empty database");
         (conn, dir)
     }
 

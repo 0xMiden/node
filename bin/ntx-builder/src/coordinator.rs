@@ -26,8 +26,8 @@ pub struct ApplyBlockResult {
 /// Handle to an account actor spawned by the coordinator.
 #[derive(Clone)]
 struct ActorHandle {
-    /// [`Notify`] shared with the actor. The coordinator calls [`Notify::notify_one`] when DB
-    /// state relevant to the actor may have changed, the actor awaits [`Notify::notified`] and
+    /// [`Notify`] shared with the actor. The coordinator calls [`Notify::notify_one`] when DB state
+    /// relevant to the actor may have changed, the actor awaits [`Notify::notified`] and
     /// re-evaluates its state on wake-up.
     notify: Arc<Notify>,
 }
@@ -37,8 +37,8 @@ impl ActorHandle {
         Self { notify }
     }
 
-    /// Signals the actor that DB state may have changed. Notifications coalesce when one is
-    /// already pending.
+    /// Signals the actor that DB state may have changed. Notifications coalesce when one is already
+    /// pending.
     fn notify(&self) {
         self.notify.notify_one();
     }
@@ -137,8 +137,8 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
-    /// Creates a new coordinator with the specified maximum number of inflight transactions
-    /// and the crash threshold for account deactivation.
+    /// Creates a new coordinator with the specified maximum number of inflight transactions and the
+    /// crash threshold for account deactivation.
     pub fn new(max_inflight_transactions: usize, max_account_crashes: usize, db: Db) -> Self {
         Self {
             actor_registry: HashMap::new(),
@@ -240,9 +240,9 @@ impl Coordinator {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok((account_id, Ok(())))) => {
-                // Actor shut down intentionally (idle timeout or account removed).
-                // Remove from registry and check if a notification arrived just as it shut
-                // down. If so, the caller should respawn it.
+                // Actor shut down intentionally (idle timeout or account removed). Remove from
+                // registry and check if a notification arrived just as it shut down. If so, the
+                // caller should respawn it.
                 let should_respawn = self
                     .actor_registry
                     .remove(&account_id)

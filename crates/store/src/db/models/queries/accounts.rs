@@ -10,6 +10,8 @@ use diesel::{
     BoolExpressionMethods,
     ExpressionMethods,
     Insertable,
+    JoinOnDsl,
+    NullableExpressionMethods,
     OptionalExtension,
     QueryDsl,
     RunQueryDsl,
@@ -145,8 +147,8 @@ pub(crate) fn select_account(
 
     let summary: AccountSummary = raw.try_into()?;
 
-    // Backfill account details from database
-    // For private accounts, we don't store full details in the database
+    // Backfill account details from database For private accounts, we don't store full details in
+    // the database
     let details = if account_id.has_public_state() {
         Some(select_full_account(conn, account_id)?)
     } else {
@@ -176,15 +178,17 @@ pub(crate) fn select_full_account(
     account_id: AccountId,
 ) -> Result<Account, DatabaseError> {
     // Get account metadata (nonce, code_commitment) and code in a single join query
-    let (nonce, code_bytes): (Option<i64>, Vec<u8>) = SelectDsl::select(
-        schema::accounts::table.inner_join(schema::account_codes::table),
-        (schema::accounts::nonce, schema::account_codes::code),
-    )
-    .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
-    .filter(schema::accounts::is_latest.eq(true))
-    .get_result(conn)
-    .optional()?
-    .ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
+    let joined = schema::accounts::table.inner_join(schema::account_codes::table.on(
+        schema::accounts::code_commitment.eq(schema::account_codes::code_commitment.nullable()),
+    ));
+
+    let (nonce, code_bytes): (Option<i64>, Vec<u8>) =
+        SelectDsl::select(joined, (schema::accounts::nonce, schema::account_codes::code))
+            .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
+            .filter(schema::accounts::is_latest.eq(true))
+            .get_result(conn)
+            .optional()?
+            .ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
 
     let nonce = raw_sql_to_nonce(nonce.ok_or_else(|| {
         DatabaseError::DataCorrupted(format!("No nonce found for account {account_id}"))
@@ -304,8 +308,7 @@ pub struct PublicAccountStateRoots {
     pub storage_header: AccountStorageHeader,
 }
 
-/// Page of public account state roots returned by
-/// [`select_public_account_state_roots_paged`].
+/// Page of public account state roots returned by [`select_public_account_state_roots_paged`].
 #[derive(Debug)]
 pub struct PublicAccountStateRootsPage {
     /// The public account state roots in this page.
@@ -495,8 +498,8 @@ pub(crate) fn select_account_vault_assets(
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
     use schema::account_vault_assets as t;
-    // TODO: These limits should be given by the protocol.
-    // See miden-protocol/issues/1770 for more details
+    // TODO: These limits should be given by the protocol. See miden-protocol/issues/1770 for more
+    // details
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
@@ -523,8 +526,8 @@ pub(crate) fn select_account_vault_assets(
             .limit(i64::try_from(MAX_ROWS + 1).expect("should fit within i64"))
             .load::<(i64, Vec<u8>, Option<Vec<u8>>)>(conn)?;
 
-    // If we got more rows than the limit, the last block may be incomplete so we
-    // drop it entirely and derive last_block_included from the remaining rows.
+    // If we got more rows than the limit, the last block may be incomplete so we drop it entirely
+    // and derive last_block_included from the remaining rows.
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
         && raw.len() > MAX_ROWS
     {
@@ -691,8 +694,8 @@ pub(crate) fn select_account_storage_map_values_paged(
             .limit(i64::try_from(limit + 1).expect("limit fits within i64"))
             .load(conn)?;
 
-    // If we got more rows than the limit, the last block may be incomplete so we
-    // drop it entirely and derive last_block_included from the remaining rows.
+    // If we got more rows than the limit, the last block may be incomplete so we drop it entirely
+    // and derive last_block_included from the remaining rows.
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
         && raw.len() > limit
     {
@@ -1046,13 +1049,13 @@ fn prepare_partial_account_update(
     account_id: AccountId,
     delta: &miden_protocol::account::delta::AccountDelta,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
-    // Build the minimal account state needed for partial delta application.
-    // Only load the storage map entries and vault balances that will receive updates.
-    // The next line fetches the header, which will always change unless the delta is empty.
+    // Build the minimal account state needed for partial delta application. Only load the storage
+    // map entries and vault balances that will receive updates. The next line fetches the header,
+    // which will always change unless the delta is empty.
     let state_headers = select_minimal_account_state_headers(conn, account_id)?;
 
-    // --- Process asset updates. ---------------------------------
-    // Only query balances for faucet_ids that are being updated.
+    // --- Process asset updates. --------------------------------- Only query balances for
+    // faucet_ids that are being updated.
     let faucet_ids =
         Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| vault_key.faucet_id()));
     let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
@@ -1121,8 +1124,7 @@ fn prepare_partial_account_update(
         vault.root()
     };
 
-    // --- Compute updated account state for the accounts row. ---
-    // Apply nonce delta.
+    // --- Compute updated account state for the accounts row. --- Apply nonce delta.
     let new_nonce_value = state_headers
         .nonce
         .as_canonical_u64()
@@ -1276,8 +1278,7 @@ pub(crate) fn upsert_accounts(
             .set(&account_value)
             .execute(conn)?;
 
-        // insert pending storage map entries
-        // TODO consider batching
+        // insert pending storage map entries TODO consider batching
         for (acc_id, slot_name, key, value) in pending_storage_inserts {
             insert_account_storage_map_value(conn, acc_id, block_num, slot_name, key, value)?;
         }
@@ -1432,8 +1433,8 @@ pub(crate) struct AccountStorageMapRowInsert {
 // ================================================================================================
 
 /// Number of historical blocks to retain for vault assets, storage map values, and account codes.
-/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
-/// except for entries marked with `is_latest=true` which are always retained.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted, except for entries
+/// marked with `is_latest=true` which are always retained.
 pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 
 /// Clean up old entries for all accounts, deleting entries older than the retention window.

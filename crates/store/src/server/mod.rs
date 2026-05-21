@@ -398,8 +398,8 @@ impl Store {
 
         Ok(join_set)
     }
-    /// Spawns a background task that periodically records the on-disk size of every store data
-    /// path as `OTel` span attributes.
+    /// Spawns a background task that periodically records the on-disk size of every store data path
+    /// as `OTel` span attributes.
     fn spawn_disk_monitor(data_directory: PathBuf) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_mins(5));

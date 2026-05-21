@@ -160,8 +160,7 @@ pub struct State {
     /// Request termination of the process due to a fatal internal state error.
     termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
 
-    /// The latest proven-in-sequence block number, updated by the proof scheduler or
-    /// `apply_proof`.
+    /// The latest proven-in-sequence block number, updated by the proof scheduler or `apply_proof`.
     proven_tip: ProvenTipWriter,
 
     /// Watch sender fired after each block is committed. Replicas subscribe via
@@ -172,8 +171,8 @@ pub struct State {
     /// block that has been evicted, it falls back to loading from the block store.
     pub(crate) block_cache: BlockCache,
 
-    /// FIFO cache of recent block proofs for replica subscriptions. When a subscriber needs a
-    /// proof that has been evicted, it falls back to loading from the block store.
+    /// FIFO cache of recent block proofs for replica subscriptions. When a subscriber needs a proof
+    /// that has been evicted, it falls back to loading from the block store.
     pub(crate) proof_cache: ProofCache,
 }
 
@@ -251,9 +250,9 @@ impl State {
             TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
-        // Verify that tree roots match the expected roots from the database.
-        // This catches any divergence between persistent storage and the database caused by
-        // corruption or incomplete shutdown.
+        // Verify that tree roots match the expected roots from the database. This catches any
+        // divergence between persistent storage and the database caused by corruption or incomplete
+        // shutdown.
         verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &mut db).await?;
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
@@ -444,9 +443,9 @@ impl State {
             return Err(GetBatchInputsError::TransactionBlockReferencesEmpty);
         }
 
-        // First we grab note inclusion proofs for the known notes. These proofs only
-        // prove that the note was included in a given block. We then also need to prove that
-        // each of those blocks is included in the chain.
+        // First we grab note inclusion proofs for the known notes. These proofs only prove that the
+        // note was included in a given block. We then also need to prove that each of those blocks
+        // is included in the chain.
         let note_proofs = self
             .db
             .select_note_inclusion_proofs(unauthenticated_note_commitments)
@@ -462,8 +461,8 @@ impl State {
         let mut blocks: BTreeSet<BlockNumber> = tx_reference_blocks;
         blocks.extend(note_blocks);
 
-        // Scoped block to automatically drop the read lock guard as soon as we're done.
-        // We also avoid accessing the db in the block as this would delay dropping the guard.
+        // Scoped block to automatically drop the read lock guard as soon as we're done. We also
+        // avoid accessing the db in the block as this would delay dropping the guard.
         let (batch_reference_block, partial_mmr) = {
             let inner_state = self.inner.read().await;
 
@@ -544,9 +543,9 @@ impl State {
         unauthenticated_note_commitments: BTreeSet<Word>,
         reference_blocks: BTreeSet<BlockNumber>,
     ) -> Result<BlockInputs, GetBlockInputsError> {
-        // Get the note inclusion proofs from the DB.
-        // We do this first so we have to acquire the lock to the state just once. There we need the
-        // reference blocks of the note proofs to get their authentication paths in the chain MMR.
+        // Get the note inclusion proofs from the DB. We do this first so we have to acquire the
+        // lock to the state just once. There we need the reference blocks of the note proofs to get
+        // their authentication paths in the chain MMR.
         let unauthenticated_note_proofs = self
             .db
             .select_note_inclusion_proofs(unauthenticated_note_commitments)
@@ -572,8 +571,8 @@ impl State {
             .await
             .map_err(GetBlockInputsError::SelectBlockHeaderError)?;
 
-        // Find and remove the latest block as we must not add it to the chain MMR, since it is
-        // not yet in the chain.
+        // Find and remove the latest block as we must not add it to the chain MMR, since it is not
+        // yet in the chain.
         let latest_block_header_index = headers
             .iter()
             .enumerate()

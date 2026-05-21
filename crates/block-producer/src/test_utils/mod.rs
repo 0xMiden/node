@@ -23,8 +23,8 @@ pub mod note;
 pub struct Random(RandomCoin);
 
 impl Random {
-    /// Creates a [Random] with a random seed. This seed is logged
-    /// so that it is known for test failures.
+    /// Creates a [Random] with a random seed. This seed is logged so that it is known for test
+    /// failures.
     pub fn with_random_seed() -> Self {
         let seed: [u32; 4] = rand::random();
 

@@ -19,6 +19,7 @@ members = [
   "crates/test-macro",
   "crates/utils",
   "proto",
+  "xtask",
 ]
 
 resolver = "2"
@@ -75,6 +76,7 @@ miden-crypto = { version = "0.23" }
 anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
+backon            = { version = "1.6" }
 build-rs          = { version = "0.3" }
 clap              = { features = ["derive"], version = "4.5" }
 codegen           = { version = "0.3" }
@@ -82,7 +84,6 @@ deadpool          = { default-features = false, version = "0.12" }
 deadpool-diesel   = { version = "0.6" }
 deadpool-sync     = { default-features = false, version = "0.1" }
 diesel            = { version = "2.3" }
-diesel_migrations = { version = "2.3" }
 fs-err            = { version = "3" }
 futures           = { version = "0.3" }
 hex               = { version = "0.4" }
@@ -107,8 +108,10 @@ rand_chacha        = { default-features = false, version = "0.9" }
 rayon              = { version = "1.10" }
 reqwest            = { version = "0.13" }
 rstest             = { version = "0.26" }
+rusqlite           = { features = ["bundled"], version = "0.37" }
 serde              = { features = ["derive"], version = "1" }
 serial_test        = { version = "3.2" }
+sha2               = { version = "0.10" }
 syn                = { version = "2.0" }
 tempfile           = { version = "3.12" }
 thiserror          = { default-features = false, version = "2.0" }

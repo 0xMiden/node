@@ -1,7 +1,16 @@
+# We have a custom `cargo xtask fmt-comments` which performs the comment formatting.
+#
+# The custom xtask also supports reflowing short comment lines, unlike rustftm which
+# only supports truncation.
+#
+# The custom xtask reads `comment_width` from here for consistency and we explicitly
+# disable rustfmt's comment wrapping to give the xtask control.
+comment_width = 100
+wrap_comments = false
+
 array_width                    = 80
 attr_fn_like_width             = 80
 chain_width                    = 80
-comment_width                  = 100
 condense_wildcard_suffixes     = true
 edition                        = "2024"
 fn_call_width                  = 80
@@ -16,4 +25,3 @@ struct_lit_width               = 40
 struct_variant_width           = 40
 use_field_init_shorthand       = true
 use_try_shorthand              = true
-wrap_comments                  = true

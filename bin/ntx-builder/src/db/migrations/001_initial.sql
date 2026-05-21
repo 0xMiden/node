@@ -5,7 +5,7 @@ CREATE TABLE chain_state (
     -- Singleton constraint: only one row allowed.
     id              INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
     -- Block number of the chain tip.
-    block_num       INTEGER NOT NULL,
+    block_num       BIGINT NOT NULL,
     -- Serialized BlockHeader.
     block_header    BLOB    NOT NULL,
     -- Serialized PartialMmr representing the chain MMR at this tip.
@@ -35,12 +35,12 @@ CREATE TABLE notes (
     -- Backoff tracking: number of failed execution attempts.
     attempt_count   INTEGER NOT NULL DEFAULT 0,
     -- Backoff tracking: block number of the last failed attempt. NULL if never attempted.
-    last_attempt    INTEGER,
+    last_attempt    BIGINT,
     -- Latest execution error message. NULL if no error recorded.
     last_error      TEXT,
     -- Block number at which the note's consuming transaction was committed.
     -- NULL while the note is still pending; set on block commit.
-    committed_at    INTEGER,
+    committed_at    BIGINT,
 
     CONSTRAINT notes_attempt_count_non_negative CHECK (attempt_count >= 0),
     CONSTRAINT notes_last_attempt_is_u32 CHECK (last_attempt BETWEEN 0 AND 0xFFFFFFFF),

@@ -5,7 +5,6 @@ use miden_node_proto::generated::block_producer::api_client as block_producer_cl
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, GenesisState, Store, StoreMode};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee_params;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_validator::{Validator, ValidatorSigner};
 use tokio::net::TcpListener;
@@ -15,6 +14,26 @@ use tonic::transport::{Channel, Endpoint};
 use url::Url;
 
 use crate::{BlockProducer, DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
+
+/// A wrapper around the store runtime and data directory.
+///
+/// Guarantees that the store runtime is shut down _before_ the data directory is dropped and thus removed.
+struct TestStore {
+    runtime: Option<runtime::Runtime>,
+    _data_directory: tempfile::TempDir,
+}
+
+impl Drop for TestStore {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            std::thread::spawn(move || {
+                runtime.shutdown_timeout(Duration::from_millis(500));
+            })
+            .join()
+            .expect("store runtime shutdown thread should complete");
+        }
+    }
+}
 
 /// Tests that the block producer starts up correctly even when the store is not initially
 /// available. The block producer should retry with exponential backoff until the store becomes
@@ -59,8 +78,8 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         .unwrap();
     });
 
-    // start the block producer BEFORE the store is available
-    // this tests the exponential backoff behavior
+    // start the block producer BEFORE the store is available this tests the exponential backoff
+    // behavior
     let store_url = Url::parse(&format!("http://{store_addr}")).expect("Failed to parse store URL");
     let validator_url =
         Url::parse(&format!("http://{validator_addr}")).expect("Failed to parse validator URL");
@@ -82,8 +101,8 @@ async fn block_producer_startup_is_robust_to_network_failures() {
         .unwrap();
     });
 
-    // test: connecting to the block producer should fail because the store is not yet started
-    // (and therefore the block producer is not yet listening)
+    // test: connecting to the block producer should fail because the store is not yet started (and
+    // therefore the block producer is not yet listening)
     let block_producer_endpoint =
         Endpoint::try_from(format!("http://{block_producer_addr}")).expect("valid url");
     let block_producer_client =
@@ -94,11 +113,10 @@ async fn block_producer_startup_is_robust_to_network_failures() {
     );
 
     // start the store
-    let data_directory = tempfile::tempdir().expect("tempdir should be created");
-    let store_runtime = start_store(store_addr, data_directory.path()).await;
+    let _store = start_store(store_addr).await;
 
-    // wait for the block producer's exponential backoff to connect to the store
-    // use a retry loop since CI environments may be slower
+    // wait for the block producer's exponential backoff to connect to the store use a retry loop
+    // since CI environments may be slower
     let block_producer_client = {
         let mut attempts = 0;
         loop {
@@ -122,25 +140,20 @@ async fn block_producer_startup_is_robust_to_network_failures() {
     // verify the response contains expected data
     let status = response.unwrap().into_inner();
     assert_eq!(status.status, "connected");
-
-    // Shutdown the store before data_directory is dropped to allow the database to flush properly
-    shutdown_store(store_runtime).await;
 }
 
 /// Starts the store with a fresh genesis state and returns the runtime handle.
-async fn start_store(
-    store_addr: std::net::SocketAddr,
-    data_directory: &std::path::Path,
-) -> runtime::Runtime {
+async fn start_store(store_addr: std::net::SocketAddr) -> TestStore {
+    let data_directory = tempfile::tempdir().expect("tempdir should be created");
     let signer = random_secret_key();
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, signer.public_key());
     let genesis_block = genesis_state
         .clone()
         .into_block(&signer)
         .expect("genesis block should be created");
-    Store::bootstrap(genesis_block, data_directory).expect("store should bootstrap");
+    Store::bootstrap(genesis_block, data_directory.path()).expect("store should bootstrap");
 
-    let dir = data_directory.to_path_buf();
+    let dir = data_directory.path().to_path_buf();
     let rpc_listener =
         TcpListener::bind("127.0.0.1:0").await.expect("store should bind the RPC port");
     let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
@@ -171,17 +184,10 @@ async fn start_store(
         .await
         .expect("store should start serving");
     });
-    store_runtime
-}
-
-/// Shuts down the store runtime properly to allow the database to flush before the temp directory
-/// is deleted.
-async fn shutdown_store(store_runtime: runtime::Runtime) {
-    spawn_blocking_in_current_span(move || {
-        store_runtime.shutdown_timeout(Duration::from_millis(500));
-    })
-    .await
-    .expect("shutdown should complete");
+    TestStore {
+        runtime: Some(store_runtime),
+        _data_directory: data_directory,
+    }
 }
 
 /// Sends a status request to the block producer to verify connectivity.
