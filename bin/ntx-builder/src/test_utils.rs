@@ -2,7 +2,13 @@
 
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, AccountStorageMode, AccountType};
+use miden_protocol::account::{
+    Account,
+    AccountComponent,
+    AccountId,
+    AccountStorageMode,
+    AccountType,
+};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE,
@@ -45,6 +51,15 @@ pub fn mock_single_target_note(
     network_account_id: NetworkAccountId,
     seed: u8,
 ) -> AccountTargetNetworkNote {
+    mock_single_target_note_with_code(network_account_id, seed, None)
+}
+
+/// Creates a `AccountTargetNetworkNote` with optional custom note script code.
+pub fn mock_single_target_note_with_code(
+    network_account_id: NetworkAccountId,
+    seed: u8,
+    code: Option<&str>,
+) -> AccountTargetNetworkNote {
     let mut rng = ChaCha20Rng::from_seed([seed; 32]);
     let sender = AccountIdBuilder::new()
         .account_type(AccountType::RegularAccountImmutableCode)
@@ -54,7 +69,12 @@ pub fn mock_single_target_note(
     let target = NetworkAccountTarget::new(network_account_id.inner(), NoteExecutionHint::Always)
         .expect("network account should be valid target");
 
-    let note = NoteBuilder::new(sender, rng).attachment(target).build().unwrap();
+    let mut builder = NoteBuilder::new(sender, rng).attachment(target);
+    if let Some(code) = code {
+        builder = builder.code(code);
+    }
+
+    let note = builder.build().unwrap();
 
     AccountTargetNetworkNote::try_from(note).expect("note should be single-target network note")
 }
@@ -72,6 +92,20 @@ pub fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::A
         .storage_mode(AccountStorageMode::Network)
         .with_component(MockAccountComponent::with_slots(vec![]))
         .with_auth_component(NoopAuthComponent)
+        .build_existing()
+        .unwrap()
+}
+
+/// Creates a mock network [`Account`] with the provided auth component.
+pub fn mock_account_with_auth_component(auth_component: impl Into<AccountComponent>) -> Account {
+    use miden_protocol::account::AccountBuilder;
+    use miden_standards::testing::account_component::MockAccountComponent;
+
+    AccountBuilder::new([0u8; 32])
+        .account_type(AccountType::RegularAccountImmutableCode)
+        .storage_mode(AccountStorageMode::Network)
+        .with_component(MockAccountComponent::with_slots(vec![]))
+        .with_auth_component(auth_component)
         .build_existing()
         .unwrap()
 }
