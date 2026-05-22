@@ -33,6 +33,7 @@
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
+- Implemented filtering based on the network account note script root allowlist in ntx-builder ([#2042](https://github.com/0xMiden/node/issues/2042)).
 
 ## v0.14.11 (TBD)
 
