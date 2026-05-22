@@ -42,7 +42,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
-use miden_protocol::note::{Note, NoteAssets, NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteAssets, NoteHeader, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
@@ -808,7 +808,7 @@ async fn get_batch_inputs(
     let batch_inputs = store_client
         .get_batch_inputs(
             vec![(block_ref.block_num(), block_ref.commitment())].into_iter(),
-            notes.iter().map(|n| n.id().as_word()),
+            notes.iter().map(Note::id),
         )
         .await
         .unwrap();
@@ -831,7 +831,7 @@ async fn get_block_inputs(
                 batch
                     .input_notes()
                     .into_iter()
-                    .filter_map(|note| note.header().map(|h| h.id().as_word()))
+                    .filter_map(|note| note.header().map(NoteHeader::id))
             }),
             batches.iter().map(ProvenBatch::reference_block_num),
         )

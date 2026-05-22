@@ -277,7 +277,7 @@ impl Coordinator {
                 // The actor registry only contains accounts the builder has already classified as
                 // network. Wrap the id unconditionally and let the registry lookup filter for us;
                 // unknown accounts simply won't match.
-                let network_account_id = NetworkAccountId::new_trusted(delta.id());
+                let network_account_id = NetworkAccountId::new_unchecked(delta.id());
                 if self.actor_registry.contains_key(&network_account_id) {
                     target_account_ids.insert(network_account_id);
                 }
@@ -286,7 +286,7 @@ impl Coordinator {
             // Determine target actors for each note.
             for note in network_notes {
                 let account = note.target_account_id();
-                let account = NetworkAccountId::new_trusted(account);
+                let account = NetworkAccountId::new_unchecked(account);
 
                 if self.actor_registry.contains_key(&account) {
                     target_account_ids.insert(account);

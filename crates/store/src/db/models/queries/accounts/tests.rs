@@ -609,24 +609,9 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         AccountStorageMode::Public,
     );
 
-    let slot_value_1 = Word::from([
-        Felt::new_unchecked(1),
-        Felt::new_unchecked(2),
-        Felt::new_unchecked(3),
-        Felt::new_unchecked(4),
-    ]);
-    let slot_value_2 = Word::from([
-        Felt::new_unchecked(5),
-        Felt::new_unchecked(6),
-        Felt::new_unchecked(7),
-        Felt::new_unchecked(8),
-    ]);
-    let slot_value_3 = Word::from([
-        Felt::new_unchecked(9),
-        Felt::new_unchecked(10),
-        Felt::new_unchecked(11),
-        Felt::new_unchecked(12),
-    ]);
+    let slot_value_1 = Word::from([1, 2, 3, 4u32]);
+    let slot_value_2 = Word::from([5, 6, 7, 8u32]);
+    let slot_value_3 = Word::from([9, 10, 11, 12u32]);
 
     let component_storage = vec![
         StorageSlot::with_value(StorageSlotName::mock(0), slot_value_1),

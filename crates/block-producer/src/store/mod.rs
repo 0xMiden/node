@@ -13,7 +13,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, SignedBlock};
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Serializable;
 use tracing::{debug, info, instrument};
@@ -162,7 +162,7 @@ impl StoreClient {
             nullifiers: proven_tx.nullifiers().map(Into::into).collect(),
             unauthenticated_notes: proven_tx
                 .unauthenticated_notes()
-                .map(|note| note.id().as_word().into())
+                .map(|note| note.id().into())
                 .collect(),
         };
 
@@ -202,7 +202,7 @@ impl StoreClient {
         &self,
         updated_accounts: impl Iterator<Item = AccountId> + Send,
         created_nullifiers: impl Iterator<Item = Nullifier> + Send,
-        unauthenticated_notes: impl Iterator<Item = Word> + Send,
+        unauthenticated_notes: impl Iterator<Item = NoteId> + Send,
         reference_blocks: impl Iterator<Item = BlockNumber> + Send,
     ) -> Result<BlockInputs, StoreError> {
         let request = tonic::Request::new(proto::store::BlockInputsRequest {
@@ -223,11 +223,11 @@ impl StoreClient {
     pub async fn get_batch_inputs(
         &self,
         block_references: impl Iterator<Item = (BlockNumber, Word)> + Send,
-        note_commitments: impl Iterator<Item = Word> + Send,
+        note_ids: impl Iterator<Item = NoteId> + Send,
     ) -> Result<BatchInputs, StoreError> {
         let request = tonic::Request::new(proto::store::BatchInputsRequest {
             reference_blocks: block_references.map(|(block_num, _)| block_num.as_u32()).collect(),
-            note_commitments: note_commitments.map(proto::primitives::Digest::from).collect(),
+            note_commitments: note_ids.map(proto::primitives::Digest::from).collect(),
         });
 
         let store_response = self.client.clone().get_batch_inputs(request).await?.into_inner();

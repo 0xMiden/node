@@ -837,7 +837,7 @@ fn notes() {
     let note = NoteRecord {
         block_num: block_num_1,
         note_index,
-        note_id: new_note.id().as_word(),
+        note_id: new_note.details_commitment().as_word(),
         note_commitment: new_note.id().as_word(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
@@ -868,7 +868,7 @@ fn notes() {
     let note2 = NoteRecord {
         block_num: block_num_2,
         note_index: note.note_index,
-        note_id: new_note.id().as_word(),
+        note_id: new_note.details_commitment().as_word(),
         note_commitment: new_note.id().as_word(),
         metadata: note.metadata,
         details: None,
@@ -943,7 +943,7 @@ fn note_sync_across_multiple_blocks() {
         let note = NoteRecord {
             block_num,
             note_index,
-            note_id: new_note.id().as_word(),
+            note_id: new_note.details_commitment().as_word(),
             note_commitment: new_note.id().as_word(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
@@ -1025,7 +1025,7 @@ fn note_sync_multi_respects_payload_limit() {
         let note = NoteRecord {
             block_num,
             note_index,
-            note_id: new_note.id().as_word(),
+            note_id: new_note.details_commitment().as_word(),
             note_commitment: new_note.id().as_word(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
@@ -1083,7 +1083,7 @@ fn note_sync_no_matching_tags() {
     let note = NoteRecord {
         block_num,
         note_index,
-        note_id: new_note.id().as_word(),
+        note_id: new_note.details_commitment().as_word(),
         note_commitment: new_note.id().as_word(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
@@ -2538,7 +2538,7 @@ fn db_roundtrip_notes() {
     let note = NoteRecord {
         block_num,
         note_index,
-        note_id: new_note.id().as_word(),
+        note_id: new_note.details_commitment().as_word(),
         note_commitment: new_note.id().as_word(),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
@@ -3675,8 +3675,7 @@ fn db_roundtrip_transactions() {
         .map(|(idx, note)| NoteSyncRecord {
             block_num,
             note_index: BlockNoteIndex::new(0, idx).unwrap(),
-            // The `notes.note_id` column stores the details-only commitment (see `apply_block`).
-            note_id: note.details_commitment().as_word(),
+            note_id: NoteId::from_raw(note.details_commitment().as_word()),
             metadata: *note.metadata(),
             inclusion_path: SparseMerklePath::default(),
         })
@@ -3708,7 +3707,7 @@ fn db_roundtrip_transactions() {
         output_note_proofs: expected_sync_records
             .into_iter()
             .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some(n.note_id.into()),
+                note_id: Some((&n.note_id).into()),
                 block_num: n.block_num.as_u32(),
                 note_index_in_block: n.note_index.leaf_index_value().into(),
                 inclusion_path: Some(n.inclusion_path.into()),

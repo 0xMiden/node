@@ -227,14 +227,14 @@ impl NetworkTransactionBuilder {
 
                 // Spawn new actors for newly created network accounts. A delta carrying full state
                 // lets us reconstruct the Account and look for the standardized
-                // `NetworkAccountNoteAllowlist` slot in storage; that is the new protocol-level
+                // `NetworkAccountNoteAllowlist` slot in storage; that is the protocol-level
                 // definition of a network account.
                 if let Some(AccountUpdateDetails::Delta(delta)) = account_delta
                     && delta.is_full_state()
                     && let Ok(account) = Account::try_from(delta)
                     && let Ok(network_account) = NetworkAccount::new(account)
                 {
-                    let network_id = NetworkAccountId::new_trusted(network_account.id());
+                    let network_id = NetworkAccountId::new_unchecked(network_account.id());
                     self.coordinator.spawn_actor(network_id, &self.actor_context);
                 }
                 let inactive_targets = self.coordinator.send_targeted(&event);

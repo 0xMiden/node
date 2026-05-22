@@ -18,7 +18,7 @@ use rand_chacha::rand_core::SeedableRng;
 pub fn mock_network_account_id() -> NetworkAccountId {
     let account_id: AccountId =
         ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap();
-    NetworkAccountId::new_trusted(account_id)
+    NetworkAccountId::new_unchecked(account_id)
 }
 
 /// Creates a distinct network account ID using a seeded RNG.
@@ -27,7 +27,7 @@ pub fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
         .account_type(AccountType::RegularAccountImmutableCode)
         .storage_mode(AccountStorageMode::Public)
         .build_with_seed([seed; 32]);
-    NetworkAccountId::new_trusted(account_id)
+    NetworkAccountId::new_unchecked(account_id)
 }
 
 /// Creates a unique `TransactionId` from a seed value.

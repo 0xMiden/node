@@ -308,17 +308,17 @@ fn with_output_note_proofs(
     use miden_protocol::Word;
     use miden_protocol::asset::FungibleAsset;
 
-    // Pre-deserialize output notes to collect commitments for the batch lookup.
+    // Pre-deserialize output notes to collect IDs for the batch lookup.
     let mut tx_output_notes = Vec::with_capacity(raw_transactions.len());
-    let mut all_note_commitments = Vec::new();
+    let mut all_note_ids: Vec<NoteId> = Vec::new();
     for raw in &raw_transactions {
         let notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&raw.output_notes)?;
-        all_note_commitments.extend(notes.iter().map(|h| h.id().as_word()));
+        all_note_ids.extend(notes.iter().map(NoteHeader::id));
         tx_output_notes.push(notes);
     }
 
     let mut output_notes_by_id = std::collections::BTreeMap::new();
-    for chunk in all_note_commitments.chunks(QueryParamNoteCommitmentLimit::LIMIT) {
+    for chunk in all_note_ids.chunks(QueryParamNoteCommitmentLimit::LIMIT) {
         output_notes_by_id.extend(select_note_sync_records(conn, chunk)?);
     }
 
@@ -333,7 +333,7 @@ fn with_output_note_proofs(
             let output_note_proofs = output_notes
                 .iter()
                 .filter_map(|note| {
-                    let key = NoteId::from_raw(note.details_commitment().as_word());
+                    let key = note.id();
                     output_notes_by_id.get(&key).cloned()
                 })
                 .collect();

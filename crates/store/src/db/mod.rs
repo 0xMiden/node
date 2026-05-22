@@ -143,7 +143,7 @@ impl TransactionRecord {
             .output_note_proofs
             .into_iter()
             .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some(n.note_id.into()),
+                note_id: Some((&n.note_id).into()),
                 block_num: n.block_num.as_u32(),
                 note_index_in_block: n.note_index.leaf_index_value().into(),
                 inclusion_path: Some(n.inclusion_path.into()),
@@ -205,7 +205,7 @@ pub struct NoteSyncUpdate {
 pub struct NoteSyncRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
-    pub note_id: Word,
+    pub note_id: NoteId,
     pub metadata: NoteMetadata,
     pub inclusion_path: SparseMerklePath,
 }
@@ -214,7 +214,7 @@ impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
     fn from(note: NoteSyncRecord) -> Self {
         let metadata = Some(note.metadata.into());
         let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(note.note_id.into()),
+            note_id: Some((&note.note_id).into()),
             block_num: note.block_num.as_u32(),
             note_index_in_block: note.note_index.leaf_index_value().into(),
             inclusion_path: Some(note.inclusion_path.into()),
@@ -228,7 +228,7 @@ impl From<NoteRecord> for NoteSyncRecord {
         Self {
             block_num: note.block_num,
             note_index: note.note_index,
-            note_id: note.note_id,
+            note_id: NoteId::from_raw(note.note_id),
             metadata: note.metadata,
             inclusion_path: note.inclusion_path,
         }

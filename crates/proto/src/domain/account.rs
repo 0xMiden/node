@@ -994,11 +994,21 @@ impl std::fmt::Display for NetworkAccountId {
 impl NetworkAccountId {
     /// Wraps an `AccountId` known by the caller to belong to a network account.
     ///
-    /// Network-ness is no longer encoded in the `AccountId` itself; it is determined by the
-    /// presence of the standardized `NetworkAccountNoteAllowlist` slot in the account's storage.
-    /// Callers must therefore verify that classification themselves (e.g. via the store's
-    /// `network_account_type` column or the protocol's `NetworkAccount` type) before wrapping.
-    pub fn new_trusted(id: AccountId) -> Self {
+    /// # Preconditions
+    ///
+    /// Callers must ensure that:
+    /// - The account's storage contains a valid `NetworkAccountNoteAllowlist` slot
+    ///   (verified e.g. via `miden_standards::account::auth::network_account::NetworkAccount`
+    ///   or the store's `network_account_type` column).
+    /// - The account ID has public storage mode (network accounts cannot be private).
+    ///
+    /// The public-mode precondition is asserted in debug builds.
+    pub fn new_unchecked(id: AccountId) -> Self {
+        debug_assert!(
+            id.is_public(),
+            "NetworkAccountId requires a public AccountId, got storage mode {:?}",
+            id.storage_mode()
+        );
         Self(id)
     }
 

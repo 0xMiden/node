@@ -122,9 +122,9 @@ not match the current commitment {}",
         let id = BatchId::from_ids(txs.iter().map(|tx| (tx.id(), tx.account_id())));
 
         let mut unauthenticated_notes: HashSet<_> =
-            txs.iter().flat_map(|tx| tx.unauthenticated_note_commitments()).collect();
+            txs.iter().flat_map(|tx| tx.unauthenticated_note_ids()).collect();
 
-        for output_note in txs.iter().flat_map(|tx| tx.output_note_commitments()) {
+        for output_note in txs.iter().flat_map(|tx| tx.output_note_ids()) {
             unauthenticated_notes.remove(&output_note);
         }
 

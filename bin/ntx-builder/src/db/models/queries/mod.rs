@@ -146,7 +146,7 @@ pub fn add_transaction(
     for note in notes {
         let insert = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
-            account_id: conversions::network_account_id_to_bytes(NetworkAccountId::new_trusted(
+            account_id: conversions::network_account_id_to_bytes(NetworkAccountId::new_unchecked(
                 note.target_account_id(),
             )),
             note_data: note.as_note().to_bytes(),

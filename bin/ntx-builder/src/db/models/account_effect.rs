@@ -38,7 +38,7 @@ impl NetworkAccountEffect {
         // Trusted: constructors only produce this enum for accounts already classified as network
         // (via the allowlist check above) or for updates that the caller filters through the actor
         // registry.
-        NetworkAccountId::new_trusted(self.protocol_account_id())
+        NetworkAccountId::new_unchecked(self.protocol_account_id())
     }
 
     fn protocol_account_id(&self) -> AccountId {

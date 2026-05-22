@@ -329,7 +329,7 @@ impl StoreClient {
                         ConversionError::from(err).context("account_id"),
                     )
                 })?;
-                Ok(NetworkAccountId::new_trusted(account_id))
+                Ok(NetworkAccountId::new_unchecked(account_id))
             })
             .collect::<Result<Vec<NetworkAccountId>, StoreError>>()?;
 

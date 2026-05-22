@@ -382,6 +382,7 @@ pub(crate) fn select_note_inclusion_proofs(
 ///     batch_index,
 ///     note_index,
 ///     note_id,
+///     note_commitment,
 ///     note_type,
 ///     sender,
 ///     tag,
@@ -396,22 +397,24 @@ pub(crate) fn select_note_inclusion_proofs(
 /// ```
 pub(crate) fn select_note_sync_records(
     conn: &mut SqliteConnection,
-    note_commitments: &[Word],
+    note_ids: &[NoteId],
 ) -> Result<BTreeMap<NoteId, NoteSyncRecord>, DatabaseError> {
-    QueryParamNoteCommitmentLimit::check(note_commitments.len())?;
+    QueryParamNoteCommitmentLimit::check(note_ids.len())?;
 
-    let note_commitments = serialize_vec(note_commitments.iter());
+    let note_commitment_bytes: Vec<Vec<u8>> =
+        note_ids.iter().map(|id| id.as_word().to_bytes()).collect();
 
     let raw_notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
-        .filter(schema::notes::note_commitment.eq_any(note_commitments))
+        .filter(schema::notes::note_commitment.eq_any(note_commitment_bytes))
         .order_by(schema::notes::committed_at.asc())
         .load::<NoteSyncRecordRawRow>(conn)?;
 
     raw_notes
         .into_iter()
         .map(|raw_note| {
+            let note_commitment = Word::read_from_bytes(&raw_note.note_commitment[..])?;
             let note: NoteSyncRecord = raw_note.try_into()?;
-            Ok((NoteId::from_raw(note.note_id), note))
+            Ok((NoteId::from_raw(note_commitment), note))
         })
         .collect()
 }
@@ -598,7 +601,8 @@ pub struct NoteSyncRecordRawRow {
     pub committed_at: i64, // BlockNumber
     #[diesel(embed)]
     pub block_note_index: BlockNoteIndexRawRow,
-    pub note_id: Vec<u8>, // BlobDigest
+    pub note_id: Vec<u8>,         // BlobDigest (details commitment)
+    pub note_commitment: Vec<u8>, // BlobDigest (full note id)
     #[diesel(embed)]
     pub metadata: NoteMetadataRawRow,
     pub inclusion_path: Vec<u8>, // SparseMerklePath
@@ -610,7 +614,7 @@ impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
         let block_num = BlockNumber::from_raw_sql(self.committed_at)?;
         let note_index = self.block_note_index.try_into()?;
 
-        let note_id = Word::read_from_bytes(&self.note_id[..])?;
+        let note_id = NoteId::from_raw(Word::read_from_bytes(&self.note_id[..])?);
         let inclusion_path = SparseMerklePath::read_from_bytes(&self.inclusion_path[..])?;
         let (metadata, _attachments) = self.metadata.try_into()?;
         Ok(NoteSyncRecord {

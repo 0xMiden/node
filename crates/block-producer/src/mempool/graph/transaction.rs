@@ -27,11 +27,11 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.output_note_commitments())
+        Box::new(self.output_note_ids())
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.unauthenticated_note_commitments())
+        Box::new(self.unauthenticated_note_ids())
     }
 
     fn account_updates(

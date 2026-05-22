@@ -89,7 +89,7 @@ impl AuthenticatedTransaction {
         self.inner.nullifiers()
     }
 
-    pub fn output_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
+    pub fn output_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner.output_notes().iter().map(|n| n.id().as_word())
     }
 
@@ -109,9 +109,9 @@ impl AuthenticatedTransaction {
         (self.inner.ref_block_num(), self.inner.ref_block_commitment())
     }
 
-    /// Note commitments which were unauthenticated in the transaction __and__ which were not
-    /// authenticated by the store inputs.
-    pub fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
+    /// Note IDs which were unauthenticated in the transaction __and__ which were not authenticated
+    /// by the store inputs.
+    pub fn unauthenticated_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner
             .unauthenticated_notes()
             .map(|h| h.id().as_word())
