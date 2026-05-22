@@ -33,7 +33,7 @@ pub enum NtxBuilderCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: SocketAddr,
 
-        /// The store's ntx-builder service gRPC url.
+        /// The store's RPC service gRPC url.
         #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
         store_url: Url,
 

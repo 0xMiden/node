@@ -3,26 +3,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use actor::{AccountActorContext, ActorConfig, GrpcClients, State};
 use anyhow::Context;
-use builder::MempoolEventStream;
-use chain_state::SharedChainState;
-use clients::{BlockProducerClient, StoreClient, ValidatorClient};
-use coordinator::Coordinator;
+use builder::BlockStream;
+use chain_state::ChainState;
+use clients::StoreClient;
 use db::Db;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::lru_cache::LruCache;
-use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::mpsc;
+use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use url::Url;
+
+use crate::committed_block::CommittedBlockEffects;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
+// PR 1 of the block-subscription refactor leaves the actor execution path in tree but unwired. It
+// is restored by PR 2
+#[expect(dead_code)]
 mod actor;
 mod builder;
+#[expect(dead_code)]
 mod chain_state;
 mod clients;
+mod committed_block;
+#[expect(dead_code)]
 mod coordinator;
 pub(crate) mod db;
 pub mod server;
@@ -284,15 +289,17 @@ impl NtxBuilderConfig {
 
     /// Builds and initializes the network transaction builder.
     ///
-    /// This method connects to the store and block producer services, fetches the current
-    /// chain tip, and subscribes to mempool events.
+    /// Opens a committed-block subscription against the store's `Rpc` service. On a fresh DB the
+    /// subscription starts at genesis and the first block is consumed inline to bootstrap the
+    /// in-memory chain state; on resume, the in-memory chain state is loaded from the persisted
+    /// header + chain MMR and the subscription starts at `persisted_tip + 1`.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The store connection fails
-    /// - The mempool subscription fails (after retries)
-    /// - The store contains no blocks (not bootstrapped)
+    /// - The DB cannot be opened or migrated
+    /// - The store connection fails (after retries)
+    /// - The genesis block cannot be read from the subscription on a fresh start
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup_with_pool_size(
@@ -301,73 +308,66 @@ impl NtxBuilderConfig {
         )
         .await?;
 
-        // Purge inflight state from previous run.
-        db.purge_inflight().await.context("failed to purge inflight state")?;
+        let store = StoreClient::new(
+            self.store_url.clone(),
+            self.request_backoff_initial,
+            self.request_backoff_max,
+        );
 
-        let script_cache = LruCache::new(self.script_cache_size);
-        let coordinator =
-            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
+        // Decide where to start the subscription. On resume we load the persisted chain state; on
+        // fresh start we begin at genesis and bootstrap inline below.
+        let stored_chain_state =
+            db.get_chain_state().await.context("failed to read chain state")?;
 
-        let store = StoreClient::new(self.store_url.clone());
-        let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
-        let validator = ValidatorClient::new(self.validator_url.clone());
-        let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
+        let block_from = stored_chain_state
+            .as_ref()
+            .map_or(BlockNumber::GENESIS, |(num, ..)| num.child());
 
-        // Subscribe to mempool first to ensure we don't miss any events. The subscription replays
-        // all inflight transactions, so the subscriber's state is fully reconstructed.
-        let subscription = block_producer
-            .subscribe_to_mempool_with_retry()
+        tracing::info!(
+            %block_from,
+            resume = stored_chain_state.is_some(),
+            "ntx-builder opening committed-block subscription"
+        );
+
+        let raw_stream = store
+            .block_subscription_with_retry(block_from)
             .await
             .map_err(|err| anyhow::anyhow!(err))
-            .context("failed to subscribe to mempool events")?;
-        let mempool_events: MempoolEventStream = Box::pin(subscription.into_stream());
+            .context("failed to subscribe to committed blocks")?;
+        let mut block_stream: BlockStream = Box::pin(raw_stream);
 
-        let (chain_tip_header, chain_mmr) = store
-            .get_latest_blockchain_data_with_retry()
-            .await?
-            .context("store should contain a latest block")?;
+        let (chain, last_applied_block) = if let Some((block_num, header, mmr)) = stored_chain_state
+        {
+            (ChainState::new(header, mmr), block_num)
+        } else {
+            // Fresh DB: consume the genesis block inline so the in-memory chain state is non- empty
+            // before the steady-state loop runs.
+            let (genesis, _committed_tip) = block_stream
+                .next()
+                .await
+                .context("block stream ended before delivering the genesis block")?
+                .context("block stream failed before delivering the genesis block")?;
+            let genesis_header = genesis.header().clone();
+            anyhow::ensure!(
+                genesis_header.block_num() == BlockNumber::GENESIS,
+                "expected genesis block from subscription but got block {}",
+                genesis_header.block_num()
+            );
 
-        // Store the chain tip in the DB.
-        db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
-            .await
-            .context("failed to upsert chain state")?;
+            let effects = CommittedBlockEffects::from_signed_block(&genesis);
+            db.apply_committed_block(effects, PartialMmr::default())
+                .await
+                .context("failed to apply genesis block during bootstrap")?;
 
-        let chain_state = Arc::new(SharedChainState::new(chain_tip_header, chain_mmr));
-
-        let (request_tx, actor_request_rx) = mpsc::channel(1);
-
-        let actor_context = AccountActorContext {
-            clients: GrpcClients {
-                store: store.clone(),
-                block_producer: block_producer.clone(),
-                validator,
-                prover,
-            },
-            state: State {
-                db: db.clone(),
-                chain: chain_state.clone(),
-                script_cache,
-            },
-            config: ActorConfig {
-                max_notes_per_tx: self.max_notes_per_tx,
-                max_note_attempts: self.max_note_attempts,
-                idle_timeout: self.idle_timeout,
-                max_cycles: self.max_cycles,
-                request_backoff_initial: self.request_backoff_initial,
-                request_backoff_max: self.request_backoff_max,
-            },
-            request_tx,
+            (ChainState::new(genesis_header, PartialMmr::default()), BlockNumber::GENESIS)
         };
 
         Ok(NetworkTransactionBuilder::new(
             self,
-            coordinator,
-            store,
             db,
-            chain_state,
-            actor_context,
-            mempool_events,
-            actor_request_rx,
+            block_stream,
+            last_applied_block,
+            chain,
         ))
     }
 }

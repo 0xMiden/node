@@ -124,7 +124,11 @@ impl AccountActorContext {
 
         Self {
             clients: GrpcClients {
-                store: StoreClient::new(url.clone()),
+                store: StoreClient::new(
+                    url.clone(),
+                    Duration::from_millis(100),
+                    Duration::from_secs(30),
+                ),
                 block_producer: BlockProducerClient::new(url.clone()),
                 validator: ValidatorClient::new(url),
                 prover: None,

@@ -1,11 +1,9 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    accounts (order_id) {
-        order_id -> Integer,
+    accounts (account_id) {
         account_id -> Binary,
         account_data -> Binary,
-        transaction_id -> Nullable<Binary>,
     }
 }
 
@@ -14,6 +12,7 @@ diesel::table! {
         id -> Integer,
         block_num -> BigInt,
         block_header -> Binary,
+        chain_mmr -> Binary,
     }
 }
 
@@ -33,8 +32,6 @@ diesel::table! {
         attempt_count -> Integer,
         last_attempt -> Nullable<BigInt>,
         last_error -> Nullable<Text>,
-        created_by -> Nullable<Binary>,
-        consumed_by -> Nullable<Binary>,
         committed_at -> Nullable<BigInt>,
     }
 }

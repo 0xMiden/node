@@ -24,6 +24,7 @@ pub fn network_account_id_to_bytes(id: NetworkAccountId) -> Vec<u8> {
     id.inner().to_bytes()
 }
 
+#[expect(dead_code)]
 pub fn transaction_id_to_bytes(id: &TransactionId) -> Vec<u8> {
     id.to_bytes()
 }
@@ -56,6 +57,7 @@ pub fn account_id_from_bytes(bytes: &[u8]) -> Result<AccountId, DatabaseError> {
     AccountId::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("account id", e))
 }
 
+#[expect(dead_code)]
 pub fn network_account_id_from_bytes(bytes: &[u8]) -> Result<NetworkAccountId, DatabaseError> {
     let account_id = account_id_from_bytes(bytes)?;
     NetworkAccountId::try_from(account_id)

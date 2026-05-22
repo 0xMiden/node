@@ -25,6 +25,7 @@ pub struct ValidatorClient {
 
 impl ValidatorClient {
     /// Creates a new validator client with a lazy connection and a 10-second timeout.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn new(validator_url: Url) -> Self {
         info!(target: COMPONENT, validator_endpoint = %validator_url, "Initializing validator client with lazy connection");
 

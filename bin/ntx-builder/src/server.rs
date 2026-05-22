@@ -86,7 +86,6 @@ impl api_server::Api for NtxBuilderRpcServer {
 
         let status = derive_status(
             row.committed_at.is_some(),
-            row.consumed_by.is_some(),
             row.attempt_count as usize,
             self.max_note_attempts,
         );
@@ -108,14 +107,11 @@ impl api_server::Api for NtxBuilderRpcServer {
 /// Derives the lifecycle status of a network note from its DB state.
 fn derive_status(
     is_committed: bool,
-    is_consumed: bool,
     attempt_count: usize,
     max_note_attempts: usize,
 ) -> rpc::NetworkNoteStatus {
     if is_committed {
         rpc::NetworkNoteStatus::NullifierCommitted
-    } else if is_consumed {
-        rpc::NetworkNoteStatus::NullifierInflight
     } else if attempt_count >= max_note_attempts {
         rpc::NetworkNoteStatus::Discarded
     } else {
@@ -131,30 +127,21 @@ mod tests {
 
     #[test]
     fn derive_status_pending() {
-        assert_eq!(derive_status(false, false, 0, 30), NetworkNoteStatus::Pending);
-        assert_eq!(derive_status(false, false, 15, 30), NetworkNoteStatus::Pending);
-        assert_eq!(derive_status(false, false, 29, 30), NetworkNoteStatus::Pending);
-    }
-
-    #[test]
-    fn derive_status_processed() {
-        assert_eq!(derive_status(false, true, 0, 30), NetworkNoteStatus::NullifierInflight);
-        assert_eq!(derive_status(false, true, 5, 30), NetworkNoteStatus::NullifierInflight);
-        // consumed_by takes precedence over attempt count
-        assert_eq!(derive_status(false, true, 30, 30), NetworkNoteStatus::NullifierInflight);
+        assert_eq!(derive_status(false, 0, 30), NetworkNoteStatus::Pending);
+        assert_eq!(derive_status(false, 15, 30), NetworkNoteStatus::Pending);
+        assert_eq!(derive_status(false, 29, 30), NetworkNoteStatus::Pending);
     }
 
     #[test]
     fn derive_status_discarded() {
-        assert_eq!(derive_status(false, false, 30, 30), NetworkNoteStatus::Discarded);
-        assert_eq!(derive_status(false, false, 100, 30), NetworkNoteStatus::Discarded);
+        assert_eq!(derive_status(false, 30, 30), NetworkNoteStatus::Discarded);
+        assert_eq!(derive_status(false, 100, 30), NetworkNoteStatus::Discarded);
     }
 
     #[test]
     fn derive_status_committed() {
-        assert_eq!(derive_status(true, true, 0, 30), NetworkNoteStatus::NullifierCommitted);
-        assert_eq!(derive_status(true, true, 5, 30), NetworkNoteStatus::NullifierCommitted);
-        // committed takes precedence over everything
-        assert_eq!(derive_status(true, false, 30, 30), NetworkNoteStatus::NullifierCommitted);
+        // committed takes precedence over attempt count
+        assert_eq!(derive_status(true, 0, 30), NetworkNoteStatus::NullifierCommitted);
+        assert_eq!(derive_status(true, 30, 30), NetworkNoteStatus::NullifierCommitted);
     }
 }

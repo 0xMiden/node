@@ -156,9 +156,6 @@ async fn start_store(store_addr: std::net::SocketAddr) -> TestStore {
     let dir = data_directory.path().to_path_buf();
     let rpc_listener =
         TcpListener::bind("127.0.0.1:0").await.expect("store should bind the RPC port");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
     let block_producer_listener = TcpListener::bind(store_addr)
         .await
         .expect("store should bind the block-producer port");
@@ -171,7 +168,6 @@ async fn start_store(store_addr: std::net::SocketAddr) -> TestStore {
             rpc_listener,
             mode: StoreMode::BlockProducer {
                 block_producer_listener,
-                ntx_builder_listener,
                 block_prover_url: None,
                 max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
             },

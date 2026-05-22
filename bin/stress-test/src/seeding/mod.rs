@@ -852,9 +852,6 @@ pub async fn start_store(
         .await
         .expect("Failed to bind store block-producer gRPC endpoint");
     let store_addr = rpc_listener.local_addr().expect("Failed to get store RPC address");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
     let store_block_producer_addr = block_producer_listener
         .local_addr()
         .expect("Failed to get store block-producer address");
@@ -865,7 +862,6 @@ pub async fn start_store(
             rpc_listener,
             mode: StoreMode::BlockProducer {
                 block_producer_listener,
-                ntx_builder_listener,
                 block_prover_url: None,
                 max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             },

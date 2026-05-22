@@ -818,8 +818,10 @@ mod tests {
             StoreError::GrpcClientError(tonic::Status::invalid_argument("bad input"));
         assert!(!is_transient_store_error(&terminal_grpc));
 
-        let malformed = StoreError::MalformedResponse("bad".into());
-        assert!(!is_transient_store_error(&malformed));
+        let non_grpc = StoreError::Deserialize(
+            miden_protocol::utils::serde::DeserializationError::InvalidValue("bad".into()),
+        );
+        assert!(!is_transient_store_error(&non_grpc));
     }
 
     /// Smoke-test that the predicates used by the request-level retry wrappers compile and select

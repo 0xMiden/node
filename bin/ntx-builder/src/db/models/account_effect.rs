@@ -28,6 +28,7 @@ impl NetworkAccountEffect {
         update.protocol_account_id().is_network().then_some(update)
     }
 
+    #[expect(dead_code)]
     pub fn network_account_id(&self) -> NetworkAccountId {
         // SAFETY: This is a network account by construction.
         self.protocol_account_id().try_into().unwrap()
