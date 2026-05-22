@@ -2,8 +2,12 @@ use std::num::NonZeroUsize;
 
 use miden_node_store::DatabaseOptions;
 use miden_node_utils::clap::{
-    AccountStateForestRocksDbOptions, AccountTreeRocksDbOptions, CliRocksDbDurabilityMode,
-    NullifierTreeRocksDbOptions, RocksDbOptions, StorageOptions,
+    AccountStateForestRocksDbOptions,
+    AccountTreeRocksDbOptions,
+    CliRocksDbDurabilityMode,
+    NullifierTreeRocksDbOptions,
+    RocksDbOptions,
+    StorageOptions,
 };
 
 // STORE OPTIONS

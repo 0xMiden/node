@@ -2,7 +2,9 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use miden_node_block_producer::{
-    DEFAULT_BATCH_INTERVAL, DEFAULT_BLOCK_INTERVAL, DEFAULT_MAX_BATCHES_PER_BLOCK,
+    DEFAULT_BATCH_INTERVAL,
+    DEFAULT_BLOCK_INTERVAL,
+    DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
 use miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS;

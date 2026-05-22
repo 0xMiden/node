@@ -3,7 +3,9 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use miden_node_utils::clap::{
-    GrpcOptionsExternal, GrpcOptionsInternal, duration_to_human_readable_string,
+    GrpcOptionsExternal,
+    GrpcOptionsInternal,
+    duration_to_human_readable_string,
 };
 use url::Url;
 
