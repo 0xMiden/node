@@ -2,7 +2,7 @@
 // E0275.
 #![recursion_limit = "256"]
 
-use conf::{Conf, Subcommands};
+use clap::{Parser, Subcommand};
 
 mod commands;
 #[cfg(test)]
@@ -11,15 +11,15 @@ mod tests;
 // COMMANDS
 // ================================================================================================
 
-#[derive(Conf, Debug)]
-#[conf(version)]
-struct Cli {
-    #[conf(subcommands)]
-    command: Command,
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
 }
 
-#[derive(Subcommands, Debug)]
-enum Command {
+#[derive(Subcommand, Debug)]
+pub enum Command {
     /// Bootstraps the node store from a pre-signed genesis block.
     Bootstrap(commands::BootstrapCommand),
 
@@ -59,10 +59,10 @@ impl Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let command = Cli::parse().command;
+    let cli = Cli::parse();
 
     // Configure tracing with optional OpenTelemetry exporting support.
-    let _otel_guard = miden_node_utils::logging::setup_tracing(command.open_telemetry())?;
+    let _otel_guard = miden_node_utils::logging::setup_tracing(cli.command.open_telemetry())?;
 
-    command.execute().await
+    cli.command.execute().await
 }

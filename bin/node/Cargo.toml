@@ -19,7 +19,7 @@ tracing-forest = ["miden-node-block-producer/tracing-forest"]
 
 [dependencies]
 anyhow                    = { workspace = true }
-conf                      = { workspace = true }
+clap                      = { features = ["env", "string"], workspace = true }
 fs-err                    = { workspace = true }
 humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }

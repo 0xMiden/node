@@ -1068,7 +1068,7 @@ checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
 dependencies = [
  "anstream",
  "anstyle",
- "clap_lex 1.1.0",
+ "clap_lex",
  "strsim",
 ]
 
@@ -1083,12 +1083,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "clap_lex"
-version = "0.7.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "clap_lex"
@@ -1128,30 +1122,6 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
-]
-
-[[package]]
-name = "conf"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f37e148dbc927d8aa1d7f07fc6c06db98d2f102485a14239da7f3d8441ed1f46"
-dependencies = [
- "anstyle",
- "clap",
- "clap_lex 0.7.7",
- "conf_derive",
-]
-
-[[package]]
-name = "conf_derive"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "def1cc7b12095ba8d2b9b04e27d7524d4b117795a9f1f232d962ea53f1c6b81b"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -3292,7 +3262,7 @@ name = "miden-node"
 version = "0.15.0"
 dependencies = [
  "anyhow",
- "conf",
+ "clap",
  "fs-err",
  "humantime",
  "miden-node-block-producer",

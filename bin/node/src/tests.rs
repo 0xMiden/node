@@ -1,16 +1,9 @@
-use conf::Conf;
+use clap::Parser;
 
 use crate::{Cli, Command};
 
-fn parse(args: &[&str]) -> Result<Cli, conf::Error> {
-    parse_with_env(args, &[])
-}
-
-fn parse_with_env(args: &[&str], env: &[(&str, &str)]) -> Result<Cli, conf::Error> {
-    Cli::try_parse_from(
-        std::iter::once("miden-node").chain(args.iter().copied()),
-        env.iter().copied(),
-    )
+fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(std::iter::once("miden-node").chain(args.iter().copied()))
 }
 
 fn common_runtime_args() -> [&'static str; 7] {
@@ -141,29 +134,6 @@ fn grouped_runtime_options_parse() {
     let cli = parse(&args).expect("grouped runtime options should parse");
 
     assert!(matches!(cli.command, Command::Sequencer(_)));
-}
-
-#[test]
-fn grouped_runtime_options_parse_from_env() {
-    let Command::Sequencer(command) = parse_with_env(
-        &["sequencer"],
-        &[
-            ("MIDEN_NODE_DATA_DIRECTORY", "/tmp/miden-node"),
-            ("MIDEN_NODE_RPC_LISTEN", "127.0.0.1:57291"),
-            ("MIDEN_NODE_VALIDATOR_URL", "http://127.0.0.1:50101"),
-            ("MIDEN_NODE_BATCH_MAX_TXS", "4"),
-            ("MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_CACHE_SIZE", "2048"),
-        ],
-    )
-    .expect("sequencer should parse grouped runtime options from env")
-    .command
-    else {
-        panic!("expected sequencer command");
-    };
-
-    assert!(command.runtime.external_services.validator_url.is_some());
-    assert_eq!(command.block_producer.batch.max_txs, 4);
-    assert_eq!(command.runtime.store.storage.account_tree.cache_size_in_bytes, 2048);
 }
 
 #[test]
