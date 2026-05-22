@@ -244,6 +244,9 @@ impl RpcService {
 
 #[tonic::async_trait]
 impl api_server::Api for RpcService {
+    type BlockSubscriptionStream = tonic::codec::Streaming<proto::rpc::BlockSubscriptionResponse>;
+    type ProofSubscriptionStream = tonic::codec::Streaming<proto::rpc::ProofSubscriptionResponse>;
+
     // -- Nullifier endpoints -----------------------------------------------------------------
 
     async fn sync_nullifiers(
@@ -303,6 +306,30 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request_ref);
 
         self.store.clone().sync_chain_mmr(request).await
+    }
+
+    async fn block_subscription(
+        &self,
+        request: Request<proto::rpc::BlockSubscriptionRequest>,
+    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+        let request_ref = request.get_ref();
+        Span::current().set_attribute("block.from", request_ref.block_from);
+
+        debug!(target: COMPONENT, request = ?request_ref);
+
+        self.store.clone().block_subscription(request).await
+    }
+
+    async fn proof_subscription(
+        &self,
+        request: Request<proto::rpc::ProofSubscriptionRequest>,
+    ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
+        let request_ref = request.get_ref();
+        Span::current().set_attribute("block.from", request_ref.block_from);
+
+        debug!(target: COMPONENT, request = ?request_ref);
+
+        self.store.clone().proof_subscription(request).await
     }
 
     // -- Note endpoints ----------------------------------------------------------------------

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use miden_node_proto::decode::{
     convert_digests_to_words,
     read_account_id,
@@ -35,6 +37,13 @@ use crate::errors::{
     SyncTransactionsError,
 };
 use crate::server::api::{StoreApi, internal_error};
+use crate::server::replica::{
+    BlockSubscriptionStream,
+    GuardedStream,
+    ProofSubscriptionStream,
+    build_block_stream,
+    build_proof_stream,
+};
 use crate::state::Finality;
 
 // CLIENT ENDPOINTS
@@ -42,6 +51,49 @@ use crate::state::Finality;
 
 #[tonic::async_trait]
 impl rpc_server::Rpc for StoreApi {
+    type BlockSubscriptionStream = BlockSubscriptionStream;
+    type ProofSubscriptionStream = ProofSubscriptionStream;
+
+    async fn block_subscription(
+        &self,
+        request: Request<proto::rpc::BlockSubscriptionRequest>,
+    ) -> Result<Response<Self::BlockSubscriptionStream>, Status> {
+        let permit = Arc::clone(&self.block_subscription_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
+
+        let from = BlockNumber::from(request.into_inner().block_from);
+
+        let stream = build_block_stream(
+            from,
+            self.block_cache.clone(),
+            self.committed_tip_rx.clone(),
+            Arc::clone(&self.state),
+        );
+        let stream: Self::BlockSubscriptionStream = Box::pin(GuardedStream::new(stream, permit));
+        Ok(Response::new(stream))
+    }
+
+    async fn proof_subscription(
+        &self,
+        request: Request<proto::rpc::ProofSubscriptionRequest>,
+    ) -> Result<Response<Self::ProofSubscriptionStream>, Status> {
+        let permit = Arc::clone(&self.proof_subscription_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("maximum proof subscriptions reached"))?;
+
+        let from = BlockNumber::from(request.into_inner().block_from);
+
+        let stream = build_proof_stream(
+            from,
+            self.proof_cache.clone(),
+            self.proven_tip_rx.clone(),
+            Arc::clone(&self.state),
+        );
+        let stream: Self::ProofSubscriptionStream = Box::pin(GuardedStream::new(stream, permit));
+        Ok(Response::new(stream))
+    }
+
     /// Returns block header for the specified block number.
     ///
     /// If the block number is not provided, block header for the latest block is returned.
