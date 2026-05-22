@@ -100,6 +100,34 @@ impl fmt::Display for SchemaHash {
     }
 }
 
+#[derive(PartialEq)]
+pub struct SchemaHashes<'a>(pub &'a [SchemaHash]);
+
+impl fmt::Display for SchemaHashes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for hash in self.0 {
+            writeln!(f, "{hash}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for SchemaHashes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl SchemaHashes<'_> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 fn normalize_sql(sql: &str) -> String {
     sql.trim_end()
         .trim_end_matches(';')
