@@ -23,7 +23,6 @@ clap                      = { features = ["env", "string"], workspace = true }
 fs-err                    = { workspace = true }
 humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }
-miden-node-rpc            = { workspace = true }
 miden-node-store          = { workspace = true }
 miden-node-utils          = { workspace = true }
 miden-protocol            = { workspace = true }

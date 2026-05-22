@@ -3266,7 +3266,6 @@ dependencies = [
  "fs-err",
  "humantime",
  "miden-node-block-producer",
- "miden-node-rpc",
  "miden-node-store",
  "miden-node-utils",
  "miden-protocol",

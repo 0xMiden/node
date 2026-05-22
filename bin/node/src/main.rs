@@ -3,7 +3,6 @@
 #![recursion_limit = "256"]
 
 use clap::{Parser, Subcommand};
-use miden_node_utils::logging::OpenTelemetry;
 
 mod commands;
 #[cfg(test)]
@@ -12,49 +11,45 @@ mod tests;
 // COMMANDS
 // ================================================================================================
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Commands related to the node's store component.
-    #[command(subcommand)]
-    Store(commands::store::StoreCommand),
+    /// Bootstraps the node store from a pre-signed genesis block.
+    Bootstrap(commands::BootstrapCommand),
 
-    /// Commands related to the node's RPC component.
-    #[command(subcommand)]
-    Rpc(commands::rpc::RpcCommand),
+    /// Applies pending store database migrations.
+    Migrate(commands::MigrateCommand),
 
-    /// Commands related to the node's block-producer component.
-    #[command(subcommand)]
-    BlockProducer(commands::block_producer::BlockProducerCommand),
+    /// Runs a complete node which produces blocks in-process.
+    Sequencer(commands::SequencerCommand),
+
+    /// Runs a complete node which syncs blocks from a block stream source.
+    Rpc(commands::RpcCommand),
 }
 
 impl Command {
-    /// Whether OpenTelemetry tracing exporter should be enabled.
-    ///
-    /// This is enabled for some subcommands if the `--open-telemetry` flag is specified.
-    fn open_telemetry(&self) -> OpenTelemetry {
-        if match self {
-            Command::Store(subcommand) => subcommand.is_open_telemetry_enabled(),
-            Command::Rpc(subcommand) => subcommand.is_open_telemetry_enabled(),
-            Command::BlockProducer(subcommand) => subcommand.is_open_telemetry_enabled(),
-        } {
-            OpenTelemetry::Enabled
-        } else {
-            OpenTelemetry::Disabled
+    fn open_telemetry(&self) -> miden_node_utils::logging::OpenTelemetry {
+        match self {
+            Command::Sequencer(command) => command.runtime.open_telemetry(),
+            Command::Rpc(command) => command.runtime.open_telemetry(),
+            Command::Bootstrap(_) | Command::Migrate(_) => {
+                miden_node_utils::logging::OpenTelemetry::Disabled
+            },
         }
     }
 
     async fn execute(self) -> anyhow::Result<()> {
         match self {
-            Command::Rpc(rpc_command) => rpc_command.handle().await,
-            Command::Store(store_command) => store_command.handle().await,
-            Command::BlockProducer(block_producer_command) => block_producer_command.handle().await,
+            Command::Bootstrap(bootstrap_command) => bootstrap_command.handle(),
+            Command::Migrate(migrate_command) => migrate_command.handle().await,
+            Command::Sequencer(sequencer_command) => sequencer_command.handle(),
+            Command::Rpc(rpc_command) => rpc_command.handle(),
         }
     }
 }
