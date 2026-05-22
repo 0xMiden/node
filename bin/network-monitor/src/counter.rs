@@ -975,7 +975,7 @@ fn build_account_storage(
 }
 
 /// Create the increment procedure script.
-fn create_increment_script() -> Result<NoteScript> {
+pub(crate) fn create_increment_script() -> Result<NoteScript> {
     let script =
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/counter_program.masm"));
 

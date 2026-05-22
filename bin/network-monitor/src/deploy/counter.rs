@@ -1,5 +1,7 @@
 //! Counter program account creation functionality.
 
+use std::collections::BTreeSet;
+
 use anyhow::Result;
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
@@ -14,11 +16,12 @@ use miden_protocol::account::{
 };
 use miden_protocol::utils::sync::LazyLock;
 use miden_protocol::{Felt, Word};
+use miden_standards::account::auth::AuthNetworkAccount;
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::testing::account_component::IncrNonceAuthComponent;
 use tracing::instrument;
 
 use crate::COMPONENT;
+use crate::counter::create_increment_script;
 
 pub static OWNER_SLOT_NAME: LazyLock<StorageSlotName> = LazyLock::new(|| {
     StorageSlotName::new("miden::monitor::counter_contract::owner")
@@ -55,7 +58,16 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     let account_code =
         AccountComponent::new(component_code, vec![counter_slot, owner_id_slot], metadata)?;
 
-    let incr_nonce_auth: AccountComponent = IncrNonceAuthComponent.into();
+    let mut allowed_scripts = BTreeSet::new();
+
+    let increment_script = create_increment_script().expect("is valid note script");
+
+    allowed_scripts.insert(increment_script.root());
+
+    let network_account_auth: AccountComponent =
+        AuthNetworkAccount::with_allowlist(allowed_scripts)
+            .expect("list is not empty")
+            .into();
 
     // Create the counter program account
     let init_seed: [u8; 32] = rand::random();
@@ -63,7 +75,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
         .account_type(AccountType::RegularAccountUpdatableCode)
         .storage_mode(AccountStorageMode::Network)
         .with_component(account_code)
-        .with_auth_component(incr_nonce_auth)
+        .with_auth_component(network_account_auth)
         .build()?;
 
     Ok(counter_account)
