@@ -238,8 +238,8 @@ fn sql_select_notes() {
         let note = NoteRecord {
             block_num,
             note_index: BlockNoteIndex::new(0, i.try_into().unwrap()).unwrap(),
+            details_commitment: num_to_word(u64::try_from(i).unwrap()),
             note_id: num_to_word(u64::try_from(i).unwrap()),
-            note_commitment: num_to_word(u64::try_from(i).unwrap()),
             metadata: *new_note.metadata(),
             details: Some(NoteDetails::from(&new_note)),
             attachments: new_note.attachments().clone(),
@@ -283,8 +283,8 @@ fn sql_select_note_script_by_root() {
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0.try_into().unwrap()).unwrap(),
+        details_commitment: num_to_word(0),
         note_id: num_to_word(0),
-        note_commitment: num_to_word(0),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
         attachments: new_note.attachments().clone(),
@@ -365,8 +365,8 @@ fn sql_unconsumed_network_notes() {
         let note = NoteRecord {
             block_num: 0.into(), // Created on same block.
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
+            details_commitment: num_to_word(i.into()),
             note_id: num_to_word(i.into()),
-            note_commitment: num_to_word(i.into()),
             metadata,
             details: None,
             attachments,
@@ -837,8 +837,8 @@ fn notes() {
     let note = NoteRecord {
         block_num: block_num_1,
         note_index,
-        note_id: new_note.details_commitment().as_word(),
-        note_commitment: new_note.id().as_word(),
+        details_commitment: new_note.details_commitment().as_word(),
+        note_id: new_note.id().as_word(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
         attachments: NoteAttachments::default(),
@@ -868,8 +868,8 @@ fn notes() {
     let note2 = NoteRecord {
         block_num: block_num_2,
         note_index: note.note_index,
-        note_id: new_note.details_commitment().as_word(),
-        note_commitment: new_note.id().as_word(),
+        details_commitment: new_note.details_commitment().as_word(),
+        note_id: new_note.id().as_word(),
         metadata: note.metadata,
         details: None,
         attachments: NoteAttachments::default(),
@@ -943,8 +943,8 @@ fn note_sync_across_multiple_blocks() {
         let note = NoteRecord {
             block_num,
             note_index,
-            note_id: new_note.details_commitment().as_word(),
-            note_commitment: new_note.id().as_word(),
+            details_commitment: new_note.details_commitment().as_word(),
+            note_id: new_note.id().as_word(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
             attachments: NoteAttachments::default(),
@@ -1025,8 +1025,8 @@ fn note_sync_multi_respects_payload_limit() {
         let note = NoteRecord {
             block_num,
             note_index,
-            note_id: new_note.details_commitment().as_word(),
-            note_commitment: new_note.id().as_word(),
+            details_commitment: new_note.details_commitment().as_word(),
+            note_id: new_note.id().as_word(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
             attachments: NoteAttachments::default(),
@@ -1083,8 +1083,8 @@ fn note_sync_no_matching_tags() {
     let note = NoteRecord {
         block_num,
         note_index,
-        note_id: new_note.details_commitment().as_word(),
-        note_commitment: new_note.id().as_word(),
+        details_commitment: new_note.details_commitment().as_word(),
+        note_id: new_note.id().as_word(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
         attachments: NoteAttachments::default(),
@@ -2538,8 +2538,8 @@ fn db_roundtrip_notes() {
     let note = NoteRecord {
         block_num,
         note_index,
-        note_id: new_note.details_commitment().as_word(),
-        note_commitment: new_note.id().as_word(),
+        details_commitment: new_note.details_commitment().as_word(),
+        note_id: new_note.id().as_word(),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
         attachments: new_note.attachments().clone(),
@@ -2559,8 +2559,8 @@ fn db_roundtrip_notes() {
 
     assert_eq!(note.note_id, retrieved_note.note_id, "NoteId DB roundtrip must be symmetric");
     assert_eq!(
-        note.note_commitment, retrieved_note.note_commitment,
-        "Note commitment DB roundtrip must be symmetric"
+        note.details_commitment, retrieved_note.details_commitment,
+        "Details commitment DB roundtrip must be symmetric"
     );
     assert_eq!(
         note.metadata, retrieved_note.metadata,
@@ -2807,8 +2807,8 @@ fn db_roundtrip_note_metadata_attachment() {
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0).unwrap(),
+        details_commitment: num_to_word(1),
         note_id: num_to_word(1),
-        note_commitment: num_to_word(1),
         metadata,
         details: None,
         attachments: attachments.clone(),
@@ -3649,8 +3649,8 @@ fn db_roundtrip_transactions() {
                 NoteRecord {
                     block_num,
                     note_index: BlockNoteIndex::new(0, idx).unwrap(),
-                    note_id: note.details_commitment().as_word(),
-                    note_commitment: note.id().as_word(),
+                    details_commitment: note.details_commitment().as_word(),
+                    note_id: note.id().as_word(),
                     metadata: *note.metadata(),
                     details: None,
                     attachments: NoteAttachments::default(),
@@ -3675,7 +3675,7 @@ fn db_roundtrip_transactions() {
         .map(|(idx, note)| NoteSyncRecord {
             block_num,
             note_index: BlockNoteIndex::new(0, idx).unwrap(),
-            note_id: NoteId::from_raw(note.details_commitment().as_word()),
+            note_id: note.id(),
             metadata: *note.metadata(),
             inclusion_path: SparseMerklePath::default(),
         })
