@@ -33,6 +33,8 @@
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - Updated `miden-protocol` and bumped `miden-crypto` to `v0.25`. `AccountId::is_network()` was removed upstream, so `SubmitProvenTx` and `SubmitProvenTxBatch` now consult the store to classify post-deployment public-account transactions as network accounts.
+- [BREAKING] Removed `Network` variant from genesis config `StorageMode`. The implicit default for wallets and fungible faucets is now `Private` (previously `Network`, which mapped to `Public` storage) ([#2095](https://github.com/0xMiden/node/pull/2095)).
+
 ## v0.14.11 (TBD)
 
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).

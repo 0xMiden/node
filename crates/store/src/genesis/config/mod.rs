@@ -508,10 +508,10 @@ struct AssetEntry {
 pub enum StorageMode {
     /// A publicly stored account, lives on-chain.
     #[serde(alias = "public")]
-    #[default]
     Public,
     /// A private account, which must be known by interactors.
     #[serde(alias = "private")]
+    #[default]
     Private,
 }
 
