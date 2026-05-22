@@ -115,19 +115,19 @@ pub fn add_transaction(
         match update {
             NetworkAccountEffect::Updated(ref account_delta) => {
                 // Query latest_account, apply delta, insert inflight row.
-                let current_account =
-                    get_account(conn, account_id)?.expect("account must exist to apply delta");
-                let mut updated = current_account;
-                updated.apply_delta(account_delta).expect(
-                    "network account delta should apply since it was accepted by the mempool",
-                );
+                if let Some(current_account) = get_account(conn, account_id)? {
+                    let mut updated = current_account;
+                    updated.apply_delta(account_delta).expect(
+                        "network account delta should apply since it was accepted by the mempool",
+                    );
 
-                let insert = AccountInsert {
-                    account_id: conversions::network_account_id_to_bytes(account_id),
-                    transaction_id: Some(tx_id_bytes.clone()),
-                    account_data: conversions::account_to_bytes(&updated),
-                };
-                diesel::insert_into(schema::accounts::table).values(&insert).execute(conn)?;
+                    let insert = AccountInsert {
+                        account_id: conversions::network_account_id_to_bytes(account_id),
+                        transaction_id: Some(tx_id_bytes.clone()),
+                        account_data: conversions::account_to_bytes(&updated),
+                    };
+                    diesel::insert_into(schema::accounts::table).values(&insert).execute(conn)?;
+                }
             },
             NetworkAccountEffect::Created(ref account) => {
                 let insert = AccountInsert {
