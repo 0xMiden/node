@@ -37,7 +37,6 @@ CREATE TABLE accounts (
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_accounts_network_type ON accounts(network_account_type) WHERE network_account_type = 1;
-CREATE INDEX idx_accounts_id_block ON accounts(account_id, block_num DESC);
 CREATE INDEX idx_accounts_latest ON accounts(account_id, is_latest) WHERE is_latest = 1;
 CREATE INDEX idx_accounts_created_at_block ON accounts(created_at_block);
 -- Index for joining with block_headers
@@ -85,8 +84,6 @@ CREATE INDEX idx_notes_sender ON notes(sender, committed_at);
 CREATE INDEX idx_notes_tag ON notes(tag, committed_at);
 CREATE INDEX idx_notes_nullifier ON notes(nullifier);
 CREATE INDEX idx_notes_target_account ON notes(target_account_id, committed_at) WHERE target_account_id IS NOT NULL;
--- Index for joining with block_headers on committed_at
-CREATE INDEX idx_notes_committed_at ON notes(committed_at);
 -- Index for joining with note_scripts
 CREATE INDEX idx_notes_script_root ON notes(script_root) WHERE script_root IS NOT NULL;
 -- Index for joining with block_headers on consumed_at
@@ -111,8 +108,6 @@ CREATE TABLE account_storage_map_values (
     FOREIGN KEY (account_id, block_num) REFERENCES accounts(account_id, block_num) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
--- Index for joining with accounts table on compound key
-CREATE INDEX idx_account_storage_account_block ON account_storage_map_values(account_id, block_num);
 -- Index for querying latest values
 CREATE INDEX idx_account_storage_latest ON account_storage_map_values(account_id, is_latest) WHERE is_latest = 1;
 
@@ -127,8 +122,6 @@ CREATE TABLE account_vault_assets (
     FOREIGN KEY (account_id, block_num) REFERENCES accounts(account_id, block_num) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
--- Index for joining with accounts table on compound key
-CREATE INDEX idx_vault_assets_account_block ON account_vault_assets(account_id, block_num);
 -- Index for querying latest assets
 CREATE INDEX idx_vault_assets_latest ON account_vault_assets(account_id, is_latest) WHERE is_latest = 1;
 
@@ -160,8 +153,6 @@ CREATE TABLE transactions (
     PRIMARY KEY (transaction_id)
 ) WITHOUT ROWID;
 
--- Index for joining with accounts (note: account may not exist in accounts table)
-CREATE INDEX idx_transactions_account_id ON transactions(account_id);
 -- Index for joining with block_headers
 CREATE INDEX idx_transactions_block_num ON transactions(block_num);
 -- Composite index to speed up select_transactions_records.
