@@ -29,10 +29,10 @@ use crate::db::Db;
 
 /// A request sent from an account actor to the coordinator via a shared mpsc channel.
 pub enum ActorRequest {
-    /// One or more notes failed during transaction execution and should have their attempt
-    /// counters incremented. The actor waits for the coordinator to acknowledge the DB write via
-    /// the oneshot channel, preventing race conditions where the actor could re-select the same
-    /// notes before the failure is persisted.
+    /// One or more notes failed during transaction execution and should have their attempt counters
+    /// incremented. The actor waits for the coordinator to acknowledge the DB write via the oneshot
+    /// channel, preventing race conditions where the actor could re-select the same notes before
+    /// the failure is persisted.
     NotesFailed {
         failed_notes: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
@@ -54,8 +54,8 @@ pub struct GrpcClients {
     pub block_producer: BlockProducerClient,
     /// Client for interacting with the validator.
     pub validator: ValidatorClient,
-    /// Client for remote transaction proving. If `None`, transactions will be proven locally,
-    /// which is undesirable due to the performance impact.
+    /// Client for remote transaction proving. If `None`, transactions will be proven locally, which
+    /// is undesirable due to the performance impact.
     pub prover: Option<RemoteTransactionProver>,
 }
 
@@ -81,6 +81,12 @@ pub struct ActorConfig {
     pub idle_timeout: Duration,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
+    /// Initial sleep applied between per-request retries on transient infrastructure failures
+    /// (prover unreachable, validator/block-producer transport error, store gRPC hiccup). Doubles
+    /// each retry up to [`Self::request_backoff_max`].
+    pub request_backoff_initial: Duration,
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
 }
 
 // ACCOUNT ACTOR CONTEXT
@@ -133,6 +139,8 @@ impl AccountActorContext {
                 max_note_attempts: 1,
                 idle_timeout: Duration::from_secs(60),
                 max_cycles: 1 << 18,
+                request_backoff_initial: Duration::from_millis(1),
+                request_backoff_max: Duration::from_millis(10),
             },
             request_tx,
         }
@@ -193,8 +201,8 @@ pub struct AccountActor {
     state: State,
     /// Per-actor configuration knobs.
     config: ActorConfig,
-    /// Notification signal from the coordinator indicating that DB state relevant to this actor
-    /// may have changed. The actor re-evaluates its state from the DB on each notification.
+    /// Notification signal from the coordinator indicating that DB state relevant to this actor may
+    /// have changed. The actor re-evaluates its state from the DB on each notification.
     notify: Arc<Notify>,
     /// Channel for sending requests to the coordinator.
     request: mpsc::Sender<ActorRequest>,
@@ -226,8 +234,8 @@ impl AccountActor {
     pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
-        // Wait for the account to be committed to the DB. For newly created accounts,
-        // the creation transaction must be committed before we start processing notes.
+        // Wait for the account to be committed to the DB. For newly created accounts, the creation
+        // transaction must be committed before we start processing notes.
         if !self.wait_for_committed_account(account_id).await? {
             return Ok(());
         }
@@ -258,8 +266,8 @@ impl AccountActor {
                 ActorMode::NotesAvailable => semaphore.acquire().boxed(),
             };
 
-            // Idle timeout timer: only ticks when in NoViableNotes mode.
-            // Mode changes cause the next loop iteration to create a fresh sleep or pending.
+            // Idle timeout timer: only ticks when in NoViableNotes mode. Mode changes cause the
+            // next loop iteration to create a fresh sleep or pending.
             let idle_timeout_sleep = match mode {
                 ActorMode::NoViableNotes => tokio::time::sleep(self.config.idle_timeout).boxed(),
                 _ => std::future::pending().boxed(),
@@ -401,6 +409,11 @@ impl AccountActor {
     /// Execute a transaction candidate and mark notes as failed as required.
     ///
     /// Returns the new actor mode based on the execution result.
+    ///
+    /// Transient infrastructure failures (prover unreachable, validator/block-producer transport
+    /// hiccup, store gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
+    /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
+    /// are marked failed and the actor moves on.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
@@ -418,6 +431,8 @@ impl AccountActor {
             self.state.script_cache.clone(),
             self.state.db.clone(),
             self.config.max_cycles,
+            self.config.request_backoff_initial,
+            self.config.request_backoff_max,
         );
 
         let notes = tx_candidate.notes.clone();
@@ -456,8 +471,8 @@ impl AccountActor {
                     "network transaction failed",
                 );
 
-                // For `AllNotesFailed`, use the per-note errors which contain the
-                // specific reason each note failed (e.g. consumability check details).
+                // For `AllNotesFailed`, use the per-note errors which contain the specific reason
+                // each note failed (e.g. consumability check details).
                 let failed_notes: Vec<_> = match err {
                     execute::NtxError::AllNotesFailed(per_note) => log_failed_notes(per_note),
                     other => {

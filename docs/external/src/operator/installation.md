@@ -13,7 +13,7 @@ Both `amd64` and `arm64` packages are available.
 
 Note that the packages include a `systemd` service which is disabled by default.
 
-To install, download the desired releases `.deb` package and checksum files. Install using
+To install, download the desired release's `.deb` package and checksum files. Install using
 
 ```sh
 sudo dpkg -i $package_name.deb
@@ -29,7 +29,7 @@ can be used so long as the checksum file and the package file are in the same fo
 
 ## Install using `cargo`
 
-Install Rust version **1.89** or greater using the official Rust installation
+Install Rust using the official Rust installation
 [instructions](https://www.rust-lang.org/tools/install).
 
 Depending on the platform, you may need to install additional libraries. For example, on Ubuntu 22.04 the following
@@ -89,4 +89,4 @@ existing chain will not work with the new version. This will change as our proto
 settle.
 :::
 
-Updating the node to a new version is as simply as re-running the install process and repeating the [bootstrapping](./usage#bootstrapping) instructions.
+Updating the node to a new version is as simple as re-running the install process and repeating the [bootstrapping](./usage#bootstrapping) instructions.

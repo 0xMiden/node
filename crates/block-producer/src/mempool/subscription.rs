@@ -165,8 +165,8 @@ struct InflightTransactions {
     /// A reverse lookup index is maintained in `index`.
     txs: BTreeMap<u64, MempoolEvent>,
 
-    /// A reverse lookup index for `txs` which allows for efficient removal of
-    /// committed or reverted events.
+    /// A reverse lookup index for `txs` which allows for efficient removal of committed or reverted
+    /// events.
     index: BTreeMap<TransactionId, u64>,
 }
 

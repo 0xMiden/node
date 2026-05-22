@@ -403,8 +403,8 @@ impl<State> Builder<State> {
 }
 
 impl Builder<WantsTls> {
-    /// Create a new strict builder from a gRPC endpoint URL such as
-    /// `http://localhost:8080` or `https://api.example.com:443`.
+    /// Create a new strict builder from a gRPC endpoint URL such as `http://localhost:8080` or
+    /// `https://api.example.com:443`.
     pub fn new(url: Url) -> Builder<WantsTls> {
         let endpoint = Endpoint::from_shared(String::from(url))
             .expect("Url type always results in valid endpoint");

@@ -98,7 +98,7 @@ impl BatchGraph {
     ///
     /// Batches are returned in reverse-chronological order.
     pub fn revert_expired(&mut self, chain_tip: BlockNumber) -> Vec<SelectedBatch> {
-        // We only revert transactions which are _not_ included in batches.
+        // We only revert batches which are _not_ included in blocks.
         let mut to_revert = self.inner.expired(chain_tip);
         to_revert.retain(|batch| !self.inner.is_selected(batch));
 
@@ -111,8 +111,8 @@ impl BatchGraph {
         reverted
     }
 
-    /// Marks the given batch as proven, making it available for selection in a block
-    /// once it becomes a root.
+    /// Marks the given batch as proven, making it available for selection in a block once it
+    /// becomes a root.
     pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) {
         if self.inner.contains(&proof.id()) {
             self.proven.insert(proof.id(), proof);

@@ -33,7 +33,7 @@ miden-node store bootstrap \
 You can also configure the account and asset data in the genesis block by passing in a toml configuration file.
 This is particularly useful for setting up test scenarios without requiring multiple rounds of
 transactions to achieve the desired state. Any account secrets will be written to disk inside the
-the provided `--accounts-directory` path in the process.
+provided `--accounts-directory` path in the process.
 
 ```sh
 miden-validator bootstrap \
@@ -189,6 +189,16 @@ miden-node ntx-builder start \
   --validator.url http://127.0.0.1:50101 \
   --data-directory /tmp/ntx-builder
 ```
+
+### SQLite pools
+
+The store, validator, and network transaction builder use SQLite connection pools for database
+queries. By default, each pool size is twice the number of available CPU cores. Override it with
+`--sqlite.connection_pool_size` or the component-specific environment variable:
+
+- `MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE`
+- `MIDEN_NODE_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE`
+- `MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE`
 
 ### gRPC server limits and timeouts
 

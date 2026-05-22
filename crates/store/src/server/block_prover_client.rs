@@ -1,4 +1,5 @@
 use miden_block_prover::{BlockProverError, LocalBlockProver};
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof};
 use miden_remote_prover_client::{RemoteBlockProver, RemoteProverClientError};
@@ -12,6 +13,8 @@ pub enum StoreProverError {
     LocalProvingFailed(#[source] BlockProverError),
     #[error("remote proving failed")]
     RemoteProvingFailed(#[source] RemoteProverClientError),
+    #[error("local proving task join error")]
+    LocalProvingTaskJoin(#[source] tokio::task::JoinError),
 }
 
 // BLOCK PROVER
@@ -43,9 +46,18 @@ impl BlockProver {
         block_header: &BlockHeader,
     ) -> Result<BlockProof, StoreProverError> {
         match self {
-            Self::Local(prover) => Ok(prover
-                .prove(tx_batches, block_header, block_inputs)
-                .map_err(StoreProverError::LocalProvingFailed)?),
+            Self::Local(prover) => {
+                let prover = prover.clone();
+                let block_header = block_header.clone();
+
+                spawn_blocking_in_current_span(move || {
+                    prover
+                        .prove(tx_batches, &block_header, block_inputs)
+                        .map_err(StoreProverError::LocalProvingFailed)
+                })
+                .await
+                .map_err(StoreProverError::LocalProvingTaskJoin)?
+            },
             Self::Remote(prover) => Ok(prover
                 .prove(tx_batches, block_header, block_inputs)
                 .await

@@ -2,6 +2,7 @@ mod migrations;
 mod models;
 mod schema;
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use diesel::SqliteConnection;
@@ -21,14 +22,24 @@ use crate::tx_validation::ValidatedTransaction;
 /// Open a connection to the DB and apply any pending migrations.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
-    let db = Db::new(&database_filepath)?;
+    load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
+}
+
+/// Open a connection to the DB with a specific pool size and apply any pending migrations.
+#[instrument(target = COMPONENT, skip_all)]
+pub async fn load_with_pool_size(
+    database_filepath: PathBuf,
+    connection_pool_size: NonZeroUsize,
+) -> Result<Db, DatabaseError> {
+    apply_migrations(&database_filepath)?;
+
+    let db = Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
     tracing::info!(
         target: COMPONENT,
         sqlite= %database_filepath.display(),
+        connection_pool_size = %connection_pool_size,
         "Connected to the database"
     );
-
-    db.query("migrations", apply_migrations).await?;
     Ok(db)
 }
 

@@ -1073,9 +1073,9 @@ fn prune_preserves_entries_within_retention_window() {
     assert!(forest.get_vault_root(account_id, BlockNumber::from(100)).is_some());
 }
 
-/// Two accounts start with identical vault roots (same asset amount). When one account changes
-/// in the next block, verify the unchanged account's vault root still works for lookups and
-/// witness generation.
+/// Two accounts start with identical vault roots (same asset amount). When one account changes in
+/// the next block, verify the unchanged account's vault root still works for lookups and witness
+/// generation.
 #[test]
 fn shared_vault_root_retained_when_one_account_changes() {
     let mut forest = AccountStateForest::new();

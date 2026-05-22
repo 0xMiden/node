@@ -50,16 +50,16 @@ pub const NULLIFIER_TREE_STORAGE_DIR: &str = "nullifiertree";
 /// Directory name for the account state forest storage within the data directory.
 pub const ACCOUNT_STATE_FOREST_STORAGE_DIR: &str = "accountstateforest";
 
-/// Page size for loading account commitments from the database during tree rebuilding.
-/// This limits memory usage when rebuilding trees with millions of accounts.
+/// Page size for loading account commitments from the database during tree rebuilding. This limits
+/// memory usage when rebuilding trees with millions of accounts.
 const ACCOUNT_COMMITMENTS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
 
-/// Page size for loading nullifiers from the database during tree rebuilding.
-/// This limits memory usage when rebuilding trees with millions of nullifiers.
+/// Page size for loading nullifiers from the database during tree rebuilding. This limits memory
+/// usage when rebuilding trees with millions of nullifiers.
 const NULLIFIERS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
 
-/// Page size for loading public account IDs from the database during forest rebuilding.
-/// This limits memory usage when rebuilding with millions of public accounts.
+/// Page size for loading public account IDs from the database during forest rebuilding. This limits
+/// memory usage when rebuilding with millions of public accounts.
 const PUBLIC_ACCOUNT_IDS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
 
 // STORAGE TYPE ALIAS
@@ -212,9 +212,9 @@ impl TreeStorageLoader for MemoryStorage {
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
     }
 
-    // TODO: Make the loading methodology for account and nullifier trees consistent.
-    // Currently we use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()`
-    // for accounts. Consider using `NullifierTree::with_storage_from_entries()` for consistency.
+    // TODO: Make the loading methodology for account and nullifier trees consistent. Currently we
+    // use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()` for accounts.
+    // Consider using `NullifierTree::with_storage_from_entries()` for consistency.
     #[instrument(target = COMPONENT, skip_all)]
     async fn load_nullifier_tree(
         self,
@@ -464,8 +464,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
     let block_commitments = db.select_all_block_header_commitments().await?;
 
-    // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX
-    // entries.
+    // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
     let chain_mmr = Blockchain::from_mmr_unchecked(Mmr::from(
         block_commitments.iter().copied().map(BlockHeaderCommitment::word),
     ));
@@ -493,8 +492,8 @@ pub async fn rebuild_account_state_forest(
 
         // Process each account in this page
         for account_id in page.account_ids {
-            // TODO: Loading the full account from the database is inefficient and will need to
-            // go away. <https://github.com/0xMiden/node/issues/1556>
+            // TODO: Loading the full account from the database is inefficient and will need to go
+            // away. <https://github.com/0xMiden/node/issues/1556>
             let account_info = db.select_account(account_id).await?;
             let account = account_info
                 .details

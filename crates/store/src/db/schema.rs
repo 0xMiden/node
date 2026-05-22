@@ -1,6 +1,13 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    account_codes (code_commitment) {
+        code_commitment -> Binary,
+        code -> Binary,
+    }
+}
+
+diesel::table! {
     account_storage_map_values (account_id, block_num, slot_name, key) {
         account_id -> Binary,
         block_num -> BigInt,
@@ -25,21 +32,14 @@ diesel::table! {
     accounts (account_id, block_num) {
         account_id -> Binary,
         network_account_type -> Integer,
+        block_num -> BigInt,
         account_commitment -> Binary,
         code_commitment -> Nullable<Binary>,
         nonce -> Nullable<BigInt>,
         storage_header -> Nullable<Binary>,
         vault_root -> Nullable<Binary>,
-        block_num -> BigInt,
         is_latest -> Bool,
         created_at_block -> BigInt,
-    }
-}
-
-diesel::table! {
-    account_codes (code_commitment) {
-        code_commitment -> Binary,
-        code -> Binary,
     }
 }
 
@@ -49,8 +49,6 @@ diesel::table! {
         block_header -> Binary,
         signature -> Binary,
         commitment -> Binary,
-        proving_inputs -> Nullable<Binary>,
-        proven_in_sequence -> Bool,
     }
 }
 
@@ -106,21 +104,11 @@ diesel::table! {
     }
 }
 
-diesel::joinable!(accounts -> account_codes (code_commitment));
-diesel::joinable!(accounts -> block_headers (block_num));
-// Note: Cannot use diesel::joinable! with accounts table due to composite primary key
-// diesel::joinable!(notes -> accounts (sender));
-// diesel::joinable!(transactions -> accounts (account_id));
-diesel::joinable!(notes -> block_headers (committed_at));
-diesel::joinable!(notes -> note_scripts (script_root));
-diesel::joinable!(nullifiers -> block_headers (block_num));
-diesel::joinable!(transactions -> block_headers (block_num));
-
 diesel::allow_tables_to_appear_in_same_query!(
     account_codes,
     account_storage_map_values,
-    accounts,
     account_vault_assets,
+    accounts,
     block_headers,
     note_scripts,
     notes,

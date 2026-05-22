@@ -39,8 +39,8 @@ impl<M: prost::Message> Default for GrpcStructDecoder<M> {
 }
 
 impl<M: prost::Message> GrpcStructDecoder<M> {
-    /// Decode a required optional field: checks for `None`, converts via `TryInto`, and adds
-    /// field context on error.
+    /// Decode a required optional field: checks for `None`, converts via `TryInto`, and adds field
+    /// context on error.
     pub fn decode_field<T, F>(
         &self,
         name: &'static str,

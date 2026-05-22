@@ -4,7 +4,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store, StoreMode};
+use miden_node_store::{
+    DEFAULT_MAX_CONCURRENT_PROOFS,
+    DatabaseOptions,
+    Store,
+    StoreMode,
+    default_sqlite_connection_pool_size,
+};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_protocol::block::SignedBlock;
@@ -19,6 +25,7 @@ const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
 const ENV_NTX_BUILDER_LISTEN: &str = "MIDEN_NODE_STORE_NTX_BUILDER_LISTEN";
 const ENV_BLOCK_PRODUCER_LISTEN: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_LISTEN";
 const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
+const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE";
 
 #[derive(clap::Subcommand)]
 pub enum StoreCommand {
@@ -77,21 +84,30 @@ pub enum StoreCommand {
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
 
+        /// Maximum number of SQLite connections in the store database connection pool.
+        #[arg(
+            long = "sqlite.connection_pool_size",
+            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
+            default_value_t = default_sqlite_connection_pool_size(),
+            value_name = "NUM"
+        )]
+        sqlite_connection_pool_size: NonZeroUsize,
+
         #[command(flatten)]
         storage_options: StorageOptions,
     },
 
     /// Starts the store in replica mode.
     ///
-    /// In this mode the store syncs blocks from an upstream store's `StoreReplica` gRPC service.
-    /// Only the `Rpc` and `StoreReplica` gRPC services are exposed — the `BlockProducer` and
-    /// `NtxBuilder` services are not started and no proof scheduler runs.
+    /// In this mode the store syncs blocks from an upstream store's `Rpc` gRPC service.
+    /// Only the `Rpc` gRPC service is exposed — the `BlockProducer` and `NtxBuilder` services are
+    /// not started and no proof scheduler runs.
     StartReplica {
         /// Socket address at which to serve the store's RPC API.
         #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
         rpc_listen: SocketAddr,
 
-        /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
+        /// gRPC URL of the upstream store's `Rpc` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
         upstream_store_url: Url,
 
@@ -105,6 +121,15 @@ pub enum StoreCommand {
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
+
+        /// Maximum number of SQLite connections in the store database connection pool.
+        #[arg(
+            long = "sqlite.connection_pool_size",
+            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
+            default_value_t = default_sqlite_connection_pool_size(),
+            value_name = "NUM"
+        )]
+        sqlite_connection_pool_size: NonZeroUsize,
 
         #[command(flatten)]
         storage_options: StorageOptions,
@@ -127,6 +152,7 @@ impl StoreCommand {
                 data_directory,
                 enable_otel: _,
                 grpc_options,
+                sqlite_connection_pool_size,
                 max_concurrent_proofs,
                 storage_options,
             } => {
@@ -137,6 +163,9 @@ impl StoreCommand {
                     block_prover_url,
                     data_directory,
                     grpc_options,
+                    DatabaseOptions {
+                        connection_pool_size: sqlite_connection_pool_size,
+                    },
                     max_concurrent_proofs,
                     storage_options,
                 )
@@ -148,6 +177,7 @@ impl StoreCommand {
                 data_directory,
                 enable_otel: _,
                 grpc_options,
+                sqlite_connection_pool_size,
                 storage_options,
             } => {
                 Self::start_replica(
@@ -155,6 +185,9 @@ impl StoreCommand {
                     upstream_store_url,
                     data_directory,
                     grpc_options,
+                    DatabaseOptions {
+                        connection_pool_size: sqlite_connection_pool_size,
+                    },
                     storage_options,
                 )
                 .await
@@ -179,6 +212,7 @@ impl StoreCommand {
         block_prover_url: Option<Url>,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
+        database_options: DatabaseOptions,
         max_concurrent_proofs: NonZeroUsize,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
@@ -203,6 +237,7 @@ impl StoreCommand {
                 max_concurrent_proofs,
             },
             data_directory,
+            database_options,
             grpc_options,
             storage_options,
         }
@@ -216,6 +251,7 @@ impl StoreCommand {
         upstream_store_url: Url,
         data_directory: PathBuf,
         grpc_options: GrpcOptionsInternal,
+        database_options: DatabaseOptions,
         storage_options: StorageOptions,
     ) -> anyhow::Result<()> {
         let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
@@ -226,6 +262,7 @@ impl StoreCommand {
             rpc_listener,
             mode: StoreMode::Replica { upstream_url: upstream_store_url },
             data_directory,
+            database_options,
             grpc_options,
             storage_options,
         }

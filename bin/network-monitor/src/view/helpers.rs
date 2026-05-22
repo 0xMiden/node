@@ -19,8 +19,8 @@ pub(super) fn metric_row(label: &str, value: &str) -> Markup {
     }
 }
 
-/// Inline copy-to-clipboard button. `label` appears in the tooltip ("Copy full {label}");
-/// `value` is the literal text written to the clipboard via the JS helper.
+/// Inline copy-to-clipboard button. `label` appears in the tooltip ("Copy full {label}"); `value`
+/// is the literal text written to the clipboard via the JS helper.
 pub(super) fn copy_button(value: &str, label: &str) -> Markup {
     let onclick = format!("copyToClipboard({}, event)", json_string(value));
     html! {

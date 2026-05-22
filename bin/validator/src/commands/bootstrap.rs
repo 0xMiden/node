@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -15,6 +16,7 @@ pub async fn bootstrap(
     genesis_block_directory: &Path,
     accounts_directory: &Path,
     data_directory: &Path,
+    sqlite_connection_pool_size: NonZeroUsize,
     genesis_config: Option<&PathBuf>,
     validator_key: ValidatorKey,
 ) -> anyhow::Result<()> {
@@ -27,7 +29,7 @@ pub async fn bootstrap(
         .transpose()?
         .unwrap_or_default();
 
-    for directory in [accounts_directory, genesis_block_directory] {
+    for directory in [accounts_directory, genesis_block_directory, data_directory] {
         ensure_empty_directory(directory)?;
     }
 
@@ -38,18 +40,20 @@ pub async fn bootstrap(
         accounts_directory,
         genesis_block_directory,
         data_directory,
+        sqlite_connection_pool_size,
     )
     .await
 }
 
-/// Builds the genesis state, writes account secret files, signs the genesis block, writes it
-/// to disk, and initializes the validator's database with the genesis block as the chain tip.
+/// Builds the genesis state, writes account secret files, signs the genesis block, writes it to
+/// disk, and initializes the validator's database with the genesis block as the chain tip.
 async fn build_and_write_genesis(
     config: GenesisConfig,
     signer: ValidatorSigner,
     accounts_directory: &Path,
     genesis_block_directory: &Path,
     data_directory: &Path,
+    sqlite_connection_pool_size: NonZeroUsize,
 ) -> anyhow::Result<()> {
     let (genesis_state, secrets) = config.into_state(signer.public_key())?;
 
@@ -81,9 +85,12 @@ async fn build_and_write_genesis(
     fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
 
     let (genesis_header, ..) = genesis_block.into_inner().into_parts();
-    let db = miden_validator::db::load(data_directory.join("validator.sqlite3"))
-        .await
-        .context("failed to initialize validator database during bootstrap")?;
+    let db = miden_validator::db::load_with_pool_size(
+        data_directory.join("validator.sqlite3"),
+        sqlite_connection_pool_size,
+    )
+    .await
+    .context("failed to initialize validator database during bootstrap")?;
     db.transact("upsert_block_header", move |conn| {
         miden_validator::db::upsert_block_header(conn, &genesis_header)
     })

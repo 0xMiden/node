@@ -120,8 +120,8 @@ pub fn available_notes(
 ) -> Result<Vec<AccountTargetNetworkNote>, DatabaseError> {
     let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
 
-    // Get unconsumed, uncommitted notes for this account that haven't exceeded the max
-    // attempt count.
+    // Get unconsumed, uncommitted notes for this account that haven't exceeded the max attempt
+    // count.
     let rows: Vec<NoteRow> = schema::notes::table
         .filter(schema::notes::account_id.eq(&account_id_bytes))
         .filter(schema::notes::consumed_by.is_null())

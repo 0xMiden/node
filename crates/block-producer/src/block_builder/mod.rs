@@ -2,7 +2,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
-use futures::FutureExt;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
@@ -82,12 +81,16 @@ impl BlockBuilder {
             // Exit if a fatal error occurred.
             //
             // No need for error logging since this is handled inside the function.
-            if let err @ Err(BuildBlockError::Desync { local_chain_tip, .. }) =
-                self.build_block(&mempool).await
-            {
-                return err.with_context(|| {
-                    format!("fatal error while building block {}", local_chain_tip.child())
-                });
+            match self.build_block(&mempool).await {
+                Err(err @ BuildBlockError::Desync { local_chain_tip, .. }) => {
+                    return Err(err).with_context(|| {
+                        format!("fatal error while building block {}", local_chain_tip.child())
+                    });
+                },
+                Err(err @ BuildBlockError::MempoolPoisoned(_)) => {
+                    return Err(err).context("fatal error while accessing mempool");
+                },
+                Err(_) | Ok(()) => {},
             }
         }
     }
@@ -107,7 +110,8 @@ impl BlockBuilder {
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
-        let selected = Self::select_block(mempool).inspect(SelectedBlock::inject_telemetry).await;
+        let selected = Self::select_block(mempool)?;
+        selected.inject_telemetry();
         let block_num = selected.block_number;
 
         self.get_block_inputs(selected)
@@ -121,15 +125,15 @@ impl BlockBuilder {
             // Handle errors by propagating the error to the root span and rolling back the block.
             .inspect_err(|err| Span::current().set_error(err))
             .or_else(|err| async {
-                self.rollback_block(mempool, block_num).await;
+                Self::rollback_block(mempool, block_num)?;
                 Err(err)
             })
             .await
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
-    async fn select_block(mempool: &SharedMempool) -> SelectedBlock {
-        mempool.lock().await.select_block()
+    fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
+        Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
 
     /// Fetches block inputs from the store for the [`SelectedBlock`].
@@ -160,10 +164,10 @@ impl BlockBuilder {
         let unauthenticated_notes_iter = batch_iter.clone().flat_map(|batch| {
             // Note: .cloned() shouldn't be necessary but not having it produces an odd lifetime
             // error in BlockProducer::serve. Not sure if there's a better fix. Error:
-            // implementation of `FnOnce` is not general enough
-            // closure with signature `fn(&InputNoteCommitment) -> miden_protocol::note::NoteId`
-            // must implement `FnOnce<(&InputNoteCommitment,)>` ...but it actually
-            // implements `FnOnce<(&InputNoteCommitment,)>`
+            // implementation of `FnOnce` is not general enough closure with signature
+            // `fn(&InputNoteCommitment) -> miden_protocol::note::NoteId` must implement
+            // `FnOnce<(&InputNoteCommitment,)>` ...but it actually implements
+            // `FnOnce<(&InputNoteCommitment,)>`
             batch
                 .input_notes()
                 .iter()
@@ -240,16 +244,16 @@ impl BlockBuilder {
             .map_err(|err| BuildBlockError::other(format!("task join error: {err}")))?
             .map_err(BuildBlockError::ProposeBlockFailed)?;
 
-        // Verify the signature against the built block to ensure that
-        // the validator has provided a valid signature for the relevant block.
+        // Verify the signature against the built block to ensure that the validator has provided a
+        // valid signature for the relevant block.
         if !signature.verify(header.commitment(), header.validator_key()) {
             return Err(BuildBlockError::InvalidSignature);
         }
 
         let (ordered_batches, ..) = proposed_block.into_parts();
         // SAFETY: The header, body, and signature are known to correspond to each other because the
-        // header and body are derived from the proposed block and the signature is verified
-        // against the corresponding commitment.
+        // header and body are derived from the proposed block and the signature is verified against
+        // the corresponding commitment.
         let signed_block = SignedBlock::new_unchecked(header, body, signature);
         Ok((ordered_batches, signed_block))
     }
@@ -267,14 +271,15 @@ impl BlockBuilder {
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
         let (header, ..) = signed_block.into_parts();
-        mempool.lock().await.commit_block(header);
+        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(header);
 
         Ok(())
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
-    async fn rollback_block(&self, mempool: &SharedMempool, block: BlockNumber) {
-        mempool.lock().await.rollback_block(block);
+    fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
+        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
+        Ok(())
     }
 }
 

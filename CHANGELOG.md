@@ -12,21 +12,33 @@
 - Updated the RocksDB SMT backend to use budgeted deserialization for bytes read from disk, ported from `0xMiden/crypto` PR [#846](https://github.com/0xMiden/crypto/pull/846) ([#1923](https://github.com/0xMiden/node/pull/1923)).
 - [BREAKING] Network monitor `/status` endpoint now emits a single `RemoteProverStatus` entry per remote prover that bundles status, workers, and test results, instead of separate entries ([#1980](https://github.com/0xMiden/node/pull/1980)).
 - Refactored the validator gRPC API implementation to use the new per-method trait implementations ([#1959](https://github.com/0xMiden/node/pull/1959)).
+- Refactored the remote prover gRPC API implementation to use the new per-method trait implementations ([#1975](https://github.com/0xMiden/node/issues/1975)).
 - Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, extended `GetLimits` test coverage, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
 - Added a `replica` mode to the store, which streams blocks from an upstream master store ([#1987](https://github.com/0xMiden/node/pull/1987)).
-- Added `StoreReplica` gRPC service with endpoints for streaming blocks and proofs ([#1987](https://github.com/0xMiden/node/pull/1987)).
+- Added public and store `Rpc` streaming endpoints for replica block/proof synchronization ([#1987](https://github.com/0xMiden/node/pull/1987)).
 - Replaced the network monitor's JavaScript dashboard with a server-rendered Maud + HTMX frontend ([#2024](https://github.com/0xMiden/node/pull/2024)).
 - [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
+- Replaced local store block proving with `spawn_blocking` to avoid starving the Tokio runtime ([#1976](https://github.com/0xMiden/node/issues/1976)).
 - Implemented persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
 - [BREAKING] Replaced binding URL env vars and CLI flags with listen socket addresses ([#2054](https://github.com/0xMiden/node/pull/2054)).
 - [BREAKING] `BlockRange.block_to` is now required for all RPC endpoints ([#2056](https://github.com/0xMiden/node/pull/2056)).
 - [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
+- Made SQLite connection pool sizes configurable for store, validator, and ntx-builder components, defaulting each to twice the available CPU core count ([#2098](https://github.com/0xMiden/node/pull/2098)).
+- Replaced blocking-in-async LargeSmt and account state forest operations in the store with wrappers using Tokio's `block_in_place()` ([#2076](https://github.com/0xMiden/node/pull/2076)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
+- [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
+
+## v0.14.11 (TBD)
+
+- Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
+- Implement persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
+- Fixed network transaction builder permanently dropping notes after transient infrastructure failures. These now retry with exponential backoff at the actor level instead of consuming per-note retry budget ([#2052](https://github.com/0xMiden/node/issues/2052)).
 
 ## v0.14.10 (2026-05-29)
 
@@ -34,6 +46,7 @@
 - Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982)).
 - Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
 - Fixed occasional mempool panic during transaction submission, causing the lock to be held for longer than expected ([#1984](https://github.com/0xMiden/node/pull/1984)).
+- Optimize `GetAccount` implementation: `all_entries` requests now mostly use state from `AccountStateForest` ([#2012](https://github.com/0xMiden/node/pull/2012)).
 
 ## v0.14.9 (2026-04-21)
 

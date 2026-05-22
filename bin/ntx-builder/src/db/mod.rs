@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -19,7 +20,6 @@ use crate::{COMPONENT, NoteError};
 pub(crate) mod models;
 
 mod migrations;
-mod schema_hash;
 
 /// [diesel](https://diesel.rs) generated schema.
 pub(crate) mod schema;
@@ -41,21 +41,35 @@ impl Db {
         err,
     )]
     pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
-        let inner = miden_node_db::Db::new(&database_filepath)
+        Self::setup_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
+            .await
+    }
+
+    /// Creates and initializes the database with a specific pool size.
+    #[instrument(
+        target = COMPONENT,
+        name = "ntx_builder.database.setup",
+        skip_all,
+        fields(path=%database_filepath.display()),
+        err,
+    )]
+    pub async fn setup_with_pool_size(
+        database_filepath: PathBuf,
+        connection_pool_size: NonZeroUsize,
+    ) -> anyhow::Result<Self> {
+        apply_migrations(&database_filepath).context("failed to apply migrations")?;
+
+        let inner = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)
             .context("failed to build connection pool")?;
 
         info!(
             target: COMPONENT,
             sqlite = %database_filepath.display(),
+            connection_pool_size = %connection_pool_size,
             "Connected to the database"
         );
 
-        let me = Db { inner };
-        me.inner
-            .query("migrations", apply_migrations)
-            .await
-            .context("failed to apply migrations on pool connection")?;
-        Ok(me)
+        Ok(Db { inner })
     }
 
     // PUBLIC QUERY METHODS
@@ -237,10 +251,10 @@ impl Db {
 
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("test.sqlite3");
+        apply_migrations(&db_path).expect("migrations should apply on empty database");
         let mut conn = SqliteConnection::establish(db_path.to_str().unwrap())
             .expect("temp file sqlite should always work");
         configure_connection_on_creation(&mut conn).expect("connection configuration should work");
-        apply_migrations(&mut conn).expect("migrations should apply on empty database");
         (conn, dir)
     }
 

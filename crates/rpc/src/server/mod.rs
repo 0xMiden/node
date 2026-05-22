@@ -95,13 +95,13 @@ impl Rpc {
             .layer(GrpcWebLayer::new())
             .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
             .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
-            // Note: must come after the CORS layer, as otherwise accept rejections
-            // do _not_ get CORS headers applied, masking the accept error in
-            // web-clients (which would experience CORS rejection).
+            // Note: must come after the CORS layer, as otherwise accept rejections do _not_ get
+            // CORS headers applied, masking the accept error in web-clients (which would experience
+            // CORS rejection).
             .layer(
                 AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
-                    .with_genesis_enforced_method("SubmitProvenTransaction")
-                    .with_genesis_enforced_method("SubmitProvenBatch"),
+                    .with_genesis_enforced_method("SubmitProvenTx")
+                    .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
             .add_service(api_service)
             // Enables gRPC reflection service.

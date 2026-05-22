@@ -113,8 +113,8 @@ impl AuthenticatedTransaction {
         (self.inner.ref_block_num(), self.inner.ref_block_commitment())
     }
 
-    /// Note commitments which were unauthenticated in the transaction __and__ which were
-    /// not authenticated by the store inputs.
+    /// Note commitments which were unauthenticated in the transaction __and__ which were not
+    /// authenticated by the store inputs.
     pub fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner
             .unauthenticated_notes()
