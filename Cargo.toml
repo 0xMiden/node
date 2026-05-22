@@ -61,13 +61,13 @@ miden-validator                 = { path = "bin/validator", version = "0.15" }
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-agglayer        = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol" }
-miden-standards       = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-testing         = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol" }
-miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/protocol" }
+miden-agglayer        = { version = "0.15" }
+miden-block-prover    = { version = "0.15" }
+miden-protocol        = { default-features = false, version = "0.15" }
+miden-standards       = { version = "0.15" }
+miden-testing         = { version = "0.15" }
+miden-tx              = { default-features = false, version = "0.15" }
+miden-tx-batch-prover = { version = "0.15" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto = { version = "0.25" }

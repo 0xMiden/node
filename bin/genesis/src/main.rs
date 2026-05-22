@@ -6,13 +6,7 @@ use clap::Parser;
 use miden_agglayer::create_bridge_account;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::delta::{AccountStorageDelta, AccountVaultDelta};
-use miden_protocol::account::{
-    Account,
-    AccountDelta,
-    AccountFile,
-    AccountStorageMode,
-    AccountType,
-};
+use miden_protocol::account::{Account, AccountDelta, AccountFile, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{self, SecretKey as FalconSecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::utils::serde::Deserializable;
@@ -73,8 +67,7 @@ fn run(
         AuthMethod::SingleSig {
             approver: (bridge_admin_pub.into(), AuthScheme::Falcon512Poseidon2),
         },
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
+        AccountType::Public,
     )
     .context("failed to create bridge admin account")?;
     let bridge_admin_id = bridge_admin.id();
@@ -85,8 +78,7 @@ fn run(
         AuthMethod::SingleSig {
             approver: (ger_manager_pub.into(), AuthScheme::Falcon512Poseidon2),
         },
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
+        AccountType::Public,
     )
     .context("failed to create GER manager account")?;
     let ger_manager_id = ger_manager.id();

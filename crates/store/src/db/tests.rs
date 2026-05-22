@@ -17,7 +17,6 @@ use miden_protocol::account::{
     AccountId,
     AccountIdVersion,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMapKey,
@@ -310,15 +309,10 @@ fn make_account_and_note(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
     init_seed: [u8; 32],
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
 ) -> (AccountId, Note) {
     conn.transaction(|conn| {
-        let account = mock_account_code_and_storage(
-            AccountType::RegularAccountUpdatableCode,
-            storage_mode,
-            [],
-            Some(init_seed),
-        );
+        let account = mock_account_code_and_storage(account_type, [], Some(init_seed));
         let account_id = account.id();
         queries::upsert_accounts(
             conn,
@@ -343,8 +337,7 @@ fn sql_unconsumed_network_notes() {
     let mut conn = create_db();
 
     // Create account.
-    let account_note =
-        make_account_and_note(&mut conn, 0.into(), [1u8; 32], AccountStorageMode::Public);
+    let account_note = make_account_and_note(&mut conn, 0.into(), [1u8; 32], AccountType::Public);
 
     // Create 2 blocks.
     create_block(&mut conn, 0.into());
@@ -437,12 +430,8 @@ fn sql_select_accounts() {
     // test multiple entries
     let mut state = vec![];
     for i in 0..10u8 {
-        let account_id = AccountId::dummy(
-            [i; 15],
-            AccountIdVersion::Version1,
-            AccountType::RegularAccountImmutableCode,
-            AccountStorageMode::Private,
-        );
+        let account_id =
+            AccountId::dummy([i; 15], AccountIdVersion::Version1, AccountType::Private);
         let account_commitment = num_to_word(u64::from(i));
         state.push(AccountInfo {
             summary: AccountSummary {
@@ -1329,7 +1318,7 @@ fn select_storage_map_sync_values_for_network_account() {
     create_block(&mut conn, block_num);
 
     let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Public);
+        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountType::Public);
     let slot_name = StorageSlotName::mock(7);
     let key = StorageMapKey::from_index(1);
     let value = num_to_word(10);
@@ -1716,13 +1705,12 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountUpdatableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     AccountBuilder::new(seed)
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -1793,7 +1781,6 @@ fn insert_transactions(conn: &mut SqliteConnection) -> usize {
 
 fn mock_account_code_and_storage(
     account_type: AccountType,
-    storage_mode: AccountStorageMode,
     assets: impl IntoIterator<Item = Asset>,
     init_seed: Option<[u8; 32]>,
 ) -> Account {
@@ -1819,13 +1806,12 @@ fn mock_account_code_and_storage(
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("counter_contract", AccountType::all()),
+        AccountComponentMetadata::new("counter_contract"),
     )
     .unwrap();
 
     AccountBuilder::new(init_seed.unwrap_or([0; 32]))
         .account_type(account_type)
-        .storage_mode(storage_mode)
         .with_assets(assets)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
@@ -1849,12 +1835,7 @@ fn test_select_account_code_by_commitment() {
     create_block(&mut conn, block_num_1);
 
     // Create an account with code at block 1 using the existing mock function
-    let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-        [],
-        None,
-    );
+    let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     // Get the code commitment and bytes before inserting
     let code_commitment = account.code().commitment();
@@ -1983,7 +1964,7 @@ async fn genesis_with_account_assets() {
     let account_component = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
@@ -1991,8 +1972,7 @@ async fn genesis_with_account_assets() {
     let fungible_asset = FungibleAsset::new(faucet_id, 1000).unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
@@ -2055,13 +2035,12 @@ async fn genesis_with_account_storage_map() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2115,13 +2094,12 @@ async fn genesis_with_account_assets_and_storage() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
@@ -2156,13 +2134,12 @@ async fn genesis_with_multiple_accounts() {
     let account_component1 = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
     let account1 = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component1)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2180,13 +2157,12 @@ async fn genesis_with_multiple_accounts() {
     let account_component2 = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("bar", AccountType::all()),
+        AccountComponentMetadata::new("bar"),
     )
     .unwrap();
 
     let account2 = AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component2)
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
@@ -2215,13 +2191,12 @@ async fn genesis_with_multiple_accounts() {
     let account_component3 = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("baz", AccountType::all()),
+        AccountComponentMetadata::new("baz"),
     )
     .unwrap();
 
     let account3 = AccountBuilder::new([3u8; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component3)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2256,8 +2231,7 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
 
     let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
+        AccountType::Public,
         [fungible_asset.into()],
         Some([42u8; 32]),
     );
@@ -2372,12 +2346,7 @@ fn serialization_symmetry_assets() {
 
 #[test]
 fn serialization_symmetry_account_code() {
-    let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-        [],
-        None,
-    );
+    let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     let code = account.code();
     let bytes = code.to_bytes();
@@ -2487,12 +2456,7 @@ fn db_roundtrip_account() {
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
 
-    let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-        [],
-        Some([99u8; 32]),
-    );
+    let account = mock_account_code_and_storage(AccountType::Public, [], Some([99u8; 32]));
     let account_id = account.id();
     let account_commitment = account.to_commitment();
 
@@ -2705,13 +2669,12 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", AccountType::all()),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([50u8; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2793,7 +2756,7 @@ fn db_roundtrip_note_metadata_attachment() {
     create_block(&mut conn, block_num);
 
     let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [1u8; 32], AccountStorageMode::Public);
+        make_account_and_note(&mut conn, block_num, [1u8; 32], AccountType::Public);
 
     let target = NetworkAccountTarget::new(account_id, NoteExecutionHint::Always)
         .expect("NetworkAccountTarget creation should succeed for network account");

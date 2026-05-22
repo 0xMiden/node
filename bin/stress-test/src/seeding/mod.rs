@@ -20,7 +20,6 @@ use miden_protocol::account::{
     AccountDelta,
     AccountId,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMap,
@@ -122,7 +121,7 @@ pub async fn seed_store(
     let benchmark_faucets = create_benchmark_faucets(vault_entries);
     let faucet = benchmark_faucets[0].clone();
     let asset_faucet_ids = benchmark_faucets.iter().map(Account::id).collect::<Vec<_>>();
-    let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
+    let fee_params = FeeParameters::new(faucet.id(), 0);
     let signer = EcdsaSecretKey::new();
     let genesis_state = GenesisState::new(benchmark_faucets, fee_params, 1, 1, signer.public_key());
     let genesis_block = genesis_state
@@ -220,7 +219,7 @@ async fn generate_blocks(
         // create public accounts and notes that mint assets for these accounts
         let (pub_accounts, pub_notes) = create_accounts_and_notes(
             num_public_accounts,
-            AccountStorageMode::Public,
+            AccountType::Public,
             &key_pair,
             &rng,
             &asset_faucet_ids,
@@ -232,7 +231,7 @@ async fn generate_blocks(
         // create private accounts and notes that mint assets for these accounts
         let (priv_accounts, priv_notes) = create_accounts_and_notes(
             num_private_accounts,
-            AccountStorageMode::Private,
+            AccountType::Private,
             &key_pair,
             &rng,
             &asset_faucet_ids,
@@ -404,7 +403,7 @@ fn fee_from_block(block_ref: &BlockHeader) -> Result<FungibleAsset, AssetError> 
 #[expect(clippy::too_many_arguments)]
 fn create_accounts_and_notes(
     num_accounts: usize,
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
     key_pair: &SecretKey,
     rng: &Arc<Mutex<RandomCoin>>,
     asset_faucet_ids: &[AccountId],
@@ -416,11 +415,9 @@ fn create_accounts_and_notes(
         !asset_faucet_ids.is_empty(),
         "at least one faucet id is required to create benchmark notes"
     );
-    let note_faucet_ids = match storage_mode {
-        AccountStorageMode::Public => {
-            asset_faucet_ids.iter().take(vault_entries).copied().collect()
-        },
-        AccountStorageMode::Private => vec![asset_faucet_ids[0]],
+    let note_faucet_ids = match account_type {
+        AccountType::Public => asset_faucet_ids.iter().take(vault_entries).copied().collect(),
+        AccountType::Private => vec![asset_faucet_ids[0]],
     };
 
     (0..num_accounts)
@@ -429,7 +426,7 @@ fn create_accounts_and_notes(
             let account = create_account(
                 key_pair.public_key(),
                 ((block_num * num_accounts) + account_index) as u64,
-                storage_mode,
+                account_type,
                 storage_map_entries,
             );
             let note = {
@@ -524,17 +521,16 @@ pub fn benchmark_storage_map_slot() -> StorageSlotName {
 fn create_account(
     public_key: PublicKey,
     index: u64,
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
     storage_map_entries: usize,
 ) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     let mut builder = AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(storage_mode)
+        .account_type(account_type)
         .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet);
 
-    if storage_mode == AccountStorageMode::Public && storage_map_entries > 0 {
+    if account_type == AccountType::Public && storage_map_entries > 0 {
         let entries = (1..=storage_map_entries)
             .map(|i| {
                 let i = u32::try_from(i).expect("storage map entry index fits into u32");
@@ -553,10 +549,7 @@ fn create_account(
         let component = AccountComponent::new(
             component_code,
             component_storage,
-            AccountComponentMetadata::new(
-                "benchmark_storage_map",
-                [AccountType::RegularAccountImmutableCode],
-            ),
+            AccountComponentMetadata::new("benchmark_storage_map"),
         )
         .unwrap();
         builder = builder.with_component(component);
@@ -587,8 +580,7 @@ fn create_faucet_with_seed(index: u64) -> Account {
         .unwrap();
 
     AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(AccountStorageMode::Private)
+        .account_type(AccountType::Private)
         .with_component(faucet)
         .with_components(
             TokenPolicyManager::new()

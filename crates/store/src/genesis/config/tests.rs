@@ -36,9 +36,9 @@ fn parsing_yields_expected_default_values() -> TestResult {
     let wallet1 = state.accounts[2].clone();
     let wallet2 = state.accounts[3].clone();
 
-    assert!(native_faucet.is_faucet());
-    assert!(wallet1.is_regular_account());
-    assert!(wallet2.is_regular_account());
+    assert!(FungibleFaucet::try_from(&native_faucet).is_ok());
+    assert!(FungibleFaucet::try_from(&wallet1).is_err());
+    assert!(FungibleFaucet::try_from(&wallet2).is_err());
 
     assert_eq!(native_faucet.nonce(), ONE);
     assert_eq!(wallet1.nonce(), ONE);
@@ -53,10 +53,14 @@ fn parsing_yields_expected_default_values() -> TestResult {
     }
 
     // check account balance, and ensure ordering is retained
-    assert_matches!(wallet1.vault().get_balance(native_faucet.id()), Ok(val) => {
+    let faucet_vault_key = miden_protocol::asset::AssetVaultKey::new_fungible(
+        native_faucet.id(),
+        miden_protocol::asset::AssetCallbackFlag::Disabled,
+    );
+    assert_matches!(wallet1.vault().get_balance(faucet_vault_key), Ok(val) => {
         assert_eq!(val.as_u64(), 999_000);
     });
-    assert_matches!(wallet2.vault().get_balance(native_faucet.id()), Ok(val) => {
+    assert_matches!(wallet2.vault().get_balance(faucet_vault_key), Ok(val) => {
         assert_eq!(val.as_u64(), 777);
     });
 
@@ -86,7 +90,7 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
 #[test]
 fn parsing_account_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountFile, AccountType};
     use miden_standards::AuthMethod;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
@@ -105,12 +109,7 @@ fn parsing_account_from_file() -> TestResult {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
-    let test_account = create_basic_wallet(
-        init_seed,
-        auth,
-        AccountType::RegularAccountUpdatableCode,
-        AccountStorageMode::Public,
-    )?;
+    let test_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
     let account_id = test_account.id();
 
@@ -146,7 +145,7 @@ path = "test_account.mac"
 #[test]
 fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountBuilder, AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
     use miden_protocol::asset::AssetAmount;
     use miden_standards::account::auth::AuthSingleSig;
     use miden_standards::account::policies::{
@@ -177,8 +176,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
         .build()?;
 
     let faucet_account = AccountBuilder::new(init_seed)
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_auth_component(auth)
         .with_component(faucet)
         .with_components(
@@ -224,7 +222,7 @@ verification_base_fee = 0
 #[test]
 fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountFile, AccountType};
     use miden_standards::AuthMethod;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
@@ -243,12 +241,7 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
-    let regular_account = create_basic_wallet(
-        init_seed,
-        auth,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    )?;
+    let regular_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
     // Save to file
     let account_file_path = config_dir.join("not_a_faucet.mac");
@@ -316,8 +309,6 @@ path = "does_not_exist.mac"
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
 async fn parsing_agglayer_sample_with_account_files() -> TestResult {
-    use miden_protocol::account::AccountType;
-
     // Use the actual sample file path since it references relative .mac files
     let sample_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/genesis/config/samples/02-with-account-files.toml");
@@ -340,36 +331,26 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
     let usdc_faucet = &state.accounts[3];
 
     // Native faucet should be a fungible faucet (built from parameters)
-    assert_eq!(
-        native_faucet.id().account_type(),
-        AccountType::FungibleFaucet,
-        "Native faucet should be a FungibleFaucet"
-    );
+    let native_faucet_handle =
+        FungibleFaucet::try_from(native_faucet).expect("Native faucet should be a FungibleFaucet");
+    assert_eq!(*native_faucet_handle.symbol(), TokenSymbol::new("MIDEN").unwrap());
 
-    // Verify native faucet symbol
-    {
-        let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
-        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
-    }
-
-    // Bridge account is a regular account (not a faucet)
+    // Bridge account is not a fungible faucet
     assert!(
-        bridge_account.is_regular_account(),
-        "Bridge account should be a regular account"
+        FungibleFaucet::try_from(bridge_account).is_err(),
+        "Bridge account should not be a fungible faucet"
     );
 
-    // ETH faucet should be a fungible faucet (AggLayer faucet loaded from file)
-    assert_eq!(
-        eth_faucet.id().account_type(),
-        AccountType::FungibleFaucet,
-        "ETH faucet should be a FungibleFaucet"
+    // ETH faucet should be an AggLayer faucet loaded from file
+    assert!(
+        miden_agglayer::AggLayerFaucet::try_faucet_from_account(eth_faucet).is_ok(),
+        "ETH faucet should be an AggLayer faucet"
     );
 
-    // USDC faucet should be a fungible faucet (AggLayer faucet loaded from file)
-    assert_eq!(
-        usdc_faucet.id().account_type(),
-        AccountType::FungibleFaucet,
-        "USDC faucet should be a FungibleFaucet"
+    // USDC faucet should be an AggLayer faucet loaded from file
+    assert!(
+        miden_agglayer::AggLayerFaucet::try_faucet_from_account(usdc_faucet).is_ok(),
+        "USDC faucet should be an AggLayer faucet"
     );
 
     // Only the native faucet generates a secret (built from parameters)

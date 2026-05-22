@@ -312,7 +312,7 @@ impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
                 "native_asset_id",
             ))?
             .context("native_asset_id")?;
-        let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee)?;
+        let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee);
         Ok(fee_params)
     }
 }

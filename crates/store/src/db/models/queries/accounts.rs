@@ -371,7 +371,7 @@ pub struct PublicAccountStateRootsPage {
 /// Returns up to `page_size` public account IDs, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public`. We identify them by checking
+/// Public accounts are those with `AccountType::Public`. We identify them by checking
 /// against the store. Public accounts store their `code_commitment`, while private accounts only
 /// store the `account_commitment`.
 ///
@@ -431,7 +431,7 @@ pub(crate) fn select_public_account_ids_paged(
 /// Returns up to `page_size` public account states, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public`. We identify them by checking
+/// Public accounts are those with `AccountType::Public`. We identify them by checking
 /// against the store. Public accounts store their `code_commitment`, while private accounts only
 /// store the `account_commitment`.
 ///

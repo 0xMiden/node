@@ -360,9 +360,15 @@ pub async fn bench_sync_nullifiers(
                 .notes;
 
             nullifier_prefixes.extend(notes.iter().filter_map(|n| {
-                let details_bytes = n.note.as_ref()?.details.as_ref()?;
+                let proto_note = n.note.as_ref()?;
+                let details_bytes = proto_note.details.as_ref()?;
                 let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
-                Some(u32::from(details.nullifier().prefix()))
+                let metadata =
+                    miden_protocol::note::NoteMetadata::try_from(proto_note.metadata.clone()?)
+                        .ok()?;
+                let nullifier =
+                    miden_protocol::note::Nullifier::from_details_and_metadata(&details, &metadata);
+                Some(u32::from(nullifier.prefix()))
             }));
         }
 

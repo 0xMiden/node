@@ -20,7 +20,6 @@ use miden_protocol::account::{
     AccountComponent,
     AccountDelta,
     AccountId,
-    AccountStorageMode,
     AccountType,
     StorageMap,
     StorageMapKey,
@@ -135,13 +134,12 @@ fn optimized_delta_matches_full_account_method() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -336,13 +334,12 @@ fn optimized_delta_updates_non_empty_vault() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -503,13 +500,12 @@ fn optimized_delta_updates_storage_map_header() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -583,7 +579,7 @@ fn optimized_delta_updates_storage_map_header() {
 /// Private accounts store only the account commitment, not the full state.
 #[test]
 fn upsert_private_account() {
-    use miden_protocol::account::{AccountIdVersion, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountIdVersion, AccountType};
 
     // Use deterministic account seed to keep account IDs stable.
     const ACCOUNT_ID_SEED: [u8; 15] = [20u8; 15];
@@ -598,12 +594,8 @@ fn upsert_private_account() {
     insert_block_header(&mut conn, block_num);
 
     // Create a private account ID
-    let account_id = AccountId::dummy(
-        ACCOUNT_ID_SEED,
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Private,
-    );
+    let account_id =
+        AccountId::dummy(ACCOUNT_ID_SEED, AccountIdVersion::Version1, AccountType::Private);
 
     let account_commitment = Word::from([
         Felt::new_unchecked(COMMITMENT_WORDS[0]),
@@ -676,13 +668,12 @@ fn upsert_full_state_delta() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new(ACCOUNT_SEED)
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),

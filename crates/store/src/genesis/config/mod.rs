@@ -14,7 +14,6 @@ use miden_protocol::account::{
     AccountFile,
     AccountId,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     FungibleAssetDelta,
@@ -212,7 +211,7 @@ impl GenesisConfig {
         }
 
         let fee_parameters =
-            FeeParameters::new(native_faucet_account_id, fee_parameters.verification_base_fee)?;
+            FeeParameters::new(native_faucet_account_id, fee_parameters.verification_base_fee);
 
         // Track all adjustments, one per faucet account id
         let mut faucet_issuance = IndexMap::<AccountId, u64>::new();
@@ -220,8 +219,7 @@ impl GenesisConfig {
         let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
 
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
-        for (index, WalletConfig { has_updatable_code, storage_mode, assets }) in
-            wallet_configs.into_iter().enumerate()
+        for (index, WalletConfig { storage_mode, assets }) in wallet_configs.into_iter().enumerate()
         {
             tracing::debug!(index, assets = ?assets, "Adding wallet account");
 
@@ -232,14 +230,7 @@ impl GenesisConfig {
             };
             let init_seed: [u8; 32] = rng.random();
 
-            let account_type = if has_updatable_code {
-                AccountType::RegularAccountUpdatableCode
-            } else {
-                AccountType::RegularAccountImmutableCode
-            };
-            let account_storage_mode = storage_mode.into();
-            let mut wallet_account =
-                create_basic_wallet(init_seed, auth, account_type, account_storage_mode)?;
+            let mut wallet_account = create_basic_wallet(init_seed, auth, storage_mode.into())?;
 
             // Add fungible assets and track the faucet adjustments per faucet/asset.
             let wallet_fungible_asset_update =
@@ -403,12 +394,9 @@ impl NativeFaucetConfig {
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
                 let account = account_file.account;
 
-                if account.id().account_type() != AccountType::FungibleFaucet {
-                    return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
-                }
-
-                let faucet = FungibleFaucet::try_from(account.storage())
-                    .expect("validated as fungible faucet above");
+                let faucet = FungibleFaucet::try_from(&account).map_err(|_| {
+                    GenesisConfigError::NativeFaucetNotFungible { path: full_path.clone() }
+                })?;
                 let symbol = TokenSymbolStr::from(faucet.symbol().clone());
                 Ok((account, symbol, None))
             },
@@ -461,8 +449,7 @@ impl FungibleFaucetConfig {
 
         // It's similar to `fn create_basic_fungible_faucet`, but we need to cover more cases.
         let faucet_account = AccountBuilder::new(init_seed)
-            .account_type(AccountType::FungibleFaucet)
-            .storage_mode(storage_mode.into())
+            .account_type(storage_mode.into())
             .with_auth_component(auth)
             .with_component(faucet)
             .with_components(
@@ -485,8 +472,6 @@ impl FungibleFaucetConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletConfig {
-    #[serde(default)]
-    has_updatable_code: bool,
     #[serde(default)]
     storage_mode: StorageMode,
     assets: Vec<AssetEntry>,
@@ -515,11 +500,11 @@ pub enum StorageMode {
     Private,
 }
 
-impl From<StorageMode> for AccountStorageMode {
-    fn from(mode: StorageMode) -> AccountStorageMode {
+impl From<StorageMode> for AccountType {
+    fn from(mode: StorageMode) -> AccountType {
         match mode {
-            StorageMode::Public => AccountStorageMode::Public,
-            StorageMode::Private => AccountStorageMode::Private,
+            StorageMode::Public => AccountType::Public,
+            StorageMode::Private => AccountType::Private,
         }
     }
 }

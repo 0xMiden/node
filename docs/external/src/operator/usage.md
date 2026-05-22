@@ -85,8 +85,6 @@ storage_mode = "public"
 assets       = [{ amount = 999_000_000, symbol = "FUZZY" }]
 # Storage mode of the wallet account.
 storage_mode = "private"
-# The code of the account can be updated or not.
-# has_updatable_code = false # default value
 ```
 
 To include pre-built accounts (e.g. bridge or wrapped-asset faucets) in the genesis block, use

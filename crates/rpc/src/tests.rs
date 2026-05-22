@@ -27,7 +27,6 @@ use miden_protocol::account::{
     AccountDelta,
     AccountId,
     AccountIdVersion,
-    AccountStorageMode,
     AccountType,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
@@ -176,8 +175,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Creates a minimal account and its delta for testing proven transaction building.
 fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
     let account = AccountBuilder::new(seed)
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_assets(vec![])
         .with_component(BasicWallet)
         .with_auth_component(NoopAuthComponent)
@@ -197,12 +195,7 @@ fn build_test_proven_tx(
     delta: &AccountDelta,
     genesis: Word,
 ) -> ProvenTransaction {
-    let account_id = AccountId::dummy(
-        [0; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([0; 15], AccountIdVersion::Version1, AccountType::Public);
 
     let account_update = TxAccountUpdate::new(
         account_id,
@@ -549,12 +542,8 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 
     // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
     // The store uses WAL mode so a secondary connection is safe.
-    let network_account_id = AccountId::dummy(
-        [7u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let network_account_id =
+        AccountId::dummy([7u8; 15], AccountIdVersion::Version1, AccountType::Public);
     miden_node_store::test_support::seed_network_account(
         &store.data_directory_path().join("miden-store.sqlite3"),
         network_account_id,

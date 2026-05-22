@@ -10,7 +10,6 @@ use miden_protocol::account::{
     AccountComponent,
     AccountFile,
     AccountId,
-    AccountStorageMode,
     AccountType,
     StorageSlot,
     StorageSlotName,
@@ -54,7 +53,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     let component_code =
         CodeBuilder::default().compile_component_code("counter::program", script)?;
 
-    let metadata = AccountComponentMetadata::new("counter::program", AccountType::all());
+    let metadata = AccountComponentMetadata::new("counter::program");
     let account_code =
         AccountComponent::new(component_code, vec![counter_slot, owner_id_slot], metadata)?;
 
@@ -63,8 +62,7 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     // Create the counter program account
     let init_seed: [u8; 32] = rand::random();
     let counter_account = AccountBuilder::new(init_seed)
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_code)
         .with_auth_component(incr_nonce_auth)
         .build()?;

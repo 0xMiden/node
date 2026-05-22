@@ -2,7 +2,7 @@
 
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, AccountStorageMode, AccountType};
+use miden_protocol::account::{AccountId, AccountType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
@@ -24,8 +24,7 @@ pub fn mock_network_account_id() -> NetworkAccountId {
 /// Creates a distinct network account ID using a seeded RNG.
 pub fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
     let account_id = AccountIdBuilder::new()
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .build_with_seed([seed; 32]);
     NetworkAccountId::new_unchecked(account_id)
 }
@@ -47,8 +46,7 @@ pub fn mock_single_target_note(
 ) -> AccountTargetNetworkNote {
     let mut rng = ChaCha20Rng::from_seed([seed; 32]);
     let sender = AccountIdBuilder::new()
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Private)
+        .account_type(AccountType::Private)
         .build_with_rng(&mut rng);
 
     let target = NetworkAccountTarget::new(network_account_id.inner(), NoteExecutionHint::Always)
@@ -68,8 +66,7 @@ pub fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::A
     use miden_standards::testing::account_component::MockAccountComponent;
 
     AccountBuilder::new([0u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(MockAccountComponent::with_slots(vec![]))
         .with_auth_component(NoopAuthComponent)
         .build_existing()

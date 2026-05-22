@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::Result;
 use miden_node_utils::crypto::get_rpo_random_coin;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
-use miden_protocol::account::{Account, AccountFile, AccountStorageMode, AccountType};
+use miden_protocol::account::{Account, AccountFile, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -27,12 +27,7 @@ pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     };
     let init_seed: [u8; 32] = rng.random();
 
-    let wallet_account = create_basic_wallet(
-        init_seed,
-        auth,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    )?;
+    let wallet_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
     Ok((wallet_account, secret_key))
 }

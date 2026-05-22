@@ -1006,8 +1006,8 @@ impl NetworkAccountId {
     pub fn new_unchecked(id: AccountId) -> Self {
         debug_assert!(
             id.is_public(),
-            "NetworkAccountId requires a public AccountId, got storage mode {:?}",
-            id.storage_mode()
+            "NetworkAccountId requires a public AccountId, got account type {:?}",
+            id.account_type()
         );
         Self(id)
     }

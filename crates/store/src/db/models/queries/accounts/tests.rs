@@ -18,7 +18,6 @@ use miden_protocol::account::{
     AccountStorage,
     AccountStorageDelta,
     AccountStorageHeader,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMap,
@@ -123,12 +122,7 @@ fn reconstruct_account_storage_at_block(
 
 fn create_test_account_with_storage() -> (Account, AccountId) {
     // Create a simple public account with one value storage slot
-    let account_id = AccountId::dummy(
-        [1u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([1u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     let storage_value = Word::from([
         Felt::new_unchecked(1),
@@ -145,13 +139,12 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -208,13 +201,12 @@ fn create_account_with_map_storage(
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     AccountBuilder::new([9u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -312,12 +304,7 @@ fn test_select_account_header_at_block_returns_none_for_nonexistent() {
     let block_num = BlockNumber::from_epoch(0);
     insert_block_header(&mut conn, block_num);
 
-    let account_id = AccountId::dummy(
-        [99u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([99u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     // Query for a non-existent account
     let result =
@@ -527,13 +514,12 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     let component_2 = AccountComponent::new(
         account_component_code,
         component_storage_modified,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account_2 = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component_2)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -602,12 +588,7 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let mut conn = setup_test_db();
 
     // Create account with 3 storage slots
-    let account_id = AccountId::dummy(
-        [2u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([2u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     let slot_value_1 = Word::from([1, 2, 3, 4u32]);
     let slot_value_2 = Word::from([5, 6, 7, 8u32]);
@@ -626,13 +607,12 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -681,12 +661,7 @@ fn test_upsert_accounts_with_empty_storage() {
     let mut conn = setup_test_db();
 
     // Create account with no component storage slots (only auth slot)
-    let account_id = AccountId::dummy(
-        [3u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([3u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     let account_component_code = CodeBuilder::default()
         .compile_component_code("test::interface", "pub proc foo push.1 end")
@@ -695,13 +670,12 @@ fn test_upsert_accounts_with_empty_storage() {
     let component = AccountComponent::new(
         account_component_code,
         vec![],
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -831,13 +805,12 @@ fn test_select_latest_account_storage_multiple_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([9u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -1037,7 +1010,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
     const BLOCK_COUNT: u32 = 5;
 
     use assert_matches::assert_matches;
-    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
+    use miden_protocol::asset::{AssetCallbackFlag, AssetVaultKey, FungibleAsset};
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
 
     let mut conn = setup_test_db();
@@ -1064,7 +1037,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
             .expect("upsert_accounts failed");
     }
 
-    let vault_key = AssetVaultKey::new_fungible(faucet_id).unwrap();
+    let vault_key = AssetVaultKey::new_fungible(faucet_id, AssetCallbackFlag::Disabled);
 
     for (index, block) in blocks.iter().enumerate() {
         let amount = 1u64 << index;
@@ -1209,17 +1182,13 @@ fn build_account_with_code(push_value: u32) -> Account {
             StorageSlotName::mock(0),
             Word::from([Felt::new_unchecked(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
         )],
-        AccountComponentMetadata::new(
-            "code_prune_test",
-            [AccountType::RegularAccountUpdatableCode],
-        ),
+        AccountComponentMetadata::new("code_prune_test"),
     )
     .unwrap();
 
     // Seed [2u8; 32] keeps the account ID distinct from the other test helpers.
     AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -1386,30 +1355,10 @@ fn network_accounts_subset_classifies_correctly() {
 
     // Three accounts with distinct classifications. AccountIds are dummies — the queries only care
     // about the (account_id, network_account_type, is_latest) tuple, not protocol-level validity.
-    let network_id = AccountId::dummy(
-        [1u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
-    let public_id = AccountId::dummy(
-        [2u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
-    let private_id = AccountId::dummy(
-        [3u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Private,
-    );
-    let unknown_id = AccountId::dummy(
-        [4u8; 15],
-        AccountIdVersion::Version1,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let network_id = AccountId::dummy([1u8; 15], AccountIdVersion::Version1, AccountType::Public);
+    let public_id = AccountId::dummy([2u8; 15], AccountIdVersion::Version1, AccountType::Public);
+    let private_id = AccountId::dummy([3u8; 15], AccountIdVersion::Version1, AccountType::Private);
+    let unknown_id = AccountId::dummy([4u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     for (id, ty) in [
         (network_id, NetworkAccountType::Network),

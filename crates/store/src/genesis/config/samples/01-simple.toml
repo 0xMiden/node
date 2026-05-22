@@ -13,12 +13,10 @@ symbol       = "WHAT"
 [[wallet]]
 assets       = [{ amount = 999_000, symbol = "MIDEN" }]
 storage_mode = "private"
-# has_updatable_code = false # default value
 
 [[wallet]]
 assets       = [{ amount = 777, symbol = "MIDEN" }]
 storage_mode = "private"
-# has_updatable_code = false # default value
 
 [[wallet]]
 assets       = [{ amount = 1, symbol = "WHAT" }]
