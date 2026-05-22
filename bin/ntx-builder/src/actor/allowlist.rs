@@ -8,6 +8,12 @@ use miden_standards::account::auth::{
 };
 use miden_standards::note::AccountTargetNetworkNote;
 
+/// Notes partitioned by the target account's note-script allowlist.
+pub struct PartitionedNotes {
+    pub allowed: Vec<AccountTargetNetworkNote>,
+    pub rejected: Vec<(Nullifier, NoteScriptRoot)>,
+}
+
 /// Returned when a note is addressed to a network account but its script root is not allowlisted by
 /// that account.
 #[derive(Debug, Clone)]
@@ -38,10 +44,7 @@ impl std::error::Error for NoteScriptNotAllowlisted {}
 pub fn partition_by_allowlist(
     account: &Account,
     notes: Vec<AccountTargetNetworkNote>,
-) -> Result<
-    (Vec<AccountTargetNetworkNote>, Vec<(Nullifier, NoteScriptRoot)>),
-    NetworkAccountNoteAllowlistError,
-> {
+) -> Result<PartitionedNotes, NetworkAccountNoteAllowlistError> {
     let allowlist = NetworkAccountNoteAllowlist::try_from(account.storage())?;
     let allowed_roots = allowlist.allowed_script_roots();
 
@@ -57,7 +60,7 @@ pub fn partition_by_allowlist(
         }
     }
 
-    Ok((allowed, rejected))
+    Ok(PartitionedNotes { allowed, rejected })
 }
 
 #[cfg(test)]
@@ -91,12 +94,12 @@ end";
                 .expect("non-empty allowlist should construct"),
         );
 
-        let (allowed, rejected) =
+        let partitioned_notes =
             partition_by_allowlist(&account, vec![note.clone()]).expect("allowlist should load");
 
-        assert_eq!(allowed.len(), 1);
-        assert_eq!(allowed[0].as_note().nullifier(), note.as_note().nullifier());
-        assert!(rejected.is_empty());
+        assert_eq!(partitioned_notes.allowed.len(), 1);
+        assert_eq!(partitioned_notes.allowed[0].as_note().nullifier(), note.as_note().nullifier());
+        assert!(partitioned_notes.rejected.is_empty());
     }
 
     #[test]
@@ -114,11 +117,14 @@ end";
                 .expect("non-empty allowlist should construct"),
         );
 
-        let (allowed, rejected) = partition_by_allowlist(&account, vec![rejected_note.clone()])
+        let partitioned_notes = partition_by_allowlist(&account, vec![rejected_note.clone()])
             .expect("allowlist should load");
 
-        assert!(allowed.is_empty());
-        assert_eq!(rejected, vec![(rejected_note.as_note().nullifier(), rejected_root)]);
+        assert!(partitioned_notes.allowed.is_empty());
+        assert_eq!(
+            partitioned_notes.rejected,
+            vec![(rejected_note.as_note().nullifier(), rejected_root)]
+        );
     }
 
     #[test]
@@ -136,13 +142,19 @@ end";
                 .expect("non-empty allowlist should construct"),
         );
 
-        let (allowed, rejected) =
+        let partitioned_notes =
             partition_by_allowlist(&account, vec![allowed_note.clone(), rejected_note.clone()])
                 .expect("allowlist should load");
 
-        assert_eq!(allowed.len(), 1);
-        assert_eq!(allowed[0].as_note().nullifier(), allowed_note.as_note().nullifier());
-        assert_eq!(rejected, vec![(rejected_note.as_note().nullifier(), rejected_root)]);
+        assert_eq!(partitioned_notes.allowed.len(), 1);
+        assert_eq!(
+            partitioned_notes.allowed[0].as_note().nullifier(),
+            allowed_note.as_note().nullifier()
+        );
+        assert_eq!(
+            partitioned_notes.rejected,
+            vec![(rejected_note.as_note().nullifier(), rejected_root)]
+        );
     }
 
     #[test]

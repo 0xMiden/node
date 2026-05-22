@@ -346,11 +346,12 @@ impl AccountActor {
             return Ok(None);
         };
 
-        let (allowed_notes, rejected_notes) = partition_by_allowlist(&account, notes)
+        let partitioned_notes = partition_by_allowlist(&account, notes)
             .context("failed to read network account note allowlist")?;
 
-        if !rejected_notes.is_empty() {
-            let failed_notes = rejected_notes
+        if !partitioned_notes.rejected.is_empty() {
+            let failed_notes = partitioned_notes
+                .rejected
                 .into_iter()
                 .map(|(nullifier, script_root)| {
                     let error: NoteError = Arc::new(NoteScriptNotAllowlisted::new(script_root));
@@ -365,7 +366,7 @@ impl AccountActor {
             self.mark_notes_failed(&failed_notes, block_num).await;
         }
 
-        let notes: Vec<_> = allowed_notes.into_iter().take(max_notes).collect();
+        let notes: Vec<_> = partitioned_notes.allowed.into_iter().take(max_notes).collect();
         if notes.is_empty() {
             return Ok(None);
         }
