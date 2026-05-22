@@ -99,15 +99,15 @@ pub enum StoreCommand {
 
     /// Starts the store in replica mode.
     ///
-    /// In this mode the store syncs blocks from an upstream store's `StoreReplica` gRPC service.
-    /// Only the `Rpc` and `StoreReplica` gRPC services are exposed — the `BlockProducer` and
-    /// `NtxBuilder` services are not started and no proof scheduler runs.
+    /// In this mode the store syncs blocks from an upstream store's `Rpc` gRPC service.
+    /// Only the `Rpc` gRPC service is exposed — the `BlockProducer` and `NtxBuilder` services are
+    /// not started and no proof scheduler runs.
     StartReplica {
         /// Socket address at which to serve the store's RPC API.
         #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
         rpc_listen: SocketAddr,
 
-        /// gRPC URL of the upstream store's `StoreReplica` endpoint to sync blocks from.
+        /// gRPC URL of the upstream store's `Rpc` endpoint to sync blocks from.
         #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
         upstream_store_url: Url,
 
