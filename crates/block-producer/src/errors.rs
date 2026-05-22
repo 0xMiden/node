@@ -12,6 +12,7 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::task::JoinError;
 
+use crate::mempool::MempoolPoisonError;
 use crate::validator::ValidatorError;
 
 // Block-producer errors
@@ -72,6 +73,10 @@ pub enum MempoolSubmissionError {
 
     #[error("the mempool is at capacity")]
     CapacityExceeded,
+
+    #[error("mempool lock is poisoned")]
+    #[grpc(internal)]
+    MempoolPoisoned(#[source] MempoolPoisonError),
 }
 
 // Mempool submission conflicts with current state
@@ -123,6 +128,9 @@ pub enum BuildBatchError {
 
     #[error("batch proof security level is too low: {0} < {1}")]
     SecurityLevelTooLow(u32, u32),
+
+    #[error("mempool lock is poisoned")]
+    MempoolPoisoned(#[source] MempoolPoisonError),
 }
 
 // Block building errors
@@ -147,6 +155,9 @@ pub enum BuildBlockError {
     ValidateBlockFailed(#[source] Box<ValidatorError>),
     #[error("block signature is invalid")]
     InvalidSignature,
+
+    #[error("mempool lock is poisoned")]
+    MempoolPoisoned(#[source] MempoolPoisonError),
 
     /// We sometimes randomly inject errors into the batch building process to test our failure
     /// responses.

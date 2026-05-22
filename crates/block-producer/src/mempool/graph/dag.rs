@@ -148,7 +148,7 @@ where
     /// Returns the node and its descendants.
     ///
     /// That is, this returns the node's children, their children etc.
-    fn descendants(&self, node: &N::Id) -> HashSet<N::Id> {
+    pub(super) fn descendants(&self, node: &N::Id) -> HashSet<N::Id> {
         let mut to_process = vec![*node];
         let mut descendants = HashSet::default();
 
@@ -273,6 +273,10 @@ where
 
     pub fn contains(&self, node: &N::Id) -> bool {
         self.nodes.contains_key(node)
+    }
+
+    pub(super) fn get_mut(&mut self, node: &N::Id) -> Option<&mut N> {
+        self.nodes.get_mut(node)
     }
 }
 

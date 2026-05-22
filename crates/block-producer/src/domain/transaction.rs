@@ -26,8 +26,9 @@ pub struct AuthenticatedTransaction {
     /// This does not necessarily have to match the transaction's initial state
     /// as this may still be modified by inflight transactions.
     store_account_state: Option<Word>,
-    /// Unauthenticated note commitments that have now been authenticated by the store
-    /// [inputs](TransactionInputs).
+    /// Unauthenticated note commitments that have now been authenticated by committed state,
+    /// either through store [inputs](TransactionInputs) or through locally committed mempool
+    /// history.
     ///
     /// In other words, notes which were unauthenticated at the time the transaction was proven,
     /// but which have since been committed to, and authenticated by the store.
@@ -119,6 +120,10 @@ impl AuthenticatedTransaction {
             .unauthenticated_notes()
             .map(NoteHeader::to_commitment)
             .filter(|commitment| !self.notes_authenticated_by_store.contains(commitment))
+    }
+
+    pub(crate) fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = Word>) {
+        self.notes_authenticated_by_store.extend(notes);
     }
 
     pub fn proven_transaction(&self) -> Arc<ProvenTransaction> {

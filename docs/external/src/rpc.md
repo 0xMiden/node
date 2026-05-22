@@ -18,6 +18,8 @@ The gRPC service definition can be found in the Miden node's `proto` [directory]
 - [GetNetworkNoteStatus](#getnetworknotestatus)
 - [GetNotesById](#getnotesbyid)
 - [GetNoteScriptByRoot](#getnotescriptbyroot)
+- [BlockSubscription](#blocksubscription)
+- [ProofSubscription](#proofsubscription)
 - [Status](#status)
 - [SubmitProvenTx](#submitproventx)
 - [SyncAccountStorageMaps](#syncaccountstoragemaps)
@@ -125,6 +127,20 @@ If the note is not found in the network transaction builder's database, the endp
 ### GetNoteScriptByRoot
 
 Request the script for a note by its root.
+
+### BlockSubscription
+
+Streams committed blocks starting from `block_from` inclusive.
+
+Each stream item contains the serialized signed block and the committed chain tip observed when
+the item was emitted.
+
+### ProofSubscription
+
+Streams block proofs starting from `block_from` inclusive.
+
+Each stream item contains the block number, serialized block proof, and the proven chain tip
+observed when the item was emitted.
 
 ### Status
 
