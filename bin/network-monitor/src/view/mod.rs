@@ -394,6 +394,7 @@ mod tests {
                 explorer_url: Some("https://explorer.example".to_string()),
                 pow_load_difficulty: 4,
                 base_amount: 100,
+                note_transport_url: Some("https://note-transport.example".to_string()),
             }),
         };
         let html = render(vec![healthy("faucet", ServiceDetails::FaucetTest(details))]);
@@ -433,10 +434,10 @@ mod tests {
         let details = ExplorerStatusDetails {
             block_number: 100,
             timestamp: 1_609_459_200,
-            number_of_transactions: 1,
-            number_of_nullifiers: 1,
-            number_of_notes: 1,
-            number_of_account_updates: 1,
+            total_transactions: 1,
+            total_nullifiers: 1,
+            total_notes: 1,
+            total_account_updates: 1,
             block_commitment: "0x".repeat(20),
             chain_commitment: "0x".repeat(20),
             proof_commitment: "0x".repeat(20),

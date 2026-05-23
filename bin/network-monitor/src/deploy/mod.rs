@@ -3,7 +3,6 @@
 //! This module contains functionality for deploying Miden accounts to the network.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +13,7 @@ use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_protocol::account::{Account, AccountId, PartialAccount, StorageMapKey};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
 use miden_protocol::note::{NoteScript, NoteScriptRoot};
 use miden_protocol::transaction::{AccountInputs, InputNotes, PartialBlockchain, TransactionArgs};
@@ -32,8 +32,8 @@ use tracing::instrument;
 use url::Url;
 
 use crate::COMPONENT;
-use crate::deploy::counter::{create_counter_account, save_counter_account};
-use crate::deploy::wallet::{create_wallet_account, save_wallet_account};
+use crate::deploy::counter::create_counter_account;
+use crate::deploy::wallet::create_wallet_account;
 
 pub mod counter;
 pub mod wallet;
@@ -93,75 +93,24 @@ pub async fn create_genesis_aware_rpc_client(
     Ok(rpc_client)
 }
 
-/// Ensure accounts exist, creating them if they don't.
+/// Create a fresh wallet + counter pair in memory and deploy the counter to the network.
 ///
-/// This function checks if the wallet and counter account files exist.
-/// If they don't exist, it creates new accounts and saves them to the specified files.
-/// If they do exist, it does nothing.
-///
-/// # Arguments
-///
-/// * `wallet_file` - Path to the wallet account file.
-/// * `counter_file` - Path to the counter program account file.
-///
-/// # Returns
-///
-/// `Ok(())` if the accounts exist or were successfully created, or an error if creation fails.
-pub async fn ensure_accounts_exist(
-    wallet_filepath: &Path,
-    counter_filepath: &Path,
-    rpc_url: &Url,
-) -> Result<()> {
-    let wallet_exists = wallet_filepath.exists();
-    let counter_exists = counter_filepath.exists();
+/// Used both at startup and by the increment task when accounts are fundamentally outdated
+/// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
+/// are never persisted to disk; the monitor re-creates them on every restart.
+pub async fn create_and_deploy_accounts(rpc_url: &Url) -> Result<(Account, SecretKey, Account)> {
+    tracing::info!("Creating fresh monitor accounts");
 
-    if wallet_exists && counter_exists {
-        tracing::info!("Account files already exist, skipping account creation");
-        return Ok(());
-    }
-
-    tracing::info!("Account files not found, creating new accounts");
-
-    // Create wallet account
     let (wallet_account, secret_key) = create_wallet_account()?;
-
-    // Create counter program account
     let counter_account = create_counter_account(wallet_account.id())?;
 
     deploy_counter_account(&counter_account, rpc_url).await?;
     tracing::info!("Successfully created and deployed accounts");
 
-    // Save accounts to files
-    save_wallet_account(&wallet_account, &secret_key, wallet_filepath)?;
-    save_counter_account(&counter_account, counter_filepath)
+    Ok((wallet_account, secret_key, counter_account))
 }
 
-/// Unconditionally creates fresh wallet and counter accounts, deploys the counter, and saves both
-/// to disk. Unlike [`ensure_accounts_exist`], this always replaces existing account files.
-///
-/// Used by the increment task when accounts are fundamentally outdated (e.g., after a network
-/// reset) and re-syncing from the RPC is not sufficient.
-pub async fn force_recreate_accounts(
-    wallet_filepath: &Path,
-    counter_filepath: &Path,
-    rpc_url: &Url,
-) -> Result<()> {
-    tracing::warn!("Regenerating monitor accounts (force recreate)");
-
-    let (wallet_account, secret_key) = create_wallet_account()?;
-    let counter_account = create_counter_account(wallet_account.id())?;
-
-    deploy_counter_account(&counter_account, rpc_url).await?;
-    tracing::info!("Successfully recreated and deployed accounts");
-
-    save_wallet_account(&wallet_account, &secret_key, wallet_filepath)?;
-    save_counter_account(&counter_account, counter_filepath)
-}
-
-/// Deploy counter account to the network.
-///
-/// This function creates a counter program account,
-/// then saves it to the specified file.
+/// Deploy a counter account to the network by submitting its genesis transaction via RPC.
 #[instrument(target = COMPONENT, name = "deploy-counter-account", skip_all, ret(level = "debug"))]
 pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) -> Result<()> {
     // Deploy counter account to the network using a genesis-aware RPC client.

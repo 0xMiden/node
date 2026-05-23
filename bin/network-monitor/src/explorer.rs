@@ -1,11 +1,11 @@
 // EXPLORER STATUS CHECKER
 // ================================================================================================
 
-use std::fmt::{self, Display};
 use std::time::Duration;
 
+use anyhow::Context;
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::instrument;
 use url::Url;
 
@@ -13,20 +13,25 @@ use crate::COMPONENT;
 use crate::service::Service;
 use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus};
 
-const LATEST_BLOCK_QUERY: &str = "
-query LatestBlock {
+/// Fetches network-wide totals from `overviewStats` together with the latest block header (number +
+/// timestamp + commitments). The latest block is still needed for tip-drift detection against the
+/// RPC.
+const NETWORK_OVERVIEW_QUERY: &str = "
+query NetworkOverview {
+    overviewStats {
+        total_count_transactions
+        total_count_nullifiers
+        total_count_notes
+        total_count_account_updates
+    }
     blocks(input: { sort_by: timestamp, order_by: desc }, first: 1) {
         edges {
             node {
                 block_number
                 timestamp
-                number_of_transactions
-                number_of_nullifiers
-                number_of_notes
                 block_commitment
                 chain_commitment
                 proof_commitment
-                number_of_account_updates
             }
         }
     }
@@ -42,8 +47,8 @@ struct GraphqlRequest<V> {
     variables: V,
 }
 
-const LATEST_BLOCK_REQUEST: GraphqlRequest<EmptyVariables> = GraphqlRequest {
-    query: LATEST_BLOCK_QUERY,
+const NETWORK_OVERVIEW_REQUEST: GraphqlRequest<EmptyVariables> = GraphqlRequest {
+    query: NETWORK_OVERVIEW_QUERY,
     variables: EmptyVariables,
 };
 
@@ -86,7 +91,7 @@ impl Service for ExplorerService {
         let resp = self
             .client
             .post(self.url.clone())
-            .json(&LATEST_BLOCK_REQUEST)
+            .json(&NETWORK_OVERVIEW_REQUEST)
             .timeout(self.request_timeout)
             .send()
             .await;
@@ -99,12 +104,7 @@ impl Service for ExplorerService {
             Err(e) => return ServiceStatus::error(self.name(), e),
         };
 
-        let value: serde_json::Value = match serde_json::from_str(&body) {
-            Ok(value) => value,
-            Err(e) => return ServiceStatus::error(self.name(), format!("{e}: {body}")),
-        };
-
-        match ExplorerStatusDetails::try_from(value) {
+        match parse_response(&body) {
             Ok(details) => {
                 ServiceStatus::healthy(self.name(), ServiceDetails::ExplorerStatus(details))
             },
@@ -113,103 +113,97 @@ impl Service for ExplorerService {
     }
 }
 
-#[derive(Debug)]
-pub enum ExplorerStatusError {
-    /// A required field was not present in the response.
-    NotPresent { field: String, response: String },
-    /// A field was present but had an unexpected type.
-    TypeMismatch {
-        field: String,
-        expected: &'static str,
-        got: String,
-    },
-}
-
-impl Display for ExplorerStatusError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExplorerStatusError::NotPresent { field, response } => {
-                write!(f, "field '{field}': not present in response (got: {response})")
-            },
-            ExplorerStatusError::TypeMismatch { field, expected, got } => {
-                write!(f, "field '{field}': expected {expected}, got {got}")
-            },
-        }
-    }
-}
-
-/// Extracts a u64 from a named field.
+/// Deserialize the GraphQL response and project it onto [`ExplorerStatusDetails`].
 ///
-/// Accepts both numeric values and string-encoded numbers (as returned by the Explorer's
-/// GraphQL API).
-fn require_u64(node: &serde_json::Value, field: &str) -> Result<u64, ExplorerStatusError> {
-    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent {
-        field: field.into(),
-        response: truncate_json(node),
-    })?;
+/// Uses [`serde_path_to_error`] so that failures point at the specific JSON path that no longer
+/// matches the expected shape (e.g. `data.overviewStats.total_count_transactions`). The structs
+/// use `#[serde(deny_unknown_fields)]` so that unexpected additions surface in the same way.
+fn parse_response(body: &str) -> anyhow::Result<ExplorerStatusDetails> {
+    let mut de = serde_json::Deserializer::from_str(body);
+    let response: GraphqlResponse<NetworkOverviewData> = serde_path_to_error::deserialize(&mut de)
+        .with_context(|| format!("failed to parse explorer response: {body}"))?;
 
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
-        .ok_or_else(|| ExplorerStatusError::TypeMismatch {
-            field: field.into(),
-            expected: "u64-compatible value",
-            got: truncate_json(value),
-        })
+    let block = response
+        .data
+        .blocks
+        .edges
+        .into_iter()
+        .next()
+        .context("explorer returned no blocks")?
+        .node;
+
+    Ok(ExplorerStatusDetails {
+        block_number: block.block_number,
+        timestamp: block.timestamp,
+        total_transactions: response.data.overview_stats.transactions,
+        total_nullifiers: response.data.overview_stats.nullifiers,
+        total_notes: response.data.overview_stats.notes,
+        total_account_updates: response.data.overview_stats.account_updates,
+        block_commitment: block.block_commitment,
+        chain_commitment: block.chain_commitment,
+        proof_commitment: block.proof_commitment,
+    })
 }
 
-/// Extracts a string from a named field.
-fn require_str(node: &serde_json::Value, field: &str) -> Result<String, ExplorerStatusError> {
-    let value = node.get(field).ok_or_else(|| ExplorerStatusError::NotPresent {
-        field: field.into(),
-        response: truncate_json(node),
-    })?;
+// RESPONSE TYPES
+// ================================================================================================
 
-    value
-        .as_str()
-        .map(String::from)
-        .ok_or_else(|| ExplorerStatusError::TypeMismatch {
-            field: field.into(),
-            expected: "string",
-            got: truncate_json(value),
-        })
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphqlResponse<T> {
+    data: T,
 }
 
-/// Returns a short string representation of a JSON value for error messages.
-///
-/// Truncates the JSON string to at most 60 characters, appending "..." if truncated.
-/// Truncation is done at a character boundary to avoid panicking on multi-byte characters.
-fn truncate_json(value: &serde_json::Value) -> String {
-    let s = value.to_string();
-    match s.char_indices().nth(60) {
-        Some((idx, _)) => format!("{}...", &s[..idx]),
-        None => s,
-    }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkOverviewData {
+    #[serde(rename = "overviewStats")]
+    overview_stats: OverviewStats,
+    blocks: BlockConnection,
 }
 
-impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
-    type Error = ExplorerStatusError;
+/// The explorer's `BigIntStringScalar` fields are wire-encoded as strings, so we parse them via
+/// [`u64_from_str`] rather than relying on serde's numeric deserialization.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverviewStats {
+    #[serde(rename = "total_count_transactions", deserialize_with = "u64_from_str")]
+    transactions: u64,
+    #[serde(rename = "total_count_nullifiers", deserialize_with = "u64_from_str")]
+    nullifiers: u64,
+    #[serde(rename = "total_count_notes", deserialize_with = "u64_from_str")]
+    notes: u64,
+    #[serde(rename = "total_count_account_updates", deserialize_with = "u64_from_str")]
+    account_updates: u64,
+}
 
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        let node = value.pointer("/data/blocks/edges/0/node").ok_or_else(|| {
-            ExplorerStatusError::NotPresent {
-                field: "data.blocks.edges[0].node".to_string(),
-                response: truncate_json(&value),
-            }
-        })?;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockConnection {
+    edges: Vec<BlockEdge>,
+}
 
-        Ok(Self {
-            block_number: require_u64(node, "block_number")?,
-            timestamp: require_u64(node, "timestamp")?,
-            number_of_transactions: require_u64(node, "number_of_transactions")?,
-            number_of_nullifiers: require_u64(node, "number_of_nullifiers")?,
-            number_of_notes: require_u64(node, "number_of_notes")?,
-            number_of_account_updates: require_u64(node, "number_of_account_updates")?,
-            block_commitment: require_str(node, "block_commitment")?,
-            chain_commitment: require_str(node, "chain_commitment")?,
-            proof_commitment: require_str(node, "proof_commitment")?,
-        })
-    }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockEdge {
+    node: BlockNode,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockNode {
+    #[serde(deserialize_with = "u64_from_str")]
+    block_number: u64,
+    #[serde(deserialize_with = "u64_from_str")]
+    timestamp: u64,
+    block_commitment: String,
+    chain_commitment: String,
+    proof_commitment: String,
+}
+
+fn u64_from_str<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let s = String::deserialize(d)?;
+    s.parse().map_err(serde::de::Error::custom)
 }
 
 // TESTS
@@ -217,105 +211,98 @@ impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
-    // truncate_json tests
-    // --------------------------------------------------------------------------------------------
-
-    #[test]
-    fn truncate_json_short_value_is_not_truncated() {
-        let value = json!({"key": "short"});
-        let result = truncate_json(&value);
-        assert_eq!(result, value.to_string());
-        assert!(!result.ends_with("..."));
+    fn sample_response() -> String {
+        r#"{
+            "data": {
+                "overviewStats": {
+                    "total_count_transactions": "241820",
+                    "total_count_nullifiers": "53060",
+                    "total_count_notes": "125701",
+                    "total_count_account_updates": "241776"
+                },
+                "blocks": {
+                    "edges": [{
+                        "node": {
+                            "block_number": "1211961",
+                            "timestamp": "1779374922",
+                            "block_commitment": "0x7306",
+                            "chain_commitment": "0x11844a",
+                            "proof_commitment": "0xc2014763"
+                        }
+                    }]
+                }
+            }
+        }"#
+        .to_string()
     }
 
     #[test]
-    fn truncate_json_long_value_is_truncated() {
-        let long_string = "a".repeat(100);
-        let value = json!(long_string);
-        let result = truncate_json(&value);
-        assert!(result.ends_with("..."));
-        // 60 chars + "..."
-        assert_eq!(result.chars().count(), 63);
+    fn parse_full_response() {
+        let details = parse_response(&sample_response()).unwrap();
+        assert_eq!(details.block_number, 1_211_961);
+        assert_eq!(details.timestamp, 1_779_374_922);
+        assert_eq!(details.total_transactions, 241_820);
+        assert_eq!(details.total_nullifiers, 53_060);
+        assert_eq!(details.total_notes, 125_701);
+        assert_eq!(details.total_account_updates, 241_776);
+        assert_eq!(details.block_commitment, "0x7306");
+        assert_eq!(details.chain_commitment, "0x11844a");
+        assert_eq!(details.proof_commitment, "0xc2014763");
     }
 
     #[test]
-    fn truncate_json_multibyte_chars_are_handled() {
-        // Each 'é' is 2 bytes in UTF-8. Build a string whose serialized JSON form exceeds 60
-        // characters, ensuring truncation lands on a char boundary.
-        let multibyte_string = "é".repeat(80);
-        let value = json!(multibyte_string);
-        // Should not panic and should still truncate correctly.
-        let result = truncate_json(&value);
-        assert!(result.ends_with("..."));
-    }
-
-    #[test]
-    fn truncate_json_exactly_60_chars_is_not_truncated() {
-        // Build a JSON string whose serialized form is exactly 60 characters. json!("x".repeat(58))
-        // serializes as `"xxx...xxx"` (58 chars + 2 quotes = 60).
-        let value = json!("x".repeat(58));
-        let result = truncate_json(&value);
-        assert_eq!(result.chars().count(), 60);
-        assert!(!result.ends_with("..."));
-    }
-
-    // require_u64 tests
-    // --------------------------------------------------------------------------------------------
-
-    #[test]
-    fn require_u64_from_number() {
-        let node = json!({"block_number": 42});
-        assert_eq!(require_u64(&node, "block_number").unwrap(), 42);
-    }
-
-    #[test]
-    fn require_u64_from_string() {
-        let node = json!({"block_number": "42"});
-        assert_eq!(require_u64(&node, "block_number").unwrap(), 42);
-    }
-
-    #[test]
-    fn require_u64_missing_field() {
-        let node = json!({});
-        let err = require_u64(&node, "block_number").unwrap_err();
+    fn missing_field_error_includes_path() {
+        let body = sample_response().replace("total_count_transactions", "txn_count");
+        let err = parse_response(&body).unwrap_err();
+        let msg = format!("{err:#}");
         assert!(
-            matches!(err, ExplorerStatusError::NotPresent { field, .. } if field == "block_number")
+            msg.contains("data.overviewStats"),
+            "error should locate the failing path, got: {msg}",
         );
     }
 
     #[test]
-    fn require_u64_wrong_type() {
-        let node = json!({"block_number": [1, 2, 3]});
-        let err = require_u64(&node, "block_number").unwrap_err();
+    fn unknown_field_is_rejected() {
+        let body = sample_response().replace(
+            "\"total_count_transactions\": \"241820\",",
+            "\"total_count_transactions\": \"241820\", \"unexpected_field\": 1,",
+        );
+        let err = parse_response(&body).unwrap_err();
+        let msg = format!("{err:#}");
         assert!(
-            matches!(err, ExplorerStatusError::TypeMismatch { field, .. } if field == "block_number")
+            msg.contains("unexpected_field"),
+            "error should name the unknown field, got: {msg}",
         );
     }
 
-    // require_str tests
-    // --------------------------------------------------------------------------------------------
-
     #[test]
-    fn require_str_valid() {
-        let node = json!({"name": "hello"});
-        assert_eq!(require_str(&node, "name").unwrap(), "hello");
+    fn empty_blocks_array_is_an_error() {
+        let body = r#"{
+            "data": {
+                "overviewStats": {
+                    "total_count_transactions": "1",
+                    "total_count_nullifiers": "1",
+                    "total_count_notes": "1",
+                    "total_count_account_updates": "1"
+                },
+                "blocks": { "edges": [] }
+            }
+        }"#;
+        let err = parse_response(body).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no blocks"), "got: {msg}");
     }
 
     #[test]
-    fn require_str_missing_field() {
-        let node = json!({});
-        let err = require_str(&node, "name").unwrap_err();
-        assert!(matches!(err, ExplorerStatusError::NotPresent { field, .. } if field == "name"));
-    }
-
-    #[test]
-    fn require_str_wrong_type() {
-        let node = json!({"name": 123});
-        let err = require_str(&node, "name").unwrap_err();
-        assert!(matches!(err, ExplorerStatusError::TypeMismatch { field, .. } if field == "name"));
+    fn non_numeric_string_is_rejected() {
+        let body = sample_response().replace("\"241820\"", "\"not-a-number\"");
+        let err = parse_response(&body).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("total_count_transactions"),
+            "error should point at the failing field, got: {msg}",
+        );
     }
 }

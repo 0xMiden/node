@@ -14,7 +14,7 @@ use tracing::debug;
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::counter::{CounterTrackingService, IncrementService, LatencyState};
-use crate::deploy::ensure_accounts_exist;
+use crate::deploy::create_and_deploy_accounts;
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
@@ -130,26 +130,36 @@ impl Tasks {
     }
 
     /// Spawn the network transaction service checker task.
+    ///
+    /// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and
+    /// hands the same counter account to both services via a [`watch::channel`]. The increment
+    /// service publishes new counters on the channel when it regenerates accounts after
+    /// persistent failures; the tracking service observes the channel to switch over.
     pub async fn spawn_ntx_service(
         &mut self,
         config: &MonitorConfig,
     ) -> Result<(Receiver<ServiceStatus>, Receiver<ServiceStatus>)> {
-        // Ensure accounts exist before starting monitoring tasks
-        ensure_accounts_exist(&config.wallet_filepath, &config.counter_filepath, &config.rpc_url)
-            .await?;
+        let (wallet_account, secret_key, counter_account) =
+            create_and_deploy_accounts(&config.rpc_url).await?;
 
-        // Create shared atomic counter for tracking expected counter value
+        let (counter_tx, counter_rx) = watch::channel(counter_account.clone());
+
         let expected_counter_value = Arc::new(AtomicU64::new(0));
         let latency_state = Arc::new(Mutex::new(LatencyState::default()));
 
         let increment_svc = IncrementService::new(
             config.clone(),
+            wallet_account,
+            secret_key,
+            counter_account,
+            counter_tx,
             Arc::clone(&expected_counter_value),
             latency_state.clone(),
         )
         .await?;
         let tracking_svc = CounterTrackingService::new(
             config.clone(),
+            counter_rx,
             Arc::clone(&expected_counter_value),
             latency_state,
         )
