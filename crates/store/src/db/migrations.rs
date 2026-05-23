@@ -45,19 +45,22 @@ mod tests {
     use std::process::Command;
 
     use anyhow::{Context, Result, ensure};
-    use miden_node_db::migration::SchemaHash;
+    use miden_node_db::migration::{SchemaHash, SchemaHashes};
 
     use super::*;
 
     const EXPECTED_SCHEMA_HASHES: [SchemaHash; 1] = [SchemaHash::from_hex(
-        "b3bdd2e530fbb66c9146cda9f3bf79df49c6a6bf99f7432aae0a8927a15406ac",
+        "57ede2ef6984e3450838db516058517badc630567f09bb0f522b9ddedb76f7e8",
     )];
 
     #[test]
     fn migration_schema_hashes_are_stable() -> Result<()> {
         let migrator = migrator()?;
 
-        assert_eq!(migrator.schema_hashes(), &EXPECTED_SCHEMA_HASHES);
+        pretty_assertions::assert_eq!(
+            migrator.schema_hashes(),
+            SchemaHashes(&EXPECTED_SCHEMA_HASHES)
+        );
         Ok(())
     }
 

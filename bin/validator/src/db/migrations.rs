@@ -25,7 +25,7 @@ mod tests {
     use std::process::Command;
 
     use anyhow::{Context, Result, ensure};
-    use miden_node_db::migration::SchemaHash;
+    use miden_node_db::migration::{SchemaHash, SchemaHashes};
 
     use super::*;
 
@@ -37,7 +37,7 @@ mod tests {
     fn migration_schema_hashes_are_stable() -> Result<()> {
         let migrator = migrator()?;
 
-        assert_eq!(migrator.schema_hashes(), &EXPECTED_SCHEMA_HASHES);
+        assert_eq!(migrator.schema_hashes(), SchemaHashes(&EXPECTED_SCHEMA_HASHES));
         Ok(())
     }
 

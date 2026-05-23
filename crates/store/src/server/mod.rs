@@ -61,10 +61,10 @@ pub enum StoreMode {
         max_concurrent_proofs: NonZeroUsize,
     },
 
-    /// Receives blocks from an upstream store's `StoreReplica` gRPC service.
+    /// Receives blocks from an upstream store's `Rpc` gRPC service.
     ///
-    /// Only the `Rpc` and `StoreReplica` gRPC services are exposed. The `BlockProducer` and
-    /// `NtxBuilder` services are not started and no proof scheduler runs.
+    /// Only the `Rpc` gRPC service is exposed. The `BlockProducer` and `NtxBuilder` services are
+    /// not started and no proof scheduler runs.
     Replica { upstream_url: Url },
 }
 
@@ -310,7 +310,7 @@ impl Store {
 
     /// Spawns the gRPC servers for block-producer mode.
     ///
-    /// Starts three listeners: Rpc+StoreReplica (shared), `NtxBuilder`, and `BlockProducer`.
+    /// Starts three listeners: `Rpc`, `NtxBuilder`, and `BlockProducer`.
     fn spawn_block_producer_grpc_servers(
         store_api: api::StoreApi,
         block_producer_api: block_producer::BlockProducerApi,
@@ -322,8 +322,6 @@ impl Store {
         let mut join_set = JoinSet::new();
 
         let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
-        let replica_service =
-            store::store_replica_server::StoreReplicaServer::new(store_api.clone());
         let ntx_builder_service = store::ntx_builder_server::NtxBuilderServer::new(store_api);
         let block_producer_service =
             store::block_producer_server::BlockProducerServer::new(block_producer_api);
@@ -343,7 +341,6 @@ impl Store {
         join_set.spawn(
             make_server()
                 .add_service(rpc_service)
-                .add_service(replica_service)
                 .add_service(reflection_service.clone())
                 .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
         );
@@ -368,8 +365,7 @@ impl Store {
 
     /// Spawns the gRPC servers for replica mode.
     ///
-    /// Only the Rpc and `StoreReplica` services are exposed — no `BlockProducer`, `NtxBuilder`, or
-    /// proof scheduler.
+    /// Only the `Rpc` service is exposed — no `BlockProducer`, `NtxBuilder`, or proof scheduler.
     fn spawn_replica_grpc_servers(
         store_api: api::StoreApi,
         grpc_options: GrpcOptionsInternal,
@@ -377,8 +373,7 @@ impl Store {
     ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
         let mut join_set = JoinSet::new();
 
-        let rpc_service = store::rpc_server::RpcServer::new(store_api.clone());
-        let replica_service = store::store_replica_server::StoreReplicaServer::new(store_api);
+        let rpc_service = store::rpc_server::RpcServer::new(store_api);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(store_api_descriptor())
@@ -391,7 +386,6 @@ impl Store {
                 .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
                 .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
                 .add_service(rpc_service)
-                .add_service(replica_service)
                 .add_service(reflection_service)
                 .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
         );
