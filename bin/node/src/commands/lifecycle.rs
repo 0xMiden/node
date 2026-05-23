@@ -14,7 +14,7 @@ use super::ENV_DATA_DIRECTORY;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BootstrapCommand {
-    /// Directory to initialize with the node database and raw block data.
+    /// Directory to initialize with the node's local data storage.
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     data_directory: PathBuf,
 
@@ -46,7 +46,7 @@ pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyh
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct MigrateCommand {
-    /// Directory containing the node database.
+    /// Directory containing the node's local data storage.
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     data_directory: PathBuf,
 }

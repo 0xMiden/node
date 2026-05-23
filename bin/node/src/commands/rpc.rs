@@ -15,7 +15,12 @@ use url::Url;
 #[derive(clap::Args, Clone, Debug)]
 pub struct RpcOptions {
     /// Socket address at which to serve the public RPC API.
-    #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "LISTEN")]
+    #[arg(
+        long = "rpc.listen",
+        env = "MIDEN_NODE_RPC_LISTEN",
+        value_name = "LISTEN",
+        display_order = 3
+    )]
     pub listen: SocketAddr,
 
     #[command(flatten)]
@@ -45,7 +50,9 @@ pub struct RpcGrpcOptions {
         env = "MIDEN_NODE_RPC_GRPC_TIMEOUT",
         default_value = duration_to_human_readable_string(Duration::from_secs(10)),
         value_parser = humantime::parse_duration,
-        value_name = "DURATION"
+        value_name = "DURATION",
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING,
+        display_order = 10
     )]
     pub timeout: Duration,
 
@@ -55,7 +62,9 @@ pub struct RpcGrpcOptions {
         env = "MIDEN_NODE_RPC_GRPC_MAX_CONNECTION_AGE",
         default_value = duration_to_human_readable_string(Duration::from_secs(30 * 60)),
         value_parser = humantime::parse_duration,
-        value_name = "DURATION"
+        value_name = "DURATION",
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING,
+        display_order = 11
     )]
     pub max_connection_age: Duration,
 }
@@ -68,12 +77,14 @@ impl RpcGrpcOptions {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RpcRateLimitOptions {
-    /// Number of RPC connections to be served before API tokens are replenished per IP address.
+    /// Number of RPC request credits available per IP before replenishment.
     #[arg(
         long = "rpc.rate-limit.burst-size",
         env = "MIDEN_NODE_RPC_RATE_LIMIT_BURST_SIZE",
         default_value_t = NonZeroU32::new(128).unwrap(),
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING,
+        display_order = 20
     )]
     pub burst_size: NonZeroU32,
 
@@ -82,7 +93,9 @@ pub struct RpcRateLimitOptions {
         long = "rpc.rate-limit.replenish-per-second",
         env = "MIDEN_NODE_RPC_RATE_LIMIT_REPLENISH_PER_SECOND",
         default_value_t = NonZeroU64::new(16).unwrap(),
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING,
+        display_order = 21
     )]
     pub replenish_per_second: NonZeroU64,
 
@@ -91,18 +104,23 @@ pub struct RpcRateLimitOptions {
         long = "rpc.rate-limit.max-concurrent-connections",
         env = "MIDEN_NODE_RPC_RATE_LIMIT_MAX_CONCURRENT_CONNECTIONS",
         default_value_t = 1_000,
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING,
+        display_order = 22
     )]
     pub max_concurrent_connections: u64,
 }
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct SyncOptions {
-    /// URL for the block stream source used to sync this node's store.
+    /// Upstream block sync source.
+    ///
+    /// This URL must host the RPC's block and proof subscription methods.
     #[arg(
         long = "sync.block-source.url",
         env = "MIDEN_NODE_SYNC_BLOCK_SOURCE_URL",
-        value_name = "URL"
+        value_name = "URL",
+        display_order = 5
     )]
     pub block_source_url: Url,
 }

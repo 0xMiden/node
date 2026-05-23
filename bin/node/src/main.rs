@@ -2,20 +2,16 @@
 // E0275.
 #![recursion_limit = "256"]
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use clap::error::ErrorKind;
+use commands::Command;
 
 mod commands;
-#[cfg(test)]
-mod tests;
 
 // COMMANDS
 // ================================================================================================
 
 /// Operate and maintain a Miden node.
-///
-/// Sync to an existing network by running the node in RPC mode, or in sequencer mode to operate a local dev network.
-///
-/// A node must first be initialized using `bootstrap` and occasionally maintained after updates by running `migrate`.
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Cli {
@@ -23,71 +19,24 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[derive(Subcommand, Debug)]
-pub enum Command {
-    /// Initialize a node from a signed genesis block.
-    ///
-    /// Performs one-time initialization of an empty node data directory from a trusted, signed
-    /// genesis block. This is required before the node can be started.
-    Bootstrap(commands::BootstrapCommand),
-
-    /// Apply pending database migrations.
-    ///
-    /// Migrates the node database from its current version to the version required by this node
-    /// binary. This is a no-op if the database is already at the latest version.
-    ///
-    /// Backwards migrations are not supported. If the database is older than the minimum supported
-    /// version, run an older node binary first and migrate forward in stages until this binary can
-    /// complete the migration.
-    ///
-    /// Cannot be run on an empty data directory; use `bootstrap` first.
-    Migrate(commands::MigrateCommand),
-
-    /// Run a node in sequencer mode.
-    ///
-    /// Runs a sequencer node which maintains a mempool of submitted transactions and produces
-    /// blocks. Miden is currently centralized and only one of these exists per network.
-    ///
-    /// Note that the node still exposes an RPC API in this mode and can be used for local dev
-    /// purposes.
-    ///
-    /// Run the node in RPC mode to sync blocks from an existing network and avoid rate-limiting.
-    Sequencer(commands::SequencerCommand),
-
-    /// Run a node in RPC mode.
-    ///
-    /// In this mode, the node syncs blocks from an upstream RPC source and is useful for
-    /// providing a local RPC API to avoid rate-limiting on official networks.
-    Rpc(commands::RpcCommand),
-}
-
-impl Command {
-    fn open_telemetry(&self) -> miden_node_utils::logging::OpenTelemetry {
-        match self {
-            Command::Sequencer(command) => command.runtime.open_telemetry(),
-            Command::Rpc(command) => command.runtime.open_telemetry(),
-            Command::Bootstrap(_) | Command::Migrate(_) => {
-                miden_node_utils::logging::OpenTelemetry::Disabled
-            },
-        }
-    }
-
-    async fn execute(self) -> anyhow::Result<()> {
-        match self {
-            Command::Bootstrap(bootstrap_command) => bootstrap_command.handle(),
-            Command::Migrate(migrate_command) => migrate_command.handle().await,
-            Command::Sequencer(sequencer_command) => sequencer_command.handle(),
-            Command::Rpc(rpc_command) => rpc_command.handle(),
-        }
-    }
-}
-
 // MAIN
 // ================================================================================================
 
+fn parse_cli() -> Cli {
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        // We inject custom section descriptions into help output to improve readability.
+        Err(err) if err.kind() == ErrorKind::DisplayHelp => {
+            print!("{}", commands::section::inject_section_descriptions(err.to_string()));
+            std::process::exit(err.exit_code());
+        },
+        Err(err) => err.exit(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = parse_cli();
 
     // Configure tracing with optional OpenTelemetry exporting support.
     let _otel_guard = miden_node_utils::logging::setup_tracing(cli.command.open_telemetry())?;

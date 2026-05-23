@@ -29,7 +29,9 @@ pub struct StoreSqliteOptions {
         long = "store.sqlite.connection-pool-size",
         env = "MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE",
         default_value_t = miden_node_store::default_sqlite_connection_pool_size(),
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 40
     )]
     pub connection_pool_size: NonZeroUsize,
 }
@@ -84,7 +86,9 @@ pub struct AccountTreeStoreRocksDbOptions {
         long = "store.account-tree.rocksdb.max-open-fds",
         env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_MAX_OPEN_FDS",
         default_value_t = default_rocksdb_max_open_fds(),
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 41
     )]
     pub max_open_fds: i32,
 
@@ -94,7 +98,9 @@ pub struct AccountTreeStoreRocksDbOptions {
         long = "store.account-tree.rocksdb.cache-size",
         env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_CACHE_SIZE",
         default_value_t = default_rocksdb_cache_size(),
-        value_name = "BYTES"
+        value_name = "BYTES",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 42
     )]
     pub cache_size_in_bytes: usize,
 
@@ -104,7 +110,9 @@ pub struct AccountTreeStoreRocksDbOptions {
         long = "store.account-tree.rocksdb.durability-mode",
         env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_DURABILITY_MODE",
         value_enum,
-        value_name = "MODE"
+        value_name = "MODE",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 43
     )]
     pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
@@ -117,7 +125,9 @@ pub struct NullifierTreeStoreRocksDbOptions {
         long = "store.nullifier-tree.rocksdb.max-open-fds",
         env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_MAX_OPEN_FDS",
         default_value_t = default_rocksdb_max_open_fds(),
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 44
     )]
     pub max_open_fds: i32,
 
@@ -127,7 +137,9 @@ pub struct NullifierTreeStoreRocksDbOptions {
         long = "store.nullifier-tree.rocksdb.cache-size",
         env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_CACHE_SIZE",
         default_value_t = default_rocksdb_cache_size(),
-        value_name = "BYTES"
+        value_name = "BYTES",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 45
     )]
     pub cache_size_in_bytes: usize,
 
@@ -137,7 +149,9 @@ pub struct NullifierTreeStoreRocksDbOptions {
         long = "store.nullifier-tree.rocksdb.durability-mode",
         env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_DURABILITY_MODE",
         value_enum,
-        value_name = "MODE"
+        value_name = "MODE",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 46
     )]
     pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
@@ -150,7 +164,9 @@ pub struct AccountStateForestStoreRocksDbOptions {
         long = "store.account-state-forest.rocksdb.max-open-fds",
         env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_MAX_OPEN_FDS",
         default_value_t = default_rocksdb_max_open_fds(),
-        value_name = "NUM"
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 47
     )]
     pub max_open_fds: i32,
 
@@ -160,7 +176,9 @@ pub struct AccountStateForestStoreRocksDbOptions {
         long = "store.account-state-forest.rocksdb.cache-size",
         env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_CACHE_SIZE",
         default_value_t = default_rocksdb_cache_size(),
-        value_name = "BYTES"
+        value_name = "BYTES",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 48
     )]
     pub cache_size_in_bytes: usize,
 
@@ -170,7 +188,9 @@ pub struct AccountStateForestStoreRocksDbOptions {
         long = "store.account-state-forest.rocksdb.durability-mode",
         env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_DURABILITY_MODE",
         value_enum,
-        value_name = "MODE"
+        value_name = "MODE",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
+        display_order = 49
     )]
     pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
