@@ -11,8 +11,13 @@ mod tests;
 // COMMANDS
 // ================================================================================================
 
+/// Operate and maintain a Miden node.
+///
+/// Sync to an existing network by running the node in RPC mode, or in sequencer mode to operate a local dev network.
+///
+/// A node must first be initialized using `bootstrap` and occasionally maintained after updates by running `migrate`.
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -20,16 +25,35 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Bootstraps the node store from a pre-signed genesis block.
+    /// Initialize a node from a signed genesis block.
+    ///
+    /// Performs one-time initialization of an empty node data directory from a trusted, signed
+    /// genesis block. This is required before the node can be started.
     Bootstrap(commands::BootstrapCommand),
 
-    /// Applies pending store database migrations.
+    /// Apply pending database migrations.
+    ///
+    /// Applies any migrations required by the node database in an existing data directory. Use
+    /// this after upgrading to a release that changes the database schema.
+    ///
+    /// Cannot be run on an empty data directory; use `bootstrap` first.
     Migrate(commands::MigrateCommand),
 
-    /// Runs a complete node which produces blocks in-process.
+    /// Run a node in sequencer mode.
+    ///
+    /// Runs a sequencer node which maintains a mempool of submitted transactions and produces
+    /// blocks. Miden is currently centralized and only one of these exists per network.
+    ///
+    /// Note that the node still exposes an RPC API in this mode and can be used for local dev
+    /// purposes.
+    ///
+    /// Run the node in RPC mode to sync blocks from an existing network and avoid rate-limiting.
     Sequencer(commands::SequencerCommand),
 
-    /// Runs a complete node which syncs blocks from a block stream source.
+    /// Run a node in RPC mode.
+    ///
+    /// In this mode, the node syncs blocks from an upstream RPC source and is useful for
+    /// providing a local RPC API to avoid rate-limiting on official networks.
     Rpc(commands::RpcCommand),
 }
 
