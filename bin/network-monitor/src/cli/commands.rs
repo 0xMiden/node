@@ -24,7 +24,7 @@ impl Cli {
     /// Execute the parsed command.
     pub async fn execute(self) -> anyhow::Result<()> {
         match self.command {
-            Command::Start(config) => start_monitor(config).await,
+            Command::Start(config) => Box::pin(start_monitor(config)).await,
         }
     }
 }

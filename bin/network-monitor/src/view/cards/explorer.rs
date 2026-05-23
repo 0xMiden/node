@@ -70,14 +70,14 @@ pub(in crate::view) fn render_explorer(
                     }
                 }
                 (metric_row(
-                    "Transactions:",
-                    &num_or_dash(stats.number_of_transactions, healthy),
+                    "Total Transactions:",
+                    &num_or_dash(stats.total_transactions, healthy),
                 ))
-                (metric_row("Nullifiers:", &num_or_dash(stats.number_of_nullifiers, healthy)))
-                (metric_row("Notes:", &num_or_dash(stats.number_of_notes, healthy)))
+                (metric_row("Total Nullifiers:", &num_or_dash(stats.total_nullifiers, healthy)))
+                (metric_row("Total Notes:", &num_or_dash(stats.total_notes, healthy)))
                 (metric_row(
-                    "Account Updates:",
-                    &num_or_dash(stats.number_of_account_updates, healthy),
+                    "Total Account Updates:",
+                    &num_or_dash(stats.total_account_updates, healthy),
                 ))
             }
         }
