@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 
 use super::entry::{Migration, MigrationEntry, SqlMigration, apply_migration_and_verify_schema};
-use super::{MigratorBuilder, SchemaHash, schema};
+use super::{MigratorBuilder, SchemaHash, SchemaHashes, schema};
 
 /// Applies versioned database migrations.
 ///
@@ -111,8 +111,8 @@ impl Migrator {
     ///
     /// Callers can use these hashes in tests when retiring active migrations into SQL: the
     /// replacement SQL should produce the same hash at the same migration index.
-    pub fn schema_hashes(&self) -> &[SchemaHash] {
-        &self.expected_schema_hashes
+    pub fn schema_hashes(&self) -> SchemaHashes<'_> {
+        SchemaHashes(&self.expected_schema_hashes)
     }
 
     /// Applies missing migrations to the database at `database_filepath`.

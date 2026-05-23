@@ -84,6 +84,19 @@ service Api {
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
+    // Streams committed blocks starting from the given block number (inclusive).
+    //
+    // Replays historical blocks first, then streams live blocks as they are committed.
+    // On lag (replica falls too far behind), the stream is closed with a DATA_LOSS error and
+    // the client should reconnect from its local tip.
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
+
+    // Streams block proofs starting from the given block number (inclusive).
+    //
+    // Replays existing proofs first, then streams new proofs as they are generated.
+    // On lag, the stream is closed with a DATA_LOSS error.
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
+
     // NOTE DEBUGGING ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
@@ -95,6 +108,47 @@ service Api {
     //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
     rpc GetNetworkNoteStatus(note.NoteId) returns (GetNetworkNoteStatusResponse) {}
+}
+
+// BLOCK SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the committed block stream.
+message BlockSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A committed block streamed to a replica.
+message BlockSubscriptionResponse {
+    // The block encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::SignedBlock].
+    bytes block = 1;
+
+    // The committed chain tip when this item was emitted.
+    fixed32 committed_chain_tip = 2;
+}
+
+// PROOF SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the block proof stream.
+message ProofSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A block proof streamed to a replica.
+message ProofSubscriptionResponse {
+    // The block number this proof corresponds to.
+    fixed32 block_num = 1;
+
+    // The block proof encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::BlockProof].
+    bytes proof = 2;
+
+    // The proven chain tip when this item was emitted.
+    fixed32 proven_chain_tip = 3;
 }
 
 // RPC STATUS

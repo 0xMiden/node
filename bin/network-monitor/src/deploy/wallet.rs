@@ -1,11 +1,9 @@
 //! Wallet account creation functionality.
 
-use std::path::Path;
-
 use anyhow::Result;
 use miden_node_utils::crypto::get_rpo_random_coin;
-use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
-use miden_protocol::account::{Account, AccountFile, AccountType};
+use miden_protocol::account::auth::AuthScheme;
+use miden_protocol::account::{Account, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -30,16 +28,4 @@ pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let wallet_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
     Ok((wallet_account, secret_key))
-}
-
-/// Save wallet account to disk together with its authentication key.
-pub fn save_wallet_account(
-    account: &Account,
-    secret_key: &SecretKey,
-    file_path: &Path,
-) -> Result<()> {
-    let auth_secret_key = AuthSecretKey::Falcon512Poseidon2(secret_key.clone());
-    let account_file = AccountFile::new(account.clone(), vec![auth_secret_key]);
-    account_file.write(file_path)?;
-    Ok(())
 }

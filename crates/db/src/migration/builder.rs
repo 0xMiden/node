@@ -110,6 +110,7 @@ mod tests {
     use rusqlite::{Connection, Transaction};
 
     use super::super::{Migrator, SchemaHash};
+    use crate::migration::SchemaHashes;
 
     fn add_item_height(tx: &Transaction<'_>) -> Result<()> {
         tx.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
@@ -152,7 +153,7 @@ mod tests {
             .push_code("add item height", add_item_height)?
             .build()?;
 
-        assert_eq!(migrator.schema_hashes(), &[retired_hash, sql_hash, final_hash]);
+        assert_eq!(migrator.schema_hashes(), SchemaHashes(&[retired_hash, sql_hash, final_hash]));
         Ok(())
     }
 }
