@@ -13,9 +13,11 @@ mod tests;
 
 /// Operate and maintain a Miden node.
 ///
-/// Sync to an existing network by running the node in RPC mode, or in sequencer mode to operate a local dev network.
+/// Sync to an existing network by running the node in RPC mode, or in sequencer mode to operate a
+/// local dev network.
 ///
-/// A node must first be initialized using `bootstrap` and occasionally maintained after updates by running `migrate`.
+/// A node must first be initialized using `bootstrap` and occasionally maintained after updates by
+/// running `migrate`.
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Cli {
@@ -33,8 +35,8 @@ pub enum Command {
 
     /// Apply pending database migrations.
     ///
-    /// Applies any migrations required by the node database in an existing data directory. Use
-    /// this after upgrading to a release that changes the database schema.
+    /// Applies any migrations required by the node database in an existing data directory. Use this
+    /// after upgrading to a release that changes the database schema.
     ///
     /// Cannot be run on an empty data directory; use `bootstrap` first.
     Migrate(commands::MigrateCommand),
@@ -52,8 +54,8 @@ pub enum Command {
 
     /// Run a node in RPC mode.
     ///
-    /// In this mode, the node syncs blocks from an upstream RPC source and is useful for
-    /// providing a local RPC API to avoid rate-limiting on official networks.
+    /// In this mode, the node syncs blocks from an upstream RPC source and is useful for providing
+    /// a local RPC API to avoid rate-limiting on official networks.
     Rpc(commands::RpcCommand),
 }
 

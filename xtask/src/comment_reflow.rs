@@ -248,9 +248,7 @@ fn replacements(comment_lines: &[CommentLine], width: usize) -> Vec<Replacement>
             block_end += 1;
         }
 
-        if let Some(replacement) = reflow_block(&comment_lines[block_start..block_end], width) {
-            replacements.push(replacement);
-        }
+        replacements.extend(reflow_block(&comment_lines[block_start..block_end], width));
 
         block_start = block_end;
     }
@@ -264,7 +262,36 @@ fn same_block(previous: &CommentLine, current: &CommentLine) -> bool {
         && previous.prefix == current.prefix
 }
 
-fn reflow_block(block: &[CommentLine], width: usize) -> Option<Replacement> {
+fn reflow_block(block: &[CommentLine], width: usize) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+    let mut paragraph_start = None;
+
+    for (line_idx, line) in block.iter().enumerate() {
+        if is_blank_comment_line(line) {
+            if let Some(start) = paragraph_start.take() {
+                if let Some(replacement) = reflow_paragraph(&block[start..line_idx], width) {
+                    replacements.push(replacement);
+                }
+            }
+        } else if paragraph_start.is_none() {
+            paragraph_start = Some(line_idx);
+        }
+    }
+
+    if let Some(start) = paragraph_start {
+        if let Some(replacement) = reflow_paragraph(&block[start..], width) {
+            replacements.push(replacement);
+        }
+    }
+
+    replacements
+}
+
+fn is_blank_comment_line(line: &CommentLine) -> bool {
+    line.content.strip_prefix(' ').unwrap_or(&line.content).trim().is_empty()
+}
+
+fn reflow_paragraph(block: &[CommentLine], width: usize) -> Option<Replacement> {
     let first = block.first()?;
     let last = block.last()?;
     let line_prefix = format!("{}{}", first.indent, first.prefix.marker());
@@ -464,6 +491,29 @@ fn main() {}
 ";
 
         assert_eq!(reflow(source, 30), source);
+    }
+
+    #[test]
+    fn reflows_doc_comment_paragraphs_around_blank_lines() {
+        let source = r"/// Summary.
+///
+/// This paragraph should be wrapped even though it follows a blank Rustdoc line in the same comment block.
+///
+/// - list item should stay untouched even if it is very long
+fn main() {}
+";
+
+        let expected = r"/// Summary.
+///
+/// This paragraph should be wrapped even though
+/// it follows a blank Rustdoc line in the same
+/// comment block.
+///
+/// - list item should stay untouched even if it is very long
+fn main() {}
+";
+
+        assert_eq!(reflow(source, 50), expected);
     }
 
     #[test]
