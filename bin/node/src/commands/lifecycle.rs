@@ -14,11 +14,11 @@ use super::ENV_DATA_DIRECTORY;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BootstrapCommand {
-    /// Directory in which to store the node database and raw block data.
+    /// Directory to initialize with the node database and raw block data.
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     data_directory: PathBuf,
 
-    /// Path to the pre-signed genesis block file produced by the validator.
+    /// Path to the trusted, signed genesis block file.
     #[arg(long, value_name = "FILE")]
     genesis_block: PathBuf,
 }
