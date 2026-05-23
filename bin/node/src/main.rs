@@ -33,8 +33,12 @@ pub enum Command {
 
     /// Apply pending database migrations.
     ///
-    /// Applies any migrations required by the node database in an existing data directory. Use
-    /// this after upgrading to a release that changes the database schema.
+    /// Migrates the node database from its current version to the version required by this node
+    /// binary. This is a no-op if the database is already at the latest version.
+    ///
+    /// Backwards migrations are not supported. If the database is older than the minimum supported
+    /// version, run an older node binary first and migrate forward in stages until this binary can
+    /// complete the migration.
     ///
     /// Cannot be run on an empty data directory; use `bootstrap` first.
     Migrate(commands::MigrateCommand),
