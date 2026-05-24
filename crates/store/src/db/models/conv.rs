@@ -43,7 +43,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotType,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::Asset;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
@@ -137,7 +137,6 @@ impl_binary_sql_convert!(
     AccountId,
     AccountStorageHeader,
     Asset,
-    FungibleAsset,
     NoteAssets,
     NoteAttachments,
     NoteId,
@@ -295,7 +294,6 @@ pub(crate) fn idx_to_raw_sql(idx: usize) -> i32 {
 mod tests {
     use std::fmt::Debug;
 
-    use miden_protocol::account::AccountStorageHeader;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::testing::account_id::{
         ACCOUNT_ID_PRIVATE_SENDER,
@@ -320,7 +318,6 @@ mod tests {
 
         assert_sql_roundtrip(Word::from([1, 2, 3, 4]));
         assert_sql_roundtrip(account_id);
-        assert_sql_roundtrip(AccountStorageHeader::new(Vec::new()).unwrap());
         assert_sql_roundtrip(StorageMapKey::from_index(7));
         assert_sql_roundtrip(NoteId::new(Word::from([1, 0, 0, 0]), Word::from([2, 0, 0, 0])));
         assert_sql_roundtrip(Asset::from(FungibleAsset::new(faucet_id, 100).unwrap()));
