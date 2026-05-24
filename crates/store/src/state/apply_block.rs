@@ -221,12 +221,18 @@ impl State {
         self.with_inner_read_blocking(|inner| {
             let block_num = header.block_num();
 
-            // nullifiers can be produced only once
-            let duplicate_nullifiers: Vec<_> = body
+            // Nullifiers can be produced only once. Build the mutation input in the same pass so
+            // large blocks do not need to traverse the nullifier list twice.
+            let mut duplicate_nullifiers = Vec::new();
+            let nullifier_mutations: Vec<_> = body
                 .created_nullifiers()
                 .iter()
-                .filter(|&nullifier| inner.nullifier_tree.get_block_num(nullifier).is_some())
-                .copied()
+                .map(|nullifier| {
+                    if inner.nullifier_tree.get_block_num(nullifier).is_some() {
+                        duplicate_nullifiers.push(*nullifier);
+                    }
+                    (*nullifier, block_num)
+                })
                 .collect();
             if !duplicate_nullifiers.is_empty() {
                 return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
@@ -241,9 +247,7 @@ impl State {
             // compute update for nullifier tree
             let nullifier_tree_update = inner
                 .nullifier_tree
-                .compute_mutations(
-                    body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
-                )
+                .compute_mutations(nullifier_mutations)
                 .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
             if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
