@@ -13,6 +13,7 @@ pub use modes::{RpcCommand, SequencerCommand};
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 
 #[derive(Subcommand, Debug)]
+#[expect(clippy::large_enum_variant, reason = "cli is a once-off usage")]
 pub enum Command {
     /// Run a node in sequencer mode.
     ///
