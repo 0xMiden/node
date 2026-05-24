@@ -306,16 +306,16 @@ impl RocksDbStorage {
     /// Converts a `NodeIndex` (for a subtree root) into a `KeyBytes` for use as a `RocksDB` key.
     /// The `KeyBytes` is a wrapper around a 8-byte value with a variable-length prefix.
     #[inline(always)]
-    fn subtree_db_key(index: NodeIndex) -> KeyBytes {
+    fn subtree_db_key(index: NodeIndex) -> Result<KeyBytes, StorageError> {
         let keep = match index.depth() {
             24 => 3,
             32 => 4,
             40 => 5,
             48 => 6,
             56 => 7,
-            d => panic!("unsupported depth {d}"),
+            d => return Err(StorageError::Unsupported(format!("unsupported subtree depth {d}"))),
         };
-        KeyBytes::new(index.position(), keep)
+        Ok(KeyBytes::new(index.position(), keep))
     }
 
     /// Retrieves a handle to a `RocksDB` column family by its name.
@@ -331,9 +331,9 @@ impl RocksDbStorage {
 
     /* helper: CF handle from NodeIndex ------------------------------------- */
     #[inline(always)]
-    fn subtree_cf(&self, index: NodeIndex) -> &rocksdb::ColumnFamily {
-        let name = cf_for_depth(index.depth());
-        self.cf_handle(name).expect("CF handle missing")
+    fn subtree_cf(&self, index: NodeIndex) -> Result<&rocksdb::ColumnFamily, StorageError> {
+        let name = cf_for_depth(index.depth())?;
+        self.cf_handle(name)
     }
 }
 
@@ -624,8 +624,8 @@ impl SmtStorage for RocksDbStorage {
     /// - `Ok(...)` if all fetches succeed.
     /// - `Err(StorageError)` if any RocksDB access or deserialization fails.
     fn get_subtree(&self, index: NodeIndex) -> Result<Option<Subtree>, StorageError> {
-        let cf = self.subtree_cf(index);
-        let key = Self::subtree_db_key(index);
+        let cf = self.subtree_cf(index)?;
+        let key = Self::subtree_db_key(index)?;
         match self.db.get_cf(cf, key).map_err(map_rocksdb_err)? {
             Some(bytes) => {
                 let subtree = Subtree::from_vec(index, &bytes)?;
@@ -680,9 +680,10 @@ impl SmtStorage for RocksDbStorage {
             .map(
                 |(bucket_index, bucket)| -> Result<Vec<(usize, Option<Subtree>)>, StorageError> {
                     let depth = SUBTREE_DEPTHS[bucket_index];
-                    let cf = self.cf_handle(cf_for_depth(depth))?;
-                    let keys: Vec<_> =
+                    let cf = self.cf_handle(cf_for_depth(depth)?)?;
+                    let keys: Result<Vec<_>, _> =
                         bucket.iter().map(|(_, idx)| Self::subtree_db_key(*idx)).collect();
+                    let keys = keys?;
 
                     let db_results = self.db.multi_get_cf(keys.iter().map(|k| (cf, k.as_ref())));
 
@@ -726,10 +727,10 @@ impl SmtStorage for RocksDbStorage {
     /// - Returns `StorageError` if column family lookup, serialization, or the write operation
     ///   fails.
     fn set_subtree(&mut self, subtree: &Subtree) -> Result<(), StorageError> {
-        let subtrees_cf = self.subtree_cf(subtree.root_index());
+        let subtrees_cf = self.subtree_cf(subtree.root_index())?;
         let mut batch = WriteBatch::default();
 
-        let key = Self::subtree_db_key(subtree.root_index());
+        let key = Self::subtree_db_key(subtree.root_index())?;
         let value = subtree.to_vec();
         batch.put_cf(subtrees_cf, key, value);
 
@@ -768,8 +769,8 @@ impl SmtStorage for RocksDbStorage {
         let mut batch = WriteBatch::default();
 
         for subtree in subtrees {
-            let subtrees_cf = self.subtree_cf(subtree.root_index());
-            let key = Self::subtree_db_key(subtree.root_index());
+            let subtrees_cf = self.subtree_cf(subtree.root_index())?;
+            let key = Self::subtree_db_key(subtree.root_index())?;
             let value = subtree.to_vec();
             batch.put_cf(subtrees_cf, key, value);
 
@@ -791,10 +792,10 @@ impl SmtStorage for RocksDbStorage {
     /// - `StorageError::Backend`: If the subtrees column family is missing or a RocksDB error
     ///   occurs.
     fn remove_subtree(&mut self, index: NodeIndex) -> Result<(), StorageError> {
-        let subtrees_cf = self.subtree_cf(index);
+        let subtrees_cf = self.subtree_cf(index)?;
         let mut batch = WriteBatch::default();
 
-        let key = Self::subtree_db_key(index);
+        let key = Self::subtree_db_key(index)?;
         batch.delete_cf(subtrees_cf, key);
 
         // Also remove level 24 hash cache if this is a level 24 subtree
@@ -958,8 +959,8 @@ impl SmtStorage for RocksDbStorage {
                     },
                 };
 
-                let key = Self::subtree_db_key(index);
-                let subtrees_cf = self.subtree_cf(index);
+                let key = Self::subtree_db_key(index)?;
+                let subtrees_cf = self.subtree_cf(index)?;
 
                 Ok((subtrees_cf, key, maybe_bytes, depth24_op))
             })
@@ -1586,13 +1587,13 @@ fn subtree_root_from_key_bytes(key_bytes: &[u8], depth: u8) -> Result<NodeIndex,
 
 /// Helper that maps an SMT depth to its column family.
 #[inline(always)]
-fn cf_for_depth(depth: u8) -> &'static str {
+fn cf_for_depth(depth: u8) -> Result<&'static str, StorageError> {
     match depth {
-        24 => SUBTREE_24_CF,
-        32 => SUBTREE_32_CF,
-        40 => SUBTREE_40_CF,
-        48 => SUBTREE_48_CF,
-        56 => SUBTREE_56_CF,
-        _ => panic!("unsupported subtree depth: {depth}"),
+        24 => Ok(SUBTREE_24_CF),
+        32 => Ok(SUBTREE_32_CF),
+        40 => Ok(SUBTREE_40_CF),
+        48 => Ok(SUBTREE_48_CF),
+        56 => Ok(SUBTREE_56_CF),
+        _ => Err(StorageError::Unsupported(format!("unsupported subtree depth {depth}"))),
     }
 }
