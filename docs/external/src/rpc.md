@@ -95,6 +95,11 @@ Returns the current lifecycle status of a network note. The status indicates whe
 
 This endpoint is only available when the network transaction builder is enabled and connected. If it is not configured, the endpoint returns `UNAVAILABLE`.
 
+For network notes that perform FPI into another account, `last_error` is the first place to check when the foreign
+account cannot be loaded. A missing, private, or not-yet-visible foreign account causes execution to fail in the network
+transaction builder. The note remains pending while retries are available, and the same failure is returned in
+`last_error` until a later attempt succeeds or the note is discarded.
+
 #### Request
 
 ```protobuf

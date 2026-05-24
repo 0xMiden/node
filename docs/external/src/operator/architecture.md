@@ -75,6 +75,24 @@ The builder also exposes an internal gRPC server that the RPC component uses to 
 `GetNetworkNoteStatus`. In bundled mode this is wired automatically; in distributed mode operators must set
 `--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`) on the RPC component.
 
+### Foreign account calls from network notes
+
+Network-account notes may use Foreign Procedure Invocation (FPI) to call procedures from another public account while
+the network transaction builder executes the note. When execution requests a foreign account, the builder asks the store
+for that account at the same reference block used for the network transaction, loads the foreign account code into the
+transaction executor, and passes the resulting transaction inputs to the validator. The validator then reloads the same
+foreign account code from the transaction inputs while re-executing the proven transaction.
+
+Application developers do not import the foreign account directly when submitting a network note. Instead, they must
+ensure that the FPI target is a public account whose code and header are available from the store at execution time. This
+is the supported path for registry or AMM-style flows where a network account validates code or state commitments from
+another public account.
+
+If the foreign account is private, missing, not yet visible at the reference block, or otherwise unavailable from the
+store, network note execution fails and is retried according to the builder's retry policy. The latest failure is exposed
+through `GetNetworkNoteStatus.last_error`, and the note is eventually discarded once the configured attempt limit is
+reached.
+
 ## Validator
 
 The validator is responsible for verifying the integrity of the blockchain by signing new blocks before they can be committed.

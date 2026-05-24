@@ -608,7 +608,8 @@ impl DataStore for NtxDataStore {
         async move {
             debug_assert_eq!(ref_block, self.reference_block.block_num());
 
-            // Get foreign account inputs from store, retrying on transient gRPC failures.
+            // Network-note FPI resolves public foreign accounts from the store at the transaction's
+            // reference block. The account code is loaded below so the executor can call it.
             let account_inputs =
                 (|| async { self.store.get_account_inputs(foreign_account_id, ref_block).await })
                     .retry(self.store_backoff())

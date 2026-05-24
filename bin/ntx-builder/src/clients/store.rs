@@ -163,7 +163,7 @@ impl StoreClient {
         account_id: AccountId,
         block_num: BlockNumber,
     ) -> Result<AccountInputs, StoreError> {
-        // Construct proto request.
+        // Request the public foreign account data needed for FPI at the execution reference block.
         let proto_request = proto::rpc::AccountRequest {
             account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
             block_num: Some(block_num.into()),
