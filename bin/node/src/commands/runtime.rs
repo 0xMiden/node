@@ -15,7 +15,7 @@ use super::store::StoreOptions;
 #[derive(clap::Args, Clone, Debug)]
 pub struct RuntimeOptions {
     /// Directory containing the node's local data storage.
-    #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR", display_order = 1)]
+    #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     pub data_directory: PathBuf,
 
     /// Enables the exporting of traces for OpenTelemetry.
@@ -26,8 +26,7 @@ pub struct RuntimeOptions {
         long = "enable-otel",
         default_value_t = false,
         env = "MIDEN_NODE_ENABLE_OTEL",
-        value_name = "BOOL",
-        display_order = 2
+        value_name = "BOOL"
     )]
     pub enable_otel: bool,
 

@@ -30,8 +30,7 @@ pub struct StoreSqliteOptions {
         env = "MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE",
         default_value_t = miden_node_store::default_sqlite_connection_pool_size(),
         value_name = "NUM",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 40
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub connection_pool_size: NonZeroUsize,
 }
@@ -87,8 +86,7 @@ pub struct AccountTreeStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_MAX_OPEN_FDS",
         default_value_t = default_rocksdb_max_open_fds(),
         value_name = "NUM",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 41
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub max_open_fds: i32,
 
@@ -99,8 +97,7 @@ pub struct AccountTreeStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_CACHE_SIZE",
         default_value_t = default_rocksdb_cache_size(),
         value_name = "BYTES",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 42
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub cache_size_in_bytes: usize,
 
@@ -111,8 +108,7 @@ pub struct AccountTreeStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_DURABILITY_MODE",
         value_enum,
         value_name = "MODE",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 43
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
@@ -126,8 +122,7 @@ pub struct NullifierTreeStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_MAX_OPEN_FDS",
         default_value_t = default_rocksdb_max_open_fds(),
         value_name = "NUM",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 44
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub max_open_fds: i32,
 
@@ -138,8 +133,7 @@ pub struct NullifierTreeStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_CACHE_SIZE",
         default_value_t = default_rocksdb_cache_size(),
         value_name = "BYTES",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 45
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub cache_size_in_bytes: usize,
 
@@ -150,8 +144,7 @@ pub struct NullifierTreeStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_DURABILITY_MODE",
         value_enum,
         value_name = "MODE",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 46
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
@@ -165,8 +158,7 @@ pub struct AccountStateForestStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_MAX_OPEN_FDS",
         default_value_t = default_rocksdb_max_open_fds(),
         value_name = "NUM",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 47
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub max_open_fds: i32,
 
@@ -177,8 +169,7 @@ pub struct AccountStateForestStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_CACHE_SIZE",
         default_value_t = default_rocksdb_cache_size(),
         value_name = "BYTES",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 48
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub cache_size_in_bytes: usize,
 
@@ -189,8 +180,7 @@ pub struct AccountStateForestStoreRocksDbOptions {
         env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_DURABILITY_MODE",
         value_enum,
         value_name = "MODE",
-        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING,
-        display_order = 49
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
     )]
     pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }

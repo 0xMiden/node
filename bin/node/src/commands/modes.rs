@@ -50,21 +50,11 @@ impl SequencerCommand {
 #[derive(clap::Args, Clone, Debug)]
 pub struct SequencerExternalServiceOptions {
     /// The validator service gRPC URL.
-    #[arg(
-        long = "validator.url",
-        env = "MIDEN_NODE_VALIDATOR_URL",
-        value_name = "URL",
-        display_order = 4
-    )]
+    #[arg(long = "validator.url", env = "MIDEN_NODE_VALIDATOR_URL", value_name = "URL")]
     pub validator_url: Url,
 
     /// The network transaction builder service gRPC URL.
-    #[arg(
-        long = "ntx-builder.url",
-        env = "MIDEN_NODE_NTX_BUILDER_URL",
-        value_name = "URL",
-        display_order = 5
-    )]
+    #[arg(long = "ntx-builder.url", env = "MIDEN_NODE_NTX_BUILDER_URL", value_name = "URL")]
     pub ntx_builder_url: Url,
 }
 

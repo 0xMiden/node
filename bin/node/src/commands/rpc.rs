@@ -15,12 +15,7 @@ use url::Url;
 #[derive(clap::Args, Clone, Debug)]
 pub struct RpcOptions {
     /// Socket address at which to serve the public RPC API.
-    #[arg(
-        long = "rpc.listen",
-        env = "MIDEN_NODE_RPC_LISTEN",
-        value_name = "LISTEN",
-        display_order = 3
-    )]
+    #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "LISTEN")]
     pub listen: SocketAddr,
 
     #[command(flatten)]
@@ -51,8 +46,7 @@ pub struct RpcGrpcOptions {
         default_value = duration_to_human_readable_string(Duration::from_secs(10)),
         value_parser = humantime::parse_duration,
         value_name = "DURATION",
-        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING,
-        display_order = 10
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
     )]
     pub timeout: Duration,
 
@@ -63,8 +57,7 @@ pub struct RpcGrpcOptions {
         default_value = duration_to_human_readable_string(Duration::from_secs(30 * 60)),
         value_parser = humantime::parse_duration,
         value_name = "DURATION",
-        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING,
-        display_order = 11
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
     )]
     pub max_connection_age: Duration,
 }
@@ -83,8 +76,7 @@ pub struct RpcRateLimitOptions {
         env = "MIDEN_NODE_RPC_RATE_LIMIT_BURST_SIZE",
         default_value_t = NonZeroU32::new(128).unwrap(),
         value_name = "NUM",
-        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING,
-        display_order = 20
+        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING
     )]
     pub burst_size: NonZeroU32,
 
@@ -94,8 +86,7 @@ pub struct RpcRateLimitOptions {
         env = "MIDEN_NODE_RPC_RATE_LIMIT_REPLENISH_PER_SECOND",
         default_value_t = NonZeroU64::new(16).unwrap(),
         value_name = "NUM",
-        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING,
-        display_order = 21
+        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING
     )]
     pub replenish_per_second: NonZeroU64,
 
@@ -105,8 +96,7 @@ pub struct RpcRateLimitOptions {
         env = "MIDEN_NODE_RPC_RATE_LIMIT_MAX_CONCURRENT_CONNECTIONS",
         default_value_t = 1_000,
         value_name = "NUM",
-        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING,
-        display_order = 22
+        help_heading = super::section::RPC_RATE_LIMITING_HELP_HEADING
     )]
     pub max_concurrent_connections: u64,
 }
@@ -119,8 +109,7 @@ pub struct SyncOptions {
     #[arg(
         long = "sync.block-source.url",
         env = "MIDEN_NODE_SYNC_BLOCK_SOURCE_URL",
-        value_name = "URL",
-        display_order = 5
+        value_name = "URL"
     )]
     pub block_source_url: Url,
 }

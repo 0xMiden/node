@@ -114,8 +114,7 @@ pub struct BatchOptions {
         default_value = duration_to_human_readable_string(DEFAULT_BATCH_INTERVAL),
         value_parser = humantime::parse_duration,
         value_name = "DURATION",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 30
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub interval: Duration,
 
@@ -126,8 +125,7 @@ pub struct BatchOptions {
         env = "MIDEN_NODE_BATCH_MAX_TXS",
         value_name = "NUM",
         default_value_t = DEFAULT_MAX_TXS_PER_BATCH,
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 31
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub max_txs: usize,
 
@@ -137,8 +135,7 @@ pub struct BatchOptions {
         long = "batch-prover.url",
         env = "MIDEN_NODE_BATCH_PROVER_URL",
         value_name = "URL",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 32
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub prover_url: Option<Url>,
 }
@@ -153,8 +150,7 @@ pub struct BlockOptions {
         default_value = duration_to_human_readable_string(DEFAULT_BLOCK_INTERVAL),
         value_parser = humantime::parse_duration,
         value_name = "DURATION",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 33
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub interval: Duration,
 
@@ -165,8 +161,7 @@ pub struct BlockOptions {
         env = "MIDEN_NODE_BLOCK_MAX_BATCHES",
         value_name = "NUM",
         default_value_t = DEFAULT_MAX_BATCHES_PER_BLOCK,
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 34
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub max_batches: usize,
 
@@ -177,8 +172,7 @@ pub struct BlockOptions {
         env = "MIDEN_NODE_BLOCK_MAX_CONCURRENT_PROOFS",
         default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
         value_name = "NUM",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 35
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub max_concurrent_proofs: NonZeroUsize,
 }
@@ -191,8 +185,7 @@ pub struct BlockProverOptions {
         long = "block-prover.url",
         env = "MIDEN_NODE_BLOCK_PROVER_URL",
         value_name = "URL",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 36
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub url: Option<Url>,
 }
@@ -206,8 +199,7 @@ pub struct MempoolOptions {
         default_value_t = miden_node_block_producer::DEFAULT_MEMPOOL_TX_CAPACITY,
         env = "MIDEN_NODE_MEMPOOL_TX_CAPACITY",
         value_name = "NUM",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING,
-        display_order = 37
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub tx_capacity: NonZeroUsize,
 }
