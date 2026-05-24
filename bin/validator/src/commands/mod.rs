@@ -34,15 +34,18 @@ pub enum ValidatorCommand {
     /// and writes the signed block and account secret files to disk. Also initializes the
     /// validator's database with the genesis block as the chain tip.
     Bootstrap {
-        /// Directory in which to write the genesis block file.
-        #[arg(long, value_name = "DIR")]
+        /// Output directory for the generated genesis block file.
+        #[arg(long, value_name = "OUTPUT_DIR")]
         genesis_block_directory: PathBuf,
-        /// Directory to write the account secret files (.mac) to.
-        #[arg(long, value_name = "DIR")]
+
+        /// Output directory for the generated account secret files (.mac).
+        #[arg(long, value_name = "OUTPUT_DIR")]
         accounts_directory: PathBuf,
-        /// Directory in which to store the validator's database.
-        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+
+        /// Output directory for the validator database created during bootstrap.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "OUTPUT_DIR")]
         data_directory: PathBuf,
+
         /// Maximum number of SQLite connections in the validator database connection pool.
         #[arg(
             long = "sqlite.connection_pool_size",
@@ -51,9 +54,11 @@ pub enum ValidatorCommand {
             value_name = "NUM"
         )]
         sqlite_connection_pool_size: NonZeroUsize,
-        /// Use the given configuration file to construct the genesis state from.
-        #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "GENESIS_CONFIG")]
+
+        /// Input configuration file used to construct the genesis state.
+        #[arg(long, env = ENV_GENESIS_CONFIG_FILE, value_name = "INPUT_FILE")]
         genesis_config_file: Option<PathBuf>,
+
         /// Configuration for the Validator key used to sign the genesis block.
         #[command(flatten)]
         validator_key: ValidatorKey,
