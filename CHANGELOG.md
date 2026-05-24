@@ -34,6 +34,7 @@
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
 - Implemented filtering based on the network account note script root allowlist in ntx-builder ([#2042](https://github.com/0xMiden/node/issues/2042)).
+- Validated sync endpoint block ranges against the committed chain tip before querying state ([#1866](https://github.com/0xMiden/node/issues/1866)).
 
 - [BREAKING] Renamed `ExplorerStatusDetails` fields in the network monitor's `/status` payload from `number_of_*` to `total_*` (`total_transactions`, `total_nullifiers`, `total_notes`, `total_account_updates`). The values now represent network-wide cumulative totals from the explorer's `overviewStats` query instead of last-block counts.
 - [BREAKING] Removed `--wallet-filepath` / `--counter-filepath` flags and the `MIDEN_MONITOR_WALLET_FILEPATH` / `MIDEN_MONITOR_COUNTER_FILEPATH` env vars from the network monitor. The monitor now keeps wallet and counter accounts fully in memory and regenerates them on every startup; the dashboard's counter value resets to zero on restart.

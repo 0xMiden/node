@@ -359,6 +359,11 @@ pub enum SyncNullifiersError {
     DatabaseError(#[from] DatabaseError),
     #[error("invalid block range")]
     InvalidBlockRange(#[from] InvalidBlockRange),
+    #[error("block_to ({block_to}) is greater than chain tip ({chain_tip})")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_to: BlockNumber,
+    },
     #[error("unsupported prefix length: {0} (only 16-bit prefixes are supported)")]
     InvalidPrefixLength(u32),
     #[error("malformed nullifier prefix")]
@@ -375,6 +380,11 @@ pub enum SyncAccountVaultError {
     DatabaseError(#[from] DatabaseError),
     #[error("invalid block range")]
     InvalidBlockRange(#[from] InvalidBlockRange),
+    #[error("block_to ({block_to}) is greater than chain tip ({chain_tip})")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_to: BlockNumber,
+    },
     #[error("malformed account ID")]
     DeserializationFailed(#[from] ConversionError),
     #[error("account {0} is not public")]
@@ -391,6 +401,11 @@ pub enum SyncAccountStorageMapsError {
     DatabaseError(#[from] DatabaseError),
     #[error("invalid block range")]
     InvalidBlockRange(#[from] InvalidBlockRange),
+    #[error("block_to ({block_to}) is greater than chain tip ({chain_tip})")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_to: BlockNumber,
+    },
     #[error("malformed account ID")]
     DeserializationFailed(#[from] ConversionError),
     #[error("account {0} not found")]
@@ -485,6 +500,11 @@ pub enum SyncTransactionsError {
     DatabaseError(#[from] DatabaseError),
     #[error("invalid block range")]
     InvalidBlockRange(#[from] InvalidBlockRange),
+    #[error("block_to ({block_to}) is greater than chain tip ({chain_tip})")]
+    FutureBlock {
+        chain_tip: BlockNumber,
+        block_to: BlockNumber,
+    },
     #[error("malformed account ID")]
     DeserializationFailed(#[from] ConversionError),
     #[error("account {0} not found")]
