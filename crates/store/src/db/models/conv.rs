@@ -33,11 +33,30 @@
 )]
 
 use miden_crypto::Word;
-use miden_crypto::utils::Deserializable;
+use miden_crypto::utils::{Deserializable, Serializable};
 use miden_protocol::Felt;
-use miden_protocol::account::{StorageSlotName, StorageSlotType};
+use miden_protocol::account::{
+    AccountCode,
+    AccountId,
+    AccountStorageHeader,
+    StorageMapKey,
+    StorageSlotName,
+    StorageSlotType,
+};
+use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::NoteTag;
+use miden_protocol::crypto::merkle::SparseMerklePath;
+use miden_protocol::note::{
+    NoteAssets,
+    NoteAttachments,
+    NoteId,
+    NoteMetadata,
+    NoteScript,
+    NoteStorage,
+    NoteTag,
+    Nullifier,
+};
+use miden_protocol::transaction::TransactionId;
 
 use crate::db::models::queries::{BlockHeaderCommitment, NetworkAccountType};
 
@@ -91,9 +110,46 @@ impl SqlTypeConvert for BlockHeader {
     }
 
     fn to_raw_sql(self) -> Self::Raw {
-        miden_crypto::utils::Serializable::to_bytes(&self)
+        Serializable::to_bytes(&self)
     }
 }
+
+macro_rules! impl_binary_sql_convert {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl SqlTypeConvert for $ty {
+                type Raw = Vec<u8>;
+
+                fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
+                    <Self as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)
+                }
+
+                fn to_raw_sql(self) -> Self::Raw {
+                    Serializable::to_bytes(&self)
+                }
+            }
+        )+
+    };
+}
+
+impl_binary_sql_convert!(
+    AccountCode,
+    AccountId,
+    AccountStorageHeader,
+    Asset,
+    FungibleAsset,
+    NoteAssets,
+    NoteAttachments,
+    NoteId,
+    NoteMetadata,
+    NoteScript,
+    NoteStorage,
+    Nullifier,
+    SparseMerklePath,
+    StorageMapKey,
+    TransactionId,
+    Word,
+);
 
 impl SqlTypeConvert for NetworkAccountType {
     type Raw = i32;
@@ -233,4 +289,46 @@ pub(crate) fn raw_sql_to_idx(raw: i32) -> usize {
 #[inline(always)]
 pub(crate) fn idx_to_raw_sql(idx: usize) -> i32 {
     idx as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Debug;
+
+    use miden_protocol::account::AccountStorageHeader;
+    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PRIVATE_SENDER,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    };
+
+    use super::*;
+
+    fn assert_sql_roundtrip<T>(value: T)
+    where
+        T: SqlTypeConvert<Raw = Vec<u8>> + Clone + Debug + PartialEq,
+    {
+        let raw = value.clone().to_raw_sql();
+        let restored = T::from_raw_sql(raw).expect("database conversion should roundtrip");
+        assert_eq!(restored, value);
+    }
+
+    #[test]
+    fn binary_sql_conversions_roundtrip_core_types() {
+        let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+        let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+
+        assert_sql_roundtrip(Word::from([1, 2, 3, 4]));
+        assert_sql_roundtrip(account_id);
+        assert_sql_roundtrip(AccountStorageHeader::new(Vec::new()).unwrap());
+        assert_sql_roundtrip(StorageMapKey::from_index(7));
+        assert_sql_roundtrip(NoteId::new(Word::from([1, 0, 0, 0]), Word::from([2, 0, 0, 0])));
+        assert_sql_roundtrip(Asset::from(FungibleAsset::new(faucet_id, 100).unwrap()));
+    }
+
+    #[test]
+    fn binary_sql_conversion_rejects_malformed_bytes() {
+        let err = AccountId::from_raw_sql(vec![1, 2, 3]).expect_err("invalid account id bytes");
+        assert!(err.to_string().contains("failed to convert from database type"));
+    }
 }
