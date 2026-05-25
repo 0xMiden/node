@@ -32,7 +32,7 @@ jobs:
         with:
           push: false
           file: ./Dockerfile
-          platforms: linux/arm64
+          platforms: linux/amd64
           profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
           build-args: |
             BIN=${{ matrix.bin }}
