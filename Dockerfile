@@ -29,17 +29,17 @@ ARG BIN
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies while preserving Cargo artifacts across layer invalidations.
 #
-# cargo-chef only preserves cache if no deps or features change, so this extra
-# caching helps in those cases by preserving unchanged dep compilations.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
+# Cache Cargo's git DB, but leave checkout worktrees ephemeral; shared checkout
+# caches are fragile when concurrent CI builds race or a build is interrupted.
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git/db \
+    --mount=type=cache,sharing=locked,target=/app/target \
     cargo chef cook --release --recipe-path recipe.json
 # Build application
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/usr/local/cargo/git/db \
+    --mount=type=cache,sharing=locked,target=/app/target \
     cargo build --release --locked --bin ${BIN} && \
     mkdir -p /app/bin && \
     cp /app/target/release/${BIN} /app/bin/${BIN}
