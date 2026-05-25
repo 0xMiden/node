@@ -1,3 +1,4 @@
+mod allowlist;
 pub mod candidate;
 mod execute;
 
@@ -5,6 +6,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use allowlist::{NoteScriptNotAllowlisted, partition_by_allowlist};
 use anyhow::Context;
 use candidate::TransactionCandidate;
 use futures::FutureExt;
@@ -344,7 +346,27 @@ impl AccountActor {
             return Ok(None);
         };
 
-        let notes: Vec<_> = notes.into_iter().take(max_notes).collect();
+        let partitioned_notes = partition_by_allowlist(&account, notes)
+            .context("failed to read network account note allowlist")?;
+
+        if !partitioned_notes.rejected.is_empty() {
+            let failed_notes = partitioned_notes
+                .rejected
+                .into_iter()
+                .map(|(nullifier, script_root)| {
+                    let error: NoteError = Arc::new(NoteScriptNotAllowlisted::new(script_root));
+                    (nullifier, error)
+                })
+                .collect::<Vec<_>>();
+            tracing::info!(
+                %account_id,
+                rejected_count = failed_notes.len(),
+                "dropping network notes whose script roots are not allowlisted",
+            );
+            self.mark_notes_failed(&failed_notes, block_num).await;
+        }
+
+        let notes: Vec<_> = partitioned_notes.allowed.into_iter().take(max_notes).collect();
         if notes.is_empty() {
             return Ok(None);
         }
@@ -553,4 +575,172 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
             (f.note().nullifier(), error)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    use miden_standards::account::auth::AuthNetworkAccount;
+    use tokio::sync::{Notify, mpsc};
+
+    use super::*;
+    use crate::test_utils::{
+        mock_account_with_auth_component,
+        mock_network_account_id,
+        mock_single_target_note,
+        mock_single_target_note_with_code,
+    };
+
+    const OTHER_NOTE_SCRIPT: &str = "\
+@note_script
+pub proc main
+    push.1 drop
+end";
+
+    async fn ack_actor_requests(mut rx: mpsc::Receiver<ActorRequest>, db: Db) {
+        while let Some(request) = rx.recv().await {
+            match request {
+                ActorRequest::NotesFailed { failed_notes, block_num, ack_tx } => {
+                    db.notes_failed(failed_notes, block_num)
+                        .await
+                        .expect("test DB write should succeed");
+                    let _ = ack_tx.send(());
+                },
+                ActorRequest::CacheNoteScript { .. } => {},
+            }
+        }
+    }
+
+    fn actor_with_request_handler(
+        db: &Db,
+        account_id: NetworkAccountId,
+    ) -> (AccountActor, AccountActorContext) {
+        let (request_tx, request_rx) = mpsc::channel(8);
+        let mut context = AccountActorContext::test(db);
+        context.request_tx = request_tx;
+        tokio::spawn(ack_actor_requests(request_rx, db.clone()));
+
+        let actor = AccountActor::new(account_id, &context, Arc::new(Notify::new()));
+
+        (actor, context)
+    }
+
+    #[tokio::test]
+    async fn select_candidate_keeps_allowlisted_notes() {
+        let (db, _dir) = Db::test_setup().await;
+        let account_id = mock_network_account_id();
+        let note = mock_single_target_note(account_id, 10);
+        let account = mock_account_with_auth_component(
+            AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([note
+                .as_note()
+                .script()
+                .root()]))
+            .expect("non-empty allowlist should construct"),
+        );
+
+        db.sync_account_from_store(account_id, account, vec![note.clone()])
+            .await
+            .expect("fixtures should sync");
+
+        let (actor, context) = actor_with_request_handler(&db, account_id);
+        let chain_state = context.state.chain.get_cloned();
+
+        let candidate = actor
+            .select_candidate_from_db(account_id, chain_state)
+            .await
+            .expect("selection should succeed")
+            .expect("allowed note should produce a candidate");
+
+        assert_eq!(candidate.notes.len(), 1);
+        assert_eq!(candidate.notes[0].as_note().nullifier(), note.as_note().nullifier());
+    }
+
+    #[tokio::test]
+    async fn select_candidate_marks_non_allowlisted_notes_failed() {
+        let (db, _dir) = Db::test_setup().await;
+        let account_id = mock_network_account_id();
+        let allowed_note = mock_single_target_note(account_id, 10);
+        let rejected_note =
+            mock_single_target_note_with_code(account_id, 20, Some(OTHER_NOTE_SCRIPT));
+        let account = mock_account_with_auth_component(
+            AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([allowed_note
+                .as_note()
+                .script()
+                .root()]))
+            .expect("non-empty allowlist should construct"),
+        );
+
+        db.sync_account_from_store(account_id, account, vec![rejected_note.clone()])
+            .await
+            .expect("fixtures should sync");
+
+        let (actor, context) = actor_with_request_handler(&db, account_id);
+        let chain_state = context.state.chain.get_cloned();
+
+        let candidate = actor
+            .select_candidate_from_db(account_id, chain_state)
+            .await
+            .expect("selection should succeed");
+
+        assert!(candidate.is_none());
+
+        let status = db
+            .get_note_status(rejected_note.as_note().id())
+            .await
+            .expect("status query should succeed")
+            .expect("note should exist");
+        assert_eq!(status.attempt_count, 1);
+        assert!(
+            status
+                .last_error
+                .as_deref()
+                .expect("rejected note should store an error")
+                .contains("not allowlisted")
+        );
+    }
+
+    #[tokio::test]
+    async fn select_candidate_executes_allowed_notes_and_marks_rejected_notes_failed() {
+        let (db, _dir) = Db::test_setup().await;
+        let account_id = mock_network_account_id();
+        let allowed_note = mock_single_target_note(account_id, 10);
+        let rejected_note =
+            mock_single_target_note_with_code(account_id, 20, Some(OTHER_NOTE_SCRIPT));
+        let account = mock_account_with_auth_component(
+            AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([allowed_note
+                .as_note()
+                .script()
+                .root()]))
+            .expect("non-empty allowlist should construct"),
+        );
+
+        db.sync_account_from_store(
+            account_id,
+            account,
+            vec![allowed_note.clone(), rejected_note.clone()],
+        )
+        .await
+        .expect("fixtures should sync");
+
+        let (actor, context) = actor_with_request_handler(&db, account_id);
+        let chain_state = context.state.chain.get_cloned();
+
+        let candidate = actor
+            .select_candidate_from_db(account_id, chain_state)
+            .await
+            .expect("selection should succeed")
+            .expect("allowed note should remain");
+
+        assert_eq!(candidate.notes.len(), 1);
+        assert_eq!(candidate.notes[0].as_note().nullifier(), allowed_note.as_note().nullifier());
+
+        let rejected_status = db
+            .get_note_status(rejected_note.as_note().id())
+            .await
+            .expect("status query should succeed")
+            .expect("rejected note should exist");
+        assert_eq!(rejected_status.attempt_count, 1);
+    }
 }

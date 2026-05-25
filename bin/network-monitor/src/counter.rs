@@ -3,7 +3,6 @@
 //! This module contains the implementation for periodically incrementing the counter
 //! of the network account deployed at startup by creating and submitting network notes.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -13,7 +12,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountCode, AccountFile, AccountHeader, AccountId};
+use miden_protocol::account::{Account, AccountCode, AccountHeader, AccountId};
 use miden_protocol::asset::AssetVault;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -38,12 +37,16 @@ use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tracing::{error, info, instrument, warn};
 
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
-use crate::deploy::{MonitorDataStore, create_genesis_aware_rpc_client};
+use crate::deploy::{
+    MonitorDataStore,
+    create_and_deploy_accounts,
+    create_genesis_aware_rpc_client,
+};
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -62,6 +65,11 @@ const REGENERATE_FAILURE_THRESHOLD: usize = 10;
 
 /// Minimum time between account regeneration attempts.
 const REGENERATE_COOLDOWN: Duration = Duration::from_secs(3600);
+
+/// Number of consecutive polls observing the pending-increments gap above
+/// [`MonitorConfig::counter_pending_unhealthy_threshold`] before flipping the Network Transactions
+/// card to unhealthy. Buffers against a single in-flight batch of notes flapping the card.
+const PENDING_UNHEALTHY_CONFIRMATION_POLLS: u32 = 3;
 
 // SHARED STATE
 // ================================================================================================
@@ -134,17 +142,27 @@ pub struct IncrementService {
     details: IncrementDetails,
     expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
+    /// Publishes the current counter account to [`CounterTrackingService`]. A new value is sent
+    /// whenever the increment task regenerates accounts after persistent failures, so the tracker
+    /// can switch to the new account ID without polling disk.
+    counter_sender: watch::Sender<Account>,
 }
 
 impl IncrementService {
     pub async fn new(
         config: MonitorConfig,
+        wallet_account: Account,
+        secret_key: SecretKey,
+        counter_account: Account,
+        counter_sender: watch::Sender<Account>,
         expected_counter_value: Arc<AtomicU64>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let mut rpc_client =
             create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
-        let (tx, details) = setup_increment_task(config.clone(), &mut rpc_client).await?;
+        let (tx, details) =
+            setup_increment_task(wallet_account, secret_key, counter_account, &mut rpc_client)
+                .await?;
         Ok(Self {
             config,
             rpc_client,
@@ -153,6 +171,7 @@ impl IncrementService {
             details,
             expected_counter_value,
             latency_state,
+            counter_sender,
         })
     }
 
@@ -205,6 +224,10 @@ impl IncrementService {
     }
 
     /// Regenerate accounts from scratch when re-sync is ineffective.
+    ///
+    /// Builds a fresh wallet/counter pair in memory, deploys the counter to the network, swaps
+    /// the local [`TxBuilder`] state, and publishes the new counter on [`Self::counter_sender`]
+    /// so the tracker switches over without polling disk.
     #[instrument(
         parent = None,
         target = COMPONENT,
@@ -214,17 +237,24 @@ impl IncrementService {
         err,
     )]
     async fn try_regenerate_accounts(&mut self) -> Result<()> {
-        crate::deploy::force_recreate_accounts(
-            &self.config.wallet_filepath,
-            &self.config.counter_filepath,
-            &self.config.rpc_url,
-        )
-        .await
-        .context("failed to regenerate accounts")?;
+        let (wallet_account, secret_key, counter_account) =
+            create_and_deploy_accounts(&self.config.rpc_url)
+                .await
+                .context("failed to regenerate accounts")?;
 
-        let (tx, details) = setup_increment_task(self.config.clone(), &mut self.rpc_client).await?;
+        let (tx, details) = setup_increment_task(
+            wallet_account,
+            secret_key,
+            counter_account.clone(),
+            &mut self.rpc_client,
+        )
+        .await?;
         self.tx = tx;
         self.details = details;
+
+        self.counter_sender
+            .send(counter_account)
+            .context("counter tracker dropped before regeneration completed")?;
 
         info!("account regeneration completed, increment task re-initialized");
         Ok(())
@@ -372,21 +402,26 @@ pub struct CounterTrackingService {
     config: MonitorConfig,
     rpc_client: RpcClient,
     counter_account: Account,
+    /// Observes regenerations of the counter account from [`IncrementService`].
+    counter_receiver: watch::Receiver<Account>,
     details: CounterTrackingDetails,
     expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
+    /// Consecutive polls that observed `pending_increments > counter_pending_unhealthy_threshold`.
+    /// Used to confirm a real backlog before flipping the card to unhealthy.
+    over_threshold_streak: u32,
 }
 
 impl CounterTrackingService {
     pub async fn new(
         config: MonitorConfig,
+        counter_receiver: watch::Receiver<Account>,
         expected_counter_value: Arc<AtomicU64>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let mut rpc_client =
             create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
-        let counter_account = load_counter_account(&config.counter_filepath)
-            .context("Failed to load counter account")?;
+        let counter_account = counter_receiver.borrow().clone();
 
         let mut details = CounterTrackingDetails::default();
         initialize_tracking_state(
@@ -401,24 +436,21 @@ impl CounterTrackingService {
             config,
             rpc_client,
             counter_account,
+            counter_receiver,
             details,
             expected_counter_value,
             latency_state,
+            over_threshold_streak: 0,
         })
     }
 
-    /// The increment service regenerates accounts on persistent failure and rewrites the counter
-    /// account file. If the file's account ID has changed, switch to the new account and reset
+    /// If [`IncrementService`] regenerated accounts and published a new counter, adopt it and reset
     /// tracking state.
     async fn reload_counter_account_if_changed(&mut self) {
-        let reloaded = match load_counter_account(&self.config.counter_filepath) {
-            Ok(account) => account,
-            Err(e) => {
-                warn!(err = ?e, "failed to reload counter account file");
-                return;
-            },
-        };
-
+        if !self.counter_receiver.has_changed().unwrap_or(false) {
+            return;
+        }
+        let reloaded = self.counter_receiver.borrow_and_update().clone();
         if reloaded.id() == self.counter_account.id() {
             return;
         }
@@ -426,10 +458,11 @@ impl CounterTrackingService {
         info!(
             old.id = %self.counter_account.id(),
             new.id = %reloaded.id(),
-            "counter account file changed, resetting tracking state",
+            "counter account changed, resetting tracking state",
         );
         self.counter_account = reloaded;
         self.details = CounterTrackingDetails::default();
+        self.over_threshold_streak = 0;
         initialize_tracking_state(
             &mut self.rpc_client,
             &self.counter_account,
@@ -535,37 +568,47 @@ impl Service for CounterTrackingService {
     async fn check(&mut self) -> ServiceStatus {
         self.reload_counter_account_if_changed().await;
         let last_error = self.poll_counter_once().await;
-        build_tracking_status(&self.details, last_error)
+        self.update_over_threshold_streak();
+        build_tracking_status(
+            &self.details,
+            last_error,
+            self.over_threshold_streak,
+            self.config.counter_pending_unhealthy_threshold,
+        )
+    }
+}
+
+impl CounterTrackingService {
+    /// Update the over-threshold streak using the most recent pending-increments observation.
+    ///
+    /// - A fresh observation strictly above the threshold extends the streak.
+    /// - A fresh observation at or below the threshold resets it.
+    /// - No fresh observation (RPC error, counter not yet observed) leaves the streak unchanged
+    ///   so a single missing tick doesn't paper over a real backlog.
+    fn update_over_threshold_streak(&mut self) {
+        let Some(pending) = self.details.pending_increments else {
+            return;
+        };
+        if pending > self.config.counter_pending_unhealthy_threshold {
+            self.over_threshold_streak = self.over_threshold_streak.saturating_add(1);
+        } else {
+            self.over_threshold_streak = 0;
+        }
     }
 }
 
 // SETUP
 // ================================================================================================
 
-/// Load wallet + counter accounts, fetch the genesis block header, and build the data store and
-/// increment script needed to produce network notes.
+/// Fetch the genesis block header and build the data store + increment script needed to produce
+/// network notes from a freshly-created wallet/counter pair. The accounts are passed in already
+/// constructed by [`create_and_deploy_accounts`]; there is no file I/O.
 async fn setup_increment_task(
-    config: MonitorConfig,
+    wallet_account: Account,
+    secret_key: SecretKey,
+    counter_account: Account,
     rpc_client: &mut RpcClient,
 ) -> Result<(TxBuilder, IncrementDetails)> {
-    let wallet_account_file =
-        AccountFile::read(config.wallet_filepath).context("Failed to read wallet account file")?;
-    let wallet_account = fetch_wallet_account(rpc_client, wallet_account_file.account.id())
-        .await?
-        .unwrap_or(wallet_account_file.account.clone());
-
-    let AuthSecretKey::Falcon512Poseidon2(secret_key) = wallet_account_file
-        .auth_secret_keys
-        .first()
-        .expect("wallet account file should have one auth secret key")
-        .clone()
-    else {
-        anyhow::bail!("Failed to load wallet account, auth secret key not found")
-    };
-
-    let counter_account = load_counter_account(&config.counter_filepath)
-        .inspect_err(|e| error!("Failed to load counter account: {:?}", e))?;
-
     let block_header = get_genesis_block_header(rpc_client).await?;
 
     let increment_script = create_increment_script()?;
@@ -634,15 +677,36 @@ fn build_increment_status(details: &IncrementDetails, last_error: Option<String>
 }
 
 /// Build a `ServiceStatus` snapshot from the current tracking details and last error.
+///
+/// Health priority:
+/// 1. Explicit RPC errors from this poll flip the card to unhealthy immediately.
+/// 2. A sustained backlog (the pending-increments gap exceeded the configured threshold for at
+///    least [`PENDING_UNHEALTHY_CONFIRMATION_POLLS`] polls in a row) flips the card to
+///    unhealthy. A single in-flight batch of notes won't hit this; a network silently dropping
+///    notes will.
+/// 3. Otherwise healthy if we have observed a counter value, unknown if we haven't yet.
 fn build_tracking_status(
     details: &CounterTrackingDetails,
     last_error: Option<String>,
+    over_threshold_streak: u32,
+    threshold: u64,
 ) -> ServiceStatus {
     let service_details = ServiceDetails::NtxTracking(details.clone());
 
     if let Some(err) = last_error {
-        ServiceStatus::unhealthy("Network Transactions", err, service_details)
-    } else if details.current_value.is_some() {
+        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+    }
+
+    if over_threshold_streak >= PENDING_UNHEALTHY_CONFIRMATION_POLLS {
+        let pending = details.pending_increments.unwrap_or(0);
+        let err = format!(
+            "counter trailing expected by {pending} (> {threshold}) for {over_threshold_streak} \
+             consecutive polls",
+        );
+        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+    }
+
+    if details.current_value.is_some() {
         ServiceStatus::healthy("Network Transactions", service_details)
     } else {
         ServiceStatus::unknown("Network Transactions", service_details)
@@ -910,16 +974,8 @@ fn build_account_storage(
     AccountStorage::new(slots).context("failed to create account storage")
 }
 
-/// Load counter account from file.
-fn load_counter_account(file_path: &Path) -> Result<Account> {
-    let account_file =
-        AccountFile::read(file_path).context("Failed to read counter account file")?;
-
-    Ok(account_file.account.clone())
-}
-
 /// Create the increment procedure script.
-fn create_increment_script() -> Result<NoteScript> {
+pub(crate) fn create_increment_script() -> Result<NoteScript> {
     let script =
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/counter_program.masm"));
 
@@ -979,5 +1035,83 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
         Ok(store_status.chain_tip)
     } else {
         anyhow::bail!("RPC status response did not include a chain tip")
+    }
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use crate::counter::{PENDING_UNHEALTHY_CONFIRMATION_POLLS, build_tracking_status};
+    use crate::status::{CounterTrackingDetails, Status};
+
+    const THRESHOLD: u64 = 5;
+
+    fn details(current: u64, expected: u64) -> CounterTrackingDetails {
+        let pending = expected.saturating_sub(current);
+        CounterTrackingDetails {
+            current_value: Some(current),
+            expected_value: Some(expected),
+            last_updated: Some(1),
+            pending_increments: Some(pending),
+        }
+    }
+
+    #[test]
+    fn healthy_when_pending_under_threshold() {
+        // When pending sits at or below the threshold, `update_over_threshold_streak` keeps the
+        // streak at zero, so the card stays green regardless of how long we have been polling.
+        let status = build_tracking_status(&details(100, 102), None, 0, THRESHOLD);
+        assert_eq!(status.status, Status::Healthy);
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn healthy_while_streak_below_confirmation_window() {
+        // Pending is over threshold this tick (8 > 5) but the streak hasn't crossed the window yet,
+        // so we keep the card green until we've confirmed sustained backlog.
+        let streak = PENDING_UNHEALTHY_CONFIRMATION_POLLS - 1;
+        let status = build_tracking_status(&details(10, 18), None, streak, THRESHOLD);
+        assert_eq!(status.status, Status::Healthy);
+    }
+
+    #[test]
+    fn unhealthy_when_streak_reaches_window() {
+        let status = build_tracking_status(
+            &details(10, 20),
+            None,
+            PENDING_UNHEALTHY_CONFIRMATION_POLLS,
+            THRESHOLD,
+        );
+        assert_eq!(status.status, Status::Unhealthy);
+        let err = status.error.expect("error message should be set");
+        assert!(err.contains("10"), "should mention pending count, got: {err}");
+        assert!(err.contains('5'), "should mention threshold, got: {err}");
+    }
+
+    #[test]
+    fn rpc_error_wins_over_streak() {
+        let status = build_tracking_status(
+            &details(10, 20),
+            Some("fetch counter value failed".to_string()),
+            PENDING_UNHEALTHY_CONFIRMATION_POLLS,
+            THRESHOLD,
+        );
+        assert_eq!(status.status, Status::Unhealthy);
+        let err = status.error.expect("error message should be set");
+        assert!(err.contains("fetch counter value failed"));
+    }
+
+    #[test]
+    fn unknown_when_no_observation_yet() {
+        let blank = CounterTrackingDetails {
+            current_value: None,
+            expected_value: None,
+            last_updated: None,
+            pending_increments: None,
+        };
+        let status = build_tracking_status(&blank, None, 0, THRESHOLD);
+        assert_eq!(status.status, Status::Unknown);
     }
 }

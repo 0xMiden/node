@@ -191,14 +191,18 @@ pub struct CounterTrackingDetails {
 }
 
 /// Details of the explorer service.
+///
+/// The `total_*` counters are network-wide totals sourced from the explorer's `overviewStats`
+/// query, not per-block counts. `block_number`, `timestamp` and the commitments are still
+/// taken from the latest block so that tip-drift against the RPC can be detected.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExplorerStatusDetails {
     pub block_number: u64,
     pub timestamp: u64,
-    pub number_of_transactions: u64,
-    pub number_of_nullifiers: u64,
-    pub number_of_notes: u64,
-    pub number_of_account_updates: u64,
+    pub total_transactions: u64,
+    pub total_nullifiers: u64,
+    pub total_notes: u64,
+    pub total_account_updates: u64,
     pub block_commitment: String,
     pub chain_commitment: String,
     pub proof_commitment: String,
