@@ -69,7 +69,7 @@ miden-testing         = { branch = "next", git = "https://github.com/0xMiden/pro
 miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol" }
 miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/protocol" }
 
-# Other miden dependenciesss. These should align with those expected by miden-protocol.
+# Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto = { version = "0.23" }
 
 # External dependencies

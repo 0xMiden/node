@@ -25,7 +25,7 @@ pub enum Command {
     #[command(subcommand)]
     Store(commands::store::StoreCommand),
 
-    /// Commands related to the node's RPC component. testing.
+    /// Commands related to the node's RPC component.
     #[command(subcommand)]
     Rpc(commands::rpc::RpcCommand),
 
