@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 ARG BIN
 ARG PORT
 
@@ -25,11 +27,22 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 ARG BIN
 COPY --from=planner /app/recipe.json recipe.json
-# Build dependencies - this is the caching Docker layer!
-RUN cargo chef cook --release --recipe-path recipe.json
+# Build dependencies while preserving Cargo artifacts across layer invalidations.
+#
+# cargo-chef only preserves cache if no deps or features change, so this extra
+# caching helps in those cases by preserving unchanged dep compilations.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --recipe-path recipe.json
 # Build application
 COPY . .
-RUN cargo build --release --locked --bin ${BIN}
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked --bin ${BIN} && \
+    mkdir -p /app/bin && \
+    cp /app/target/release/${BIN} /app/bin/${BIN}
 
 # Base line runtime image with runtime dependencies installed.
 FROM debian:bookworm-slim AS runtime-base
@@ -41,7 +54,7 @@ RUN apt-get update && \
 FROM runtime-base AS runtime
 ARG BIN
 ARG PORT
-COPY --from=builder /app/target/release/${BIN} /usr/local/bin/${BIN}
+COPY --from=builder /app/bin/${BIN} /usr/local/bin/${BIN}
 LABEL org.opencontainers.image.authors=devops@miden.team \
     org.opencontainers.image.url=https://0xMiden.github.io/ \
     org.opencontainers.image.documentation=https://github.com/0xMiden/node \
