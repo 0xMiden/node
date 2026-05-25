@@ -430,7 +430,7 @@ impl Mempool {
     ///
     /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
-    pub(crate) fn commit_block(&mut self, block_header: BlockHeader) {
+    pub(crate) fn commit_block(&mut self, block_header: &BlockHeader) {
         assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
             .pending_block

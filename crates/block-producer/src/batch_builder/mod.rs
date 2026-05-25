@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -5,6 +6,7 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_store::state::State;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -19,9 +21,8 @@ use url::Url;
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::BuildBatchError;
+use crate::errors::{BuildBatchError, StoreError};
 use crate::mempool::SharedMempool;
-use crate::store::StoreClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
 
 // BATCH BUILDER
@@ -49,7 +50,7 @@ pub struct BatchBuilder {
     ///
     /// Note: this _must_ be sign positive and less than 1.0.
     failure_rate: f64,
-    store: StoreClient,
+    state: Arc<State>,
 }
 
 impl BatchBuilder {
@@ -58,7 +59,7 @@ impl BatchBuilder {
     ///
     /// If no batch prover URL is provided, a local batch prover is used instead.
     pub fn new(
-        store: StoreClient,
+        state: Arc<State>,
         num_workers: NonZeroUsize,
         batch_prover_url: Option<Url>,
         batch_interval: Duration,
@@ -75,7 +76,7 @@ impl BatchBuilder {
             worker_pool,
             failure_rate: 0.0,
             batch_prover,
-            store,
+            state,
         }
     }
 
@@ -110,7 +111,7 @@ impl BatchBuilder {
 
         let job = BatchJob {
             failure_rate: self.failure_rate,
-            store: self.store.clone(),
+            state: Arc::clone(&self.state),
             mempool,
             batch_prover: self.batch_prover.clone(),
         };
@@ -161,7 +162,7 @@ struct BatchJob {
     ///
     /// Note: this _must_ be sign positive and less than 1.0.
     failure_rate: f64,
-    store: StoreClient,
+    state: Arc<State>,
     batch_prover: BatchProver,
     mempool: SharedMempool,
 }
@@ -212,20 +213,24 @@ impl BatchJob {
         &self,
         batch: SelectedBatch,
     ) -> Result<(SelectedBatch, BatchInputs), BuildBatchError> {
-        let block_references = batch
+        let block_references: BTreeSet<_> = batch
             .transactions()
             .iter()
             .map(Deref::deref)
-            .map(AuthenticatedTransaction::reference_block);
-        let unauthenticated_notes = batch
+            .map(AuthenticatedTransaction::reference_block)
+            .map(|(block_num, _)| block_num)
+            .collect();
+        let unauthenticated_notes: BTreeSet<_> = batch
             .transactions()
             .iter()
             .map(Deref::deref)
-            .flat_map(AuthenticatedTransaction::unauthenticated_note_commitments);
+            .flat_map(AuthenticatedTransaction::unauthenticated_note_commitments)
+            .collect();
 
-        self.store
+        self.state
             .get_batch_inputs(block_references, unauthenticated_notes)
             .await
+            .map_err(StoreError::from)
             .map_err(BuildBatchError::FetchBatchInputsFailed)
             .map(|inputs| (batch, inputs))
     }

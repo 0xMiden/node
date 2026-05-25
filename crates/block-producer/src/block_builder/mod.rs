@@ -1,7 +1,10 @@
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_proto::domain::proof_request::BlockProofRequest;
+use miden_node_store::state::State;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
@@ -11,9 +14,8 @@ use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
 use tracing::{Span, instrument};
 
-use crate::errors::BuildBlockError;
+use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
-use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
 
@@ -29,19 +31,17 @@ pub struct BlockBuilder {
     /// Note: this _must_ be sign positive and less than 1.0.
     pub failure_rate: f64,
 
-    /// The store RPC client for committing blocks.
-    pub store: StoreClient,
+    /// Shared store state used to build and commit blocks.
+    pub state: Arc<State>,
 
     /// The validator RPC client for validating blocks.
     pub validator: BlockProducerValidatorClient,
 }
 
 impl BlockBuilder {
-    /// Creates a new [`BlockBuilder`] with the given [`StoreClient`] and optional block prover URL.
-    ///
-    /// If the block prover URL is not set, the block builder will use the local block prover.
+    /// Creates a new [`BlockBuilder`] using the shared store [`State`].
     pub fn new(
-        store: StoreClient,
+        state: Arc<State>,
         validator: BlockProducerValidatorClient,
         block_interval: Duration,
     ) -> Self {
@@ -49,7 +49,7 @@ impl BlockBuilder {
             block_interval,
             // Note: The range cannot be empty.
             failure_rate: 0.0,
-            store,
+            state,
             validator,
         }
     }
@@ -181,15 +181,21 @@ impl BlockBuilder {
         let created_nullifiers_iter =
             batch_iter.map(Deref::deref).flat_map(ProvenBatch::created_nullifiers);
 
+        let account_ids = account_ids_iter.collect();
+        let nullifiers = created_nullifiers_iter.collect();
+        let unauthenticated_note_commitments = unauthenticated_notes_iter.collect();
+        let reference_blocks = block_references_iter.collect();
+
         let inputs = self
-            .store
+            .state
             .get_block_inputs(
-                account_ids_iter,
-                created_nullifiers_iter,
-                unauthenticated_notes_iter,
-                block_references_iter,
+                account_ids,
+                nullifiers,
+                unauthenticated_note_commitments,
+                reference_blocks,
             )
             .await
+            .map_err(StoreError::from)
             .map_err(BuildBlockError::GetBlockInputsFailed)?;
 
         // Check that the latest committed block in the store matches our expectations.
@@ -265,15 +271,65 @@ impl BlockBuilder {
         ordered_batches: OrderedBatches,
         signed_block: SignedBlock,
     ) -> Result<(), BuildBlockError> {
-        self.store
-            .apply_block(&ordered_batches, &signed_block)
+        let block_num = signed_block.header().block_num();
+        let header = signed_block.header().clone();
+        let block_inputs = self.block_inputs_from_ordered_batches(&ordered_batches).await?;
+        let proving_inputs = BlockProofRequest {
+            tx_batches: ordered_batches,
+            block_header: header.clone(),
+            block_inputs,
+        };
+
+        self.state
+            .save_proving_inputs(block_num, &proving_inputs)
             .await
+            .map_err(|err| {
+                BuildBlockError::StoreApplyBlockFailed(StoreError::SaveProvingInputsFailed(err))
+            })?;
+
+        self.state
+            .apply_block(signed_block)
+            .await
+            .map_err(StoreError::from)
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
-        let (header, ..) = signed_block.into_parts();
-        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(header);
+        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(&header);
 
         Ok(())
+    }
+
+    /// Retrieves block proving inputs for the ordered batches that were actually committed.
+    async fn block_inputs_from_ordered_batches(
+        &self,
+        batches: &OrderedBatches,
+    ) -> Result<BlockInputs, BuildBlockError> {
+        let mut account_ids = BTreeSet::new();
+        let mut nullifiers = Vec::new();
+        let mut unauthenticated_note_commitments = BTreeSet::new();
+        let mut reference_blocks = BTreeSet::new();
+
+        for batch in batches.as_slice() {
+            account_ids.extend(batch.updated_accounts());
+            nullifiers.extend(batch.created_nullifiers());
+            reference_blocks.insert(batch.reference_block_num());
+
+            for note in batch.input_notes().iter() {
+                if let Some(header) = note.header() {
+                    unauthenticated_note_commitments.insert(header.to_commitment());
+                }
+            }
+        }
+
+        self.state
+            .get_block_inputs(
+                account_ids.into_iter().collect(),
+                nullifiers,
+                unauthenticated_note_commitments,
+                reference_blocks,
+            )
+            .await
+            .map_err(StoreError::from)
+            .map_err(BuildBlockError::GetBlockInputsFailed)
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]

@@ -70,7 +70,7 @@ mod tx_expiration {
         for _ in 0..slack + 10 {
             let block = uut.select_block();
             let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
-            uut.commit_block(header);
+            uut.commit_block(&header);
         }
 
         uut
@@ -144,7 +144,7 @@ mod authentication_height {
         for _ in 0..retention + 10 {
             let block = uut.select_block();
             let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
-            uut.commit_block(header);
+            uut.commit_block(&header);
         }
 
         uut

@@ -9,7 +9,7 @@ mod batch_builder;
 mod block_builder;
 mod domain;
 mod mempool;
-pub mod store;
+mod store;
 mod validator;
 
 #[cfg(feature = "testing")]

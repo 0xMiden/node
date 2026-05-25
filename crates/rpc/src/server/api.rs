@@ -37,6 +37,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
@@ -284,7 +285,7 @@ impl RpcService {
     ) -> Result<AuthenticatedTransactionInputs, Status> {
         let nullifiers = tx.nullifiers().collect::<Vec<_>>();
         let unauthenticated_notes =
-            tx.unauthenticated_notes().map(|note| note.to_commitment()).collect::<Vec<_>>();
+            tx.unauthenticated_notes().map(NoteHeader::to_commitment).collect::<Vec<_>>();
 
         let inputs = state
             .get_transaction_inputs(tx.account_id(), &nullifiers, unauthenticated_notes)

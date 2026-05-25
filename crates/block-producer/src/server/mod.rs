@@ -1,15 +1,16 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{error, info};
+use miden_node_store::state::{Finality, State};
+use tracing::info;
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
-use crate::errors::{BlockProducerError, StoreError};
+use crate::errors::BlockProducerError;
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig};
-use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, SERVER_NUM_BATCH_BUILDERS};
 
@@ -18,13 +19,10 @@ mod tests;
 
 /// The block producer component.
 ///
-/// Specifies how to connect to the store, batch prover, and block prover components.
-/// The connection to the store is established at startup and retried with exponential backoff
-/// until the store becomes available. Once the connection is established, the block producer
-/// will start producing batches and blocks.
+/// Specifies the shared store state and how to connect to validator and prover components.
 pub struct BlockProducer {
-    /// The address of the store component.
-    pub store_url: Url,
+    /// Shared store state used by the batch and block builders.
+    pub state: Arc<State>,
     /// The address of the validator component.
     pub validator_url: Url,
     /// The address of the batch prover component.
@@ -50,44 +48,17 @@ impl BlockProducer {
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
-        info!(target: COMPONENT, store=%self.store_url, "Initializing block producer");
-        let store = StoreClient::new(self.store_url.clone());
+        info!(target: COMPONENT, "Initializing block producer");
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
 
-        // Retry fetching the chain tip from the store until it succeeds.
-        let mut retries_counter = 0;
-        let chain_tip = loop {
-            match store.latest_header().await {
-                Err(StoreError::GrpcClientError(err)) => {
-                    // exponential backoff with base 500ms and max 30s
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retries_counter)
-                        .min(Duration::from_secs(30));
-
-                    error!(
-                        store = %self.store_url,
-                        ?backoff,
-                        %retries_counter,
-                        %err,
-                        "store connection failed while fetching chain tip, retrying"
-                    );
-
-                    retries_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-                Ok(header) => break header.block_num(),
-                Err(e) => {
-                    error!(target: COMPONENT, %e, "failed to fetch chain tip from store");
-                    return Err(e.into());
-                },
-            }
-        };
+        let chain_tip = self.state.chain_tip(Finality::Committed).await;
 
         info!(target: COMPONENT, chain_tip = %chain_tip, "Block producer initialized");
 
-        let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
+        let block_builder =
+            BlockBuilder::new(Arc::clone(&self.state), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
-            store.clone(),
+            Arc::clone(&self.state),
             SERVER_NUM_BATCH_BUILDERS,
             self.batch_prover_url,
             self.batch_interval,

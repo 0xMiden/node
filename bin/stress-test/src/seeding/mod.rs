@@ -1,12 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use metrics::SeedingMetrics;
-use miden_node_block_producer::store::StoreClient;
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::generated::store::rpc_client::RpcClient;
+use miden_node_store::state::State;
 use miden_node_store::{DataDirectory, GenesisState, Store, StoreMode};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::tracing::grpc::OtelInterceptor;
@@ -131,9 +132,15 @@ pub async fn seed_store(
         .expect("genesis block should be created");
     Store::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
 
-    // start the store
-    let (_, store_url) = start_store(data_directory.clone()).await;
-    let store_client = StoreClient::new(store_url);
+    let (termination_ask, _termination_signal) = tokio::sync::mpsc::channel(1);
+    let (state, _proven_tip) = State::load_with_database_options(
+        &data_directory,
+        StorageOptions::bench(),
+        miden_node_store::DatabaseOptions::default(),
+        termination_ask,
+    )
+    .await
+    .expect("state should load");
 
     // start generating blocks
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
@@ -145,7 +152,7 @@ pub async fn seed_store(
         public_accounts_percentage,
         faucet,
         genesis_header,
-        &store_client,
+        &state,
         data_directory,
         accounts_filepath,
         &signer,
@@ -171,7 +178,7 @@ async fn generate_blocks(
     public_accounts_percentage: u8,
     mut faucet: Account,
     genesis_block: SignedBlock,
-    store_client: &StoreClient,
+    state: &State,
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
     signer: &EcdsaSecretKey,
@@ -260,11 +267,10 @@ async fn generate_blocks(
             .collect();
 
         // create the block and send it to the store
-        let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
+        let block_inputs = get_block_inputs(state, &batches, &mut metrics).await;
 
         // update blocks
-        prev_block_header =
-            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+        prev_block_header = apply_block(batches, block_inputs, state, &mut metrics, signer).await;
         account_states
             .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
@@ -272,8 +278,7 @@ async fn generate_blocks(
         }
 
         // create the consume notes txs to be used in the next block
-        let batch_inputs =
-            get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
+        let batch_inputs = get_batch_inputs(state, &prev_block_header, &notes, &mut metrics).await;
         (pending_consumed_accounts, consume_notes_txs) = create_consume_note_txs(
             &prev_block_header,
             accounts,
@@ -317,18 +322,16 @@ async fn generate_blocks(
             .map(|txs| create_batch(txs, &prev_block_header))
             .collect();
 
-        let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
+        let block_inputs = get_block_inputs(state, &batches, &mut metrics).await;
 
-        prev_block_header =
-            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+        prev_block_header = apply_block(batches, block_inputs, state, &mut metrics, signer).await;
         account_states
             .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
             current_anchor_header = prev_block_header.clone();
         }
 
-        let batch_inputs =
-            get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
+        let batch_inputs = get_batch_inputs(state, &prev_block_header, &notes, &mut metrics).await;
         let accounts = selected_account_ids
             .iter()
             .filter_map(|account_id| account_states.get(account_id).cloned())
@@ -365,10 +368,11 @@ async fn generate_blocks(
 async fn apply_block(
     batches: Vec<ProvenBatch>,
     block_inputs: BlockInputs,
-    store_client: &StoreClient,
+    state: &State,
     metrics: &mut SeedingMetrics,
     signer: &EcdsaSecretKey,
 ) -> BlockHeader {
+    let proving_block_inputs = block_inputs.clone();
     let proposed_block = ProposedBlock::new(block_inputs, batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
     let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
@@ -376,13 +380,22 @@ async fn apply_block(
     // SAFETY: The header, body, and signature are known to correspond to each other.
     let signed_block = SignedBlock::new_unchecked(header, body, signature);
     let ordered_batches = proposed_block.batches().clone();
+    let block_header = signed_block.header().clone();
 
     let start = Instant::now();
-    store_client.apply_block(&ordered_batches, &signed_block).await.unwrap();
+    let proving_inputs = BlockProofRequest {
+        tx_batches: ordered_batches,
+        block_header: block_header.clone(),
+        block_inputs: proving_block_inputs,
+    };
+    state
+        .save_proving_inputs(block_header.block_num(), &proving_inputs)
+        .await
+        .unwrap();
+    state.apply_block(signed_block).await.unwrap();
     metrics.track_block_insertion(start.elapsed(), block_size);
 
-    let (header, ..) = signed_block.into_parts();
-    header
+    block_header
 }
 
 // HELPER FUNCTIONS
@@ -792,7 +805,7 @@ fn create_emit_note_tx(
 
 /// Gets the batch inputs from the store and tracks the query time on the metrics.
 async fn get_batch_inputs(
-    store_client: &StoreClient,
+    state: &State,
     block_ref: &BlockHeader,
     notes: &[Note],
     metrics: &mut SeedingMetrics,
@@ -800,10 +813,10 @@ async fn get_batch_inputs(
     let start = Instant::now();
     // Mark every note as unauthenticated, so that the store returns the inclusion proofs for all of
     // them
-    let batch_inputs = store_client
+    let batch_inputs = state
         .get_batch_inputs(
-            vec![(block_ref.block_num(), block_ref.commitment())].into_iter(),
-            notes.iter().map(Note::commitment),
+            BTreeSet::from([block_ref.block_num()]),
+            notes.iter().map(Note::commitment).collect(),
         )
         .await
         .unwrap();
@@ -813,22 +826,25 @@ async fn get_batch_inputs(
 
 /// Gets the block inputs from the store and tracks the query time on the metrics.
 async fn get_block_inputs(
-    store_client: &StoreClient,
+    state: &State,
     batches: &[ProvenBatch],
     metrics: &mut SeedingMetrics,
 ) -> BlockInputs {
     let start = Instant::now();
-    let inputs = store_client
+    let inputs = state
         .get_block_inputs(
-            batches.iter().flat_map(ProvenBatch::updated_accounts),
-            batches.iter().flat_map(ProvenBatch::created_nullifiers),
-            batches.iter().flat_map(|batch| {
-                batch
-                    .input_notes()
-                    .into_iter()
-                    .filter_map(|note| note.header().map(NoteHeader::to_commitment))
-            }),
-            batches.iter().map(ProvenBatch::reference_block_num),
+            batches.iter().flat_map(ProvenBatch::updated_accounts).collect(),
+            batches.iter().flat_map(ProvenBatch::created_nullifiers).collect(),
+            batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .input_notes()
+                        .into_iter()
+                        .filter_map(|note| note.header().map(NoteHeader::to_commitment))
+                })
+                .collect(),
+            batches.iter().map(ProvenBatch::reference_block_num).collect(),
         )
         .await
         .unwrap();
@@ -848,20 +864,13 @@ pub async fn start_store(
     let rpc_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind store RPC gRPC endpoint");
-    let block_producer_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store block-producer gRPC endpoint");
     let store_addr = rpc_listener.local_addr().expect("Failed to get store RPC address");
-    let store_block_producer_addr = block_producer_listener
-        .local_addr()
-        .expect("Failed to get store block-producer address");
     let dir = data_directory.clone();
 
     task::spawn(async move {
         Store {
             rpc_listener,
             mode: StoreMode::BlockProducer {
-                block_producer_listener,
                 block_prover_url: None,
                 max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
@@ -881,7 +890,7 @@ pub async fn start_store(
         .await
         .expect("Failed to connect to store");
 
-    // SAFETY: The store_block_producer_addr is always valid as it is created from a `SocketAddr`.
-    let store_url = Url::parse(&format!("http://{store_block_producer_addr}")).unwrap();
+    // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
+    let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
     (RpcClient::with_interceptor(channel, OtelInterceptor), store_url)
 }

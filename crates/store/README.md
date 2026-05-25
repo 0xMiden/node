@@ -38,17 +38,13 @@ Without the environment variables above, `librocksdb-sys` compiles RocksDB from 
 
 ## API overview
 
-The full gRPC API can be found [here](../../proto/proto/store.proto).
+The full gRPC API can be found [here](../../proto/proto/internal/store.proto).
 
 <!--toc:start-->
-- [ApplyBlock](#applyblock)
 - [GetAccount](#getaccount)
 - [GetBlockByNumber](#getblockbynumber)
 - [GetBlockHeaderByNumber](#getblockheaderbynumber)
-- [GetBlockInputs](#getblockinputs)
-- [GetNoteAuthenticationInfo](#getnoteauthenticationinfo)
 - [GetNotesById](#getnotesbyid)
-- [GetTransactionInputs](#gettransactioninputs)
 - [GetNoteScriptByRoot](#getnotescriptbyroot)
 - [SyncNullifiers](#syncnullifiers)
 - [SyncAccountVault](#syncaccountvault)
@@ -57,12 +53,6 @@ The full gRPC API can be found [here](../../proto/proto/store.proto).
 - [SyncChainMmr](#syncchainmmr)
 - [SyncTransactions](#synctransactions)
 <!--toc:end-->
-
----
-
-### ApplyBlock
-
-Applies changes of a new block to the DB and in-memory data structures. Raw block data is also stored as a flat file.
 
 ---
 
@@ -89,20 +79,6 @@ authenticate the block's inclusion.
 
 ---
 
-### GetBlockInputs
-
-Used by the `block-producer` to query state required to prove the next block.
-
----
-
-### GetNoteAuthenticationInfo
-
-Returns a list of Note inclusion proofs for the specified Note IDs.
-
-This is used by the `block-producer` as part of the batch proving process.
-
----
-
 ### GetNotesById
 
 Returns a list of notes matching the provided note IDs.
@@ -118,12 +94,6 @@ When note retrieval fails, detailed error information is provided through gRPC s
 | `NOTE_NOT_FOUND`          | 2     | `NOT_FOUND`        | One or more note IDs don't exist     |
 | `TOO_MANY_NOTE_IDS`       | 3     | `INVALID_ARGUMENT` | Too many note IDs in request          |
 | `NOTE_NOT_PUBLIC`         | 4     | `PERMISSION_DENIED`| Note details not publicly accessible  |
-
----
-
-### GetTransactionInputs
-
-Used by the `block-producer` to query state required to verify a submitted transaction.
 
 ---
 

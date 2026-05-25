@@ -13,7 +13,6 @@ use miden_node_utils::spawn::spawn_blocking_in_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::trace::TraceLayer;
@@ -30,7 +29,6 @@ use crate::state::{ProofCache, State};
 use crate::{BlockProver, COMPONENT};
 
 mod api;
-mod block_producer;
 pub mod block_prover_client;
 mod replica_sync;
 
@@ -41,17 +39,13 @@ mod rpc_api;
 
 /// Determines how the store receives new blocks.
 ///
-/// The two modes are mutually exclusive: a store either accepts blocks from a block producer
-/// via its `BlockProducer` gRPC service, or it syncs blocks from an upstream store instance.
-/// The services exposed on the network differ between modes accordingly.
+/// The two modes are mutually exclusive: a store either runs alongside a block producer sharing
+/// the same [`State`], or it syncs blocks from an upstream store instance.
 pub enum StoreMode {
-    /// Accepts blocks from a block producer via the `BlockProducer` gRPC service.
+    /// Runs in the sequencer process alongside the block producer.
     ///
-    /// Exposes the `Rpc` and `BlockProducer` gRPC services and runs the proof scheduler to
-    /// generate block proofs.
+    /// Exposes the `Rpc` gRPC service and runs the proof scheduler to generate block proofs.
     BlockProducer {
-        /// Listener for the block producer gRPC endpoint.
-        block_producer_listener: TcpListener,
         /// URL of the remote block prover. Uses a local prover if `None`.
         block_prover_url: Option<Url>,
         /// Maximum number of blocks proven concurrently by the proof scheduler.
@@ -152,21 +146,15 @@ impl Store {
         let _disk_monitor_task = Self::spawn_disk_monitor(self.data_directory.clone());
 
         let ModeSetup { mut grpc_servers, mode_task } = match self.mode {
-            StoreMode::BlockProducer {
-                block_producer_listener,
-                block_prover_url,
-                max_concurrent_proofs,
-            } => {
+            StoreMode::BlockProducer { block_prover_url, max_concurrent_proofs } => {
                 Self::setup_block_producer_mode(
                     state,
-                    block_producer_listener,
                     block_prover_url,
                     max_concurrent_proofs,
                     tx_proven_tip,
                     self.grpc_options,
                     self.rpc_listener,
-                )
-                .await?
+                )?
             },
             StoreMode::Replica { upstream_url } => {
                 Self::setup_replica_mode(state, upstream_url, self.grpc_options, self.rpc_listener)?
@@ -193,43 +181,29 @@ impl Store {
         }
     }
 
-    async fn setup_block_producer_mode(
+    fn setup_block_producer_mode(
         state: State,
-        block_producer_listener: TcpListener,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
         tx_proven_tip: ProvenTipWriter,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
     ) -> anyhow::Result<ModeSetup> {
-        info!(target: COMPONENT,
-            block_producer_endpoint=?block_producer_listener.local_addr()?,
-            "Starting in block-producer mode");
+        info!(target: COMPONENT, "Starting in block-producer mode");
 
         let proof_cache = state.proof_cache.clone();
-        let (proof_scheduler_task, chain_tip_sender) = Self::spawn_proof_scheduler(
+        let proof_scheduler_task = Self::spawn_proof_scheduler(
             &state,
             block_prover_url,
             max_concurrent_proofs,
             tx_proven_tip,
             proof_cache,
-        )
-        .await;
+        );
 
         let state = Arc::new(state);
         let store_api = api::StoreApi::new(state);
-        let block_producer_api = block_producer::BlockProducerApi {
-            inner: store_api.clone(),
-            chain_tip_sender,
-        };
 
-        let join_set = Self::spawn_block_producer_grpc_servers(
-            store_api,
-            block_producer_api,
-            grpc_options,
-            rpc_listener,
-            block_producer_listener,
-        )?;
+        let join_set = Self::spawn_rpc_grpc_server(store_api, grpc_options, rpc_listener)?;
 
         Ok(ModeSetup {
             grpc_servers: join_set,
@@ -256,7 +230,7 @@ impl Store {
         });
 
         let store_api = api::StoreApi::new(state);
-        let join_set = Self::spawn_replica_grpc_servers(store_api, grpc_options, rpc_listener)?;
+        let join_set = Self::spawn_rpc_grpc_server(store_api, grpc_options, rpc_listener)?;
 
         Ok(ModeSetup {
             grpc_servers: join_set,
@@ -266,89 +240,34 @@ impl Store {
 
     /// Initializes the block prover client and spawns the proof scheduler as a background task.
     ///
-    /// Returns the scheduler task handle and the chain tip sender (needed by the block-producer
-    /// gRPC service to notify the scheduler of new blocks).
-    async fn spawn_proof_scheduler(
+    /// Returns the scheduler task handle.
+    fn spawn_proof_scheduler(
         state: &State,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
         proven_tip: ProvenTipWriter,
         proof_cache: ProofCache,
-    ) -> (
-        tokio::task::JoinHandle<anyhow::Result<()>>,
-        watch::Sender<miden_protocol::block::BlockNumber>,
-    ) {
+    ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
         let block_prover = if let Some(url) = block_prover_url {
             Arc::new(BlockProver::remote(url))
         } else {
             Arc::new(BlockProver::local())
         };
 
-        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
-        let (chain_tip_tx, chain_tip_rx) = watch::channel(chain_tip);
+        let chain_tip_rx = state.subscribe_committed_tip();
 
-        let handle = proof_scheduler::spawn(
+        proof_scheduler::spawn(
             block_prover,
             state.block_store(),
             chain_tip_rx,
             proven_tip,
             max_concurrent_proofs,
             proof_cache,
-        );
-
-        (handle, chain_tip_tx)
+        )
     }
 
-    /// Spawns the gRPC servers for block-producer mode.
-    ///
-    /// Starts two listeners: `Rpc` and `BlockProducer`.
-    fn spawn_block_producer_grpc_servers(
-        store_api: api::StoreApi,
-        block_producer_api: block_producer::BlockProducerApi,
-        grpc_options: GrpcOptionsInternal,
-        rpc_listener: TcpListener,
-        block_producer_listener: TcpListener,
-    ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
-        let mut join_set = JoinSet::new();
-
-        let rpc_service = store::rpc_server::RpcServer::new(store_api);
-        let block_producer_service =
-            store::block_producer_server::BlockProducerServer::new(block_producer_api);
-
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(store_api_descriptor())
-            .build_v1()
-            .context("failed to build reflection service")?;
-
-        let make_server = || {
-            tonic::transport::Server::builder()
-                .timeout(grpc_options.request_timeout)
-                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-        };
-
-        join_set.spawn(
-            make_server()
-                .add_service(rpc_service)
-                .add_service(reflection_service.clone())
-                .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
-        );
-
-        join_set.spawn(
-            make_server()
-                .accept_http1(true)
-                .add_service(block_producer_service)
-                .add_service(reflection_service)
-                .serve_with_incoming(TcpListenerStream::new(block_producer_listener)),
-        );
-
-        Ok(join_set)
-    }
-
-    /// Spawns the gRPC servers for replica mode.
-    ///
-    /// Only the `Rpc` service is exposed — no `BlockProducer` or proof scheduler.
-    fn spawn_replica_grpc_servers(
+    /// Spawns the store RPC gRPC server.
+    fn spawn_rpc_grpc_server(
         store_api: api::StoreApi,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
