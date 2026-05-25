@@ -3384,6 +3384,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "mediatype",
+ "miden-node-block-producer",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",

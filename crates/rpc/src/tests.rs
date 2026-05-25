@@ -43,7 +43,7 @@ use tokio::task;
 use tokio::time::sleep;
 use url::Url;
 
-use crate::Rpc;
+use crate::{Rpc, RpcSubmissionMode};
 
 /// A wrapper around the store runtime and data directory.
 ///
@@ -581,29 +581,16 @@ async fn start_rpc_with_options(
 ) -> (RpcClient, std::net::SocketAddr, TcpListener) {
     let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
     let store_addr = store_listener.local_addr().expect("store should get a local address");
-    let block_producer_addr = {
-        let block_producer_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind block-producer");
-        block_producer_listener
-            .local_addr()
-            .expect("Failed to get block-producer address")
-    };
-
     // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
     let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
     task::spawn(async move {
         // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
         let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
-        // SAFETY: The block_producer_addr is always valid as it is created from a `SocketAddr`.
-        let block_producer_url = Url::parse(&format!("http://{block_producer_addr}")).unwrap();
-        // SAFETY: Using dummy validator URL for test - not actually contacted in this test
-        let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
         Rpc {
             listener: rpc_listener,
             store_url,
-            block_producer_url: Some(block_producer_url),
-            validator_url,
+            submission: RpcSubmissionMode::ReadOnly,
             ntx_builder_url: None,
             grpc_options,
         }

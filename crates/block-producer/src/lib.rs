@@ -16,6 +16,18 @@ mod validator;
 pub mod errors;
 #[cfg(not(feature = "testing"))]
 mod errors;
+pub use domain::transaction::AuthenticatedTransaction;
+pub use errors::{MempoolSubmissionError, StateConflict, StoreError};
+pub use mempool::{
+    BatchBudget,
+    BlockBudget,
+    Mempool,
+    MempoolConfig,
+    MempoolPoisonError,
+    MempoolStats,
+    SharedMempool,
+};
+pub use store::TransactionInputs;
 
 pub mod server;
 pub use server::BlockProducer;

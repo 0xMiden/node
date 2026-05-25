@@ -55,6 +55,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -94,6 +95,29 @@ pub struct SharedMempool(Arc<Mutex<Mempool>>);
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[error("shared mempool lock is poisoned")]
 pub struct MempoolPoisonError;
+
+/// Snapshot of the mempool's current state.
+#[derive(Clone, Copy, Default)]
+pub struct MempoolStats {
+    /// The mempool's current view of the chain tip height.
+    pub chain_tip: BlockNumber,
+    /// Number of transactions currently in the mempool waiting to be batched.
+    pub unbatched_transactions: u64,
+    /// Number of batches currently being proven.
+    pub proposed_batches: u64,
+    /// Number of proven batches waiting for block inclusion.
+    pub proven_batches: u64,
+}
+
+impl From<MempoolStats> for proto::rpc::MempoolStats {
+    fn from(stats: MempoolStats) -> Self {
+        proto::rpc::MempoolStats {
+            unbatched_transactions: stats.unbatched_transactions,
+            proposed_batches: stats.proposed_batches,
+            proven_batches: stats.proven_batches,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MempoolConfig {
@@ -157,9 +181,44 @@ impl SharedMempool {
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
     #[instrument(target = COMPONENT, name = "mempool.lock", skip_all, err)]
-    pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
+    }
+
+    /// Adds an authenticated transaction to the mempool.
+    pub fn add_transaction(
+        &self,
+        tx: Arc<AuthenticatedTransaction>,
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
+        self.lock()
+            .map_err(MempoolSubmissionError::MempoolPoisoned)?
+            .add_transaction(tx)
+    }
+
+    /// Adds a user-provided batch of authenticated transactions to the mempool.
+    pub fn add_user_batch(
+        &self,
+        txs: &[Arc<AuthenticatedTransaction>],
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
+        self.lock()
+            .map_err(MempoolSubmissionError::MempoolPoisoned)?
+            .add_user_batch(txs)
+    }
+
+    /// Returns a snapshot of the current mempool statistics.
+    pub fn stats(&self) -> Result<MempoolStats, MempoolPoisonError> {
+        let mempool = self.lock()?;
+        Ok(MempoolStats {
+            chain_tip: mempool.chain_tip(),
+            unbatched_transactions: mempool.unbatched_transactions_count() as u64,
+            proposed_batches: mempool.proposed_batches_count() as u64,
+            proven_batches: mempool.proven_batches_count() as u64,
+        })
+    }
+
+    pub(crate) fn subscribe(&self) -> Result<mpsc::Receiver<MempoolEvent>, MempoolPoisonError> {
+        Ok(self.lock()?.subscribe())
     }
 }
 
@@ -236,7 +295,7 @@ impl Mempool {
         reason = "Not impactful, and we may want ownership in the future"
     )]
     #[instrument(target = COMPONENT, name = "mempool.add_transaction", skip_all, fields(tx=%tx.id()))]
-    pub fn add_transaction(
+    pub(crate) fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
@@ -258,7 +317,7 @@ impl Mempool {
     }
 
     #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
-    pub fn add_user_batch(
+    pub(crate) fn add_user_batch(
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
     ) -> Result<BlockNumber, MempoolSubmissionError> {
@@ -300,7 +359,7 @@ impl Mempool {
     ///
     /// Returns `None` if no transactions are available.
     #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
-    pub fn select_batch(&mut self) -> Option<SelectedBatch> {
+    pub(crate) fn select_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_batch(self.config.batch_budget)?;
         if let Err(err) = self.batches.append(batch.clone()) {
             panic!("failed to append batch to dependency graph: {}", err.as_report());
@@ -315,7 +374,7 @@ impl Mempool {
     /// transactions have their failure count incremented, reverting them if they now exceed the
     /// failure limit.
     #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
-    pub fn rollback_batch(&mut self, batch: BatchId) {
+    pub(crate) fn rollback_batch(&mut self, batch: BatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
         // coming back for the same batch. If the batch previously succeeded, then yanking it would
         // corrupt the mempool since the batch might be in a block.
@@ -350,7 +409,7 @@ impl Mempool {
 
     /// Marks a batch as proven if it exists.
     #[instrument(target = COMPONENT, name = "mempool.commit_batch", skip_all)]
-    pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
+    pub(crate) fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
         self.batches.submit_proof(proof);
         self.inject_telemetry();
     }
@@ -365,7 +424,7 @@ impl Mempool {
     ///
     /// Panics if there is already a block in flight.
     #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
-    pub fn select_block(&mut self) -> SelectedBlock {
+    pub(crate) fn select_block(&mut self) -> SelectedBlock {
         assert!(
             self.pending_block.is_none(),
             "block {} is already in progress",
@@ -396,7 +455,7 @@ impl Mempool {
     ///
     /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
-    pub fn commit_block(&mut self, block_header: BlockHeader) {
+    pub(crate) fn commit_block(&mut self, block_header: BlockHeader) {
         assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
             .pending_block
@@ -433,7 +492,7 @@ impl Mempool {
     ///
     /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.rollback_block", skip_all)]
-    pub fn rollback_block(&mut self, block: BlockNumber) {
+    pub(crate) fn rollback_block(&mut self, block: BlockNumber) {
         // FIXME: We should consider a more robust check here to identify the block by a hash.
         //        If multiple jobs are possible, then so are multiple variants with the same
         //        block number.
@@ -470,7 +529,7 @@ impl Mempool {
     ///
     /// Only emits events which occurred after the current committed block.
     #[instrument(target = COMPONENT, name = "mempool.subscribe", skip_all)]
-    pub fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
+    pub(crate) fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
         self.subscription.subscribe()
     }
 

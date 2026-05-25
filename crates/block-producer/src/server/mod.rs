@@ -15,7 +15,6 @@ use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
@@ -30,7 +29,14 @@ use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{BlockProducerError, MempoolSubmissionError, StoreError};
-use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
+use crate::mempool::{
+    BatchBudget,
+    BlockBudget,
+    Mempool,
+    MempoolConfig,
+    MempoolStats,
+    SharedMempool,
+};
 use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
@@ -268,26 +274,16 @@ impl BlockProducerRpcServer {
             loop {
                 interval.tick().await;
 
-                let (chain_tip, unbatched_transactions, proposed_batches, proven_batches) = {
-                    let Ok(mempool) = mempool.lock() else {
+                let stats = {
+                    let Ok(stats) = mempool.stats() else {
                         tracing::error!("mempool lock poisoned, stopping mempool stats updater");
                         return;
                     };
-                    (
-                        mempool.chain_tip(),
-                        mempool.unbatched_transactions_count() as u64,
-                        mempool.proposed_batches_count() as u64,
-                        mempool.proven_batches_count() as u64,
-                    )
+                    stats
                 };
 
                 let mut cache = cached_mempool_stats.write().await;
-                *cache = MempoolStats {
-                    chain_tip,
-                    unbatched_transactions,
-                    proposed_batches,
-                    proven_batches,
-                };
+                *cache = stats;
             }
         });
     }
@@ -338,12 +334,7 @@ impl BlockProducerRpcServer {
             .map_err(MempoolSubmissionError::StateConflict)?;
 
         let shared_mempool = self.mempool.lock().await;
-        // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
-        let result = shared_mempool
-            .lock()
-            .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_transaction(tx)
-            .map(Into::into);
+        let result = shared_mempool.add_transaction(tx).map(Into::into);
         result
     }
 
@@ -384,12 +375,7 @@ impl BlockProducerRpcServer {
         }
 
         let shared_mempool = self.mempool.lock().await;
-        // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
-        let result = shared_mempool
-            .lock()
-            .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_user_batch(&txs)
-            .map(Into::into);
+        let result = shared_mempool.add_user_batch(&txs).map(Into::into);
         result
     }
 }
@@ -440,9 +426,8 @@ impl api_server::Api for BlockProducerRpcServer {
     ) -> Result<tonic::Response<Self::MempoolSubscriptionStream>, tonic::Status> {
         let shared_mempool = self.mempool.lock().await;
         let subscription = shared_mempool
-            .lock()
-            .map_err(|err| tonic::Status::internal(err.to_string()))?
-            .subscribe();
+            .subscribe()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
         let subscription = ReceiverStream::new(subscription);
 
         Ok(tonic::Response::new(MempoolEventSubscription { inner: subscription }))
@@ -466,31 +451,5 @@ impl tokio_stream::Stream for MempoolEventSubscription {
         self.inner
             .poll_next_unpin(cx)
             .map(|x| x.map(proto::block_producer::MempoolEvent::from).map(Result::Ok))
-    }
-}
-
-// MEMPOOL STATISTICS
-// ================================================================================================
-
-/// Mempool statistics that are updated periodically to avoid locking the mempool.
-#[derive(Clone, Copy, Default)]
-struct MempoolStats {
-    /// The mempool's current view of the chain tip height.
-    chain_tip: BlockNumber,
-    /// Number of transactions currently in the mempool waiting to be batched.
-    unbatched_transactions: u64,
-    /// Number of batches currently being proven.
-    proposed_batches: u64,
-    /// Number of proven batches waiting for block inclusion.
-    proven_batches: u64,
-}
-
-impl From<MempoolStats> for proto::rpc::MempoolStats {
-    fn from(stats: MempoolStats) -> Self {
-        proto::rpc::MempoolStats {
-            unbatched_transactions: stats.unbatched_transactions,
-            proposed_batches: stats.proposed_batches,
-            proven_batches: stats.proven_batches,
-        }
     }
 }

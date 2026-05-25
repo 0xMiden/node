@@ -1,12 +1,18 @@
-use std::num::NonZeroUsize;
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_block_producer::{
+    AuthenticatedTransaction,
+    SharedMempool,
+    TransactionInputs as AuthenticatedTransactionInputs,
+};
 use miden_node_proto::clients::{
-    BlockProducerClient,
     Builder,
     NtxBuilderClient,
+    RpcClient,
     StoreRpcClient,
     ValidatorClient,
 };
@@ -17,6 +23,7 @@ use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
+use miden_node_store::state::{Finality, State, TransactionInputs as StateTransactionInputs};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -45,24 +52,36 @@ use tracing::{Span, debug, info, info_span};
 use url::Url;
 
 use crate::COMPONENT;
+use crate::server::RpcSubmissionMode;
 
 // RPC SERVICE
 // ================================================================================================
 
 pub struct RpcService {
     store: StoreRpcClient,
-    block_producer: Option<BlockProducerClient>,
-    validator: ValidatorClient,
+    submission: SubmissionTarget,
     ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
     block_commitment_cache: LruCache<BlockNumber, Word>,
 }
 
+enum SubmissionTarget {
+    ReadOnly,
+    Full {
+        source_rpc_url: Url,
+        source: Option<RpcClient>,
+    },
+    Sequencer {
+        validator: ValidatorClient,
+        state: Arc<State>,
+        mempool: SharedMempool,
+    },
+}
+
 impl RpcService {
     pub(super) fn new(
         store_url: Url,
-        block_producer_url: Option<Url>,
-        validator_url: Url,
+        submission: RpcSubmissionMode,
         ntx_builder_url: Option<Url>,
         commitment_cache_capacity: NonZeroUsize,
     ) -> Self {
@@ -77,34 +96,34 @@ impl RpcService {
                 .connect_lazy::<StoreRpcClient>()
         };
 
-        let block_producer = block_producer_url.map(|block_producer_url| {
-            info!(
-                target: COMPONENT,
-                block_producer_endpoint = %block_producer_url,
-                "Initializing block producer client",
-            );
-            Builder::new(block_producer_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<BlockProducerClient>()
-        });
+        let submission = match submission {
+            RpcSubmissionMode::ReadOnly => SubmissionTarget::ReadOnly,
+            RpcSubmissionMode::Full { source_rpc_url } => {
+                info!(
+                    target: COMPONENT,
+                    source_rpc_endpoint = %source_rpc_url,
+                    "Initializing source RPC submission target",
+                );
+                SubmissionTarget::Full { source_rpc_url, source: None }
+            },
+            RpcSubmissionMode::Sequencer { validator_url, state, mempool } => {
+                let validator = {
+                    info!(
+                        target: COMPONENT,
+                        validator_endpoint = %validator_url,
+                        "Initializing validator client",
+                    );
+                    Builder::new(validator_url)
+                        .without_tls()
+                        .without_timeout()
+                        .without_metadata_version()
+                        .without_metadata_genesis()
+                        .with_otel_context_injection()
+                        .connect_lazy::<ValidatorClient>()
+                };
 
-        let validator = {
-            info!(
-                target: COMPONENT,
-                validator_endpoint = %validator_url,
-                "Initializing validator client",
-            );
-            Builder::new(validator_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<ValidatorClient>()
+                SubmissionTarget::Sequencer { validator, state, mempool }
+            },
         };
 
         let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
@@ -124,8 +143,7 @@ impl RpcService {
 
         Self {
             store,
-            block_producer,
-            validator,
+            submission,
             ntx_builder,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
@@ -139,6 +157,17 @@ impl RpcService {
     pub fn set_genesis_commitment(&mut self, commitment: Word) -> anyhow::Result<()> {
         if self.genesis_commitment.is_some() {
             return Err(anyhow::anyhow!("genesis commitment already set"));
+        }
+        if let SubmissionTarget::Full { source_rpc_url, source } = &mut self.submission {
+            *source = Some(
+                Builder::new(source_rpc_url.clone())
+                    .without_tls()
+                    .without_timeout()
+                    .with_metadata_version(env!("CARGO_PKG_VERSION").to_string())
+                    .with_metadata_genesis(commitment.to_hex())
+                    .with_otel_context_injection()
+                    .connect_lazy::<RpcClient>(),
+            );
         }
         self.genesis_commitment = Some(commitment);
         Ok(())
@@ -236,6 +265,67 @@ impl RpcService {
         }
 
         Ok(())
+    }
+
+    async fn authenticate_transaction(
+        state: &State,
+        tx: Arc<ProvenTransaction>,
+    ) -> Result<Arc<AuthenticatedTransaction>, Status> {
+        let inputs = Self::get_transaction_inputs(state, &tx).await?;
+
+        AuthenticatedTransaction::new_unchecked(tx, inputs)
+            .map(Arc::new)
+            .map_err(|err| Status::invalid_argument(err.to_string()))
+    }
+
+    async fn get_transaction_inputs(
+        state: &State,
+        tx: &ProvenTransaction,
+    ) -> Result<AuthenticatedTransactionInputs, Status> {
+        let nullifiers = tx.nullifiers().collect::<Vec<_>>();
+        let unauthenticated_notes =
+            tx.unauthenticated_notes().map(|note| note.to_commitment()).collect::<Vec<_>>();
+
+        let inputs = state
+            .get_transaction_inputs(tx.account_id(), &nullifiers, unauthenticated_notes)
+            .await
+            .map_err(|err| Status::internal(err.as_report()))?;
+
+        if !inputs.new_account_id_prefix_is_unique.unwrap_or(true) {
+            return Err(Status::invalid_argument(format!(
+                "account Id prefix already exists: {}",
+                tx.account_id()
+            )));
+        }
+
+        let current_block_height = state.chain_tip(Finality::Committed).await;
+        Ok(Self::convert_transaction_inputs(tx, inputs, current_block_height))
+    }
+
+    fn convert_transaction_inputs(
+        tx: &ProvenTransaction,
+        inputs: StateTransactionInputs,
+        current_block_height: BlockNumber,
+    ) -> AuthenticatedTransactionInputs {
+        let account_commitment = if inputs.account_commitment.is_empty() {
+            None
+        } else {
+            Some(inputs.account_commitment)
+        };
+
+        let nullifiers = inputs
+            .nullifiers
+            .into_iter()
+            .map(|nullifier| (nullifier.nullifier, NonZeroU32::new(nullifier.block_num.as_u32())))
+            .collect::<HashMap<_, _>>();
+
+        AuthenticatedTransactionInputs {
+            account_id: tx.account_id(),
+            account_commitment,
+            nullifiers,
+            found_unauthenticated_notes: inputs.found_unauthenticated_notes,
+            current_block_height,
+        }
     }
 }
 
@@ -461,19 +551,13 @@ impl api_server::Api for RpcService {
     // -- Transaction submission --------------------------------------------------------------
 
     /// Deserializes and rebuilds the transaction with MAST decorators stripped from output note
-    /// scripts, verifies the transaction proof, optionally re-executes via the validator if
-    /// transaction inputs are provided, then forwards the transaction to the block producer.
+    /// scripts, verifies the transaction proof, then either forwards it to the source RPC or
+    /// re-executes it via the validator and submits it directly to the mempool.
     async fn submit_proven_tx(
         &self,
         request: Request<proto::transaction::ProvenTransaction>,
     ) -> Result<Response<proto::blockchain::BlockNumber>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
-
-        let Some(block_producer) = &self.block_producer else {
-            return Err(Status::unavailable(
-                "Transaction submission not available in read-only mode",
-            ));
-        };
 
         let request = request.into_inner();
 
@@ -535,27 +619,42 @@ impl api_server::Api for RpcService {
             ))
         })?;
 
-        // Transaction inputs must be provided in order to allow for transaction re-execution via
-        // the Validator.
-        if request.transaction_inputs.is_some() {
-            self.validator.clone().submit_proven_transaction(request.clone()).await?;
-        } else {
+        if request.transaction_inputs.is_none() {
             return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
-        block_producer.clone().submit_proven_tx(request).await
+        match &self.submission {
+            SubmissionTarget::ReadOnly => {
+                Err(Status::unavailable("Transaction submission not available in read-only mode"))
+            },
+            SubmissionTarget::Full { source: Some(source), .. } => {
+                source.clone().submit_proven_tx(request).await
+            },
+            SubmissionTarget::Full { source: None, .. } => {
+                Err(Status::unavailable("Source RPC submission target is not initialized"))
+            },
+            SubmissionTarget::Sequencer { validator, state, mempool } => {
+                // Transaction inputs must be provided in order to allow for transaction
+                // re-execution via the Validator.
+                validator.clone().submit_proven_transaction(request.clone()).await?;
+
+                let tx = Self::authenticate_transaction(state, Arc::new(rebuilt_tx)).await?;
+
+                mempool
+                    .add_transaction(tx)
+                    .map(Into::into)
+                    .map(Response::new)
+                    .map_err(Into::into)
+            },
+        }
     }
 
     /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds the
-    /// batch, then forwards it to the block producer.
+    /// batch, then either forwards it to the source RPC or submits it directly to the mempool.
     async fn submit_proven_tx_batch(
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        let Some(block_producer) = &self.block_producer else {
-            return Err(Status::unavailable("Batch submission not available in read-only mode"));
-        };
-
         let request = request.into_inner();
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
@@ -623,18 +722,39 @@ impl api_server::Api for RpcService {
             return Err(Status::invalid_argument("batch proof did not match proposed batch"));
         }
 
-        // Submit each transaction to the validator.
-        //
-        // SAFETY: We checked earlier that the two iterators are the same length.
-        for (tx, inputs) in proposed_batch.transactions().iter().zip(&request.transaction_inputs) {
-            let request = proto::transaction::ProvenTransaction {
-                transaction: tx.to_bytes(),
-                transaction_inputs: inputs.clone().into(),
-            };
-            self.validator.clone().submit_proven_transaction(request).await?;
-        }
+        match &self.submission {
+            SubmissionTarget::ReadOnly => {
+                Err(Status::unavailable("Batch submission not available in read-only mode"))
+            },
+            SubmissionTarget::Full { source: Some(source), .. } => {
+                source.clone().submit_proven_tx_batch(request).await
+            },
+            SubmissionTarget::Full { source: None, .. } => {
+                Err(Status::unavailable("Source RPC submission target is not initialized"))
+            },
+            SubmissionTarget::Sequencer { validator, state, mempool } => {
+                // Submit each transaction to the validator.
+                //
+                // SAFETY: We checked earlier that the two iterators are the same length.
+                let mut txs = Vec::with_capacity(proposed_batch.transactions().len());
+                for (tx, inputs) in
+                    proposed_batch.transactions().iter().zip(&request.transaction_inputs)
+                {
+                    let tx_request = proto::transaction::ProvenTransaction {
+                        transaction: tx.to_bytes(),
+                        transaction_inputs: inputs.clone().into(),
+                    };
+                    validator.clone().submit_proven_transaction(tx_request).await?;
+                    txs.push(Self::authenticate_transaction(state, Arc::clone(tx)).await?);
+                }
 
-        block_producer.clone().submit_proven_tx_batch(request).await
+                mempool
+                    .add_user_batch(&txs)
+                    .map(Into::into)
+                    .map(Response::new)
+                    .map_err(Into::into)
+            },
+        }
     }
 
     // -- Status & utility endpoints ----------------------------------------------------------
@@ -670,15 +790,17 @@ impl api_server::Api for RpcService {
 
         let store_status =
             self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
-        let block_producer_status = if let Some(block_producer) = &self.block_producer {
-            block_producer
-                .clone()
-                .status(Request::new(()))
-                .await
-                .map(Response::into_inner)
-                .ok()
-        } else {
-            None
+        let block_producer_status = match &self.submission {
+            SubmissionTarget::Sequencer { mempool, .. } => mempool
+                .stats()
+                .map(|stats| proto::rpc::BlockProducerStatus {
+                    status: "connected".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    chain_tip: stats.chain_tip.as_u32(),
+                    mempool_stats: Some(stats.into()),
+                })
+                .ok(),
+            SubmissionTarget::ReadOnly | SubmissionTarget::Full { .. } => None,
         };
 
         Ok(Response::new(proto::rpc::RpcStatus {
