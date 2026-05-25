@@ -100,6 +100,25 @@ impl NetworkTransactionBuilder {
     }
 
     async fn run_event_loop(mut self) -> anyhow::Result<()> {
+        // First sync up to the chain tip.
+        loop {
+            let (block, committed_tip) = self
+                .block_stream
+                .next()
+                .await
+                .context("block stream ended")?
+                .context("block stream failed")?;
+            let local_tip = block.header().block_num();
+            self.apply_committed_block(block, committed_tip).await?;
+
+            if local_tip == committed_tip {
+                self.is_synced = true;
+                tracing::info!(block.number = %committed_tip, "ntx-builder is now in sync");
+                break;
+            }
+        }
+
+        // Spawn and handle network account actors, and apply new blocks.
         loop {
             let (block, committed_tip) = self
                 .block_stream
@@ -140,11 +159,6 @@ impl NetworkTransactionBuilder {
             .context("failed to apply committed block to DB")?;
 
         self.last_applied_block = block_num;
-
-        if !self.is_synced && block_num == committed_tip {
-            self.is_synced = true;
-            tracing::info!(block = %block_num, "ntx-builder caught up to chain tip");
-        }
 
         Ok(())
     }
