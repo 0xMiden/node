@@ -26,6 +26,11 @@
 - [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
+- [BREAKING] Removed the `miden-node store`, `miden-node rpc start`, and `miden-node block-producer` component commands as part of unifying the node runtime ([#2119](https://github.com/0xMiden/node/pull/2119)).
+- Added `miden-node sequencer` command which combines the previous `store`, `rpc start`, and `block-producer` commands into a single process for running a node sequencer([#2119](https://github.com/0xMiden/node/pull/2119)).
+- Added `miden-node rpc` command which combines the previous `store` and `rpc start` commands into a single process ([#2119](https://github.com/0xMiden/node/pull/2119)).
+    - It streams blocks from an upstream source (e.g. sequencer) and allows local RPC serving from this data.
+- Added top-level `miden-node bootstrap` and `miden-node migrate` lifecycle commands for a node's store initialization and migrations ([#2119](https://github.com/0xMiden/node/pull/2119)).
 - Made SQLite connection pool sizes configurable for store, validator, and ntx-builder components, defaulting each to twice the available CPU core count ([#2098](https://github.com/0xMiden/node/pull/2098)).
 - Replaced blocking-in-async LargeSmt and account state forest operations in the store with wrappers using Tokio's `block_in_place()` ([#2076](https://github.com/0xMiden/node/pull/2076)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
@@ -33,7 +38,11 @@
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
+- Implemented filtering based on the network account note script root allowlist in ntx-builder ([#2042](https://github.com/0xMiden/node/issues/2042)).
 
+- [BREAKING] Renamed `ExplorerStatusDetails` fields in the network monitor's `/status` payload from `number_of_*` to `total_*` (`total_transactions`, `total_nullifiers`, `total_notes`, `total_account_updates`). The values now represent network-wide cumulative totals from the explorer's `overviewStats` query instead of last-block counts.
+- [BREAKING] Removed `--wallet-filepath` / `--counter-filepath` flags and the `MIDEN_MONITOR_WALLET_FILEPATH` / `MIDEN_MONITOR_COUNTER_FILEPATH` env vars from the network monitor. The monitor now keeps wallet and counter accounts fully in memory and regenerates them on every startup; the dashboard's counter value resets to zero on restart.
+- Added `--counter-pending-unhealthy-threshold` (env `MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD`, default `5`) to the network monitor: the Network Transactions card now flips unhealthy when the gap between expected and observed counter values stays above the threshold for three consecutive polls.
 ## v0.14.11 (TBD)
 
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
