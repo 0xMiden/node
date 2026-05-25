@@ -5,7 +5,6 @@ use std::process::Command;
 use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
-    block_producer_api_descriptor,
     ntx_builder_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
@@ -29,7 +28,6 @@ fn main() -> miette::Result<()> {
     let descriptor_sets = [
         rpc_api_descriptor(),
         store_api_descriptor(),
-        block_producer_api_descriptor(),
         remote_prover_api_descriptor(),
         validator_api_descriptor(),
         ntx_builder_api_descriptor(),

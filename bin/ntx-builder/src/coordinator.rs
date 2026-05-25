@@ -1,24 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
-use miden_node_proto::domain::mempool::MempoolEvent;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::actor::{AccountActor, AccountActorContext};
 use crate::db::Db;
-
-// WRITE EVENT RESULT
-// ================================================================================================
-
-/// Result of writing a mempool event to the database.
-pub struct WriteEventResult {
-    /// Accounts that should be notified of state changes.
-    pub accounts_to_notify: Vec<NetworkAccountId>,
-}
 
 // ACTOR HANDLE
 // ================================================================================================
@@ -75,7 +63,7 @@ impl ActorHandle {
 /// - Gracefully handles actor shutdown and cleanup when actors complete or fail.
 /// - Monitors actor tasks through a join set to detect completion or errors.
 ///
-/// ## Event Notification
+/// ## State Notification
 /// - Notifies actors via a shared [`Notify`] when state may have changed.
 /// - The DB is the source of truth: actors re-evaluate their state from DB on notification.
 /// - Notifications are coalesced: [`Notify`] stores at most one permit, so multiple notifications
@@ -89,12 +77,11 @@ impl ActorHandle {
 /// - Actors that have been idle for longer than the idle timeout deactivate themselves.
 /// - When an actor deactivates, the coordinator checks if a notification arrived just as the actor
 ///   timed out. If so, the actor is respawned immediately.
-/// - Deactivated actors are re-spawned when [`Coordinator::send_targeted`] detects notes targeting
-///   an account without an active actor.
+/// - Deactivated actors may be re-spawned when later committed chain state requires them.
 ///
 /// The coordinator operates in an event-driven manner:
 /// 1. Network accounts are registered and actors spawned as needed.
-/// 2. Mempool events are written to DB, then actors are notified.
+/// 2. Actors are notified when DB state relevant to them may have changed.
 /// 3. Actor completion/failure events are monitored and handled.
 /// 4. Failed or completed actors are cleaned up from the registry.
 pub struct Coordinator {
@@ -255,101 +242,6 @@ impl Coordinator {
             },
         }
     }
-
-    /// Notifies account actors that are affected by a `TransactionAdded` event.
-    ///
-    /// Only actors that are currently active are notified. Since event effects are already
-    /// persisted in the DB by `write_event()`, actors that spawn later read their state from the
-    /// DB and do not need predating events.
-    ///
-    /// Returns account IDs of note targets that do not have active actors (e.g. previously
-    /// deactivated due to sterility). The caller can use this to re-activate actors for those
-    /// accounts.
-    pub fn send_targeted(&self, event: &MempoolEvent) -> Vec<NetworkAccountId> {
-        let mut target_account_ids = HashSet::new();
-        let mut inactive_targets = Vec::new();
-
-        if let MempoolEvent::TransactionAdded { network_notes, account_delta, .. } = event {
-            // We need to inform the account if it was updated. This lets it know that its own
-            // transaction has been applied, and in the future also resolves race conditions with
-            // external network transactions (once these are allowed).
-            if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
-                let account_id = delta.id();
-                if account_id.is_network() {
-                    let network_account_id =
-                        account_id.try_into().expect("account is network account");
-                    if self.actor_registry.contains_key(&network_account_id) {
-                        target_account_ids.insert(network_account_id);
-                    }
-                }
-            }
-
-            // Determine target actors for each note.
-            for note in network_notes {
-                let account = note.target_account_id();
-                let account = NetworkAccountId::try_from(account)
-                    .expect("network note target account should be a network account");
-
-                if self.actor_registry.contains_key(&account) {
-                    target_account_ids.insert(account);
-                } else {
-                    inactive_targets.push(account);
-                }
-            }
-        }
-        // Notify target actors.
-        for account_id in &target_account_ids {
-            if let Some(handle) = self.actor_registry.get(account_id) {
-                handle.notify();
-            }
-        }
-
-        inactive_targets
-    }
-
-    /// Writes mempool event effects to the database.
-    ///
-    /// This must be called BEFORE sending notifications to actors. Returns a [`WriteEventResult`]
-    /// with the accounts to notify and cancel.
-    pub async fn write_event(
-        &self,
-        event: &MempoolEvent,
-    ) -> Result<WriteEventResult, DatabaseError> {
-        match event {
-            MempoolEvent::TransactionAdded {
-                id,
-                nullifiers,
-                network_notes,
-                account_delta,
-            } => {
-                self.db
-                    .handle_transaction_added(
-                        *id,
-                        account_delta.clone(),
-                        network_notes.clone(),
-                        nullifiers.clone(),
-                    )
-                    .await?;
-                Ok(WriteEventResult { accounts_to_notify: Vec::new() })
-            },
-            MempoolEvent::BlockCommitted { header, txs } => {
-                let affected_accounts = self
-                    .db
-                    .handle_block_committed(
-                        txs.clone(),
-                        header.block_num(),
-                        header.as_ref().clone(),
-                    )
-                    .await?;
-                Ok(WriteEventResult { accounts_to_notify: affected_accounts })
-            },
-            MempoolEvent::TransactionsReverted(tx_ids) => {
-                let affected_accounts =
-                    self.db.handle_transactions_reverted(tx_ids.iter().copied().collect()).await?;
-                Ok(WriteEventResult { accounts_to_notify: affected_accounts })
-            },
-        }
-    }
 }
 
 #[cfg(test)]
@@ -363,47 +255,10 @@ impl Coordinator {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::domain::mempool::MempoolEvent;
-
     use super::*;
     use crate::actor::AccountActorContext;
     use crate::db::Db;
     use crate::test_utils::*;
-
-    /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
-    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
-        let notify = Arc::new(Notify::new());
-        coordinator.actor_registry.insert(account_id, ActorHandle::new(notify));
-    }
-
-    // SEND TARGETED TESTS
-    // ============================================================================================
-
-    #[tokio::test]
-    async fn send_targeted_returns_inactive_targets() {
-        let (mut coordinator, _dir) = Coordinator::test().await;
-
-        let active_id = mock_network_account_id();
-        let inactive_id = mock_network_account_id_seeded(42);
-
-        // Only register the active account.
-        register_dummy_actor(&mut coordinator, active_id);
-
-        let note_active = mock_single_target_note(active_id, 10);
-        let note_inactive = mock_single_target_note(inactive_id, 20);
-
-        let event = MempoolEvent::TransactionAdded {
-            id: mock_tx_id(1),
-            nullifiers: vec![],
-            network_notes: vec![note_active, note_inactive],
-            account_delta: None,
-        };
-
-        let inactive_targets = coordinator.send_targeted(&event);
-
-        assert_eq!(inactive_targets.len(), 1);
-        assert_eq!(inactive_targets[0], inactive_id);
-    }
 
     // DEACTIVATED ACCOUNTS
     // ============================================================================================

@@ -3284,7 +3284,6 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "miden-node-proto",
- "miden-node-proto-build",
  "miden-node-store",
  "miden-node-utils",
  "miden-protocol",
@@ -3299,10 +3298,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tonic",
- "tonic-reflection",
- "tower-http",
  "tracing",
  "url",
 ]

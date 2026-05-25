@@ -14,7 +14,6 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
-use miden_protocol::transaction::TransactionId;
 use miden_standards::note::{AccountTargetNetworkNote, NetworkAccountTarget, NoteExecutionHint};
 use miden_standards::testing::note::NoteBuilder;
 use rand_chacha::ChaCha20Rng;
@@ -25,25 +24,6 @@ pub fn mock_network_account_id() -> NetworkAccountId {
     let account_id: AccountId =
         ACCOUNT_ID_REGULAR_NETWORK_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap();
     NetworkAccountId::try_from(account_id).unwrap()
-}
-
-/// Creates a distinct network account ID using a seeded RNG.
-pub fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
-    let account_id = AccountIdBuilder::new()
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Network)
-        .build_with_seed([seed; 32]);
-    NetworkAccountId::try_from(account_id).unwrap()
-}
-
-/// Creates a unique `TransactionId` from a seed value.
-pub fn mock_tx_id(seed: u64) -> TransactionId {
-    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
-
-    let w = |n: u64| Word::try_from([n, 0, 0, 0]).unwrap();
-    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
-    let fee = miden_protocol::asset::FungibleAsset::new(faucet_id, 0).unwrap();
-    TransactionId::new(w(seed), w(seed + 1), w(seed + 2), w(seed + 3), fee)
 }
 
 /// Creates a `AccountTargetNetworkNote` targeting the given network account.

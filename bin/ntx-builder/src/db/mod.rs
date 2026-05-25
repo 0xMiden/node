@@ -186,7 +186,7 @@ impl Db {
     // DEAD-CODE STUBS
     // ============================================================================================
     //
-    // These methods exist to keep the dead actor/coordinator modules compiling in PR 1. They are
+    // These methods exist to keep the dead actor module compiling in PR 1. They are
     // never reached because `NetworkTransactionBuilder` does not spawn the actor path. PR 2
     // replaces them with their new committed-block-driven equivalents.
 
@@ -196,37 +196,6 @@ impl Db {
         _tx_id: miden_protocol::transaction::TransactionId,
     ) -> Result<bool> {
         unimplemented!("transaction_exists is rewired in PR 2 of the ntx-builder refactor")
-    }
-
-    #[expect(clippy::unused_async)]
-    pub async fn handle_transaction_added(
-        &self,
-        _tx_id: miden_protocol::transaction::TransactionId,
-        _account_delta: Option<miden_protocol::account::delta::AccountUpdateDetails>,
-        _notes: Vec<AccountTargetNetworkNote>,
-        _nullifiers: Vec<Nullifier>,
-    ) -> Result<()> {
-        unimplemented!("handle_transaction_added is rewired in PR 2 of the ntx-builder refactor")
-    }
-
-    #[expect(clippy::unused_async)]
-    pub async fn handle_block_committed(
-        &self,
-        _txs: Vec<miden_protocol::transaction::TransactionId>,
-        _block_num: BlockNumber,
-        _header: BlockHeader,
-    ) -> Result<Vec<NetworkAccountId>> {
-        unimplemented!("handle_block_committed is rewired in PR 2 of the ntx-builder refactor")
-    }
-
-    #[expect(clippy::unused_async)]
-    pub async fn handle_transactions_reverted(
-        &self,
-        _tx_ids: Vec<miden_protocol::transaction::TransactionId>,
-    ) -> Result<Vec<NetworkAccountId>> {
-        unimplemented!(
-            "handle_transactions_reverted is rewired in PR 2 of the ntx-builder refactor"
-        )
     }
 
     /// Creates a file-backed SQLite test connection with migrations applied.

@@ -174,16 +174,14 @@ enum ActorMode {
 ///   based on current chain state and DB queries.
 /// - **Transaction Execution**: Executes selected transactions using either local or remote
 ///   proving.
-/// - **Mempool Integration**: Listens for mempool events to stay synchronized with the network
-///   state and adjust behavior based on transaction confirmations.
+/// - **Chain Integration**: Reacts to committed chain state persisted by the builder.
 ///
 /// ## Lifecycle
 ///
 /// 1. **Initialization**: Waits for committed account state, then checks DB for available notes.
-/// 2. **Event Loop**: Continuously processes mempool events and executes transactions.
+/// 2. **Event Loop**: Re-evaluates persisted state and executes transactions when notified.
 /// 3. **Transaction Processing**: Selects, executes, proves, and submits transactions through RPC.
-/// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
-///    notified.
+/// 4. **State Updates**: Committed block effects are persisted to DB before actors are notified.
 /// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
 ///    failures.
 ///
@@ -383,9 +381,8 @@ impl AccountActor {
     /// For accounts that are being created by an inflight transaction, this will idle
     /// until the transaction is committed. Returns `true` when the account is ready, or
     /// `false` if no commit arrived within [`ActorConfig::idle_timeout`] — in which case
-    /// the coordinator will respawn a new actor when the account reappears through
-    /// [`Coordinator::send_targeted`](crate::coordinator::Coordinator::send_targeted) or the
-    /// account loader.
+    /// the coordinator will respawn a new actor when the account reappears through the account
+    /// loader.
     async fn wait_for_committed_account(
         &self,
         account_id: NetworkAccountId,

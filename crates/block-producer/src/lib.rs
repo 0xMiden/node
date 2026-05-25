@@ -59,9 +59,6 @@ const SERVER_MEMPOOL_STATE_RETENTION: NonZeroUsize = NonZeroUsize::new(5).unwrap
 /// This rejects transactions which would likely expire before making it into a block.
 const SERVER_MEMPOOL_EXPIRATION_SLACK: u32 = 2;
 
-/// The interval at which to update the cached mempool statistics.
-const CACHED_MEMPOOL_STATS_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
-
 /// How often a block is created.
 pub const DEFAULT_BLOCK_INTERVAL: Duration = Duration::from_secs(3);
 
