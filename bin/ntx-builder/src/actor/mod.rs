@@ -23,7 +23,7 @@ use tokio::sync::{Notify, Semaphore, mpsc};
 
 use crate::NoteError;
 use crate::chain_state::{ChainState, SharedChainState};
-use crate::clients::{RpcClient, ValidatorClient};
+use crate::clients::RpcClient;
 use crate::db::Db;
 
 // ACTOR REQUESTS
@@ -53,8 +53,6 @@ pub enum ActorRequest {
 pub struct GrpcClients {
     /// Client for interacting with the RPC service in order to load account state.
     pub rpc: RpcClient,
-    /// Client for interacting with the validator.
-    pub validator: ValidatorClient,
     /// Client for remote transaction proving. If `None`, transactions will be proven locally, which
     /// is undesirable due to the performance impact.
     pub prover: Option<RemoteTransactionProver>,
@@ -83,8 +81,8 @@ pub struct ActorConfig {
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
     /// Initial sleep applied between per-request retries on transient infrastructure failures
-    /// (prover unreachable, validator/RPC transport error, RPC gRPC hiccup). Doubles each retry up
-    /// to [`Self::request_backoff_max`].
+    /// (prover unreachable, RPC transport error, RPC gRPC hiccup). Doubles each retry up to
+    /// [`Self::request_backoff_max`].
     pub request_backoff_initial: Duration,
     /// Upper bound on the per-request retry backoff sleep.
     pub request_backoff_max: Duration,
@@ -130,7 +128,6 @@ impl AccountActorContext {
                     Duration::from_millis(100),
                     Duration::from_secs(30),
                 ),
-                validator: ValidatorClient::new(url),
                 prover: None,
             },
             state: State {
@@ -433,8 +430,8 @@ impl AccountActor {
     ///
     /// Returns the new actor mode based on the execution result.
     ///
-    /// Transient infrastructure failures (prover unreachable, validator/RPC transport
-    /// hiccup, RPC gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
+    /// Transient infrastructure failures (prover unreachable, RPC transport hiccup, RPC gRPC
+    /// error) are retried inside [`execute::NtxContext::execute_transaction`].
     /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
     /// are marked failed and the actor moves on.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
@@ -447,7 +444,6 @@ impl AccountActor {
 
         // Execute the selected transaction.
         let context = execute::NtxContext::new(
-            self.clients.validator.clone(),
             self.clients.prover.clone(),
             self.clients.rpc.clone(),
             self.state.script_cache.clone(),

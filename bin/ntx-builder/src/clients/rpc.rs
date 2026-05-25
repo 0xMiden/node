@@ -13,7 +13,7 @@ use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, Stora
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::note::NoteScript;
-use miden_protocol::transaction::{AccountInputs, ProvenTransaction};
+use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use thiserror::Error;
 use tonic::Status;
@@ -110,11 +110,14 @@ impl RpcClient {
     }
 
     #[instrument(target = COMPONENT, name = "ntx.rpc.client.submit_proven_tx", skip_all, err)]
-    pub async fn submit_proven_tx(&self, proven_tx: &ProvenTransaction) -> Result<(), Status> {
+    pub async fn submit_proven_tx(
+        &self,
+        proven_tx: &ProvenTransaction,
+        tx_inputs: &TransactionInputs,
+    ) -> Result<(), Status> {
         let request = proto::transaction::ProvenTransaction {
             transaction: proven_tx.to_bytes(),
-            transaction_inputs: None, /* Transaction inputs are only required for Validator
-                                       * transaction re-execution. */
+            transaction_inputs: Some(tx_inputs.to_bytes()),
         };
 
         self.inner.clone().submit_proven_tx(request).await?;

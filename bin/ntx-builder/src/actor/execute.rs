@@ -55,7 +55,7 @@ use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
 use crate::actor::candidate::TransactionCandidate;
-use crate::clients::{RpcClient, RpcError, ValidatorClient};
+use crate::clients::{RpcClient, RpcError};
 use crate::db::Db;
 
 #[derive(Debug, thiserror::Error)]
@@ -135,9 +135,6 @@ pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteSc
 /// Provides the context for execution [network transaction candidates](TransactionCandidate).
 #[derive(Clone)]
 pub struct NtxContext {
-    /// Client for validating transactions via the Validator.
-    validator: ValidatorClient,
-
     /// The prover to delegate proofs to.
     ///
     /// Defaults to local proving if unset. This should be avoided in production as this is
@@ -162,9 +159,7 @@ pub struct NtxContext {
 
 impl NtxContext {
     /// Creates a new [`NtxContext`] instance.
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
-        validator: ValidatorClient,
         prover: Option<RemoteTransactionProver>,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
@@ -175,7 +170,6 @@ impl NtxContext {
     ) -> Self {
         let request_backoff = request_backoff(request_backoff_initial, request_backoff_max);
         Self {
-            validator,
             prover,
             rpc,
             script_cache,
@@ -292,11 +286,8 @@ impl NtxContext {
                 let tx_inputs: TransactionInputs = executed_tx.into();
                 let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
 
-                // Validate proven transaction.
-                self.validate(&proven_tx, &tx_inputs).await?;
-
                 // Submit transaction through the RPC service.
-                self.submit(&proven_tx).await?;
+                self.submit(&proven_tx, &tx_inputs).await?;
 
                 Ok((proven_tx.id(), failed_notes, scripts_to_cache))
             })
@@ -427,31 +418,16 @@ impl NtxContext {
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the actor can mark the batch failed.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
-    async fn submit(&self, proven_tx: &ProvenTransaction) -> NtxResult<()> {
-        (|| async { self.rpc.submit_proven_tx(proven_tx).await })
-            .retry(self.request_backoff())
-            .when(is_transient_status)
-            .notify(|status, dur| {
-                log_transient_retry("rpc.submit_proven_tx", status, dur);
-            })
-            .await
-            .map_err(NtxError::Submission)
-    }
-
-    /// Validates the transaction against the Validator.
-    ///
-    /// Transient gRPC failures are retried in-place; content-rejection codes escape immediately.
-    #[instrument(target = COMPONENT, name = "ntx.execute_transaction.validate", skip_all, err)]
-    async fn validate(
+    async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
         tx_inputs: &TransactionInputs,
     ) -> NtxResult<()> {
-        (|| async { self.validator.submit_proven_transaction(proven_tx, tx_inputs).await })
+        (|| async { self.rpc.submit_proven_tx(proven_tx, tx_inputs).await })
             .retry(self.request_backoff())
             .when(is_transient_status)
             .notify(|status, dur| {
-                log_transient_retry("validator.submit_proven_transaction", status, dur);
+                log_transient_retry("rpc.submit_proven_tx", status, dur);
             })
             .await
             .map_err(NtxError::Submission)

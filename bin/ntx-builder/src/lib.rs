@@ -72,8 +72,8 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
 /// Default initial sleep applied between per-request retries on transient infrastructure failures
-/// (downed prover, transport error, validator/RPC crash, RPC gRPC hiccup). Doubles on each retry up
-/// to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+/// (downed prover, transport error, RPC crash, RPC gRPC hiccup). Doubles on each retry up to
+/// [`DEFAULT_REQUEST_BACKOFF_MAX`].
 const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 
 /// Default upper bound on the per-request retry backoff sleep.
@@ -95,9 +95,6 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 pub struct NtxBuilderConfig {
     /// Address of the node RPC gRPC server.
     pub rpc_url: Url,
-
-    /// Address of the validator gRPC server.
-    pub validator_url: Url,
 
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
@@ -141,9 +138,9 @@ pub struct NtxBuilderConfig {
     pub max_cycles: u32,
 
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
-    /// prover unreachable, validator/RPC crash, transport error, RPC gRPC hiccup). Doubles on each
-    /// retry up to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not* advanced while
-    /// retries are in progress.
+    /// prover unreachable, RPC crash, transport error, RPC gRPC hiccup). Doubles on each retry up
+    /// to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not* advanced while retries
+    /// are in progress.
     pub request_backoff_initial: Duration,
 
     /// Upper bound on the per-request retry backoff sleep.
@@ -157,10 +154,9 @@ pub struct NtxBuilderConfig {
 }
 
 impl NtxBuilderConfig {
-    pub fn new(rpc_url: Url, validator_url: Url, database_filepath: PathBuf) -> Self {
+    pub fn new(rpc_url: Url, database_filepath: PathBuf) -> Self {
         Self {
             rpc_url,
-            validator_url,
             tx_prover_url: None,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,

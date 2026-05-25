@@ -13,7 +13,6 @@ const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_RPC_URL: &str = "MIDEN_NODE_NTX_BUILDER_RPC_URL";
-const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
 const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
@@ -35,10 +34,6 @@ pub enum NtxBuilderCommand {
         /// The node RPC service gRPC url.
         #[arg(long = "rpc.url", alias = "store.url", env = ENV_RPC_URL, value_name = "URL")]
         rpc_url: Url,
-
-        /// The validator's gRPC url.
-        #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
-        validator_url: Url,
 
         /// The remote transaction prover's gRPC url. If unset, will default to running a prover
         /// in-process which is expensive.
@@ -113,7 +108,6 @@ impl NtxBuilderCommand {
         let Self::Start {
             listen,
             rpc_url,
-            validator_url,
             tx_prover_url,
             script_cache_size,
             idle_timeout,
@@ -130,14 +124,13 @@ impl NtxBuilderCommand {
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
-        let config =
-            miden_ntx_builder::NtxBuilderConfig::new(rpc_url, validator_url, database_filepath)
-                .with_tx_prover_url(tx_prover_url)
-                .with_script_cache_size(script_cache_size)
-                .with_idle_timeout(idle_timeout)
-                .with_max_account_crashes(max_account_crashes)
-                .with_max_cycles(max_tx_cycles)
-                .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
+        let config = miden_ntx_builder::NtxBuilderConfig::new(rpc_url, database_filepath)
+            .with_tx_prover_url(tx_prover_url)
+            .with_script_cache_size(script_cache_size)
+            .with_idle_timeout(idle_timeout)
+            .with_max_account_crashes(max_account_crashes)
+            .with_max_cycles(max_tx_cycles)
+            .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
 
         config
             .build()
