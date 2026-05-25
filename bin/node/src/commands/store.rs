@@ -1,285 +1,194 @@
-use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-use miden_node_store::genesis::GenesisBlock;
-use miden_node_store::{
-    DEFAULT_MAX_CONCURRENT_PROOFS,
-    DatabaseOptions,
-    Store,
-    StoreMode,
-    default_sqlite_connection_pool_size,
+use miden_node_store::DatabaseOptions;
+use miden_node_utils::clap::{
+    AccountStateForestRocksDbOptions,
+    AccountTreeRocksDbOptions,
+    CliRocksDbDurabilityMode,
+    NullifierTreeRocksDbOptions,
+    RocksDbOptions,
+    StorageOptions,
 };
-use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
-use miden_node_utils::fs::ensure_empty_directory;
-use miden_protocol::block::SignedBlock;
-use miden_protocol::utils::serde::Deserializable;
-use url::Url;
 
-use super::ENV_ENABLE_OTEL;
-use crate::commands::ENV_DATA_DIRECTORY;
+// STORE OPTIONS
+// ================================================================================================
 
-const ENV_RPC_LISTEN: &str = "MIDEN_NODE_STORE_RPC_LISTEN";
-const ENV_UPSTREAM_URL: &str = "MIDEN_NODE_STORE_UPSTREAM_RPC_URL";
-const ENV_NTX_BUILDER_LISTEN: &str = "MIDEN_NODE_STORE_NTX_BUILDER_LISTEN";
-const ENV_BLOCK_PRODUCER_LISTEN: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_LISTEN";
-const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PROVER_URL";
-const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE";
+#[derive(clap::Args, Clone, Debug)]
+pub struct StoreOptions {
+    #[command(flatten)]
+    pub sqlite: StoreSqliteOptions,
 
-#[derive(clap::Subcommand)]
-pub enum StoreCommand {
-    /// Bootstraps the blockchain database with a pre-existing genesis block.
-    ///
-    /// The genesis block file should be produced by `miden-validator bootstrap`.
-    Bootstrap {
-        /// Directory in which to store the database and raw block data.
-        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
-        data_directory: PathBuf,
-        /// Path to the pre-signed genesis block file produced by the validator.
-        #[arg(long, value_name = "FILE")]
-        genesis_block: PathBuf,
-    },
-
-    /// Starts the store in block-producer mode.
-    ///
-    /// In this mode the store accepts blocks from a block producer via a dedicated gRPC endpoint
-    /// and runs the proof scheduler to generate block proofs.
-    Start {
-        /// Socket address at which to serve the store's RPC API.
-        #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
-        rpc_listen: SocketAddr,
-
-        /// Socket address at which to serve the store's network transaction builder API.
-        #[arg(long = "ntx-builder.listen", env = ENV_NTX_BUILDER_LISTEN, value_name = "LISTEN")]
-        ntx_builder_listen: SocketAddr,
-
-        /// Socket address at which to serve the store's block producer API.
-        #[arg(long = "block-producer.listen", env = ENV_BLOCK_PRODUCER_LISTEN, value_name = "LISTEN")]
-        block_producer_listen: SocketAddr,
-
-        /// The remote block prover's gRPC url. If not provided, a local block prover will be used.
-        #[arg(long = "block-prover.url", env = ENV_BLOCK_PROVER_URL, value_name = "URL")]
-        block_prover_url: Option<Url>,
-
-        /// Directory in which to store the database and raw block data.
-        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
-        data_directory: PathBuf,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        ///
-        /// This can be further configured using environment variables as defined in the official
-        /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
-
-        /// Maximum number of concurrent block proofs to be scheduled.
-        #[arg(
-            long = "max-concurrent-proofs",
-            default_value_t = DEFAULT_MAX_CONCURRENT_PROOFS,
-            value_name = "NUM"
-        )]
-        max_concurrent_proofs: NonZeroUsize,
-
-        #[command(flatten)]
-        grpc_options: GrpcOptionsInternal,
-
-        /// Maximum number of SQLite connections in the store database connection pool.
-        #[arg(
-            long = "sqlite.connection_pool_size",
-            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
-            default_value_t = default_sqlite_connection_pool_size(),
-            value_name = "NUM"
-        )]
-        sqlite_connection_pool_size: NonZeroUsize,
-
-        #[command(flatten)]
-        storage_options: StorageOptions,
-    },
-
-    /// Starts the store in replica mode.
-    ///
-    /// In this mode the store syncs blocks from an upstream store's `Rpc` gRPC service.
-    /// Only the `Rpc` gRPC service is exposed — the `BlockProducer` and `NtxBuilder` services are
-    /// not started and no proof scheduler runs.
-    StartReplica {
-        /// Socket address at which to serve the store's RPC API.
-        #[arg(long = "rpc.listen", env = ENV_RPC_LISTEN, value_name = "LISTEN")]
-        rpc_listen: SocketAddr,
-
-        /// gRPC URL of the upstream store's `Rpc` endpoint to sync blocks from.
-        #[arg(long = "upstream-store.url", env = ENV_UPSTREAM_URL, value_name = "URL")]
-        upstream_store_url: Url,
-
-        /// Directory in which to store the database and raw block data.
-        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
-        data_directory: PathBuf,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
-
-        #[command(flatten)]
-        grpc_options: GrpcOptionsInternal,
-
-        /// Maximum number of SQLite connections in the store database connection pool.
-        #[arg(
-            long = "sqlite.connection_pool_size",
-            env = ENV_SQLITE_CONNECTION_POOL_SIZE,
-            default_value_t = default_sqlite_connection_pool_size(),
-            value_name = "NUM"
-        )]
-        sqlite_connection_pool_size: NonZeroUsize,
-
-        #[command(flatten)]
-        storage_options: StorageOptions,
-    },
+    #[command(flatten)]
+    pub storage: StoreStorageOptions,
 }
 
-impl StoreCommand {
-    /// Executes the subcommand as described by each variant's documentation.
-    pub async fn handle(self) -> anyhow::Result<()> {
-        match self {
-            StoreCommand::Bootstrap { data_directory, genesis_block } => {
-                ensure_empty_directory(&data_directory)?;
-                bootstrap_store(&data_directory, &genesis_block)
-            },
-            StoreCommand::Start {
-                rpc_listen,
-                ntx_builder_listen,
-                block_producer_listen,
-                block_prover_url,
-                data_directory,
-                enable_otel: _,
-                grpc_options,
-                sqlite_connection_pool_size,
-                max_concurrent_proofs,
-                storage_options,
-            } => {
-                Self::start(
-                    rpc_listen,
-                    ntx_builder_listen,
-                    block_producer_listen,
-                    block_prover_url,
-                    data_directory,
-                    grpc_options,
-                    DatabaseOptions {
-                        connection_pool_size: sqlite_connection_pool_size,
-                    },
-                    max_concurrent_proofs,
-                    storage_options,
-                )
-                .await
-            },
-            StoreCommand::StartReplica {
-                rpc_listen,
-                upstream_store_url,
-                data_directory,
-                enable_otel: _,
-                grpc_options,
-                sqlite_connection_pool_size,
-                storage_options,
-            } => {
-                Self::start_replica(
-                    rpc_listen,
-                    upstream_store_url,
-                    data_directory,
-                    grpc_options,
-                    DatabaseOptions {
-                        connection_pool_size: sqlite_connection_pool_size,
-                    },
-                    storage_options,
-                )
-                .await
-            },
+#[derive(clap::Args, Clone, Debug)]
+pub struct StoreSqliteOptions {
+    /// Maximum number of SQLite connections in the store database connection pool.
+    #[arg(
+        long = "store.sqlite.connection-pool-size",
+        env = "MIDEN_NODE_STORE_SQLITE_CONNECTION_POOL_SIZE",
+        default_value_t = miden_node_store::default_sqlite_connection_pool_size(),
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub connection_pool_size: NonZeroUsize,
+}
+
+impl StoreSqliteOptions {
+    pub(super) fn database_options(&self) -> DatabaseOptions {
+        DatabaseOptions {
+            connection_pool_size: self.connection_pool_size,
         }
-    }
-
-    pub fn is_open_telemetry_enabled(&self) -> bool {
-        match self {
-            Self::Start { enable_otel, .. } | Self::StartReplica { enable_otel, .. } => {
-                *enable_otel
-            },
-            Self::Bootstrap { .. } => false,
-        }
-    }
-
-    #[expect(clippy::too_many_arguments)]
-    async fn start(
-        rpc_listen: SocketAddr,
-        ntx_builder_listen: SocketAddr,
-        block_producer_listen: SocketAddr,
-        block_prover_url: Option<Url>,
-        data_directory: PathBuf,
-        grpc_options: GrpcOptionsInternal,
-        database_options: DatabaseOptions,
-        max_concurrent_proofs: NonZeroUsize,
-        storage_options: StorageOptions,
-    ) -> anyhow::Result<()> {
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
-            .await
-            .context("Failed to bind to store's RPC gRPC socket")?;
-
-        let ntx_builder_listener = tokio::net::TcpListener::bind(ntx_builder_listen)
-            .await
-            .context("Failed to bind to store's ntx-builder gRPC socket")?;
-
-        let block_producer_listener = tokio::net::TcpListener::bind(block_producer_listen)
-            .await
-            .context("Failed to bind to store's block-producer gRPC socket")?;
-
-        Store {
-            rpc_listener,
-            mode: StoreMode::BlockProducer {
-                block_producer_listener,
-                ntx_builder_listener,
-                block_prover_url,
-                max_concurrent_proofs,
-            },
-            data_directory,
-            database_options,
-            grpc_options,
-            storage_options,
-        }
-        .serve()
-        .await
-        .context("failed while serving store component")
-    }
-
-    async fn start_replica(
-        rpc_listen: SocketAddr,
-        upstream_store_url: Url,
-        data_directory: PathBuf,
-        grpc_options: GrpcOptionsInternal,
-        database_options: DatabaseOptions,
-        storage_options: StorageOptions,
-    ) -> anyhow::Result<()> {
-        let rpc_listener = tokio::net::TcpListener::bind(rpc_listen)
-            .await
-            .context("Failed to bind to store's RPC gRPC socket")?;
-
-        Store {
-            rpc_listener,
-            mode: StoreMode::Replica { upstream_url: upstream_store_url },
-            data_directory,
-            database_options,
-            grpc_options,
-            storage_options,
-        }
-        .serve()
-        .await
-        .context("failed while serving store replica component")
     }
 }
 
-/// Reads a genesis block from disk, validates it, and bootstraps the store.
-pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyhow::Result<()> {
-    // Read and deserialize the genesis block file.
-    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
-    let signed_block = SignedBlock::read_from_bytes(&bytes)
-        .context("failed to deserialize genesis block from file")?;
-    let genesis_block =
-        GenesisBlock::try_from(signed_block).context("genesis block validation failed")?;
+#[derive(clap::Args, Clone, Debug)]
+pub struct StoreStorageOptions {
+    #[command(flatten)]
+    pub account_tree: AccountTreeStoreRocksDbOptions,
 
-    Store::bootstrap(genesis_block, data_directory)
+    #[command(flatten)]
+    pub nullifier_tree: NullifierTreeStoreRocksDbOptions,
+
+    #[command(flatten)]
+    pub account_state_forest: AccountStateForestStoreRocksDbOptions,
+}
+
+impl From<StoreStorageOptions> for StorageOptions {
+    fn from(value: StoreStorageOptions) -> Self {
+        Self {
+            account_tree: AccountTreeRocksDbOptions {
+                max_open_fds: value.account_tree.max_open_fds,
+                cache_size_in_bytes: value.account_tree.cache_size_in_bytes,
+                durability_mode: value.account_tree.durability_mode,
+            },
+            nullifier_tree: NullifierTreeRocksDbOptions {
+                max_open_fds: value.nullifier_tree.max_open_fds,
+                cache_size_in_bytes: value.nullifier_tree.cache_size_in_bytes,
+                durability_mode: value.nullifier_tree.durability_mode,
+            },
+            account_state_forest: AccountStateForestRocksDbOptions {
+                max_open_fds: value.account_state_forest.max_open_fds,
+                cache_size_in_bytes: value.account_state_forest.cache_size_in_bytes,
+                durability_mode: value.account_state_forest.durability_mode,
+            },
+        }
+    }
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct AccountTreeStoreRocksDbOptions {
+    /// Maximum number of open file descriptors for this `RocksDB` store.
+    #[arg(
+        id = "store.account-tree.rocksdb.max-open-fds",
+        long = "store.account-tree.rocksdb.max-open-fds",
+        env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_MAX_OPEN_FDS",
+        default_value_t = default_rocksdb_max_open_fds(),
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub max_open_fds: i32,
+
+    /// Maximum block cache size in bytes for this `RocksDB` store.
+    #[arg(
+        id = "store.account-tree.rocksdb.cache-size",
+        long = "store.account-tree.rocksdb.cache-size",
+        env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_CACHE_SIZE",
+        default_value_t = default_rocksdb_cache_size(),
+        value_name = "BYTES",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub cache_size_in_bytes: usize,
+
+    /// `RocksDB` durability mode for this store.
+    #[arg(
+        id = "store.account-tree.rocksdb.durability-mode",
+        long = "store.account-tree.rocksdb.durability-mode",
+        env = "MIDEN_NODE_STORE_ACCOUNT_TREE_ROCKSDB_DURABILITY_MODE",
+        value_enum,
+        value_name = "MODE",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub durability_mode: Option<CliRocksDbDurabilityMode>,
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct NullifierTreeStoreRocksDbOptions {
+    /// Maximum number of open file descriptors for this `RocksDB` store.
+    #[arg(
+        id = "store.nullifier-tree.rocksdb.max-open-fds",
+        long = "store.nullifier-tree.rocksdb.max-open-fds",
+        env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_MAX_OPEN_FDS",
+        default_value_t = default_rocksdb_max_open_fds(),
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub max_open_fds: i32,
+
+    /// Maximum block cache size in bytes for this `RocksDB` store.
+    #[arg(
+        id = "store.nullifier-tree.rocksdb.cache-size",
+        long = "store.nullifier-tree.rocksdb.cache-size",
+        env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_CACHE_SIZE",
+        default_value_t = default_rocksdb_cache_size(),
+        value_name = "BYTES",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub cache_size_in_bytes: usize,
+
+    /// `RocksDB` durability mode for this store.
+    #[arg(
+        id = "store.nullifier-tree.rocksdb.durability-mode",
+        long = "store.nullifier-tree.rocksdb.durability-mode",
+        env = "MIDEN_NODE_STORE_NULLIFIER_TREE_ROCKSDB_DURABILITY_MODE",
+        value_enum,
+        value_name = "MODE",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub durability_mode: Option<CliRocksDbDurabilityMode>,
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct AccountStateForestStoreRocksDbOptions {
+    /// Maximum number of open file descriptors for this `RocksDB` store.
+    #[arg(
+        id = "store.account-state-forest.rocksdb.max-open-fds",
+        long = "store.account-state-forest.rocksdb.max-open-fds",
+        env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_MAX_OPEN_FDS",
+        default_value_t = default_rocksdb_max_open_fds(),
+        value_name = "NUM",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub max_open_fds: i32,
+
+    /// Maximum block cache size in bytes for this `RocksDB` store.
+    #[arg(
+        id = "store.account-state-forest.rocksdb.cache-size",
+        long = "store.account-state-forest.rocksdb.cache-size",
+        env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_CACHE_SIZE",
+        default_value_t = default_rocksdb_cache_size(),
+        value_name = "BYTES",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub cache_size_in_bytes: usize,
+
+    /// `RocksDB` durability mode for this store.
+    #[arg(
+        id = "store.account-state-forest.rocksdb.durability-mode",
+        long = "store.account-state-forest.rocksdb.durability-mode",
+        env = "MIDEN_NODE_STORE_ACCOUNT_STATE_FOREST_ROCKSDB_DURABILITY_MODE",
+        value_enum,
+        value_name = "MODE",
+        help_heading = super::section::STORE_CONFIGURATION_HELP_HEADING
+    )]
+    pub durability_mode: Option<CliRocksDbDurabilityMode>,
+}
+
+fn default_rocksdb_max_open_fds() -> i32 {
+    RocksDbOptions::default().max_open_fds
+}
+
+fn default_rocksdb_cache_size() -> usize {
+    RocksDbOptions::default().cache_size_in_bytes
 }
