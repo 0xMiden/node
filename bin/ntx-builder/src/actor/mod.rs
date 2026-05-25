@@ -23,7 +23,7 @@ use tokio::sync::{Notify, Semaphore, mpsc};
 
 use crate::NoteError;
 use crate::chain_state::{ChainState, SharedChainState};
-use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
+use crate::clients::{RpcClient, ValidatorClient};
 use crate::db::Db;
 
 // ACTOR REQUESTS
@@ -40,7 +40,8 @@ pub enum ActorRequest {
         block_num: BlockNumber,
         ack_tx: tokio::sync::oneshot::Sender<()>,
     },
-    /// A note script was fetched from the remote store and should be persisted to the local DB.
+    /// A note script was fetched from the remote RPC service and should be persisted to the local
+    /// DB.
     CacheNoteScript { script_root: Word, script: NoteScript },
 }
 
@@ -50,10 +51,8 @@ pub enum ActorRequest {
 /// gRPC clients used by an account actor to interact with the node's services.
 #[derive(Clone)]
 pub struct GrpcClients {
-    /// Client for interacting with the store in order to load account state.
-    pub store: StoreClient,
-    /// Client for interacting with the block producer.
-    pub block_producer: BlockProducerClient,
+    /// Client for interacting with the RPC service in order to load account state.
+    pub rpc: RpcClient,
     /// Client for interacting with the validator.
     pub validator: ValidatorClient,
     /// Client for remote transaction proving. If `None`, transactions will be proven locally, which
@@ -68,7 +67,7 @@ pub struct State {
     pub db: Db,
     /// The latest chain state. A single chain state is shared among all actors.
     pub chain: Arc<SharedChainState>,
-    /// Shared LRU cache for storing retrieved note scripts to avoid repeated store calls.
+    /// Shared LRU cache for storing retrieved note scripts to avoid repeated RPC calls.
     pub script_cache: LruCache<Word, NoteScript>,
 }
 
@@ -84,8 +83,8 @@ pub struct ActorConfig {
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
     /// Initial sleep applied between per-request retries on transient infrastructure failures
-    /// (prover unreachable, validator/block-producer transport error, store gRPC hiccup). Doubles
-    /// each retry up to [`Self::request_backoff_max`].
+    /// (prover unreachable, validator/RPC transport error, RPC gRPC hiccup). Doubles each retry up
+    /// to [`Self::request_backoff_max`].
     pub request_backoff_initial: Duration,
     /// Upper bound on the per-request retry backoff sleep.
     pub request_backoff_max: Duration,
@@ -115,7 +114,7 @@ impl AccountActorContext {
         use url::Url;
 
         use crate::chain_state::SharedChainState;
-        use crate::clients::StoreClient;
+        use crate::clients::RpcClient;
         use crate::test_utils::mock_block_header;
 
         let url = Url::parse("http://127.0.0.1:1").unwrap();
@@ -126,12 +125,11 @@ impl AccountActorContext {
 
         Self {
             clients: GrpcClients {
-                store: StoreClient::new(
+                rpc: RpcClient::new(
                     url.clone(),
                     Duration::from_millis(100),
                     Duration::from_secs(30),
                 ),
-                block_producer: BlockProducerClient::new(url.clone()),
                 validator: ValidatorClient::new(url),
                 prover: None,
             },
@@ -186,8 +184,7 @@ enum ActorMode {
 ///
 /// 1. **Initialization**: Waits for committed account state, then checks DB for available notes.
 /// 2. **Event Loop**: Continuously processes mempool events and executes transactions.
-/// 3. **Transaction Processing**: Selects, executes, and proves transactions, and submits them to
-///    block producer.
+/// 3. **Transaction Processing**: Selects, executes, proves, and submits transactions through RPC.
 /// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
 ///    notified.
 /// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
@@ -436,8 +433,8 @@ impl AccountActor {
     ///
     /// Returns the new actor mode based on the execution result.
     ///
-    /// Transient infrastructure failures (prover unreachable, validator/block-producer transport
-    /// hiccup, store gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
+    /// Transient infrastructure failures (prover unreachable, validator/RPC transport
+    /// hiccup, RPC gRPC error) are retried inside [`execute::NtxContext::execute_transaction`].
     /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
     /// are marked failed and the actor moves on.
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
@@ -450,10 +447,9 @@ impl AccountActor {
 
         // Execute the selected transaction.
         let context = execute::NtxContext::new(
-            self.clients.block_producer.clone(),
             self.clients.validator.clone(),
             self.clients.prover.clone(),
-            self.clients.store.clone(),
+            self.clients.rpc.clone(),
             self.state.script_cache.clone(),
             self.state.db.clone(),
             self.config.max_cycles,
@@ -523,7 +519,7 @@ impl AccountActor {
         }
     }
 
-    /// Sends requests to the coordinator to cache note scripts fetched from the remote store.
+    /// Sends requests to the coordinator to cache note scripts fetched from the remote RPC service.
     async fn cache_note_scripts(&self, scripts: Vec<(Word, NoteScript)>) {
         for (script_root, script) in scripts {
             if self
@@ -583,14 +579,12 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use std::sync::Arc;
 
-    
     use tokio::sync::{Notify, mpsc};
 
     use super::*;
-    
 
     const OTHER_NOTE_SCRIPT: &str = "\
 @note_script
@@ -697,7 +691,7 @@ end";
         //     status
         //         .last_error
         //         .as_deref()
-        //         .expect("rejected note should store an error")
+        //         .expect("rejected note should record an error")
         //         .contains("not allowlisted")
         // );
     }

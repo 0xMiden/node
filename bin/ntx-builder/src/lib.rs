@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use builder::BlockStream;
 use chain_state::ChainState;
-use clients::StoreClient;
+use clients::RpcClient;
 use db::Db;
 use futures::StreamExt;
 use miden_node_utils::ErrorReport;
@@ -55,7 +55,7 @@ const DEFAULT_MAX_CONCURRENT_TXS: usize = 4;
 /// Default maximum number of blocks to keep in the chain MMR.
 const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
 
-/// Default channel capacity for account loading from the store.
+/// Default channel capacity for account loading through RPC.
 const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
 /// Default maximum number of attempts to execute a failing note before dropping it.
@@ -72,8 +72,8 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
 /// Default initial sleep applied between per-request retries on transient infrastructure failures
-/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles on
-/// each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+/// (downed prover, transport error, validator/RPC crash, RPC gRPC hiccup). Doubles on each retry up
+/// to [`DEFAULT_REQUEST_BACKOFF_MAX`].
 const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 
 /// Default upper bound on the per-request retry backoff sleep.
@@ -93,11 +93,8 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 /// This struct contains all the settings needed to create and run a `NetworkTransactionBuilder`.
 #[derive(Debug, Clone)]
 pub struct NtxBuilderConfig {
-    /// Address of the store gRPC server (ntx-builder API).
-    pub store_url: Url,
-
-    /// Address of the block producer gRPC server.
-    pub block_producer_url: Url,
+    /// Address of the node RPC gRPC server.
+    pub rpc_url: Url,
 
     /// Address of the validator gRPC server.
     pub validator_url: Url,
@@ -105,8 +102,8 @@ pub struct NtxBuilderConfig {
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
 
-    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached to
-    /// avoid repeated gRPC calls.
+    /// Size of the LRU cache for note scripts. Scripts are fetched through RPC and cached to avoid
+    /// repeated gRPC calls.
     pub script_cache_size: NonZeroUsize,
 
     /// Maximum number of network transactions which should be in progress concurrently across all
@@ -123,7 +120,7 @@ pub struct NtxBuilderConfig {
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
     pub max_block_count: usize,
 
-    /// Channel capacity for loading accounts from the store during startup.
+    /// Channel capacity for loading accounts through RPC during startup.
     pub account_channel_capacity: usize,
 
     /// Duration after which an idle network account will deactivate.
@@ -144,9 +141,9 @@ pub struct NtxBuilderConfig {
     pub max_cycles: u32,
 
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
-    /// prover unreachable, validator/block-producer crash, transport error, store gRPC hiccup).
-    /// Doubles on each retry up to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not*
-    /// advanced while retries are in progress.
+    /// prover unreachable, validator/RPC crash, transport error, RPC gRPC hiccup). Doubles on each
+    /// retry up to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not* advanced while
+    /// retries are in progress.
     pub request_backoff_initial: Duration,
 
     /// Upper bound on the per-request retry backoff sleep.
@@ -160,15 +157,9 @@ pub struct NtxBuilderConfig {
 }
 
 impl NtxBuilderConfig {
-    pub fn new(
-        store_url: Url,
-        block_producer_url: Url,
-        validator_url: Url,
-        database_filepath: PathBuf,
-    ) -> Self {
+    pub fn new(rpc_url: Url, validator_url: Url, database_filepath: PathBuf) -> Self {
         Self {
-            store_url,
-            block_producer_url,
+            rpc_url,
             validator_url,
             tx_prover_url: None,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
@@ -289,7 +280,7 @@ impl NtxBuilderConfig {
 
     /// Builds and initializes the network transaction builder.
     ///
-    /// Opens a committed-block subscription against the store's `Rpc` service. On a fresh DB the
+    /// Opens a committed-block subscription against the node RPC service. On a fresh DB the
     /// subscription starts at genesis and the first block is consumed inline to bootstrap the
     /// in-memory chain state; on resume, the in-memory chain state is loaded from the persisted
     /// header + chain MMR and the subscription starts at `persisted_tip + 1`.
@@ -298,7 +289,7 @@ impl NtxBuilderConfig {
     ///
     /// Returns an error if:
     /// - The DB cannot be opened or migrated
-    /// - The store connection fails (after retries)
+    /// - The RPC connection fails (after retries)
     /// - The genesis block cannot be read from the subscription on a fresh start
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
@@ -308,8 +299,8 @@ impl NtxBuilderConfig {
         )
         .await?;
 
-        let store = StoreClient::new(
-            self.store_url.clone(),
+        let rpc = RpcClient::new(
+            self.rpc_url.clone(),
             self.request_backoff_initial,
             self.request_backoff_max,
         );
@@ -329,7 +320,7 @@ impl NtxBuilderConfig {
             "ntx-builder opening committed-block subscription"
         );
 
-        let raw_stream = store
+        let raw_stream = rpc
             .block_subscription_with_retry(block_from)
             .await
             .map_err(|err| anyhow::anyhow!(err))

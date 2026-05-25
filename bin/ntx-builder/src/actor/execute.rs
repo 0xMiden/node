@@ -55,7 +55,7 @@ use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
 use crate::actor::candidate::TransactionCandidate;
-use crate::clients::{BlockProducerClient, StoreClient, StoreError, ValidatorClient};
+use crate::clients::{RpcClient, RpcError, ValidatorClient};
 use crate::db::Db;
 
 #[derive(Debug, thiserror::Error)]
@@ -92,10 +92,10 @@ fn is_transient_status(status: &tonic::Status) -> bool {
     )
 }
 
-/// Returns `true` for `StoreError`s that originate from a transient gRPC condition. All other store
+/// Returns `true` for `RpcError`s that originate from a transient gRPC condition. All other RPC
 /// errors (deserialization, missing fields) are content errors and are not retried.
-fn is_transient_store_error(err: &StoreError) -> bool {
-    matches!(err, StoreError::GrpcClientError(status) if is_transient_status(status))
+fn is_transient_rpc_error(err: &RpcError) -> bool {
+    matches!(err, RpcError::GrpcClientError(status) if is_transient_status(status))
 }
 
 /// Maximum number of retries applied to a single transient request before the error is propagated
@@ -126,7 +126,7 @@ fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, s
 /// The result of a successful transaction execution.
 ///
 /// Contains the transaction ID, any notes that failed during filtering, and note scripts fetched
-/// from the remote store that should be persisted to the local DB cache.
+/// from the remote RPC service that should be persisted to the local DB cache.
 pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteScript)>);
 
 // NETWORK TRANSACTION CONTEXT
@@ -135,9 +135,6 @@ pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteSc
 /// Provides the context for execution [network transaction candidates](TransactionCandidate).
 #[derive(Clone)]
 pub struct NtxContext {
-    /// Client for submitting proven transactions to the Block Producer.
-    block_producer: BlockProducerClient,
-
     /// Client for validating transactions via the Validator.
     validator: ValidatorClient,
 
@@ -147,10 +144,10 @@ pub struct NtxContext {
     /// computationally intensive.
     prover: Option<RemoteTransactionProver>,
 
-    /// The store client for retrieving note scripts.
-    store: StoreClient,
+    /// The RPC client for retrieving note scripts.
+    rpc: RpcClient,
 
-    /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
+    /// LRU cache for storing retrieved note scripts to avoid repeated RPC calls.
     script_cache: LruCache<Word, NoteScript>,
 
     /// Local database for persistent note script caching.
@@ -167,10 +164,9 @@ impl NtxContext {
     /// Creates a new [`NtxContext`] instance.
     #[expect(clippy::too_many_arguments)]
     pub fn new(
-        block_producer: BlockProducerClient,
         validator: ValidatorClient,
         prover: Option<RemoteTransactionProver>,
-        store: StoreClient,
+        rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
         max_cycles: u32,
@@ -179,10 +175,9 @@ impl NtxContext {
     ) -> Self {
         let request_backoff = request_backoff(request_backoff_initial, request_backoff_max);
         Self {
-            block_producer,
             validator,
             prover,
-            store,
+            rpc,
             script_cache,
             db,
             max_cycles,
@@ -214,21 +209,21 @@ impl NtxContext {
             .expect("execution options should be valid for transaction executor")
     }
 
-    /// Executes a transaction end-to-end: filtering, executing, proving, and submitted to the block
-    /// producer.
+    /// Executes a transaction end-to-end: filtering, executing, proving, and submitting through
+    /// the RPC service.
     ///
     /// The provided [`TransactionCandidate`] is processed in the following stages:
     /// 1. Note filtering – all input notes are checked for consumability. Any notes that cannot be
     ///    executed are returned as [`FailedNote`]s.
     /// 2. Execution – the remaining notes are executed against the account state.
     /// 3. Proving – a proof is generated for the executed transaction.
-    /// 4. Submission – the proven transaction is submitted to the block producer.
+    /// 4. Submission – the proven transaction is submitted through the RPC service.
     ///
     /// # Returns
     ///
     /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes
-    /// that failed during filtering, and note scripts fetched from the remote store that should
-    /// be persisted to the local DB cache.
+    /// that failed during filtering, and note scripts fetched from the remote RPC service that
+    /// should be persisted to the local DB cache.
     ///
     /// # Errors
     ///
@@ -262,7 +257,7 @@ impl NtxContext {
 
                 // VM execution (note filtering + transaction execution) is CPU-intensive and may
                 // not yield between await points. Run it on a dedicated blocking thread while using
-                // the parent runtime handle to drive async store callbacks.
+                // the parent runtime handle to drive async RPC callbacks.
                 let ctx = self.clone();
                 let handle = tokio::runtime::Handle::current();
                 let span = tracing::Span::current();
@@ -273,7 +268,7 @@ impl NtxContext {
                             account,
                             chain_tip_header,
                             chain_mmr,
-                            ctx.store.clone(),
+                            ctx.rpc.clone(),
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
                             ctx.request_backoff,
@@ -300,7 +295,7 @@ impl NtxContext {
                 // Validate proven transaction.
                 self.validate(&proven_tx, &tx_inputs).await?;
 
-                // Submit transaction to block producer.
+                // Submit transaction through the RPC service.
                 self.submit(&proven_tx).await?;
 
                 Ok((proven_tx.id(), failed_notes, scripts_to_cache))
@@ -427,17 +422,17 @@ impl NtxContext {
         }
     }
 
-    /// Submits the transaction to the block producer.
+    /// Submits the transaction through the RPC service.
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the actor can mark the batch failed.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
     async fn submit(&self, proven_tx: &ProvenTransaction) -> NtxResult<()> {
-        (|| async { self.block_producer.submit_proven_tx(proven_tx).await })
+        (|| async { self.rpc.submit_proven_tx(proven_tx).await })
             .retry(self.request_backoff())
             .when(is_transient_status)
             .notify(|status, dur| {
-                log_transient_retry("block_producer.submit_proven_tx", status, dur);
+                log_transient_retry("rpc.submit_proven_tx", status, dur);
             })
             .await
             .map_err(NtxError::Submission)
@@ -480,18 +475,19 @@ struct NtxDataStore {
     /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
     chain_mmr: Arc<PartialBlockchain>,
     mast_store: TransactionMastStore,
-    /// Store client for retrieving note scripts.
-    store: StoreClient,
-    /// LRU cache for storing retrieved note scripts to avoid repeated store calls.
+    /// RPC client for retrieving note scripts.
+    rpc: RpcClient,
+    /// LRU cache for storing retrieved note scripts to avoid repeated RPC calls.
     script_cache: LruCache<Word, NoteScript>,
     /// Local database for persistent note script.
     db: Db,
-    /// Scripts fetched from the remote store during execution, to be persisted by the coordinator.
+    /// Scripts fetched from the remote RPC service during execution, to be persisted by the
+    /// coordinator.
     fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
     ///
     /// The registered slot names are subsequently used to retrieve storage map witnesses from the
-    /// store. We need this because the store interface (and the underling SMT forest) use storage
+    /// RPC service. We need this because the RPC interface (and the underlying SMT forest) use storage
     /// slot names, but the `DataStore` interface works with tree roots. To get around this problem
     /// we populate this map when:
     /// - The the native account is loaded (in `get_transaction_inputs()`).
@@ -507,10 +503,10 @@ struct NtxDataStore {
     /// One nuance worth mentioning: it is possible that there could be a root collision where an
     /// account has two storage maps with the same root. In this case, the map will contain only a
     /// single entry with the storage slot name that was added last. Thus, technically, requests
-    /// to the store could be "wrong", but given that two identical maps have identical witnesses
+    /// to the RPC service could be "wrong", but given that two identical maps have identical witnesses
     /// this does not cause issues in practice.
     storage_slots: Arc<Mutex<HashMap<(AccountId, Word), StorageSlotName>>>,
-    /// Per-request retry backoff for transient store failures.
+    /// Per-request retry backoff for transient RPC failures.
     request_backoff: ExponentialBuilder,
 }
 
@@ -520,7 +516,7 @@ impl NtxDataStore {
         account: Account,
         reference_block: BlockHeader,
         chain_mmr: Arc<PartialBlockchain>,
-        store: StoreClient,
+        rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
         request_backoff: ExponentialBuilder,
@@ -533,7 +529,7 @@ impl NtxDataStore {
             reference_block,
             chain_mmr,
             mast_store,
-            store,
+            rpc,
             script_cache,
             db,
             fetched_scripts: Arc::new(Mutex::new(Vec::new())),
@@ -542,12 +538,13 @@ impl NtxDataStore {
         }
     }
 
-    /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the store.
-    fn store_backoff(&self) -> ExponentialBuilder {
+    /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the RPC
+    /// service.
+    fn rpc_backoff(&self) -> ExponentialBuilder {
         self.request_backoff
     }
 
-    /// Returns the list of note scripts fetched from the remote store during execution.
+    /// Returns the list of note scripts fetched from the remote RPC service during execution.
     fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
         self.fetched_scripts
             .lock()
@@ -558,7 +555,7 @@ impl NtxDataStore {
 
     /// Registers storage map slot names for the given account ID and storage header.
     ///
-    /// These slot names are subsequently used to query for storage map witnesses against the store.
+    /// These slot names are subsequently used to query for storage map witnesses against the RPC service.
     fn register_storage_map_slots(
         &self,
         account_id: AccountId,
@@ -608,13 +605,13 @@ impl DataStore for NtxDataStore {
         async move {
             debug_assert_eq!(ref_block, self.reference_block.block_num());
 
-            // Get foreign account inputs from store, retrying on transient gRPC failures.
+            // Get foreign account inputs from RPC, retrying on transient gRPC failures.
             let account_inputs =
-                (|| async { self.store.get_account_inputs(foreign_account_id, ref_block).await })
-                    .retry(self.store_backoff())
-                    .when(is_transient_store_error)
+                (|| async { self.rpc.get_account_inputs(foreign_account_id, ref_block).await })
+                    .retry(self.rpc_backoff())
+                    .when(is_transient_rpc_error)
                     .notify(|err, dur| {
-                        log_transient_retry("store.get_account_inputs", err, dur);
+                        log_transient_retry("rpc.get_account_inputs", err, dur);
                     })
                     .await
                     .map_err(|err| {
@@ -641,19 +638,19 @@ impl DataStore for NtxDataStore {
         async move {
             let ref_block = self.reference_block.block_num();
 
-            // Get vault asset witnesses from the store, retrying on transient gRPC failures.
+            // Get vault asset witnesses from RPC, retrying on transient gRPC failures.
             let witnesses = (|| {
                 let vault_keys = vault_keys.clone();
                 async move {
-                    self.store
+                    self.rpc
                         .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
                         .await
                 }
             })
-            .retry(self.store_backoff())
-            .when(is_transient_store_error)
+            .retry(self.rpc_backoff())
+            .when(is_transient_rpc_error)
             .notify(|err, dur| {
-                log_transient_retry("store.get_vault_asset_witnesses", err, dur);
+                log_transient_retry("rpc.get_vault_asset_witnesses", err, dur);
             })
             .await
             .map_err(|err| {
@@ -685,19 +682,19 @@ impl DataStore for NtxDataStore {
 
             let ref_block = self.reference_block.block_num();
 
-            // Get storage map witness from the store, retrying on transient gRPC failures.
+            // Get storage map witness from RPC, retrying on transient gRPC failures.
             let witness = (|| {
                 let slot_name = slot_name.clone();
                 async move {
-                    self.store
+                    self.rpc
                         .get_storage_map_witness(account_id, slot_name, map_key, Some(ref_block))
                         .await
                 }
             })
-            .retry(self.store_backoff())
-            .when(is_transient_store_error)
+            .retry(self.rpc_backoff())
+            .when(is_transient_rpc_error)
             .notify(|err, dur| {
-                log_transient_retry("store.get_storage_map_witness", err, dur);
+                log_transient_retry("rpc.get_storage_map_witness", err, dur);
             })
             .await
             .map_err(|err| {
@@ -713,7 +710,7 @@ impl DataStore for NtxDataStore {
     /// Uses a 3-tier lookup strategy:
     /// 1. In-memory LRU cache.
     /// 2. Local SQLite database.
-    /// 3. Remote store via gRPC.
+    /// 3. Remote RPC via gRPC.
     fn get_note_script(
         &self,
         script_root: NoteScriptRoot,
@@ -733,17 +730,17 @@ impl DataStore for NtxDataStore {
                 return Ok(Some(script));
             }
 
-            // 3. Remote store, retrying on transient gRPC failures.
-            let maybe_script = (|| async { self.store.get_note_script_by_root(script_root).await })
-                .retry(self.store_backoff())
-                .when(is_transient_store_error)
+            // 3. Remote RPC, retrying on transient gRPC failures.
+            let maybe_script = (|| async { self.rpc.get_note_script_by_root(script_root).await })
+                .retry(self.rpc_backoff())
+                .when(is_transient_rpc_error)
                 .notify(|err, dur| {
-                    log_transient_retry("store.get_note_script_by_root", err, dur);
+                    log_transient_retry("rpc.get_note_script_by_root", err, dur);
                 })
                 .await
                 .map_err(|err| {
                     DataStoreError::other_with_source(
-                        "failed to retrieve note script from store",
+                        "failed to retrieve note script from RPC",
                         err,
                     )
                 })?;
@@ -776,7 +773,7 @@ impl MastForestStore for NtxDataStore {
 mod tests {
     use miden_tx::TransactionProverError;
 
-    use super::{StoreError, is_transient_status, is_transient_store_error};
+    use super::{RpcError, is_transient_rpc_error, is_transient_status};
 
     #[test]
     fn transient_status_classifies_transport_codes() {
@@ -810,18 +807,17 @@ mod tests {
     }
 
     #[test]
-    fn transient_store_error_only_for_transient_grpc() {
-        let transient = StoreError::GrpcClientError(tonic::Status::unavailable("down"));
-        assert!(is_transient_store_error(&transient));
+    fn transient_rpc_error_only_for_transient_grpc() {
+        let transient = RpcError::GrpcClientError(tonic::Status::unavailable("down"));
+        assert!(is_transient_rpc_error(&transient));
 
-        let terminal_grpc =
-            StoreError::GrpcClientError(tonic::Status::invalid_argument("bad input"));
-        assert!(!is_transient_store_error(&terminal_grpc));
+        let terminal_grpc = RpcError::GrpcClientError(tonic::Status::invalid_argument("bad input"));
+        assert!(!is_transient_rpc_error(&terminal_grpc));
 
-        let non_grpc = StoreError::Deserialize(
+        let non_grpc = RpcError::Deserialize(
             miden_protocol::utils::serde::DeserializationError::InvalidValue("bad".into()),
         );
-        assert!(!is_transient_store_error(&non_grpc));
+        assert!(!is_transient_rpc_error(&non_grpc));
     }
 
     /// Smoke-test that the predicates used by the request-level retry wrappers compile and select

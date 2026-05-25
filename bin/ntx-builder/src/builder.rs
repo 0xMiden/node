@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 
 use crate::NtxBuilderConfig;
 use crate::chain_state::ChainState;
-use crate::clients::StoreError;
+use crate::clients::RpcError;
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::Db;
 use crate::server::NtxBuilderRpcServer;
@@ -17,17 +17,17 @@ use crate::server::NtxBuilderRpcServer;
 // NETWORK TRANSACTION BUILDER
 // ================================================================================================
 
-/// Boxed, pinned stream of committed blocks paired with the store-reported committed chain tip at
+/// Boxed, pinned stream of committed blocks paired with the node-reported committed chain tip at
 /// the time each block was emitted.
 ///
 /// Boxing gives the stream a `'static` lifetime by ensuring it owns all its data, avoiding the
 /// complex lifetime annotations otherwise required to store `impl Stream`.
 pub(crate) type BlockStream =
-    Pin<Box<dyn Stream<Item = Result<(SignedBlock, BlockNumber), StoreError>> + Send>>;
+    Pin<Box<dyn Stream<Item = Result<(SignedBlock, BlockNumber), RpcError>> + Send>>;
 
 /// Network transaction builder component (PR 1: subscription-driven sync only).
 ///
-/// The builder consumes the store's committed-block subscription and applies each block's
+/// The builder consumes the RPC committed-block subscription and applies each block's
 /// network-relevant effects to its local database. The actor execution path is wired back in a
 /// subsequent PR; in this PR the binary stays up and keeps the local DB caught up to the live
 /// chain tip without scheduling any network transactions.
@@ -36,7 +36,7 @@ pub struct NetworkTransactionBuilder {
     config: NtxBuilderConfig,
     /// Database for persistent state.
     db: Db,
-    /// Stream of committed blocks from the store.
+    /// Stream of committed blocks from the node RPC service.
     block_stream: BlockStream,
     /// Highest block number applied to the DB so far.
     last_applied_block: BlockNumber,
@@ -68,7 +68,7 @@ impl NetworkTransactionBuilder {
         }
     }
 
-    /// Returns `true` once the builder has caught up to the store's committed chain tip at least
+    /// Returns `true` once the builder has caught up to the node's committed chain tip at least
     /// once. Stays `true` for the lifetime of the process.
     pub fn is_synced(&self) -> bool {
         self.is_synced
@@ -132,7 +132,7 @@ impl NetworkTransactionBuilder {
 
     /// Applies a single committed block's effects to the DB, advances the in-memory partial chain,
     /// persists the updated chain MMR atomically with the effects, and flips `is_synced` the first
-    /// time the applied block matches the store-reported committed tip.
+    /// time the applied block matches the node-reported committed tip.
     #[tracing::instrument(
         name = "ntx.builder.apply_committed_block",
         skip(self, block),
