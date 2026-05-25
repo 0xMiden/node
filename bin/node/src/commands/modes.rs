@@ -59,7 +59,7 @@ pub struct SequencerExternalServiceOptions {
 }
 
 #[derive(clap::Args, Clone, Debug)]
-pub struct RpcCommand {
+pub struct FullNodeCommand {
     #[command(flatten)]
     pub runtime: RuntimeOptions,
 
@@ -70,7 +70,7 @@ pub struct RpcCommand {
     pub store: StoreOptions,
 }
 
-impl RpcCommand {
+impl FullNodeCommand {
     pub fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         let _ = (
@@ -84,7 +84,8 @@ impl RpcCommand {
         );
 
         anyhow::bail!(
-            "rpc mode block-stream sync is not implemented yet; this stage only defines the CLI"
+            "full node mode block-stream sync is not implemented yet; this stage only defines the \
+             CLI"
         )
     }
 }

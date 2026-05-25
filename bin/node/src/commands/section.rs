@@ -78,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn rpc_mode_contains_injectable_section_headings() {
-        assert_injectable_section_headings("rpc");
+    fn full_node_mode_contains_injectable_section_headings() {
+        assert_injectable_section_headings("full");
     }
 }
