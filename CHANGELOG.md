@@ -26,6 +26,11 @@
 - [BREAKING] Renamed `--url` CLI flags and `*_URL` env vars to `--listen` / `*_LISTEN` across all components.
 - [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
 - [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
+- [BREAKING] Removed the `miden-node store`, `miden-node rpc start`, and `miden-node block-producer` component commands as part of unifying the node runtime ([#2119](https://github.com/0xMiden/node/pull/2119)).
+- Added `miden-node sequencer` command which combines the previous `store`, `rpc start`, and `block-producer` commands into a single process for running a node sequencer([#2119](https://github.com/0xMiden/node/pull/2119)).
+- Added `miden-node rpc` command which combines the previous `store` and `rpc start` commands into a single process ([#2119](https://github.com/0xMiden/node/pull/2119)).
+    - It streams blocks from an upstream source (e.g. sequencer) and allows local RPC serving from this data.
+- Added top-level `miden-node bootstrap` and `miden-node migrate` lifecycle commands for a node's store initialization and migrations ([#2119](https://github.com/0xMiden/node/pull/2119)).
 - Made SQLite connection pool sizes configurable for store, validator, and ntx-builder components, defaulting each to twice the available CPU core count ([#2098](https://github.com/0xMiden/node/pull/2098)).
 - Replaced blocking-in-async LargeSmt and account state forest operations in the store with wrappers using Tokio's `block_in_place()` ([#2076](https://github.com/0xMiden/node/pull/2076)).
 - [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` (repeated) and `attachments_commitment` instead of a single `attachment`. `Note` and `NetworkNote` gained an `attachments` field. `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`. Removed `NoteAttachmentKind` enum and `NoteMetadataHeader` message ([#2078](https://github.com/0xMiden/node/pull/2078)).
