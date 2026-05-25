@@ -6,19 +6,19 @@
 //! # Examples
 //!
 //! ```rust
-//! # use miden_node_proto::clients::{Builder, WantsTls, StoreNtxBuilderClient};
+//! # use miden_node_proto::clients::{Builder, WantsTls, StoreRpcClient};
 //! # use url::Url;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! // Create a store client with OTEL and TLS
 //! let url = Url::parse("https://example.com:8080")?;
-//! let client: StoreNtxBuilderClient = Builder::new(url)
+//! let client: StoreRpcClient = Builder::new(url)
 //!     .with_tls()?                   // or `.without_tls()`
 //!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
 //!     .with_otel_context_injection() // or `.without_otel_context_injection()`
-//!     .connect::<StoreNtxBuilderClient>()
+//!     .connect::<StoreRpcClient>()
 //!     .await?;
 //! # Ok(())
 //! # }
@@ -111,8 +111,6 @@ type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
 type GeneratedBlockProducerClient =
     generated::block_producer::api_client::ApiClient<InterceptedChannel>;
-type GeneratedStoreClientForNtxBuilder =
-    generated::store::ntx_builder_client::NtxBuilderClient<InterceptedChannel>;
 type GeneratedStoreClientForBlockProducer =
     generated::store::block_producer_client::BlockProducerClient<InterceptedChannel>;
 type GeneratedStoreClientForRpc = generated::store::rpc_client::RpcClient<InterceptedChannel>;
@@ -129,8 +127,6 @@ type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<I
 pub struct RpcClient(GeneratedRpcClient);
 #[derive(Debug, Clone)]
 pub struct BlockProducerClient(GeneratedBlockProducerClient);
-#[derive(Debug, Clone)]
-pub struct StoreNtxBuilderClient(GeneratedStoreClientForNtxBuilder);
 #[derive(Debug, Clone)]
 pub struct StoreBlockProducerClient(GeneratedStoreClientForBlockProducer);
 #[derive(Debug, Clone)]
@@ -166,20 +162,6 @@ impl DerefMut for BlockProducerClient {
 
 impl Deref for BlockProducerClient {
     type Target = GeneratedBlockProducerClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreNtxBuilderClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreNtxBuilderClient {
-    type Target = GeneratedStoreClientForNtxBuilder;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -287,15 +269,6 @@ impl GrpcClient for RpcClient {
 impl GrpcClient for BlockProducerClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedBlockProducerClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for StoreNtxBuilderClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForNtxBuilder::new(InterceptedService::new(
-            channel,
-            interceptor,
-        )))
     }
 }
 

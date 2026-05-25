@@ -3,26 +3,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use actor::{AccountActorContext, ActorConfig, GrpcClients, State};
 use anyhow::Context;
-use builder::MempoolEventStream;
-use chain_state::SharedChainState;
-use clients::{BlockProducerClient, StoreClient, ValidatorClient};
-use coordinator::Coordinator;
+use builder::BlockStream;
+use chain_state::ChainState;
+use clients::RpcClient;
 use db::Db;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::lru_cache::LruCache;
-use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::mpsc;
+use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use url::Url;
+
+use crate::committed_block::CommittedBlockEffects;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
+// PR 1 of the block-subscription refactor leaves the actor execution path in tree but unwired. It
+// is restored by PR 2
+#[expect(dead_code)]
 mod actor;
 mod builder;
+#[expect(dead_code)]
 mod chain_state;
 mod clients;
+mod committed_block;
+#[expect(dead_code)]
 mod coordinator;
 pub(crate) mod db;
 pub mod server;
@@ -50,7 +55,7 @@ const DEFAULT_MAX_CONCURRENT_TXS: usize = 4;
 /// Default maximum number of blocks to keep in the chain MMR.
 const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
 
-/// Default channel capacity for account loading from the store.
+/// Default channel capacity for account loading through RPC.
 const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
 /// Default maximum number of attempts to execute a failing note before dropping it.
@@ -67,8 +72,8 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
 /// Default initial sleep applied between per-request retries on transient infrastructure failures
-/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles on
-/// each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+/// (downed prover, transport error, RPC crash, RPC gRPC hiccup). Doubles on each retry up to
+/// [`DEFAULT_REQUEST_BACKOFF_MAX`].
 const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 
 /// Default upper bound on the per-request retry backoff sleep.
@@ -88,20 +93,14 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 /// This struct contains all the settings needed to create and run a `NetworkTransactionBuilder`.
 #[derive(Debug, Clone)]
 pub struct NtxBuilderConfig {
-    /// Address of the store gRPC server (ntx-builder API).
-    pub store_url: Url,
-
-    /// Address of the block producer gRPC server.
-    pub block_producer_url: Url,
-
-    /// Address of the validator gRPC server.
-    pub validator_url: Url,
+    /// Address of the node RPC gRPC server.
+    pub rpc_url: Url,
 
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
 
-    /// Size of the LRU cache for note scripts. Scripts are fetched from the store and cached to
-    /// avoid repeated gRPC calls.
+    /// Size of the LRU cache for note scripts. Scripts are fetched through RPC and cached to avoid
+    /// repeated gRPC calls.
     pub script_cache_size: NonZeroUsize,
 
     /// Maximum number of network transactions which should be in progress concurrently across all
@@ -118,7 +117,7 @@ pub struct NtxBuilderConfig {
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
     pub max_block_count: usize,
 
-    /// Channel capacity for loading accounts from the store during startup.
+    /// Channel capacity for loading accounts through RPC during startup.
     pub account_channel_capacity: usize,
 
     /// Duration after which an idle network account will deactivate.
@@ -139,9 +138,9 @@ pub struct NtxBuilderConfig {
     pub max_cycles: u32,
 
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
-    /// prover unreachable, validator/block-producer crash, transport error, store gRPC hiccup).
-    /// Doubles on each retry up to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not*
-    /// advanced while retries are in progress.
+    /// prover unreachable, RPC crash, transport error, RPC gRPC hiccup). Doubles on each retry up
+    /// to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not* advanced while retries
+    /// are in progress.
     pub request_backoff_initial: Duration,
 
     /// Upper bound on the per-request retry backoff sleep.
@@ -155,16 +154,9 @@ pub struct NtxBuilderConfig {
 }
 
 impl NtxBuilderConfig {
-    pub fn new(
-        store_url: Url,
-        block_producer_url: Url,
-        validator_url: Url,
-        database_filepath: PathBuf,
-    ) -> Self {
+    pub fn new(rpc_url: Url, database_filepath: PathBuf) -> Self {
         Self {
-            store_url,
-            block_producer_url,
-            validator_url,
+            rpc_url,
             tx_prover_url: None,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,
@@ -284,15 +276,17 @@ impl NtxBuilderConfig {
 
     /// Builds and initializes the network transaction builder.
     ///
-    /// This method connects to the store and block producer services, fetches the current
-    /// chain tip, and subscribes to mempool events.
+    /// Opens a committed-block subscription against the node RPC service. On a fresh DB the
+    /// subscription starts at genesis and the first block is consumed inline to bootstrap the
+    /// in-memory chain state; on resume, the in-memory chain state is loaded from the persisted
+    /// header + chain MMR and the subscription starts at `persisted_tip + 1`.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The store connection fails
-    /// - The mempool subscription fails (after retries)
-    /// - The store contains no blocks (not bootstrapped)
+    /// - The DB cannot be opened or migrated
+    /// - The RPC connection fails (after retries)
+    /// - The genesis block cannot be read from the subscription on a fresh start
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup_with_pool_size(
@@ -301,73 +295,66 @@ impl NtxBuilderConfig {
         )
         .await?;
 
-        // Purge inflight state from previous run.
-        db.purge_inflight().await.context("failed to purge inflight state")?;
+        let rpc = RpcClient::new(
+            self.rpc_url.clone(),
+            self.request_backoff_initial,
+            self.request_backoff_max,
+        );
 
-        let script_cache = LruCache::new(self.script_cache_size);
-        let coordinator =
-            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, db.clone());
+        // Decide where to start the subscription. On resume we load the persisted chain state; on
+        // fresh start we begin at genesis and bootstrap inline below.
+        let stored_chain_state =
+            db.get_chain_state().await.context("failed to read chain state")?;
 
-        let store = StoreClient::new(self.store_url.clone());
-        let block_producer = BlockProducerClient::new(self.block_producer_url.clone());
-        let validator = ValidatorClient::new(self.validator_url.clone());
-        let prover = self.tx_prover_url.clone().map(RemoteTransactionProver::new);
+        let block_from = stored_chain_state
+            .as_ref()
+            .map_or(BlockNumber::GENESIS, |(num, ..)| num.child());
 
-        // Subscribe to mempool first to ensure we don't miss any events. The subscription replays
-        // all inflight transactions, so the subscriber's state is fully reconstructed.
-        let subscription = block_producer
-            .subscribe_to_mempool_with_retry()
+        tracing::info!(
+            %block_from,
+            resume = stored_chain_state.is_some(),
+            "ntx-builder opening committed-block subscription"
+        );
+
+        let raw_stream = rpc
+            .block_subscription_with_retry(block_from)
             .await
             .map_err(|err| anyhow::anyhow!(err))
-            .context("failed to subscribe to mempool events")?;
-        let mempool_events: MempoolEventStream = Box::pin(subscription.into_stream());
+            .context("failed to subscribe to committed blocks")?;
+        let mut block_stream: BlockStream = Box::pin(raw_stream);
 
-        let (chain_tip_header, chain_mmr) = store
-            .get_latest_blockchain_data_with_retry()
-            .await?
-            .context("store should contain a latest block")?;
+        let (chain, last_applied_block) = if let Some((block_num, header, mmr)) = stored_chain_state
+        {
+            (ChainState::new(header, mmr), block_num)
+        } else {
+            // Fresh DB: consume the genesis block inline so the in-memory chain state is non- empty
+            // before the steady-state loop runs.
+            let (genesis, _committed_tip) = block_stream
+                .next()
+                .await
+                .context("block stream ended before delivering the genesis block")?
+                .context("block stream failed before delivering the genesis block")?;
+            let genesis_header = genesis.header().clone();
+            anyhow::ensure!(
+                genesis_header.block_num() == BlockNumber::GENESIS,
+                "expected genesis block from subscription but got block {}",
+                genesis_header.block_num()
+            );
 
-        // Store the chain tip in the DB.
-        db.upsert_chain_state(chain_tip_header.block_num(), chain_tip_header.clone())
-            .await
-            .context("failed to upsert chain state")?;
+            let effects = CommittedBlockEffects::from_signed_block(&genesis);
+            db.apply_committed_block(effects, PartialMmr::default())
+                .await
+                .context("failed to apply genesis block during bootstrap")?;
 
-        let chain_state = Arc::new(SharedChainState::new(chain_tip_header, chain_mmr));
-
-        let (request_tx, actor_request_rx) = mpsc::channel(1);
-
-        let actor_context = AccountActorContext {
-            clients: GrpcClients {
-                store: store.clone(),
-                block_producer: block_producer.clone(),
-                validator,
-                prover,
-            },
-            state: State {
-                db: db.clone(),
-                chain: chain_state.clone(),
-                script_cache,
-            },
-            config: ActorConfig {
-                max_notes_per_tx: self.max_notes_per_tx,
-                max_note_attempts: self.max_note_attempts,
-                idle_timeout: self.idle_timeout,
-                max_cycles: self.max_cycles,
-                request_backoff_initial: self.request_backoff_initial,
-                request_backoff_max: self.request_backoff_max,
-            },
-            request_tx,
+            (ChainState::new(genesis_header, PartialMmr::default()), BlockNumber::GENESIS)
         };
 
         Ok(NetworkTransactionBuilder::new(
             self,
-            coordinator,
-            store,
             db,
-            chain_state,
-            actor_context,
-            mempool_events,
-            actor_request_rx,
+            block_stream,
+            last_applied_block,
+            chain,
         ))
     }
 }

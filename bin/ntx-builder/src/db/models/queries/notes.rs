@@ -15,7 +15,7 @@ use crate::db::schema;
 // MODELS
 // ================================================================================================
 
-/// Row read from the unified `notes` table.
+/// Row read from `notes`.
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = schema::notes)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -25,7 +25,7 @@ pub struct NoteRow {
     pub last_attempt: Option<i64>,
 }
 
-/// Row for inserting into the unified `notes` table.
+/// Row for inserting into `notes`.
 #[derive(Debug, Clone, Insertable)]
 #[diesel(table_name = schema::notes)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -37,8 +37,6 @@ pub struct NoteInsert {
     pub attempt_count: i32,
     pub last_attempt: Option<i64>,
     pub last_error: Option<String>,
-    pub created_by: Option<Vec<u8>>,
-    pub consumed_by: Option<Vec<u8>>,
     pub committed_at: Option<i64>,
 }
 
@@ -51,65 +49,62 @@ pub struct NoteStatusRow {
     pub last_error: Option<String>,
     pub attempt_count: i32,
     pub last_attempt: Option<i64>,
-    pub consumed_by: Option<Vec<u8>>,
     pub committed_at: Option<i64>,
 }
 
 // QUERIES
 // ================================================================================================
 
-/// Batch inserts committed notes (`created_by = NULL`, `consumed_by = NULL`).
-///
-/// # Raw SQL
-///
-/// Per note:
-///
-/// ```sql
-/// INSERT OR REPLACE INTO notes
-///     (nullifier, account_id, note_data, note_id, attempt_count, last_attempt, last_error,
-///      created_by, consumed_by)
-/// VALUES (?1, ?2, ?3, ?4, 0, NULL, NULL, NULL, NULL)
-/// ```
-pub fn insert_committed_notes(
+/// Inserts network notes from a committed block. Uses `INSERT OR IGNORE` so re-applying the same
+/// block (e.g. on a redelivery from the subscription stream) is a no-op rather than a constraint
+/// violation.
+pub fn insert_network_notes(
     conn: &mut SqliteConnection,
     notes: &[AccountTargetNetworkNote],
 ) -> Result<(), DatabaseError> {
     for note in notes {
+        let target_id = NetworkAccountId::new_unchecked(note.target_account_id());
         let row = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
-            account_id: conversions::network_account_id_to_bytes(NetworkAccountId::new_unchecked(
-                note.target_account_id(),
-            )),
+            account_id: conversions::network_account_id_to_bytes(target_id),
             note_data: note.as_note().to_bytes(),
             note_id: Some(conversions::note_id_to_bytes(&note.as_note().id())),
             attempt_count: 0,
             last_attempt: None,
             last_error: None,
-            created_by: None,
-            consumed_by: None,
             committed_at: None,
         };
-        diesel::replace_into(schema::notes::table).values(&row).execute(conn)?;
+        diesel::insert_or_ignore_into(schema::notes::table).values(&row).execute(conn)?;
+    }
+    Ok(())
+}
+
+/// Marks notes as consumed by setting `committed_at` to the block number whose committed body
+/// contained their nullifier. Rows for nullifiers we never inserted (notes whose targets are not
+/// network accounts, or notes that arrived before our subscription cursor) are silently skipped.
+///
+/// Rows are kept around (not deleted) so the `GetNetworkNoteStatus` endpoint can report the full
+/// lifecycle of any note the ntx-builder has ever seen.
+pub fn mark_notes_consumed(
+    conn: &mut SqliteConnection,
+    nullifiers: &[Nullifier],
+    block_num: BlockNumber,
+) -> Result<(), DatabaseError> {
+    let block_num_val = conversions::block_num_to_i64(block_num);
+    for nullifier in nullifiers {
+        let nullifier_bytes = conversions::nullifier_to_bytes(nullifier);
+        diesel::update(schema::notes::table.find(&nullifier_bytes))
+            .filter(schema::notes::committed_at.is_null())
+            .set(schema::notes::committed_at.eq(Some(block_num_val)))
+            .execute(conn)?;
     }
     Ok(())
 }
 
 /// Returns notes available for consumption by a given account.
 ///
-/// Queries unconsumed notes (`consumed_by IS NULL`) for the account that have not exceeded the
-/// maximum attempt count, then applies backoff and execution hint filtering in Rust.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT note_data, attempt_count, last_attempt
-/// FROM notes
-/// WHERE
-///     account_id = ?1
-///     AND consumed_by IS NULL
-///     AND committed_at IS NULL
-///     AND attempt_count < ?2
-/// ```
+/// Selects unconsumed notes for the account (a row exists only while a note is unconsumed) whose
+/// `attempt_count` is below the cap, then applies execution-hint and backoff filtering in Rust.
 #[expect(clippy::cast_possible_wrap)]
 pub fn available_notes(
     conn: &mut SqliteConnection,
@@ -119,11 +114,8 @@ pub fn available_notes(
 ) -> Result<Vec<AccountTargetNetworkNote>, DatabaseError> {
     let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
 
-    // Get unconsumed, uncommitted notes for this account that haven't exceeded the max attempt
-    // count.
     let rows: Vec<NoteRow> = schema::notes::table
         .filter(schema::notes::account_id.eq(&account_id_bytes))
-        .filter(schema::notes::consumed_by.is_null())
         .filter(schema::notes::committed_at.is_null())
         .filter(schema::notes::attempt_count.lt(max_attempts as i32))
         .select(NoteRow::as_select())
@@ -145,18 +137,8 @@ pub fn available_notes(
     Ok(result)
 }
 
-/// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
-/// the latest error message.
-///
-/// # Raw SQL
-///
-/// Per nullifier:
-///
-/// ```sql
-/// UPDATE notes
-/// SET attempt_count = attempt_count + 1, last_attempt = ?1, last_error = ?2
-/// WHERE nullifier = ?3
-/// ```
+/// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing the
+/// latest error message.
 pub fn notes_failed(
     conn: &mut SqliteConnection,
     failed_notes: &[(Nullifier, NoteError)],
@@ -180,14 +162,6 @@ pub fn notes_failed(
 }
 
 /// Returns the status for a note identified by its note ID.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT note_id, last_error, attempt_count, last_attempt, consumed_by
-/// FROM notes
-/// WHERE note_id = ?1
-/// ```
 pub fn get_note_status(
     conn: &mut SqliteConnection,
     note_id_bytes: &[u8],
@@ -216,13 +190,6 @@ fn deserialize_note(note_data: &[u8]) -> Result<AccountTargetNetworkNote, Databa
 ///
 /// The number of blocks passed since the last attempt must be greater than or equal to
 /// e^(0.25 * `attempt_count`) rounded to the nearest integer.
-///
-/// This evaluates to the following:
-/// - After 1 attempt, the backoff period is 1 block.
-/// - After 3 attempts, the backoff period is 2 blocks.
-/// - After 10 attempts, the backoff period is 12 blocks.
-/// - After 20 attempts, the backoff period is 148 blocks.
-/// - etc...
 #[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn has_backoff_passed(
     chain_tip: BlockNumber,
@@ -232,15 +199,12 @@ fn has_backoff_passed(
     if attempts == 0 {
         return true;
     }
-    // Compute the number of blocks passed since the last attempt.
     let blocks_passed = last_attempt
         .and_then(|last| chain_tip.checked_sub(last.as_u32()))
         .unwrap_or_default();
 
-    // Compute the exponential backoff threshold: Δ = e^(0.25 * n).
     let backoff_threshold = (0.25 * attempts as f64).exp().round() as usize;
 
-    // Check if the backoff period has passed.
     blocks_passed.as_usize() > backoff_threshold
 }
 

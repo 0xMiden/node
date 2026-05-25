@@ -110,6 +110,10 @@ install-node: ## Installs node
 install-validator: ## Installs validator
 	cargo install --path bin/validator --locked
 
+.PHONY: install-ntx-builder
+install-ntx-builder: ## Installs ntx-builder
+	cargo install --path bin/ntx-builder --locked
+
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
 	cargo install --path bin/remote-prover --bin miden-remote-prover --locked

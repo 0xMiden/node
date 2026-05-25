@@ -159,7 +159,6 @@ Each component can also be started as a standalone process. For example:
 # Start the store
 miden-node store start \
   --rpc.listen 0.0.0.0:50001 \
-  --ntx-builder.listen 0.0.0.0:50002 \
   --block-producer.listen 0.0.0.0:50003 \
   --data-directory /tmp/store
 
@@ -182,7 +181,7 @@ miden-node rpc start \
 # Start the network transaction builder
 miden-node ntx-builder start \
   --listen 0.0.0.0:50301 \
-  --store.url http://127.0.0.1:50002 \
+  --store.url http://127.0.0.1:50001 \
   --block-producer.url http://127.0.0.1:50201 \
   --validator.url http://127.0.0.1:50101 \
   --data-directory /tmp/ntx-builder

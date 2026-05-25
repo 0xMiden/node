@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   docker-build:
-    runs-on: Linux-ARM64-Runner
+    runs-on: warp-ubuntu-latest-x64-8x
     strategy:
       matrix:
         include:
@@ -27,17 +27,13 @@ jobs:
             port: 50301
     name: Build ${{ matrix.component }}
     steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
       - name: Build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: WarpBuilds/build-push-action@8c1f3b8bd22c68607865d99ff650d37a564229a5 # v6.0.7
         with:
           push: false
           file: ./Dockerfile
+          platforms: linux/amd64
+          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
           build-args: |
             BIN=${{ matrix.bin }}
             PORT=${{ matrix.port }}
-          cache-from: type=gha
-          # Only save cache on push into next
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' && 'type=gha,mode=max' || '' }}

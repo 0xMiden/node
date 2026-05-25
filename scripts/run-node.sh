@@ -21,12 +21,11 @@ VALIDATOR_DIR="/tmp/validator"
 NTX_BUILDER_DIR="/tmp/ntx-builder"
 ACCOUNTS_DIR="/tmp/accounts"
 
-# Primary store (block-producer mode): 3 APIs.
+# Primary store (block-producer mode): 2 APIs.
 STORE_RPC_PORT=50001
-STORE_NTX_BUILDER_PORT=50002
 STORE_BLOCK_PRODUCER_PORT=50003
 
-# Replica stores expose only the RPC API (no block-producer or ntx-builder endpoints).
+# Replica stores expose only the RPC API (no block-producer endpoint).
 STORE_REPLICA_1_RPC_PORT=50011
 STORE_REPLICA_2_RPC_PORT=50021
 
@@ -111,7 +110,6 @@ echo "=== Starting components ==="
 echo "Starting store (block-producer mode)..."
 OTEL_SERVICE_NAME=miden-store-primary $BINARY store start \
     --rpc.listen "0.0.0.0:$STORE_RPC_PORT" \
-    --ntx-builder.listen "0.0.0.0:$STORE_NTX_BUILDER_PORT" \
     --block-producer.listen "0.0.0.0:$STORE_BLOCK_PRODUCER_PORT" \
     --data-directory "$STORE_DIR" \
     $EXTRA_ARGS &
@@ -187,7 +185,7 @@ PIDS+=($!)
 echo "Starting network transaction builder..."
 OTEL_SERVICE_NAME=miden-ntx-builder $NTX_BUILDER_BINARY start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
-    --store.url "http://127.0.0.1:$STORE_NTX_BUILDER_PORT" \
+    --store.url "http://127.0.0.1:$STORE_RPC_PORT" \
     --block-producer.url "http://127.0.0.1:$BLOCK_PRODUCER_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
     --data-directory "$NTX_BUILDER_DIR" \

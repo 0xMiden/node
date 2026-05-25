@@ -104,9 +104,6 @@ impl TestStore {
         let store_addr =
             store_listener.local_addr().expect("store listener should get a local address");
         let rpc_listener = store_listener;
-        let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind store ntx-builder gRPC endpoint");
         let block_producer_listener =
             TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
 
@@ -119,7 +116,6 @@ impl TestStore {
                 rpc_listener,
                 mode: StoreMode::BlockProducer {
                     block_producer_listener,
-                    ntx_builder_listener,
                     block_prover_url: None,
                     max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
                 },

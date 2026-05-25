@@ -5,14 +5,13 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
-use miden_protocol::account::Account;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
-use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
+use crate::committed_block::CommittedBlockEffects;
 use crate::db::migrations::apply_migrations;
 use crate::db::models::queries;
 use crate::{COMPONENT, NoteError};
@@ -72,7 +71,31 @@ impl Db {
         Ok(Db { inner })
     }
 
-    // PUBLIC QUERY METHODS
+    // BLOCK APPLICATION
+    // ============================================================================================
+
+    /// Applies the effects of a committed block (account upserts, note inserts, nullifier-driven
+    /// deletes, and chain-state advancement) in a single transaction. Returns the set of network
+    /// accounts touched by this block.
+    pub async fn apply_committed_block(
+        &self,
+        effects: CommittedBlockEffects,
+        chain_mmr: PartialMmr,
+    ) -> Result<Vec<NetworkAccountId>> {
+        self.inner
+            .transact("apply_committed_block", move |conn| {
+                queries::apply_committed_block(conn, &effects, &chain_mmr)
+            })
+            .await
+    }
+
+    /// Reads the singleton chain state row, returning the last synced block number, its header, and
+    /// the persisted chain MMR if any block has been applied locally.
+    pub async fn get_chain_state(&self) -> Result<Option<(BlockNumber, BlockHeader, PartialMmr)>> {
+        self.inner.query("get_chain_state", queries::select_chain_state).await
+    }
+
+    // ACTOR-PATH QUERIES
     // ============================================================================================
 
     /// Returns `true` if there are notes available for consumption by the given account.
@@ -90,18 +113,11 @@ impl Db {
             .await
     }
 
-    /// Returns `true` when an inflight account row exists with the given transaction ID.
-    pub async fn transaction_exists(&self, tx_id: TransactionId) -> Result<bool> {
-        self.inner
-            .query("transaction_exists", move |conn| queries::transaction_exists(conn, &tx_id))
-            .await
-    }
-
     /// Returns `true` if a committed account state exists for the given account.
     pub async fn has_committed_account(&self, account_id: NetworkAccountId) -> Result<bool> {
         self.inner
             .query("has_committed_account", move |conn| {
-                Ok(queries::get_committed_account(conn, account_id)?.is_some())
+                Ok(queries::get_account(conn, account_id)?.is_some())
             })
             .await
     }
@@ -112,7 +128,7 @@ impl Db {
         account_id: NetworkAccountId,
         block_num: BlockNumber,
         max_note_attempts: usize,
-    ) -> Result<(Option<Account>, Vec<AccountTargetNetworkNote>)> {
+    ) -> Result<(Option<miden_protocol::account::Account>, Vec<AccountTargetNetworkNote>)> {
         self.inner
             .query("select_candidate", move |conn| {
                 let account = queries::get_account(conn, account_id)?;
@@ -145,84 +161,8 @@ impl Db {
             .await
     }
 
-    /// Handles a `TransactionAdded` mempool event by writing effects to the DB.
-    pub async fn handle_transaction_added(
-        &self,
-        tx_id: TransactionId,
-        account_delta: Option<AccountUpdateDetails>,
-        notes: Vec<AccountTargetNetworkNote>,
-        nullifiers: Vec<Nullifier>,
-    ) -> Result<()> {
-        self.inner
-            .transact("handle_transaction_added", move |conn| {
-                queries::add_transaction(conn, &tx_id, account_delta.as_ref(), &notes, &nullifiers)
-            })
-            .await
-    }
-
-    /// Handles a `BlockCommitted` mempool event by committing transaction effects.
-    ///
-    /// Returns the list of affected account IDs that should be notified.
-    pub async fn handle_block_committed(
-        &self,
-        txs: Vec<TransactionId>,
-        block_num: BlockNumber,
-        header: BlockHeader,
-    ) -> Result<Vec<NetworkAccountId>> {
-        self.inner
-            .transact("handle_block_committed", move |conn| {
-                queries::commit_block(conn, &txs, block_num, &header)
-            })
-            .await
-    }
-
-    /// Handles a `TransactionsReverted` mempool event by undoing transaction effects.
-    ///
-    /// Returns all affected account IDs that should be notified.
-    pub async fn handle_transactions_reverted(
-        &self,
-        tx_ids: Vec<TransactionId>,
-    ) -> Result<Vec<NetworkAccountId>> {
-        self.inner
-            .transact("handle_transactions_reverted", move |conn| {
-                queries::revert_transaction(conn, &tx_ids)
-            })
-            .await
-    }
-
-    /// Purges all inflight state. Called on startup to get a clean slate.
-    pub async fn purge_inflight(&self) -> Result<()> {
-        self.inner.transact("purge_inflight", queries::purge_inflight).await
-    }
-
-    /// Inserts or replaces the singleton chain state row.
-    pub async fn upsert_chain_state(
-        &self,
-        block_num: BlockNumber,
-        header: BlockHeader,
-    ) -> Result<()> {
-        self.inner
-            .transact("upsert_chain_state", move |conn| {
-                queries::upsert_chain_state(conn, block_num, &header)
-            })
-            .await
-    }
-
-    /// Syncs an account and its notes from the store into the DB.
-    pub async fn sync_account_from_store(
-        &self,
-        account_id: NetworkAccountId,
-        account: Account,
-        notes: Vec<AccountTargetNetworkNote>,
-    ) -> Result<()> {
-        self.inner
-            .transact("sync_account_from_store", move |conn| {
-                queries::upsert_committed_account(conn, account_id, &account)?;
-                queries::insert_committed_notes(conn, &notes)?;
-                Ok(())
-            })
-            .await
-    }
+    // SCRIPT CACHE
+    // ============================================================================================
 
     /// Looks up a cached note script by root hash.
     pub async fn lookup_note_script(&self, script_root: Word) -> Result<Option<NoteScript>> {
@@ -241,6 +181,52 @@ impl Db {
                 queries::insert_note_script(conn, &script_root, &script)
             })
             .await
+    }
+
+    // DEAD-CODE STUBS
+    // ============================================================================================
+    //
+    // These methods exist to keep the dead actor/coordinator modules compiling in PR 1. They are
+    // never reached because `NetworkTransactionBuilder` does not spawn the actor path. PR 2
+    // replaces them with their new committed-block-driven equivalents.
+
+    #[expect(clippy::unused_async)]
+    pub async fn transaction_exists(
+        &self,
+        _tx_id: miden_protocol::transaction::TransactionId,
+    ) -> Result<bool> {
+        unimplemented!("transaction_exists is rewired in PR 2 of the ntx-builder refactor")
+    }
+
+    #[expect(clippy::unused_async)]
+    pub async fn handle_transaction_added(
+        &self,
+        _tx_id: miden_protocol::transaction::TransactionId,
+        _account_delta: Option<miden_protocol::account::delta::AccountUpdateDetails>,
+        _notes: Vec<AccountTargetNetworkNote>,
+        _nullifiers: Vec<Nullifier>,
+    ) -> Result<()> {
+        unimplemented!("handle_transaction_added is rewired in PR 2 of the ntx-builder refactor")
+    }
+
+    #[expect(clippy::unused_async)]
+    pub async fn handle_block_committed(
+        &self,
+        _txs: Vec<miden_protocol::transaction::TransactionId>,
+        _block_num: BlockNumber,
+        _header: BlockHeader,
+    ) -> Result<Vec<NetworkAccountId>> {
+        unimplemented!("handle_block_committed is rewired in PR 2 of the ntx-builder refactor")
+    }
+
+    #[expect(clippy::unused_async)]
+    pub async fn handle_transactions_reverted(
+        &self,
+        _tx_ids: Vec<miden_protocol::transaction::TransactionId>,
+    ) -> Result<Vec<NetworkAccountId>> {
+        unimplemented!(
+            "handle_transactions_reverted is rewired in PR 2 of the ntx-builder refactor"
+        )
     }
 
     /// Creates a file-backed SQLite test connection with migrations applied.

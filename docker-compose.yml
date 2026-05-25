@@ -50,7 +50,6 @@ services:
       - store
       - start
       - --rpc.listen=0.0.0.0:50001
-      - --ntx-builder.listen=0.0.0.0:50002
       - --block-producer.listen=0.0.0.0:50003
       - --data-directory=/data/store
       - --account_tree.rocksdb.max_cache_size=4294967296
@@ -59,7 +58,6 @@ services:
       - --nullifier_tree.rocksdb.max_open_fds=512
     ports:
       - "50001:50001"
-      - "50002:50002"
       - "50003:50003"
 
   validator:
@@ -127,7 +125,7 @@ services:
       - miden-ntx-builder
       - start
       - --listen=0.0.0.0:50301
-      - --store.url=http://store:50002
+      - --store.url=http://store:50001
       - --block-producer.url=http://block-producer:50201
       - --validator.url=http://validator:50101
       - --data-directory=/data/ntx-builder

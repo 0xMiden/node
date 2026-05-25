@@ -34,6 +34,7 @@ impl NetworkAccountEffect {
         }
     }
 
+    #[expect(dead_code)]
     pub fn network_account_id(&self) -> NetworkAccountId {
         // Trusted: constructors only produce this enum for accounts already classified as network
         // (via the allowlist check above) or for updates that the caller filters through the actor

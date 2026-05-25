@@ -12,9 +12,7 @@ use url::Url;
 const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
-const ENV_STORE_URL: &str = "MIDEN_NODE_NTX_BUILDER_STORE_URL";
-const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_NTX_BUILDER_BLOCK_PRODUCER_URL";
-const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_NTX_BUILDER_VALIDATOR_URL";
+const ENV_RPC_URL: &str = "MIDEN_NODE_NTX_BUILDER_RPC_URL";
 const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
@@ -33,17 +31,9 @@ pub enum NtxBuilderCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: SocketAddr,
 
-        /// The store's ntx-builder service gRPC url.
-        #[arg(long = "store.url", env = ENV_STORE_URL, value_name = "URL")]
-        store_url: Url,
-
-        /// The block-producer's gRPC url.
-        #[arg(long = "block-producer.url", env = ENV_BLOCK_PRODUCER_URL, value_name = "URL")]
-        block_producer_url: Url,
-
-        /// The validator's gRPC url.
-        #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
-        validator_url: Url,
+        /// The node RPC service gRPC url.
+        #[arg(long = "rpc.url", alias = "store.url", env = ENV_RPC_URL, value_name = "URL")]
+        rpc_url: Url,
 
         /// The remote transaction prover's gRPC url. If unset, will default to running a prover
         /// in-process which is expensive.
@@ -52,7 +42,7 @@ pub enum NtxBuilderCommand {
 
         /// Number of note scripts to cache locally.
         ///
-        /// Note scripts not in cache must first be retrieved from the store.
+        /// Note scripts not in cache must first be retrieved through RPC.
         #[arg(
             long = "script-cache-size",
             env = ENV_SCRIPT_CACHE_SIZE,
@@ -117,9 +107,7 @@ impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let Self::Start {
             listen,
-            store_url,
-            block_producer_url,
-            validator_url,
+            rpc_url,
             tx_prover_url,
             script_cache_size,
             idle_timeout,
@@ -136,18 +124,13 @@ impl NtxBuilderCommand {
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
-        let config = miden_ntx_builder::NtxBuilderConfig::new(
-            store_url,
-            block_producer_url,
-            validator_url,
-            database_filepath,
-        )
-        .with_tx_prover_url(tx_prover_url)
-        .with_script_cache_size(script_cache_size)
-        .with_idle_timeout(idle_timeout)
-        .with_max_account_crashes(max_account_crashes)
-        .with_max_cycles(max_tx_cycles)
-        .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
+        let config = miden_ntx_builder::NtxBuilderConfig::new(rpc_url, database_filepath)
+            .with_tx_prover_url(tx_prover_url)
+            .with_script_cache_size(script_cache_size)
+            .with_idle_timeout(idle_timeout)
+            .with_max_account_crashes(max_account_crashes)
+            .with_max_cycles(max_tx_cycles)
+            .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
 
         config
             .build()

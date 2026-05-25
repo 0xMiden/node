@@ -47,8 +47,18 @@ impl ChainState {
         (self.chain_tip_header, self.chain_mmr)
     }
 
+    /// Returns the current chain tip header.
+    pub(crate) fn chain_tip_header(&self) -> &BlockHeader {
+        &self.chain_tip_header
+    }
+
+    /// Returns a clone of the current partial chain MMR.
+    pub(crate) fn current_mmr(&self) -> PartialMmr {
+        self.chain_mmr.mmr().clone()
+    }
+
     /// Updates the chain tip and prunes old blocks from the MMR.
-    fn update_chain_tip(&mut self, tip: BlockHeader, max_block_count: usize) {
+    pub(crate) fn update_chain_tip(&mut self, tip: BlockHeader, max_block_count: usize) {
         // Skip blocks already reflected in the chain state. A `BlockCommitted` event may arrive for
         // a block whose state was already loaded from the store during startup: the mempool
         // subscription is established first and then the chain tip is fetched, so any block
