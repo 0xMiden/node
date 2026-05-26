@@ -26,7 +26,7 @@ impl State {
     /// endpoint.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block_with_proving_inputs(
-        self: Arc<Self>,
+        &self,
         ordered_batches: OrderedBatches,
         signed_block: SignedBlock,
     ) -> Result<(), ApplyBlockWithProvingInputsError> {
@@ -48,21 +48,9 @@ impl State {
             .await
             .map_err(ApplyBlockWithProvingInputsError::SaveProvingInputs)?;
 
-        // Keep the actual block application in a separate task. If the caller is cancelled while
-        // awaiting this method, the state mutation can still run to completion rather than being
-        // cancelled at an arbitrary point.
-        tokio::spawn({
-            let state = Arc::clone(&self);
-            async move {
-                state
-                    .apply_block(signed_block)
-                    .await
-                    .map_err(ApplyBlockWithProvingInputsError::ApplyBlock)
-            }
-            .in_current_span()
-        })
-        .await
-        .map_err(ApplyBlockWithProvingInputsError::TokioJoinError)?
+        self.apply_block(signed_block)
+            .await
+            .map_err(ApplyBlockWithProvingInputsError::ApplyBlock)
     }
 
     /// Apply changes of a new block to the DB and in-memory data structures.

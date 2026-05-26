@@ -233,8 +233,6 @@ pub enum ApplyBlockWithProvingInputsError {
     SaveProvingInputs(#[source] io::Error),
     #[error("failed to apply block")]
     ApplyBlock(#[source] ApplyBlockError),
-    #[error("block applying task panicked")]
-    TokioJoinError(#[source] tokio::task::JoinError),
 }
 
 impl From<ApplyBlockError> for Status {

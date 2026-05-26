@@ -376,7 +376,7 @@ async fn apply_block(
     let ordered_batches = proposed_block.batches().clone();
 
     let start = Instant::now();
-    Arc::clone(store_state)
+    store_state
         .apply_block_with_proving_inputs(ordered_batches, signed_block)
         .await
         .unwrap();

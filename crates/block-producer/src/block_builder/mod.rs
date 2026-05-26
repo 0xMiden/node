@@ -268,7 +268,6 @@ impl BlockBuilder {
         let header = signed_block.header().clone();
 
         self.store
-            .clone()
             .apply_block_with_proving_inputs(ordered_batches, signed_block)
             .await
             .map_err(StoreError::ApplyBlockFailed)
