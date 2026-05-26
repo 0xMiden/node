@@ -51,7 +51,6 @@ impl Rpc {
             self.validator_url,
             self.ntx_builder_url.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
-            NonZeroUsize::new(65_536).unwrap(),
         );
 
         let genesis = api
