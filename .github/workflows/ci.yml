@@ -346,6 +346,6 @@ jobs:
       - name: Install cargo-shear
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
-          tool: cargo-shear@1.11.2
+          tool: cargo-shear@1.12.4
       - name: Check for unused dependencies
         run: make shear
