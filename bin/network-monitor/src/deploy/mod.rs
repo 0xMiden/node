@@ -186,6 +186,16 @@ pub struct MonitorDataStore {
     mast_store: TransactionMastStore,
 }
 
+impl Clone for MonitorDataStore {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new(self.block_header.clone(), self.partial_block_chain.clone());
+        for account in self.accounts.values() {
+            cloned.add_account(account.clone());
+        }
+        cloned
+    }
+}
+
 impl MonitorDataStore {
     pub fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
         Self {
