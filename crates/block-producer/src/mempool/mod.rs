@@ -84,7 +84,7 @@ mod tests;
 // MEMPOOL CONFIGURATION
 // ================================================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SharedMempool(Arc<Mutex<Mempool>>);
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]

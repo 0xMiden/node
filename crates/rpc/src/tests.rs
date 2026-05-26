@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
+use miden_node_block_producer::store::StoreClient as BlockProducerStoreClient;
+use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
 use miden_node_proto::clients::{
-    BlockProducerClient,
     Builder,
     GrpcClient,
     Interceptor,
@@ -660,13 +661,6 @@ async fn start_rpc_with_options(
 ) -> (RpcClient, std::net::SocketAddr, TcpListener) {
     let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
     let store_addr = store_listener.local_addr().expect("store should get a local address");
-    let block_producer_addr = {
-        let block_producer_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind block-producer");
-        block_producer_listener
-            .local_addr()
-            .expect("Failed to get block-producer address")
-    };
 
     // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
@@ -674,24 +668,20 @@ async fn start_rpc_with_options(
     task::spawn(async move {
         // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
         let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
-        // SAFETY: The block_producer_addr is always valid as it is created from a `SocketAddr`.
-        let block_producer_url = Url::parse(&format!("http://{block_producer_addr}")).unwrap();
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
-        let store = Builder::new(store_url)
+        let store = Builder::new(store_url.clone())
             .without_tls()
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
             .connect_lazy::<StoreRpcClient>();
-        let block_producer = Builder::new(block_producer_url)
-            .without_tls()
-            .without_timeout()
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<BlockProducerClient>();
+        let block_producer = BlockProducerApi::new(
+            BlockProducerStoreClient::new(store_url),
+            0.into(),
+            BlockProducerApiConfig::default(),
+        );
         let validator = Builder::new(validator_url)
             .without_tls()
             .without_timeout()
