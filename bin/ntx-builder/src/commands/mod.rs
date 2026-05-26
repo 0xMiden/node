@@ -7,12 +7,14 @@ use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use tokio::net::TcpListener;
+use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_RPC_URL: &str = "MIDEN_NODE_NTX_BUILDER_RPC_URL";
+const ENV_RPC_AUTH_HEADER_VALUE: &str = "MIDEN_NODE_NTX_BUILDER_RPC_AUTH_HEADER_VALUE";
 const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
@@ -34,6 +36,14 @@ pub enum NtxBuilderCommand {
         /// The node RPC service gRPC url.
         #[arg(long = "rpc.url", alias = "store.url", env = ENV_RPC_URL, value_name = "URL")]
         rpc_url: Url,
+
+        /// Optional value for the fixed `x-miden-network-tx-auth` metadata header.
+        #[arg(
+            long = "rpc.auth-header-value",
+            env = ENV_RPC_AUTH_HEADER_VALUE,
+            value_name = "VALUE"
+        )]
+        rpc_auth_header_value: Option<AsciiMetadataValue>,
 
         /// The remote transaction prover's gRPC url. If unset, will default to running a prover
         /// in-process which is expensive.
@@ -108,6 +118,7 @@ impl NtxBuilderCommand {
         let Self::Start {
             listen,
             rpc_url,
+            rpc_auth_header_value,
             tx_prover_url,
             script_cache_size,
             idle_timeout,
@@ -131,6 +142,10 @@ impl NtxBuilderCommand {
             .with_max_account_crashes(max_account_crashes)
             .with_max_cycles(max_tx_cycles)
             .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
+        let config = match rpc_auth_header_value {
+            Some(value) => config.with_rpc_auth_header(value),
+            None => config,
+        };
 
         config
             .build()
@@ -144,5 +159,34 @@ impl NtxBuilderCommand {
     pub fn is_open_telemetry_enabled(&self) -> bool {
         let Self::Start { enable_otel, .. } = self;
         *enable_otel
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use tonic::metadata::AsciiMetadataValue;
+
+    use super::NtxBuilderCommand;
+
+    #[test]
+    fn start_command_parses_rpc_auth_header_options() {
+        let command = NtxBuilderCommand::try_parse_from([
+            "miden-ntx-builder",
+            "start",
+            "--listen",
+            "127.0.0.1:8080",
+            "--rpc.url",
+            "http://127.0.0.1:57291",
+            "--rpc.auth-header-value",
+            "secret-token",
+            "--data-directory",
+            "/tmp/miden-ntx-builder",
+        ])
+        .expect("command should parse");
+
+        let NtxBuilderCommand::Start { rpc_auth_header_value, .. } = command;
+
+        assert_eq!(rpc_auth_header_value, Some(AsciiMetadataValue::from_static("secret-token")));
     }
 }
