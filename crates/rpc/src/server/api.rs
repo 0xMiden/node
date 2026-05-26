@@ -28,6 +28,7 @@ use miden_node_utils::limiter::{
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{
@@ -49,6 +50,9 @@ use crate::COMPONENT;
 // RPC SERVICE
 // ================================================================================================
 
+/// Error returned when a user submits a transaction for an account classified as a network account.
+const NETWORK_TX_REJECTION_MSG: &str = "Network transactions may not be submitted by users yet";
+
 pub struct RpcService {
     store: StoreRpcClient,
     block_producer: Option<BlockProducerClient>,
@@ -56,6 +60,7 @@ pub struct RpcService {
     ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
     block_commitment_cache: LruCache<BlockNumber, Word>,
+    network_account_cache: LruCache<AccountId, ()>,
 }
 
 impl RpcService {
@@ -65,6 +70,7 @@ impl RpcService {
         validator_url: Url,
         ntx_builder_url: Option<Url>,
         commitment_cache_capacity: NonZeroUsize,
+        network_account_cache_capacity: NonZeroUsize,
     ) -> Self {
         let store = {
             info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
@@ -129,6 +135,7 @@ impl RpcService {
             ntx_builder,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
+            network_account_cache: LruCache::new(network_account_cache_capacity),
         }
     }
 
@@ -236,6 +243,58 @@ impl RpcService {
         }
 
         Ok(())
+    }
+
+    /// Rejects the request if any of `candidate_ids` is classified as a network account.
+    ///
+    /// Known network accounts are served from the local LRU cache; on a cache miss the store is
+    /// the source of truth and any account it confirms is memoized so later gate checks skip the
+    /// store. Callers should pre-filter to post-deployment, public-account ids; `Ok(())` on empty.
+    #[tracing::instrument(target = COMPONENT, name = "reject_if_any_network_accounts", skip_all)]
+    async fn reject_if_any_network_accounts(
+        &self,
+        candidate_ids: Vec<AccountId>,
+    ) -> Result<(), Status> {
+        if candidate_ids.is_empty() {
+            return Ok(());
+        }
+
+        // A cached id is a known network account, so the gate fails without touching the store.
+        if self
+            .network_account_cache
+            .get_many(candidate_ids.iter())
+            .iter()
+            .any(Option::is_some)
+        {
+            return Err(Status::invalid_argument(NETWORK_TX_REJECTION_MSG));
+        }
+
+        let response = self
+            .store
+            .clone()
+            .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
+                account_ids: candidate_ids.iter().map(|id| (*id).into()).collect(),
+            }))
+            .await
+            .map_err(|err| {
+                Status::internal(format!("network-account classification failed: {err}"))
+            })?;
+
+        let network_ids: Vec<AccountId> = read_account_ids(
+            response.into_inner().network_account_ids,
+        )
+        .map_err(|err: ConversionError| {
+            Status::internal(format!("malformed network-account response: {err}"))
+        })?;
+
+        if network_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Memoize the confirmed network accounts so subsequent gate checks skip the store.
+        self.network_account_cache.put_many(network_ids.into_iter().map(|id| (id, ())));
+
+        Err(Status::invalid_argument(NETWORK_TX_REJECTION_MSG))
     }
 }
 
@@ -523,24 +582,14 @@ impl api_server::Api for RpcService {
         // account; the store is the source of truth because network-ness now lives in account
         // storage and isn't derivable from an AccountId alone. Network accounts must be public, so
         // private-account txs short-circuit and skip the store roundtrip.
-        if !tx.account_update().initial_state_commitment().is_empty() && tx.account_id().is_public()
+        let candidate_ids = if !tx.account_update().initial_state_commitment().is_empty()
+            && tx.account_id().is_public()
         {
-            let response = self
-                .store
-                .clone()
-                .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
-                    account_ids: vec![tx.account_id().into()],
-                }))
-                .await
-                .map_err(|err| {
-                    Status::internal(format!("network-account classification failed: {err}"))
-                })?;
-            if !response.into_inner().network_account_ids.is_empty() {
-                return Err(Status::invalid_argument(
-                    "Network transactions may not be submitted by users yet",
-                ));
-            }
-        }
+            vec![tx.account_id()]
+        } else {
+            Vec::new()
+        };
+        self.reject_if_any_network_accounts(candidate_ids).await?;
 
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
         tx_verifier.verify(&tx).map_err(|err| {
@@ -625,26 +674,9 @@ impl api_server::Api for RpcService {
                 !tx.account_update().initial_state_commitment().is_empty()
                     && tx.account_id().is_public()
             })
-            .map(|tx| proto::account::AccountId::from(tx.account_id()))
+            .map(|tx| tx.account_id())
             .collect();
-
-        if !non_deployment_ids.is_empty() {
-            let response = self
-                .store
-                .clone()
-                .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
-                    account_ids: non_deployment_ids,
-                }))
-                .await
-                .map_err(|err| {
-                    Status::internal(format!("network-account classification failed: {err}"))
-                })?;
-            if !response.into_inner().network_account_ids.is_empty() {
-                return Err(Status::invalid_argument(
-                    "Network transactions may not be submitted by users yet",
-                ));
-            }
-        }
+        self.reject_if_any_network_accounts(non_deployment_ids).await?;
 
         // Verify batch transaction proofs.
         //
