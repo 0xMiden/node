@@ -55,12 +55,10 @@ it is also possible to perform proving in-process. This is useful when running a
 
 ## Network transaction builder
 
-The network transaction builder monitors the mempool for network notes, and creates transactions consuming these.
+The network transaction builder follows committed blocks for network notes, and creates transactions consuming these.
 We call these network transactions and at present this is the only entity that is allowed to create such transactions.
 This restriction will be lifted in the future, but for now this component _must_ be enabled to have support for
 network transactions.
-
-The mempool is monitored via a gRPC event stream served by the block-producer.
 
 Internally, the builder spawns a dedicated actor for each network account that has pending notes. Actors that remain
 idle (no notes to consume) for a configurable duration are automatically deactivated to conserve resources, and are

@@ -97,7 +97,7 @@ pub struct AccountActorContext {
     pub clients: GrpcClients,
     pub state: State,
     pub config: ActorConfig,
-    /// Channel for sending requests to the coordinator (via the builder event loop).
+    /// Channel for sending requests to the coordinator (via the builder loop).
     pub request_tx: mpsc::Sender<ActorRequest>,
 }
 
@@ -176,15 +176,15 @@ enum ActorMode {
 ///   based on current chain state and DB queries.
 /// - **Transaction Execution**: Executes selected transactions using either local or remote
 ///   proving.
-/// - **Mempool Integration**: Listens for mempool events to stay synchronized with the network
-///   state and adjust behavior based on transaction confirmations.
+/// - **Chain Integration**: Reacts to committed-chain updates persisted by the coordinator to stay
+///   synchronized with the network state.
 ///
 /// ## Lifecycle
 ///
 /// 1. **Initialization**: Waits for committed account state, then checks DB for available notes.
-/// 2. **Event Loop**: Continuously processes mempool events and executes transactions.
+/// 2. **Event Loop**: Re-evaluates database state on notification and executes transactions.
 /// 3. **Transaction Processing**: Selects, executes, proves, and submits transactions through RPC.
-/// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
+/// 4. **State Updates**: Committed-chain updates are persisted to DB before actors are
 ///    notified.
 /// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
 ///    failures.
@@ -227,7 +227,7 @@ impl AccountActor {
         }
     }
 
-    /// Runs the account actor, processing events and managing state until shutdown.
+    /// Runs the account actor, processing notifications and managing state until shutdown.
     ///
     /// The return value signals the shutdown category to the coordinator:
     ///
@@ -312,7 +312,7 @@ impl AccountActor {
                     if let Some(tx_candidate) = tx_candidate {
                         mode = self.execute_transactions(account_id, tx_candidate).await;
                     } else {
-                        // No transactions to execute, wait for events.
+                        // No transactions to execute, wait for notifications.
                         mode = ActorMode::NoViableNotes;
                     }
                 }
@@ -385,9 +385,8 @@ impl AccountActor {
     /// For accounts that are being created by an inflight transaction, this will idle
     /// until the transaction is committed. Returns `true` when the account is ready, or
     /// `false` if no commit arrived within [`ActorConfig::idle_timeout`] — in which case
-    /// the coordinator will respawn a new actor when the account reappears through
-    /// [`Coordinator::send_targeted`](crate::coordinator::Coordinator::send_targeted) or the
-    /// account loader.
+    /// the coordinator will respawn a new actor when committed-chain processing or the account
+    /// loader observes the account again.
     async fn wait_for_committed_account(&self, account_id: AccountId) -> anyhow::Result<bool> {
         // Check if the account is already committed.
         if self

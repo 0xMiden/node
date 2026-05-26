@@ -54,14 +54,11 @@ use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
-use miden_node_proto::domain::mempool::MempoolEvent;
 use miden_node_utils::ErrorReport;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
-use subscription::SubscriptionProvider;
 use thiserror::Error;
-use tokio::sync::mpsc;
 use tracing::instrument;
 
 use crate::block_builder::SelectedBlock;
@@ -80,7 +77,6 @@ mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
 mod graph;
-mod subscription;
 
 #[cfg(test)]
 mod tests;
@@ -183,7 +179,6 @@ pub struct Mempool {
     committed_chain_tip: BlockNumber,
 
     config: MempoolConfig,
-    subscription: subscription::SubscriptionProvider,
 }
 
 impl Mempool {
@@ -199,7 +194,6 @@ impl Mempool {
         Self {
             config,
             committed_chain_tip: chain_tip,
-            subscription: SubscriptionProvider::new(chain_tip),
             transactions: graph::TransactionGraph::default(),
             batches: graph::BatchGraph::default(),
             pending_block: None,
@@ -220,8 +214,6 @@ impl Mempool {
     // --------------------------------------------------------------------------------------------
 
     /// Adds a transaction to the mempool.
-    ///
-    /// Sends a [`MempoolEvent::TransactionAdded`] event to subscribers.
     ///
     /// # Returns
     ///
@@ -251,7 +243,6 @@ impl Mempool {
         self.transactions
             .append(Arc::clone(&tx))
             .map_err(MempoolSubmissionError::StateConflict)?;
-        self.subscription.transaction_added(&tx);
         self.inject_telemetry();
 
         Ok(self.committed_chain_tip)
@@ -286,9 +277,6 @@ impl Mempool {
             .append_user_batch(txs)
             .map_err(MempoolSubmissionError::StateConflict)?;
 
-        for tx in txs {
-            self.subscription.transaction_added(tx);
-        }
         self.inject_telemetry();
 
         Ok(self.committed_chain_tip)
@@ -341,8 +329,7 @@ impl Mempool {
         // could check this precondition above.
         if let Some(batch) = reverted_batches.iter().find(|reverted| reverted.id() == batch) {
             let failed_txs = batch.transactions().iter().map(|tx| tx.id());
-            let reverted_txs = self.transactions.increment_failure_count(failed_txs);
-            self.subscription.txs_reverted(reverted_txs);
+            self.transactions.increment_failure_count(failed_txs);
         }
 
         self.inject_telemetry();
@@ -385,39 +372,26 @@ impl Mempool {
     /// The pool will mark the associated batches and transactions as committed, and prune stale
     /// committed data, and purge transactions that are now considered expired.
     ///
-    /// Sends a [`MempoolEvent::BlockCommitted`] event to subscribers, as well as a
-    /// [`MempoolEvent::TransactionsReverted`] for transactions that are now considered expired.
-    ///
     /// On success the internal state is updated in place: the chain tip advances, expired data is
-    /// pruned, and subscribers are notified about the committed block and any reverted
-    /// transactions.
+    /// pruned, and expired transactions are reverted.
     ///
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
     #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
-    pub fn commit_block(&mut self, block_header: BlockHeader) {
+    pub fn commit_block(&mut self, block_header: &BlockHeader) {
         assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
             .pending_block
             .take_if(|pending| pending.block_number == block_header.block_num())
             .expect("block must be in progress to commit");
 
-        let tx_ids = block
-            .batches
-            .iter()
-            .flat_map(|batch| batch.transactions().as_slice().iter())
-            .map(miden_protocol::transaction::TransactionHeader::id)
-            .collect();
-
         self.committed_chain_tip = self.committed_chain_tip.child();
-        self.subscription.block_committed(block_header, tx_ids);
 
         self.committed_blocks.push_back(block);
         self.prune_oldest_block();
 
-        let reverted_tx_ids = self.revert_expired();
-        self.subscription.txs_reverted(reverted_tx_ids);
+        self.revert_expired();
         self.inject_telemetry();
     }
 
@@ -426,8 +400,6 @@ impl Mempool {
     /// The block's batches are reverted and transactions are requeued for batch selection.
     /// Additionally, the transactions from this block have their failure count incremented,
     /// potentially reverting them if they exceed the failure limit.
-    ///
-    /// Sends a [`MempoolEvent::TransactionsReverted`] event to subscribers.
     ///
     /// # Panics
     ///
@@ -456,22 +428,8 @@ impl Mempool {
             .batches
             .iter()
             .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
-        let reverted_txs = self.transactions.increment_failure_count(failed_txs);
-
-        self.subscription.txs_reverted(reverted_txs);
+        self.transactions.increment_failure_count(failed_txs);
         self.inject_telemetry();
-    }
-
-    // EVENTS & SUBSCRIPTIONS
-    // --------------------------------------------------------------------------------------------
-
-    /// Creates a subscription to [`MempoolEvent`] which will be emitted in the order they
-    /// occur.
-    ///
-    /// Only emits events which occurred after the current committed block.
-    #[instrument(target = COMPONENT, name = "mempool.subscribe", skip_all)]
-    pub fn subscribe(&mut self) -> mpsc::Receiver<MempoolEvent> {
-        self.subscription.subscribe()
     }
 
     // STATS & INSPECTION
