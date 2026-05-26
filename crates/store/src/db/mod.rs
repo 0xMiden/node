@@ -170,7 +170,6 @@ impl TransactionRecord {
 pub struct NoteRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
-    pub details_commitment: Word,
     pub note_id: Word,
     pub metadata: NoteMetadata,
     pub details: Option<NoteDetails>,
