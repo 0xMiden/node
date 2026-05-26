@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_proto::domain::mempool::MempoolEvent;
+use miden_protocol::account::AccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
@@ -17,7 +17,7 @@ use crate::db::Db;
 /// Result of writing a mempool event to the database.
 pub struct WriteEventResult {
     /// Accounts that should be notified of state changes.
-    pub accounts_to_notify: Vec<NetworkAccountId>,
+    pub accounts_to_notify: Vec<AccountId>,
 }
 
 // ACTOR HANDLE
@@ -104,14 +104,14 @@ pub struct Coordinator {
     /// When actors are spawned, they register their notification handle here. When events need
     /// to be broadcast, this registry is used to locate the appropriate actors. The registry is
     /// automatically cleaned up when actors complete their execution.
-    actor_registry: HashMap<NetworkAccountId, ActorHandle>,
+    actor_registry: HashMap<AccountId, ActorHandle>,
 
     /// Join set for managing actor tasks and monitoring their completion status.
     ///
     /// This join set allows the coordinator to wait for actor task completion and handle
     /// different shutdown scenarios. When an actor task completes (either successfully or
     /// due to an error), the corresponding entry is removed from the actor registry.
-    actor_join_set: JoinSet<(NetworkAccountId, anyhow::Result<()>)>,
+    actor_join_set: JoinSet<(AccountId, anyhow::Result<()>)>,
 
     /// Semaphore for controlling the maximum number of concurrent transactions across all network
     /// accounts.
@@ -130,7 +130,7 @@ pub struct Coordinator {
     /// When an actor shuts down due to a DB error, its crash count is incremented. Once
     /// the count reaches `max_account_crashes`, the account is deactivated and no new actor
     /// will be spawned for it.
-    crash_counts: HashMap<NetworkAccountId, usize>,
+    crash_counts: HashMap<AccountId, usize>,
 
     /// Maximum number of crashes an account actor is allowed before being deactivated.
     max_account_crashes: usize,
@@ -156,11 +156,7 @@ impl Coordinator {
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
     #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self, actor_context))]
-    pub fn spawn_actor(
-        &mut self,
-        account_id: NetworkAccountId,
-        actor_context: &AccountActorContext,
-    ) {
+    pub fn spawn_actor(&mut self, account_id: AccountId, actor_context: &AccountActorContext) {
         // Skip spawning if the account has been deactivated due to repeated crashes.
         if let Some(&count) = self.crash_counts.get(&account_id) {
             if count >= self.max_account_crashes {
@@ -201,7 +197,7 @@ impl Coordinator {
     /// Only actors that are currently active are notified. Each actor will re-evaluate its state
     /// from the DB on the next iteration of its run loop. Notifications are coalesced: multiple
     /// notifications while an actor is busy result in a single wake-up.
-    pub fn notify_accounts(&self, account_ids: &[NetworkAccountId]) {
+    pub fn notify_accounts(&self, account_ids: &[AccountId]) {
         for account_id in account_ids {
             if let Some(handle) = self.actor_registry.get(account_id) {
                 handle.notify();
@@ -220,7 +216,7 @@ impl Coordinator {
     ///
     /// Returns `Some(account_id)` if an actor should be respawned (because a
     /// notification arrived just as it shut down), or `None` otherwise.
-    pub async fn next(&mut self) -> anyhow::Result<Option<NetworkAccountId>> {
+    pub async fn next(&mut self) -> anyhow::Result<Option<AccountId>> {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok((account_id, Ok(())))) => {
@@ -265,7 +261,7 @@ impl Coordinator {
     /// Returns account IDs of note targets that do not have active actors (e.g. previously
     /// deactivated due to sterility). The caller can use this to re-activate actors for those
     /// accounts.
-    pub fn send_targeted(&self, event: &MempoolEvent) -> Vec<NetworkAccountId> {
+    pub fn send_targeted(&self, event: &MempoolEvent) -> Vec<AccountId> {
         let mut target_account_ids = HashSet::new();
         let mut inactive_targets = Vec::new();
 
@@ -275,18 +271,16 @@ impl Coordinator {
             // external network transactions (once these are allowed).
             if let Some(AccountUpdateDetails::Delta(delta)) = account_delta {
                 // The actor registry only contains accounts the builder has already classified as
-                // network. Wrap the id unconditionally and let the registry lookup filter for us;
-                // unknown accounts simply won't match.
-                let network_account_id = NetworkAccountId::new_unchecked(delta.id());
-                if self.actor_registry.contains_key(&network_account_id) {
-                    target_account_ids.insert(network_account_id);
+                // network, so the lookup itself filters out non-network ids.
+                let account_id = delta.id();
+                if self.actor_registry.contains_key(&account_id) {
+                    target_account_ids.insert(account_id);
                 }
             }
 
             // Determine target actors for each note.
             for note in network_notes {
                 let account = note.target_account_id();
-                let account = NetworkAccountId::new_unchecked(account);
 
                 if self.actor_registry.contains_key(&account) {
                     target_account_ids.insert(account);
@@ -369,7 +363,7 @@ mod tests {
     use crate::test_utils::*;
 
     /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
-    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
+    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: AccountId) {
         let notify = Arc::new(Notify::new());
         coordinator.actor_registry.insert(account_id, ActorHandle::new(notify));
     }

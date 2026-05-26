@@ -87,10 +87,8 @@ impl SubscriptionProvider {
                 OutputNote::Private(_) => None,
             })
             .collect();
-        // The classifier `is_network()` is gone from the protocol; network-ness now lives in
-        // account storage and cannot be determined from an AccountId alone. We send the delta for
-        // every non-private update and let the subscriber (which keeps its own list of network
-        // accounts) filter. Private accounts carry no payload, so the extra envelopes are cheap.
+
+        // Private accounts cannot be managed by the network, so filter them out
         let account_delta = match tx.account_update().details() {
             miden_protocol::account::delta::AccountUpdateDetails::Private => None,
             details @ miden_protocol::account::delta::AccountUpdateDetails::Delta(_) => {

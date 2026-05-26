@@ -452,7 +452,7 @@ impl Db {
         .await
     }
 
-    /// Returns the subset of the provided account IDs that currently classify as network accounts.
+    /// Returns the subset of the provided account IDs that classify as network accounts.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_network_accounts_subset(
         &self,

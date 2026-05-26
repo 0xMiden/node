@@ -1,6 +1,5 @@
 //! Shared test helpers for the NTX builder crate.
 
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountComponent, AccountId, AccountType};
 use miden_protocol::block::BlockNumber;
@@ -15,18 +14,15 @@ use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
 
 /// Creates a network account ID from a test constant.
-pub fn mock_network_account_id() -> NetworkAccountId {
-    let account_id: AccountId =
-        ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap();
-    NetworkAccountId::new_unchecked(account_id)
+pub fn mock_network_account_id() -> AccountId {
+    ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap()
 }
 
 /// Creates a distinct network account ID using a seeded RNG.
-pub fn mock_network_account_id_seeded(seed: u8) -> NetworkAccountId {
-    let account_id = AccountIdBuilder::new()
+pub fn mock_network_account_id_seeded(seed: u8) -> AccountId {
+    AccountIdBuilder::new()
         .account_type(AccountType::Public)
-        .build_with_seed([seed; 32]);
-    NetworkAccountId::new_unchecked(account_id)
+        .build_with_seed([seed; 32])
 }
 
 /// Creates a unique `TransactionId` from a seed value.
@@ -41,7 +37,7 @@ pub fn mock_tx_id(seed: u64) -> TransactionId {
 
 /// Creates a `AccountTargetNetworkNote` targeting the given network account.
 pub fn mock_single_target_note(
-    network_account_id: NetworkAccountId,
+    network_account_id: AccountId,
     seed: u8,
 ) -> AccountTargetNetworkNote {
     mock_single_target_note_with_code(network_account_id, seed, None)
@@ -49,7 +45,7 @@ pub fn mock_single_target_note(
 
 /// Creates a `AccountTargetNetworkNote` with optional custom note script code.
 pub fn mock_single_target_note_with_code(
-    network_account_id: NetworkAccountId,
+    network_account_id: AccountId,
     seed: u8,
     code: Option<&str>,
 ) -> AccountTargetNetworkNote {
@@ -58,7 +54,7 @@ pub fn mock_single_target_note_with_code(
         .account_type(AccountType::Private)
         .build_with_rng(&mut rng);
 
-    let target = NetworkAccountTarget::new(network_account_id.inner(), NoteExecutionHint::Always)
+    let target = NetworkAccountTarget::new(network_account_id, NoteExecutionHint::Always)
         .expect("network account should be valid target");
 
     let mut builder = NoteBuilder::new(sender, rng).attachment(target);
@@ -74,7 +70,7 @@ pub fn mock_single_target_note_with_code(
 /// Creates a mock `Account` for a network account.
 ///
 /// Uses `AccountBuilder` with minimal components needed for serialization.
-pub fn mock_account(_account_id: NetworkAccountId) -> miden_protocol::account::Account {
+pub fn mock_account(_account_id: AccountId) -> miden_protocol::account::Account {
     use miden_protocol::account::AccountBuilder;
     use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
     use miden_standards::testing::account_component::MockAccountComponent;

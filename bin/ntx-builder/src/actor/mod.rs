@@ -10,10 +10,10 @@ use allowlist::{NoteScriptNotAllowlisted, partition_by_allowlist};
 use anyhow::Context;
 use candidate::TransactionCandidate;
 use futures::FutureExt;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
@@ -196,7 +196,7 @@ enum ActorMode {
 /// actor exits of its own accord when idle for longer than [`ActorConfig::idle_timeout`].
 pub struct AccountActor {
     /// The network account this actor is responsible for.
-    account_id: NetworkAccountId,
+    account_id: AccountId,
     /// gRPC clients used by the actor.
     clients: GrpcClients,
     /// Shared state accessed by the actor.
@@ -213,7 +213,7 @@ pub struct AccountActor {
 impl AccountActor {
     /// Constructs a new account actor with the given configuration.
     pub fn new(
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         actor_context: &AccountActorContext,
         notify: Arc<Notify>,
     ) -> Self {
@@ -328,7 +328,7 @@ impl AccountActor {
     /// Selects a transaction candidate by querying the DB.
     async fn select_candidate_from_db(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         chain_state: ChainState,
     ) -> anyhow::Result<Option<TransactionCandidate>> {
         let block_num = chain_state.chain_tip_header.block_num();
@@ -388,10 +388,7 @@ impl AccountActor {
     /// the coordinator will respawn a new actor when the account reappears through
     /// [`Coordinator::send_targeted`](crate::coordinator::Coordinator::send_targeted) or the
     /// account loader.
-    async fn wait_for_committed_account(
-        &self,
-        account_id: NetworkAccountId,
-    ) -> anyhow::Result<bool> {
+    async fn wait_for_committed_account(&self, account_id: AccountId) -> anyhow::Result<bool> {
         // Check if the account is already committed.
         if self
             .state
@@ -439,7 +436,7 @@ impl AccountActor {
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         tx_candidate: TransactionCandidate,
     ) -> ActorMode {
         let block_num = tx_candidate.chain_tip_header.block_num();
@@ -606,7 +603,7 @@ end";
 
     fn actor_with_request_handler(
         db: &Db,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
     ) -> (AccountActor, AccountActorContext) {
         let (request_tx, request_rx) = mpsc::channel(8);
         let mut context = AccountActorContext::test(db);

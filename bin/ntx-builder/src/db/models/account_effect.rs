@@ -1,6 +1,5 @@
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::account::{Account, AccountDelta, AccountId};
+use miden_protocol::account::{Account, AccountDelta};
 use miden_standards::account::auth::NetworkAccount;
 
 // NETWORK ACCOUNT EFFECT
@@ -31,21 +30,6 @@ impl NetworkAccountEffect {
                 // let the coordinator's actor registry filter to known network accounts.
                 Some(NetworkAccountEffect::Updated(update.clone()))
             },
-        }
-    }
-
-    #[expect(dead_code)]
-    pub fn network_account_id(&self) -> NetworkAccountId {
-        // Trusted: constructors only produce this enum for accounts already classified as network
-        // (via the allowlist check above) or for updates that the caller filters through the actor
-        // registry.
-        NetworkAccountId::new_unchecked(self.protocol_account_id())
-    }
-
-    fn protocol_account_id(&self) -> AccountId {
-        match self {
-            NetworkAccountEffect::Created(acc) => acc.id(),
-            NetworkAccountEffect::Updated(delta) => delta.id(),
         }
     }
 }

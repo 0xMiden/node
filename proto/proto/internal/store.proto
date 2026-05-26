@@ -23,12 +23,12 @@ service Rpc {
 
     // Filters the provided account ids down to the subset that are currently
     // classified as network accounts. Ids that don't exist in the store, or that
-    // aren't network accounts, are omitted. The order of `network_account_ids`
-    // is unspecified.
+    // aren't network accounts, are omitted. The order of the returned ids is
+    // unspecified.
     //
     // Callers checking a single id should pass a one-element list and check whether
     // the response is non-empty.
-    rpc AreNetworkAccounts(account.AccountIdList) returns (NetworkAccountIdSubset) {}
+    rpc FilterNetworkAccounts(account.AccountIdList) returns (account.AccountIdList) {}
 
     // Returns raw block data for the specified block number, optionally including the block proof.
     rpc GetBlockByNumber(blockchain.BlockRequest) returns (blockchain.MaybeBlock) {}

@@ -25,12 +25,12 @@ use crate::server::NtxBuilderRpcServer;
 pub(crate) type BlockStream =
     Pin<Box<dyn Stream<Item = Result<(SignedBlock, BlockNumber), RpcError>> + Send>>;
 
-/// Network transaction builder component (PR 1: subscription-driven sync only).
+/// Network transaction builder component.
 ///
 /// The builder consumes the RPC committed-block subscription and applies each block's
-/// network-relevant effects to its local database. The actor execution path is wired back in a
-/// subsequent PR; in this PR the binary stays up and keeps the local DB caught up to the live
-/// chain tip without scheduling any network transactions.
+/// network-relevant effects to its local database. The actor execution path is currently unwired;
+/// the builder keeps the local DB caught up to the live chain tip without scheduling any network
+/// transactions.
 pub struct NetworkTransactionBuilder {
     /// Configuration for the builder.
     config: NtxBuilderConfig,
@@ -45,7 +45,7 @@ pub struct NetworkTransactionBuilder {
     /// restart.
     chain: ChainState,
     /// `false` until the first applied block whose `committed_chain_tip` matches the just-applied
-    /// block number. Stays `true` afterwards. Exposed so the gRPC status surface and PR 2's actor
+    /// block number. Stays `true` afterwards. Exposed so the gRPC status surface and future actor
     /// spawn gating can read it.
     is_synced: bool,
 }

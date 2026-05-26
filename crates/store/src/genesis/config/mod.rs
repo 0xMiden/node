@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
-use miden_node_utils::crypto::get_rpo_random_coin;
+use miden_node_utils::crypto::get_random_coin;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
@@ -219,18 +219,18 @@ impl GenesisConfig {
         let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
 
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
-        for (index, WalletConfig { storage_mode, assets }) in wallet_configs.into_iter().enumerate()
+        for (index, WalletConfig { account_type, assets }) in wallet_configs.into_iter().enumerate()
         {
             tracing::debug!(index, assets = ?assets, "Adding wallet account");
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
-            let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
+            let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
             let auth = AuthMethod::SingleSig {
                 approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
             };
             let init_seed: [u8; 32] = rng.random();
 
-            let mut wallet_account = create_basic_wallet(init_seed, auth, storage_mode.into())?;
+            let mut wallet_account = create_basic_wallet(init_seed, auth, account_type.into())?;
 
             // Add fungible assets and track the faucet adjustments per faucet/asset.
             let wallet_fungible_asset_update =
@@ -383,7 +383,7 @@ impl NativeFaucetConfig {
                     symbol: symbol.clone(),
                     decimals: DEFAULT_NATIVE_FAUCET_DECIMALS,
                     max_supply: DEFAULT_NATIVE_FAUCET_MAX_SUPPLY,
-                    storage_mode: StorageMode::Public,
+                    account_type: AccountTypeConfig::Public,
                 };
                 let (account, secret_key) = faucet_config.build_account()?;
                 Ok((account, symbol, Some(secret_key)))
@@ -419,7 +419,7 @@ pub struct FungibleFaucetConfig {
     /// using based `10.powi(decimals)` as a multiplier.
     max_supply: u64,
     #[serde(default)]
-    storage_mode: StorageMode,
+    account_type: AccountTypeConfig,
 }
 
 impl FungibleFaucetConfig {
@@ -429,10 +429,10 @@ impl FungibleFaucetConfig {
             symbol,
             decimals,
             max_supply,
-            storage_mode,
+            account_type,
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
-        let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
+        let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
         let auth =
             AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
         let init_seed: [u8; 32] = rng.random();
@@ -449,7 +449,7 @@ impl FungibleFaucetConfig {
 
         // It's similar to `fn create_basic_fungible_faucet`, but we need to cover more cases.
         let faucet_account = AccountBuilder::new(init_seed)
-            .account_type(storage_mode.into())
+            .account_type(account_type.into())
             .with_auth_component(auth)
             .with_component(faucet)
             .with_components(
@@ -473,7 +473,7 @@ impl FungibleFaucetConfig {
 #[serde(deny_unknown_fields)]
 pub struct WalletConfig {
     #[serde(default)]
-    storage_mode: StorageMode,
+    account_type: AccountTypeConfig,
     assets: Vec<AssetEntry>,
 }
 
@@ -484,13 +484,13 @@ struct AssetEntry {
     amount: u64,
 }
 
-// STORAGE MODE
+// ACCOUNT TYPE CONFIG
 // ================================================================================================
 
 /// See the [full description](https://0xmiden.github.io/miden-protocol/account.html?highlight=Accoun#account-storage-mode)
 /// for details
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Default)]
-pub enum StorageMode {
+pub enum AccountTypeConfig {
     /// A publicly stored account, lives on-chain.
     #[serde(alias = "public")]
     Public,
@@ -500,11 +500,11 @@ pub enum StorageMode {
     Private,
 }
 
-impl From<StorageMode> for AccountType {
-    fn from(mode: StorageMode) -> AccountType {
-        match mode {
-            StorageMode::Public => AccountType::Public,
-            StorageMode::Private => AccountType::Private,
+impl From<AccountTypeConfig> for AccountType {
+    fn from(value: AccountTypeConfig) -> AccountType {
+        match value {
+            AccountTypeConfig::Public => AccountType::Public,
+            AccountTypeConfig::Private => AccountType::Private,
         }
     }
 }

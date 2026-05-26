@@ -2,7 +2,7 @@
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -63,10 +63,9 @@ pub fn insert_network_notes(
     notes: &[AccountTargetNetworkNote],
 ) -> Result<(), DatabaseError> {
     for note in notes {
-        let target_id = NetworkAccountId::new_unchecked(note.target_account_id());
         let row = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
-            account_id: conversions::network_account_id_to_bytes(target_id),
+            account_id: conversions::account_id_to_bytes(note.target_account_id()),
             note_data: note.as_note().to_bytes(),
             note_id: Some(conversions::note_id_to_bytes(&note.as_note().id())),
             attempt_count: 0,
@@ -108,11 +107,11 @@ pub fn mark_notes_consumed(
 #[expect(clippy::cast_possible_wrap)]
 pub fn available_notes(
     conn: &mut SqliteConnection,
-    account_id: NetworkAccountId,
+    account_id: AccountId,
     block_num: BlockNumber,
     max_attempts: usize,
 ) -> Result<Vec<AccountTargetNetworkNote>, DatabaseError> {
-    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
+    let account_id_bytes = conversions::account_id_to_bytes(account_id);
 
     let rows: Vec<NoteRow> = schema::notes::table
         .filter(schema::notes::account_id.eq(&account_id_bytes))

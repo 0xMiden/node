@@ -29,7 +29,8 @@ tonic-prost                 = { workspace = true }
 url                         = { workspace = true }
 
 [dev-dependencies]
-proptest = { version = "1.7" }
+miden-protocol = { features = ["testing"], workspace = true }
+proptest       = { version = "1.7" }
 
 [build-dependencies]
 build-rs               = { workspace = true }

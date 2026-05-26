@@ -302,9 +302,7 @@ async fn rpc_rate_limits_per_ip() {
 
 #[tokio::test]
 async fn rpc_server_accepts_requests_with_accept_header() {
-    // Start the RPC.
-    let (mut rpc_client, _, store_listener) = start_rpc().await;
-    let _store = TestStore::start(store_listener).await;
+    let (mut rpc_client, _, _store) = start_rpc_and_store_ready().await;
 
     // Send any request to the RPC.
     let response = send_request(&mut rpc_client).await;
@@ -316,9 +314,7 @@ async fn rpc_server_accepts_requests_with_accept_header() {
 #[tokio::test]
 async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
     for version in ["1.9.0", "0.8.1", "0.8.0", "0.999.0", "99.0.0"] {
-        // Start the RPC.
-        let (_, rpc_addr, store_listener) = start_rpc().await;
-        let _store = TestStore::start(store_listener).await;
+        let (_, rpc_addr, _store) = start_rpc_and_store_ready().await;
 
         // Recreate the RPC client with an invalid version.
         let url = rpc_addr.to_string();
@@ -423,13 +419,8 @@ async fn rpc_server_has_web_support() {
 
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
-    // Start the RPC.
-    let (_, rpc_addr, store_listener) = start_rpc().await;
-    let store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
     let genesis = store.genesis_commitment();
-
-    // Wait for the store to be ready before sending requests.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -475,13 +466,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
-    // Start the RPC.
-    let (_, rpc_addr, store_listener) = start_rpc().await;
-    let store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
     let genesis = store.genesis_commitment();
-
-    // Wait for the store to be ready before sending requests.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client =
@@ -518,12 +504,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 
 #[tokio::test]
 async fn rpc_rejects_post_deployment_network_account_tx() {
-    let (_, rpc_addr, store_listener) = start_rpc().await;
-    let store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
     let genesis = store.genesis_commitment();
-
-    // Wait for the store to be ready before sending requests.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Build a client that advertises the right `application/vnd.miden` content type so
     // tx-submission requests reach the handler.
@@ -570,9 +552,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 
 #[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
-    // Start the RPC.
-    let (_, rpc_addr, store_listener) = start_rpc().await;
-    let store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
     let genesis = store.genesis_commitment();
 
     // Override the client so that the ACCEPT header is not set.
@@ -655,6 +635,18 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
     start_rpc_with_options(GrpcOptionsExternal::test()).await
 }
 
+/// Starts the RPC + store pair and blocks until the RPC server has finished its genesis-fetch
+/// bootstrap and is accepting requests. Use this in tests that send a single one-shot request and
+/// would otherwise race the RPC component's startup under high test parallelism.
+async fn start_rpc_and_store_ready() -> (RpcClient, std::net::SocketAddr, TestStore) {
+    let (mut rpc_client, rpc_addr, store_listener) = start_rpc().await;
+    let store = TestStore::start(store_listener).await;
+    send_request_until_success(&mut rpc_client)
+        .await
+        .expect("RPC should become ready after store starts");
+    (rpc_client, rpc_addr, store)
+}
+
 async fn start_rpc_with_options(
     grpc_options: GrpcOptionsExternal,
 ) -> (RpcClient, std::net::SocketAddr, TcpListener) {
@@ -700,9 +692,7 @@ async fn start_rpc_with_options(
 
 #[tokio::test]
 async fn get_limits_endpoint() {
-    // Start the RPC and store
-    let (mut rpc_client, _rpc_addr, store_listener) = start_rpc().await;
-    let _store = TestStore::start(store_listener).await;
+    let (mut rpc_client, _rpc_addr, _store) = start_rpc_and_store_ready().await;
 
     // Call the get_limits endpoint
     let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");

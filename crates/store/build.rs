@@ -6,6 +6,7 @@ use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountCode, AccountFile, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::field::PrimeCharacteristicRing;
 use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -40,16 +41,16 @@ fn generate_agglayer_sample_accounts() {
     fs_err::create_dir_all(&samples_dir).expect("Failed to create samples directory");
 
     // Use deterministic seeds for reproducible builds. WARNING: DO NOT USE THESE IN PRODUCTION
-    let bridge_seed: Word = Word::new([Felt::new_unchecked(1u64); 4]);
-    let eth_faucet_seed: Word = Word::new([Felt::new_unchecked(2u64); 4]);
-    let usdc_faucet_seed: Word = Word::new([Felt::new_unchecked(3u64); 4]);
+    let bridge_seed: Word = Word::new([Felt::from_u32(1u32); 4]);
+    let eth_faucet_seed: Word = Word::new([Felt::from_u32(2u32); 4]);
+    let usdc_faucet_seed: Word = Word::new([Felt::from_u32(3u32); 4]);
 
     // Create bridge admin and GER manager as proper wallet accounts. WARNING: DO NOT USE THESE IN
     // PRODUCTION
     let bridge_admin_key =
-        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new_unchecked(4u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::from_u32(4u32); 4])));
     let ger_manager_key =
-        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new_unchecked(5u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::from_u32(5u32); 4])));
 
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
@@ -84,8 +85,8 @@ fn generate_agglayer_sample_accounts() {
         eth_faucet_seed,
         "ETH",
         8,
-        Felt::new_unchecked(1_000_000_000),
-        Felt::new_unchecked(0),
+        Felt::from_u32(1_000_000_000u32),
+        Felt::ZERO,
         bridge_account_id,
     );
 
@@ -94,8 +95,8 @@ fn generate_agglayer_sample_accounts() {
         usdc_faucet_seed,
         "USDC",
         6,
-        Felt::new_unchecked(10_000_000_000),
-        Felt::new_unchecked(0),
+        Felt::from_u64(10_000_000_000u64),
+        Felt::ZERO,
         bridge_account_id,
     );
 

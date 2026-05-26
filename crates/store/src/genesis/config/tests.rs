@@ -103,7 +103,7 @@ fn parsing_account_from_file() -> TestResult {
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
-        &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
+        &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
@@ -164,7 +164,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
-        &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
+        &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
     let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
@@ -235,7 +235,7 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
-        &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
+        &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
