@@ -7,7 +7,7 @@ use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
-use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
+use miden_protocol::block::{BlockBody, BlockHeader, BlockInputs, BlockNumber, SignedBlock};
 use miden_protocol::note::{NoteAttachments, NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
@@ -22,21 +22,16 @@ use crate::{COMPONENT, HistoricalError};
 impl State {
     /// Saves proving inputs for a signed block and applies it to the state.
     ///
-    /// This is the in-process replacement for the store block-producer gRPC `ApplyBlock`
-    /// endpoint.
+    /// Used by the in-process block producer after it has built and signed a block.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block_with_proving_inputs(
         &self,
         ordered_batches: OrderedBatches,
+        block_inputs: BlockInputs,
         signed_block: SignedBlock,
     ) -> Result<(), ApplyBlockWithProvingInputsError> {
         let block_header = signed_block.header().clone();
         let block_num = block_header.block_num();
-
-        let block_inputs = self
-            .block_inputs_from_ordered_batches(&ordered_batches)
-            .await
-            .map_err(ApplyBlockWithProvingInputsError::GetBlockInputs)?;
 
         let proving_inputs = BlockProofRequest {
             tx_batches: ordered_batches,

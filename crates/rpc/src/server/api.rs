@@ -3,11 +3,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
 use miden_node_proto::clients::{NtxBuilderClient, StoreRpcClient};
 use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
 use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::rpc::MempoolStats;
+use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::try_convert;
@@ -515,8 +516,9 @@ impl api_server::Api for RpcService {
         }
 
         block_producer
-            .submit_proven_tx(request)
+            .submit_proven_tx(rebuilt_tx)
             .await
+            .map(Into::into)
             .map(Response::new)
             .map_err(Into::into)
     }
@@ -618,8 +620,9 @@ impl api_server::Api for RpcService {
         }
 
         block_producer
-            .submit_proven_tx_batch(request)
+            .submit_proven_tx_batch(proposed_batch)
             .await
+            .map(Into::into)
             .map(Response::new)
             .map_err(Into::into)
     }
@@ -658,7 +661,9 @@ impl api_server::Api for RpcService {
         let store_status =
             self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
         let block_producer_status = match &self.mode {
-            RpcMode::Sequencer { block_producer, .. } => Some(block_producer.status().await),
+            RpcMode::Sequencer { block_producer, .. } => {
+                Some(block_producer_status_to_proto(block_producer.status().await))
+            },
             RpcMode::FullNode { source_rpc } => source_rpc
                 .as_ref()
                 .clone()
@@ -679,7 +684,7 @@ impl api_server::Api for RpcService {
                 status: "unreachable".to_string(),
                 version: "-".to_string(),
                 chain_tip: 0,
-                mempool_stats: Some(MempoolStats::default()),
+                mempool_stats: Some(ProtoMempoolStats::default()),
             })),
             genesis_commitment: self.genesis_commitment.map(Into::into),
         }))
@@ -734,6 +739,25 @@ fn strip_output_note_decorators<'a>(
         },
         OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
+}
+
+fn block_producer_status_to_proto(status: BlockProducerStatus) -> proto::rpc::BlockProducerStatus {
+    proto::rpc::BlockProducerStatus {
+        version: status.version,
+        status: status.status,
+        chain_tip: status.chain_tip.as_u32(),
+        mempool_stats: Some(block_producer_mempool_stats_to_proto(status.mempool_stats)),
+    }
+}
+
+fn block_producer_mempool_stats_to_proto(
+    stats: BlockProducerMempoolStats,
+) -> proto::rpc::MempoolStats {
+    proto::rpc::MempoolStats {
+        unbatched_transactions: stats.unbatched_transactions,
+        proposed_batches: stats.proposed_batches,
+        proven_batches: stats.proven_batches,
+    }
 }
 
 // LIMIT HELPERS

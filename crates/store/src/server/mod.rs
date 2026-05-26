@@ -39,23 +39,23 @@ mod rpc_api;
 
 /// Determines how the store receives new blocks.
 ///
-/// The two modes are mutually exclusive: a store either shares its in-process state with a block
-/// producer, or it syncs blocks from an upstream store instance.
+/// The two modes are mutually exclusive: a store either acts as the primary writer for locally
+/// produced blocks, or it syncs blocks from an upstream store instance.
 pub enum StoreMode {
-    /// Shares state with an in-process block producer.
+    /// Store mode for a sequencing node that produces local blocks.
     ///
     /// Exposes the `Rpc` gRPC service and runs the proof scheduler to generate block proofs.
-    BlockProducer {
+    Sequencer {
         /// URL of the remote block prover. Uses a local prover if `None`.
         block_prover_url: Option<Url>,
         /// Maximum number of blocks proven concurrently by the proof scheduler.
         max_concurrent_proofs: NonZeroUsize,
     },
 
-    /// Receives blocks from an upstream store's `Rpc` gRPC service.
+    /// Store mode for a full node that syncs from an upstream store's `Rpc` gRPC service.
     ///
     /// Only the `Rpc` gRPC service is exposed and no proof scheduler runs.
-    Replica { upstream_url: Url },
+    Full { upstream_url: Url },
 }
 
 /// Database options used by the store.
@@ -145,8 +145,8 @@ impl Store {
         let _disk_monitor_task = Self::spawn_disk_monitor(self.data_directory.clone());
 
         let ModeSetup { mut grpc_servers, mode_task } = match self.mode {
-            StoreMode::BlockProducer { block_prover_url, max_concurrent_proofs } => {
-                Self::setup_block_producer_mode(
+            StoreMode::Sequencer { block_prover_url, max_concurrent_proofs } => {
+                Self::setup_sequencer_mode(
                     state,
                     block_prover_url,
                     max_concurrent_proofs,
@@ -155,8 +155,8 @@ impl Store {
                     self.rpc_listener,
                 )?
             },
-            StoreMode::Replica { upstream_url } => {
-                Self::setup_replica_mode(state, upstream_url, self.grpc_options, self.rpc_listener)?
+            StoreMode::Full { upstream_url } => {
+                Self::setup_full_mode(state, upstream_url, self.grpc_options, self.rpc_listener)?
             },
         };
 
@@ -180,7 +180,7 @@ impl Store {
         }
     }
 
-    fn setup_block_producer_mode(
+    fn setup_sequencer_mode(
         state: State,
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
@@ -188,7 +188,7 @@ impl Store {
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
     ) -> anyhow::Result<ModeSetup> {
-        info!(target: COMPONENT, "Starting in block-producer mode");
+        info!(target: COMPONENT, "Starting in sequencer mode");
 
         let proof_cache = state.proof_cache.clone();
         let proof_scheduler_task = Self::spawn_proof_scheduler(
@@ -210,13 +210,13 @@ impl Store {
         })
     }
 
-    fn setup_replica_mode(
+    fn setup_full_mode(
         state: State,
         upstream_url: Url,
         grpc_options: GrpcOptionsInternal,
         rpc_listener: TcpListener,
     ) -> anyhow::Result<ModeSetup> {
-        info!(target: COMPONENT, %upstream_url, "Starting in replica mode");
+        info!(target: COMPONENT, %upstream_url, "Starting in full mode");
 
         let state = Arc::new(state);
         let block_handle = BlockReplicaSync::new(Arc::clone(&state), upstream_url.clone()).spawn();
@@ -297,7 +297,7 @@ impl Store {
         Ok(join_set)
     }
 
-    /// Spawns the gRPC servers for replica mode.
+    /// Spawns the gRPC servers for full-node mode.
     ///
     /// Only the `Rpc` service is exposed and no proof scheduler runs.
     fn spawn_replica_grpc_servers(

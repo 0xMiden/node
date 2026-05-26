@@ -10,10 +10,8 @@ This crate contains protobuf bindings for the APIs exposed by the components of 
 
 The node's gRPC endpoints return rich error information using gRPC status details. Each component exposes its own set of error codes which are included in the response details.
 
-- Error types are defined in this crate's `src/errors/` directory:
-  - `src/errors/mod.rs` - Common error traits and conversion utilities
-  - `src/errors/store.rs` - Store component gRPC error enums
-  - `src/errors/block_producer.rs` - Block producer component gRPC error enums
+Error conversion helpers are defined in `src/errors/mod.rs`. Component-specific gRPC error
+details are derived next to the component errors that need to cross a gRPC boundary.
 
 ## License
 This project is [MIT licensed](../../LICENSE).

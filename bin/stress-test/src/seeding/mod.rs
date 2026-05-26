@@ -366,7 +366,7 @@ async fn apply_block(
     metrics: &mut SeedingMetrics,
     signer: &EcdsaSecretKey,
 ) -> BlockHeader {
-    let proposed_block = ProposedBlock::new(block_inputs, batches).unwrap();
+    let proposed_block = ProposedBlock::new(block_inputs.clone(), batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
     let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
     let signature = signer.sign(header.commitment());
@@ -377,7 +377,7 @@ async fn apply_block(
 
     let start = Instant::now();
     store_state
-        .apply_block_with_proving_inputs(ordered_batches, signed_block)
+        .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)
         .await
         .unwrap();
     metrics.track_block_insertion(start.elapsed(), block_size);
@@ -855,7 +855,7 @@ pub async fn start_store(
     task::spawn(async move {
         Store {
             rpc_listener,
-            mode: StoreMode::BlockProducer {
+            mode: StoreMode::Sequencer {
                 block_prover_url: None,
                 max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
             },

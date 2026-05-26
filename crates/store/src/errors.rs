@@ -227,8 +227,6 @@ pub enum ApplyBlockError {
 
 #[derive(Error, Debug)]
 pub enum ApplyBlockWithProvingInputsError {
-    #[error("failed to get block inputs from ordered batches")]
-    GetBlockInputs(#[source] GetBlockInputsError),
     #[error("failed to save block proving inputs")]
     SaveProvingInputs(#[source] io::Error),
     #[error("failed to apply block")]

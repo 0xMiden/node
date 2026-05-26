@@ -4,13 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::{Id, JoinSet};
 use tracing::{debug, info, instrument};
@@ -220,6 +218,19 @@ impl std::fmt::Debug for BlockProducerApi {
     }
 }
 
+/// Current block producer status.
+#[derive(Clone, Debug)]
+pub struct BlockProducerStatus {
+    /// The block producer crate version.
+    pub version: String,
+    /// Human-readable status string.
+    pub status: String,
+    /// The mempool's current view of the chain tip height.
+    pub chain_tip: BlockNumber,
+    /// Cached mempool statistics.
+    pub mempool_stats: MempoolStats,
+}
+
 impl BlockProducerApi {
     /// Creates an API backed by a fresh mempool.
     pub fn new(store: Arc<State>, chain_tip: BlockNumber, config: BlockProducerApiConfig) -> Self {
@@ -277,20 +288,15 @@ impl BlockProducerApi {
 
     #[instrument(
          target = COMPONENT,
-         name = "block_producer.server.submit_proven_tx",
+         name = "block_producer.api.submit_proven_tx",
          skip_all,
          err
      )]
     #[expect(clippy::let_and_return)]
     pub async fn submit_proven_tx(
         &self,
-        request: proto::transaction::ProvenTransaction,
-    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
-        debug!(target: COMPONENT, ?request);
-
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction)
-            .map_err(MempoolSubmissionError::DeserializationFailed)?;
-
+        tx: ProvenTransaction,
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
         let tx_id = tx.id();
 
         debug!(
@@ -302,13 +308,13 @@ impl BlockProducerApi {
             input_notes = %format_input_notes(tx.input_notes()),
             output_notes = %format_output_notes(tx.output_notes()),
             ref_block_commitment = %tx.ref_block_commitment(),
-            "Deserialized transaction"
+            "Submitting transaction"
         );
         debug!(target: COMPONENT, proof = ?tx.proof());
 
         let inputs = crate::store::get_tx_inputs(&self.store, &tx)
             .await
-            .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
+            .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
 
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
         let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
@@ -320,27 +326,21 @@ impl BlockProducerApi {
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_transaction(tx)
-            .map(Into::into);
+            .add_transaction(tx);
         result
     }
 
     #[instrument(
          target = COMPONENT,
-         name = "block_producer.server.submit_proven_tx_batch",
+         name = "block_producer.api.submit_proven_tx_batch",
          skip_all,
          err
      )]
     #[expect(clippy::let_and_return)]
     pub async fn submit_proven_tx_batch(
         &self,
-        request: proto::transaction::TransactionBatch,
-    ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
-        let proposed =
-            request.proposed_batch.ok_or(MempoolSubmissionError::MissingProposedBatch)?;
-        let batch = ProposedBatch::read_from_bytes(&proposed)
-            .map_err(MempoolSubmissionError::DeserializationFailed)?;
-
+        batch: ProposedBatch,
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
         // We assume that the rpc component has verified everything, including the transaction
         // proofs.
 
@@ -348,7 +348,7 @@ impl BlockProducerApi {
         for tx in batch.transactions() {
             let inputs = crate::store::get_tx_inputs(&self.store, tx)
                 .await
-                .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
+                .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
 
             // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
             // as the batch integrity itself.
@@ -363,19 +363,18 @@ impl BlockProducerApi {
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_user_batch(&txs)
-            .map(Into::into);
+            .add_user_batch(&txs);
         result
     }
 
-    pub async fn status(&self) -> proto::rpc::BlockProducerStatus {
+    pub async fn status(&self) -> BlockProducerStatus {
         let mempool_stats = *self.cached_mempool_stats.read().await;
 
-        proto::rpc::BlockProducerStatus {
+        BlockProducerStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "connected".to_string(),
-            chain_tip: mempool_stats.chain_tip.as_u32(),
-            mempool_stats: Some(mempool_stats.into()),
+            chain_tip: mempool_stats.chain_tip,
+            mempool_stats,
         }
     }
 }
@@ -385,15 +384,15 @@ impl BlockProducerApi {
 
 /// Mempool statistics that are updated periodically to avoid locking the mempool.
 #[derive(Clone, Copy, Debug, Default)]
-struct MempoolStats {
+pub struct MempoolStats {
     /// The mempool's current view of the chain tip height.
-    chain_tip: BlockNumber,
+    pub chain_tip: BlockNumber,
     /// Number of transactions currently in the mempool waiting to be batched.
-    unbatched_transactions: u64,
+    pub unbatched_transactions: u64,
     /// Number of batches currently being proven.
-    proposed_batches: u64,
+    pub proposed_batches: u64,
     /// Number of proven batches waiting for block inclusion.
-    proven_batches: u64,
+    pub proven_batches: u64,
 }
 
 impl MempoolStats {
@@ -403,16 +402,6 @@ impl MempoolStats {
             unbatched_transactions: mempool.unbatched_transactions_count() as u64,
             proposed_batches: mempool.proposed_batches_count() as u64,
             proven_batches: mempool.proven_batches_count() as u64,
-        }
-    }
-}
-
-impl From<MempoolStats> for proto::rpc::MempoolStats {
-    fn from(stats: MempoolStats) -> Self {
-        proto::rpc::MempoolStats {
-            unbatched_transactions: stats.unbatched_transactions,
-            proposed_batches: stats.proposed_batches,
-            proven_batches: stats.proven_batches,
         }
     }
 }

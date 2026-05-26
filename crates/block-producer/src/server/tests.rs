@@ -6,6 +6,7 @@ use miden_node_store::state::State;
 use miden_node_store::{GenesisState, Store};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::fee::test_fee_params;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use url::Url;
 
@@ -33,7 +34,7 @@ async fn block_producer_starts_with_store_state() {
 
     let status = block_producer.api().status().await;
     assert_eq!(status.status, "connected");
-    assert_eq!(status.chain_tip, 0);
+    assert_eq!(status.chain_tip, BlockNumber::GENESIS);
 }
 
 fn bootstrap_store(path: &std::path::Path) {

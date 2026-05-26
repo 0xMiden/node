@@ -122,7 +122,7 @@ impl TestStore {
         store_runtime.spawn(async move {
             Store {
                 rpc_listener,
-                mode: StoreMode::BlockProducer {
+                mode: StoreMode::Sequencer {
                     block_prover_url: None,
                     max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
                 },

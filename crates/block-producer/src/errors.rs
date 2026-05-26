@@ -12,8 +12,6 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::DeserializationError;
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -47,12 +45,9 @@ pub enum BlockProducerError {
 
 #[derive(Debug, Error, GrpcError)]
 pub enum MempoolSubmissionError {
-    #[error("failed to retrieve inputs from the store")]
+    #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreConnectionFailed(#[source] StoreError),
-
-    #[error("invalid transaction proof error for transaction: {0}")]
-    InvalidTransactionProof(TransactionId),
+    StoreStateReadFailed(#[source] StoreError),
 
     #[error(
         "transaction input data from block {input_block} is rejected as stale because it is older than the limit of {stale_limit}"
@@ -62,9 +57,6 @@ pub enum MempoolSubmissionError {
         input_block: BlockNumber,
         stale_limit: BlockNumber,
     },
-
-    #[error("request deserialization failed")]
-    DeserializationFailed(#[source] DeserializationError),
 
     #[error(
         "transaction expired at block height {expired_at} but the block height limit was {limit}"
@@ -83,9 +75,6 @@ pub enum MempoolSubmissionError {
     #[error("mempool lock is poisoned")]
     #[grpc(internal)]
     MempoolPoisoned(#[source] MempoolPoisonError),
-
-    #[error("missing proposed batch")]
-    MissingProposedBatch,
 }
 
 // Mempool submission conflicts with current state

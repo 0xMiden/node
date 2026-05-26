@@ -7,7 +7,7 @@ use crate::state::{ProofNotification, State};
 impl State {
     /// Saves a block proof, advances the proven-in-sequence tip, and notifies replica subscribers.
     ///
-    /// Only used when the store is running in replica mode.
+    /// Only used when the store is running in full-node mode.
     #[instrument(target = COMPONENT, skip_all, err, fields(block.number = block_num.as_u32()))]
     pub async fn apply_proof(
         &self,
