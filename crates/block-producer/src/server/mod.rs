@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use miden_node_proto::generated::{self as proto};
+use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
@@ -12,15 +13,14 @@ use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::{Id, JoinSet};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, info, instrument};
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{BlockProducerError, MempoolSubmissionError, StoreError};
+use crate::errors::{BlockProducerError, MempoolSubmissionError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
-use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
 
@@ -64,13 +64,10 @@ impl BlockProducerApiConfig {
 
 /// The block producer runtime.
 ///
-/// Specifies how to connect to the store, batch prover, and block prover components.
-/// The connection to the store is established at startup and retried with exponential backoff
-/// until the store becomes available. Once the connection is established, the block producer
-/// starts its batch and block builders.
+/// Specifies how to connect to the batch prover and block prover components.
 pub struct BlockProducer {
-    /// The address of the store component.
-    pub store_url: Url,
+    /// The store state shared with the block producer.
+    pub store: Arc<State>,
     /// The address of the validator component.
     pub validator_url: Url,
     /// The address of the batch prover component.
@@ -97,44 +94,16 @@ impl BlockProducer {
     /// The returned handle owns the batch and block builder tasks. Dropping the handle stops those
     /// tasks.
     pub async fn start(self) -> Result<BlockProducerRuntime> {
-        info!(target: COMPONENT, store=%self.store_url, "Initializing block producer");
-        let store = StoreClient::new(self.store_url.clone());
+        info!(target: COMPONENT, "Initializing block producer");
+        let store = self.store;
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
-
-        // Retry fetching the chain tip from the store until it succeeds.
-        let mut retries_counter = 0;
-        let chain_tip = loop {
-            match store.latest_header().await {
-                Err(StoreError::GrpcClientError(err)) => {
-                    // exponential backoff with base 500ms and max 30s
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retries_counter)
-                        .min(Duration::from_secs(30));
-
-                    error!(
-                        store = %self.store_url,
-                        ?backoff,
-                        %retries_counter,
-                        %err,
-                        "store connection failed while fetching chain tip, retrying"
-                    );
-
-                    retries_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-                Ok(header) => break header.block_num(),
-                Err(e) => {
-                    error!(target: COMPONENT, %e, "failed to fetch chain tip from store");
-                    return Err(e.into());
-                },
-            }
-        };
+        let chain_tip = store.chain_tip(Finality::Committed).await;
 
         info!(target: COMPONENT, "Block producer initialized");
 
-        let block_builder = BlockBuilder::new(store.clone(), validator, self.block_interval);
+        let block_builder = BlockBuilder::new(Arc::clone(&store), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
-            store.clone(),
+            Arc::clone(&store),
             SERVER_NUM_BATCH_BUILDERS,
             self.batch_prover_url,
             self.batch_interval,
@@ -228,7 +197,7 @@ impl BlockProducerRuntime {
 // ================================================================================================
 
 /// In-process block producer API used by the RPC layer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BlockProducerApi {
     /// The mutex effectively rate limits incoming transactions into the mempool by forcing them
     /// through a queue.
@@ -238,20 +207,26 @@ pub struct BlockProducerApi {
     /// the block-producers usage of the mempool.
     mempool: Arc<Mutex<SharedMempool>>,
 
-    store: StoreClient,
+    store: Arc<State>,
 
     /// Cached mempool statistics that are updated periodically to avoid locking the mempool for
     /// each status request.
     cached_mempool_stats: Arc<RwLock<MempoolStats>>,
 }
 
+impl std::fmt::Debug for BlockProducerApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlockProducerApi").finish_non_exhaustive()
+    }
+}
+
 impl BlockProducerApi {
     /// Creates an API backed by a fresh mempool.
-    pub fn new(store: StoreClient, chain_tip: BlockNumber, config: BlockProducerApiConfig) -> Self {
+    pub fn new(store: Arc<State>, chain_tip: BlockNumber, config: BlockProducerApiConfig) -> Self {
         Self::from_shared_mempool(Mempool::shared(chain_tip, config.mempool_config()), store)
     }
 
-    fn from_shared_mempool(mempool: SharedMempool, store: StoreClient) -> Self {
+    fn from_shared_mempool(mempool: SharedMempool, store: Arc<State>) -> Self {
         let cached_mempool_stats = mempool
             .lock()
             .map(|mempool| MempoolStats::from_mempool(&mempool))
@@ -331,9 +306,7 @@ impl BlockProducerApi {
         );
         debug!(target: COMPONENT, proof = ?tx.proof());
 
-        let inputs = self
-            .store
-            .get_tx_inputs(&tx)
+        let inputs = crate::store::get_tx_inputs(&self.store, &tx)
             .await
             .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
 
@@ -373,9 +346,7 @@ impl BlockProducerApi {
 
         let mut txs = Vec::with_capacity(batch.transactions().len());
         for tx in batch.transactions() {
-            let inputs = self
-                .store
-                .get_tx_inputs(tx)
+            let inputs = crate::store::get_tx_inputs(&self.store, tx)
                 .await
                 .map_err(MempoolSubmissionError::StoreConnectionFailed)?;
 

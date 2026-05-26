@@ -225,6 +225,18 @@ pub enum ApplyBlockError {
     DbUpdateTaskFailed(String),
 }
 
+#[derive(Error, Debug)]
+pub enum ApplyBlockWithProvingInputsError {
+    #[error("failed to get block inputs from ordered batches")]
+    GetBlockInputs(#[source] GetBlockInputsError),
+    #[error("failed to save block proving inputs")]
+    SaveProvingInputs(#[source] io::Error),
+    #[error("failed to apply block")]
+    ApplyBlock(#[source] ApplyBlockError),
+    #[error("block applying task panicked")]
+    TokioJoinError(#[source] tokio::task::JoinError),
+}
+
 impl From<ApplyBlockError> for Status {
     fn from(err: ApplyBlockError) -> Self {
         match err {

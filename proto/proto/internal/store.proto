@@ -79,28 +79,6 @@ service Rpc {
     rpc ProofSubscription(rpc.ProofSubscriptionRequest) returns (stream rpc.ProofSubscriptionResponse) {}
 }
 
-// BLOCK PRODUCER STORE API
-// ================================================================================================
-
-// Store API for the BlockProducer component
-service BlockProducer {
-    // Applies changes of a new block to the DB and in-memory data structures.
-    rpc ApplyBlock(ApplyBlockRequest) returns (google.protobuf.Empty) {}
-
-    // Retrieves block header by given block number. Optionally, it also returns the MMR path
-    // and current chain length to authenticate the block's inclusion.
-    rpc GetBlockHeaderByNumber(rpc.BlockHeaderByNumberRequest) returns (rpc.BlockHeaderByNumberResponse) {}
-
-    // Returns data required to prove the next block.
-    rpc GetBlockInputs(BlockInputsRequest) returns (BlockInputs) {}
-
-    // Returns the inputs for a transaction batch.
-    rpc GetBatchInputs(BatchInputsRequest) returns (BatchInputs) {}
-
-    // Returns data required to validate a new transaction.
-    rpc GetTransactionInputs(TransactionInputsRequest) returns (TransactionInputs) {}
-}
-
 // APPLY BLOCK REQUEST
 // ================================================================================================
 

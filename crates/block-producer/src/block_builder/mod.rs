@@ -2,18 +2,17 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_store::state::State;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
-use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
 use tracing::{Span, instrument};
 
-use crate::errors::BuildBlockError;
+use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
-use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
 
@@ -29,19 +28,19 @@ pub struct BlockBuilder {
     /// Note: this _must_ be sign positive and less than 1.0.
     pub failure_rate: f64,
 
-    /// The store RPC client for committing blocks.
-    pub store: StoreClient,
+    /// The store state for committing blocks.
+    pub store: Arc<State>,
 
     /// The validator RPC client for validating blocks.
     pub validator: BlockProducerValidatorClient,
 }
 
 impl BlockBuilder {
-    /// Creates a new [`BlockBuilder`] with the given [`StoreClient`] and optional block prover URL.
+    /// Creates a new [`BlockBuilder`] with the given store state and optional block prover URL.
     ///
     /// If the block prover URL is not set, the block builder will use the local block prover.
     pub fn new(
-        store: StoreClient,
+        store: Arc<State>,
         validator: BlockProducerValidatorClient,
         block_interval: Duration,
     ) -> Self {
@@ -172,7 +171,7 @@ impl BlockBuilder {
                 .input_notes()
                 .iter()
                 .cloned()
-                .filter_map(|note| note.header().map(NoteHeader::id))
+                .filter_map(|note| note.header().map(|header| header.id().as_word()))
         });
         let block_references_iter =
             batch_iter.clone().map(Deref::deref).map(ProvenBatch::reference_block_num);
@@ -184,19 +183,20 @@ impl BlockBuilder {
         let inputs = self
             .store
             .get_block_inputs(
-                account_ids_iter,
-                created_nullifiers_iter,
-                unauthenticated_notes_iter,
-                block_references_iter,
+                account_ids_iter.collect(),
+                created_nullifiers_iter.collect(),
+                unauthenticated_notes_iter.collect(),
+                block_references_iter.collect(),
             )
             .await
+            .map_err(StoreError::GetBlockInputsFailed)
             .map_err(BuildBlockError::GetBlockInputsFailed)?;
 
         // Check that the latest committed block in the store matches our expectations.
         //
-        // Desync can occur since the mempool and store are separate components. One example is if
-        // the block-producer's apply_block gRPC request times out, rolling back the block locally,
-        // but the store still committed the block on its end.
+        // Desync can occur since the mempool and store state are updated separately. For example,
+        // the store may commit a block while the block builder rolls back its local mempool view
+        // after a late failure.
         let store_chain_tip = inputs.prev_block_header().block_num();
         if store_chain_tip.child() != block_number {
             return Err(BuildBlockError::Desync {
@@ -265,12 +265,15 @@ impl BlockBuilder {
         ordered_batches: OrderedBatches,
         signed_block: SignedBlock,
     ) -> Result<(), BuildBlockError> {
+        let header = signed_block.header().clone();
+
         self.store
-            .apply_block(&ordered_batches, &signed_block)
+            .clone()
+            .apply_block_with_proving_inputs(ordered_batches, signed_block)
             .await
+            .map_err(StoreError::ApplyBlockFailed)
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
-        let (header, ..) = signed_block.into_parts();
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(&header);
 
         Ok(())

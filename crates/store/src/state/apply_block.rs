@@ -4,6 +4,7 @@ use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
@@ -14,11 +15,56 @@ use tokio::sync::oneshot;
 use tracing::{Instrument, info, info_span, instrument};
 
 use crate::db::NoteRecord;
-use crate::errors::{ApplyBlockError, InvalidBlockError};
+use crate::errors::{ApplyBlockError, ApplyBlockWithProvingInputsError, InvalidBlockError};
 use crate::state::{BlockNotification, State};
 use crate::{COMPONENT, HistoricalError};
 
 impl State {
+    /// Saves proving inputs for a signed block and applies it to the state.
+    ///
+    /// This is the in-process replacement for the store block-producer gRPC `ApplyBlock`
+    /// endpoint.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn apply_block_with_proving_inputs(
+        self: Arc<Self>,
+        ordered_batches: OrderedBatches,
+        signed_block: SignedBlock,
+    ) -> Result<(), ApplyBlockWithProvingInputsError> {
+        let block_header = signed_block.header().clone();
+        let block_num = block_header.block_num();
+
+        let block_inputs = self
+            .block_inputs_from_ordered_batches(&ordered_batches)
+            .await
+            .map_err(ApplyBlockWithProvingInputsError::GetBlockInputs)?;
+
+        let proving_inputs = BlockProofRequest {
+            tx_batches: ordered_batches,
+            block_header,
+            block_inputs,
+        };
+
+        self.save_proving_inputs(block_num, &proving_inputs)
+            .await
+            .map_err(ApplyBlockWithProvingInputsError::SaveProvingInputs)?;
+
+        // Keep the actual block application in a separate task. If the caller is cancelled while
+        // awaiting this method, the state mutation can still run to completion rather than being
+        // cancelled at an arbitrary point.
+        tokio::spawn({
+            let state = Arc::clone(&self);
+            async move {
+                state
+                    .apply_block(signed_block)
+                    .await
+                    .map_err(ApplyBlockWithProvingInputsError::ApplyBlock)
+            }
+            .in_current_span()
+        })
+        .await
+        .map_err(ApplyBlockWithProvingInputsError::TokioJoinError)?
+    }
+
     /// Apply changes of a new block to the DB and in-memory data structures.
     ///
     /// ## Note on state consistency

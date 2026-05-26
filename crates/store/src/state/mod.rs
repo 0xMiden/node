@@ -28,6 +28,7 @@ use miden_node_utils::formatting::format_array;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain};
@@ -565,6 +566,38 @@ impl State {
             note_proofs,
             partial_block_chain,
         })
+    }
+
+    /// Retrieves block inputs from state based on the contents of the supplied ordered batches.
+    pub async fn block_inputs_from_ordered_batches(
+        &self,
+        batches: &OrderedBatches,
+    ) -> Result<BlockInputs, GetBlockInputsError> {
+        // Construct fields required to retrieve block inputs.
+        let mut account_ids = BTreeSet::new();
+        let mut nullifiers = Vec::new();
+        let mut unauthenticated_note_commitments = BTreeSet::new();
+        let mut reference_blocks = BTreeSet::new();
+
+        for batch in batches.as_slice() {
+            account_ids.extend(batch.updated_accounts());
+            nullifiers.extend(batch.created_nullifiers());
+            reference_blocks.insert(batch.reference_block_num());
+
+            for note in batch.input_notes().iter() {
+                if let Some(header) = note.header() {
+                    unauthenticated_note_commitments.insert(header.id().as_word());
+                }
+            }
+        }
+
+        self.get_block_inputs(
+            account_ids.into_iter().collect(),
+            nullifiers,
+            unauthenticated_note_commitments,
+            reference_blocks,
+        )
+        .await
     }
 
     /// Returns data needed by the block producer to construct and prove the next block.

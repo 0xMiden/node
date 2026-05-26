@@ -1,6 +1,12 @@
 use core::error::Error as CoreError;
 
-use miden_node_proto::errors::{ConversionError, GrpcError};
+use miden_node_proto::errors::GrpcError;
+use miden_node_store::{
+    ApplyBlockWithProvingInputsError,
+    DatabaseError,
+    GetBatchInputsError,
+    GetBlockInputsError,
+};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -184,21 +190,17 @@ impl BuildBlockError {
 // Store errors
 // =================================================================================================
 
-/// Errors returned by the [`StoreClient`](crate::store::StoreClient).
+/// Errors returned by the store state.
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("account Id prefix already exists: {0}")]
     DuplicateAccountIdPrefix(AccountId),
-    #[error("gRPC client error")]
-    GrpcClientError(#[from] Box<tonic::Status>),
-    #[error("malformed response from store: {0}")]
-    MalformedResponse(String),
-    #[error("failed to parse response")]
-    DeserializationError(#[from] ConversionError),
-}
-
-impl From<tonic::Status> for StoreError {
-    fn from(value: tonic::Status) -> Self {
-        StoreError::GrpcClientError(value.into())
-    }
+    #[error("failed to get transaction inputs from store")]
+    GetTransactionInputsFailed(#[source] DatabaseError),
+    #[error("failed to get batch inputs from store")]
+    GetBatchInputsFailed(#[source] GetBatchInputsError),
+    #[error("failed to get block inputs from store")]
+    GetBlockInputsFailed(#[source] GetBlockInputsError),
+    #[error("failed to apply block to store")]
+    ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
 }

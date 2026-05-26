@@ -109,8 +109,6 @@ impl tonic::service::Interceptor for Interceptor {
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
-type GeneratedStoreClientForBlockProducer =
-    generated::store::block_producer_client::BlockProducerClient<InterceptedChannel>;
 type GeneratedStoreClientForRpc = generated::store::rpc_client::RpcClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
@@ -123,8 +121,6 @@ type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<I
 
 #[derive(Debug, Clone)]
 pub struct RpcClient(GeneratedRpcClient);
-#[derive(Debug, Clone)]
-pub struct StoreBlockProducerClient(GeneratedStoreClientForBlockProducer);
 #[derive(Debug, Clone)]
 pub struct StoreRpcClient(GeneratedStoreClientForRpc);
 #[derive(Debug, Clone)]
@@ -144,20 +140,6 @@ impl DerefMut for RpcClient {
 
 impl Deref for RpcClient {
     type Target = GeneratedRpcClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreBlockProducerClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreBlockProducerClient {
-    type Target = GeneratedStoreClientForBlockProducer;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -245,15 +227,6 @@ pub trait GrpcClient {
 impl GrpcClient for RpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for StoreBlockProducerClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForBlockProducer::new(InterceptedService::new(
-            channel,
-            interceptor,
-        )))
     }
 }
 
