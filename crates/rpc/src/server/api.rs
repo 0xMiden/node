@@ -3,13 +3,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::clients::{
-    BlockProducerClient,
-    Builder,
-    NtxBuilderClient,
-    StoreRpcClient,
-    ValidatorClient,
-};
+use miden_node_proto::clients::{NtxBuilderClient, StoreRpcClient};
 use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
 use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
@@ -42,18 +36,17 @@ use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
 use tonic::{IntoRequest, Request, Response, Status};
-use tracing::{Span, debug, info, info_span};
-use url::Url;
+use tracing::{Span, debug, info_span};
 
 use crate::COMPONENT;
+use crate::server::RpcMode;
 
 // RPC SERVICE
 // ================================================================================================
 
 pub struct RpcService {
     store: StoreRpcClient,
-    block_producer: Option<BlockProducerClient>,
-    validator: ValidatorClient,
+    mode: RpcMode,
     ntx_builder: Option<NtxBuilderClient>,
     genesis_commitment: Option<Word>,
     block_commitment_cache: LruCache<BlockNumber, Word>,
@@ -61,72 +54,14 @@ pub struct RpcService {
 
 impl RpcService {
     pub(super) fn new(
-        store_url: Url,
-        block_producer_url: Option<Url>,
-        validator_url: Url,
-        ntx_builder_url: Option<Url>,
+        store: StoreRpcClient,
+        mode: RpcMode,
+        ntx_builder: Option<NtxBuilderClient>,
         commitment_cache_capacity: NonZeroUsize,
     ) -> Self {
-        let store = {
-            info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
-            Builder::new(store_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<StoreRpcClient>()
-        };
-
-        let block_producer = block_producer_url.map(|block_producer_url| {
-            info!(
-                target: COMPONENT,
-                block_producer_endpoint = %block_producer_url,
-                "Initializing block producer client",
-            );
-            Builder::new(block_producer_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<BlockProducerClient>()
-        });
-
-        let validator = {
-            info!(
-                target: COMPONENT,
-                validator_endpoint = %validator_url,
-                "Initializing validator client",
-            );
-            Builder::new(validator_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<ValidatorClient>()
-        };
-
-        let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
-            info!(
-                target: COMPONENT,
-                ntx_builder_endpoint = %ntx_builder_url,
-                "Initializing ntx-builder client",
-            );
-            Builder::new(ntx_builder_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<NtxBuilderClient>()
-        });
-
         Self {
             store,
-            block_producer,
-            validator,
+            mode,
             ntx_builder,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
@@ -135,8 +70,8 @@ impl RpcService {
 
     /// Sets the genesis commitment, returning an error if it is already set.
     ///
-    /// Required since `RpcService::new()` sets up the `store` which is used to fetch the
-    /// `genesis_commitment`.
+    /// Required since the store client is used to fetch the `genesis_commitment` after
+    /// `RpcService` construction.
     pub fn set_genesis_commitment(&mut self, commitment: Word) -> anyhow::Result<()> {
         if self.genesis_commitment.is_some() {
             return Err(anyhow::anyhow!("genesis commitment already set"));
@@ -502,12 +437,6 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::blockchain::BlockNumber>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        let Some(block_producer) = &self.block_producer else {
-            return Err(Status::unavailable(
-                "Transaction submission not available in read-only mode",
-            ));
-        };
-
         let request = request.into_inner();
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
@@ -567,10 +496,20 @@ impl api_server::Api for RpcService {
             ))
         })?;
 
+        // In full node mode we forward the request to the source.
+        let (block_producer, validator) = match &self.mode {
+            RpcMode::Sequencer { block_producer, validator } => {
+                (block_producer.as_ref(), validator.as_ref())
+            },
+            RpcMode::FullNode { source_rpc } => {
+                return source_rpc.as_ref().clone().submit_proven_tx(request).await;
+            },
+        };
+
         // Transaction inputs must be provided in order to allow for transaction re-execution via
         // the Validator.
         if request.transaction_inputs.is_some() {
-            self.validator.clone().submit_proven_transaction(request.clone()).await?;
+            validator.clone().submit_proven_transaction(request.clone()).await?;
         } else {
             return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
@@ -584,10 +523,6 @@ impl api_server::Api for RpcService {
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        let Some(block_producer) = &self.block_producer else {
-            return Err(Status::unavailable("Batch submission not available in read-only mode"));
-        };
-
         let request = request.into_inner();
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
@@ -657,6 +592,16 @@ impl api_server::Api for RpcService {
             return Err(Status::invalid_argument("batch proof did not match proposed batch"));
         }
 
+        // In full node mode we forward the request to the source.
+        let (block_producer, validator) = match &self.mode {
+            RpcMode::Sequencer { block_producer, validator } => {
+                (block_producer.as_ref(), validator.as_ref())
+            },
+            RpcMode::FullNode { source_rpc } => {
+                return source_rpc.as_ref().clone().submit_proven_tx_batch(request).await;
+            },
+        };
+
         // Submit each transaction to the validator.
         //
         // SAFETY: We checked earlier that the two iterators are the same length.
@@ -665,7 +610,7 @@ impl api_server::Api for RpcService {
                 transaction: tx.to_bytes(),
                 transaction_inputs: inputs.clone().into(),
             };
-            self.validator.clone().submit_proven_transaction(request).await?;
+            validator.clone().submit_proven_transaction(request).await?;
         }
 
         block_producer.clone().submit_proven_tx_batch(request).await
@@ -704,15 +649,21 @@ impl api_server::Api for RpcService {
 
         let store_status =
             self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
-        let block_producer_status = if let Some(block_producer) = &self.block_producer {
-            block_producer
+        let block_producer_status = match &self.mode {
+            RpcMode::Sequencer { block_producer, .. } => block_producer
+                .as_ref()
                 .clone()
                 .status(Request::new(()))
                 .await
                 .map(Response::into_inner)
+                .ok(),
+            RpcMode::FullNode { source_rpc } => source_rpc
+                .as_ref()
+                .clone()
+                .status(Request::new(()))
+                .await
                 .ok()
-        } else {
-            None
+                .and_then(|response| response.into_inner().block_producer),
         };
 
         Ok(Response::new(proto::rpc::RpcStatus {
