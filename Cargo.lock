@@ -3457,7 +3457,6 @@ dependencies = [
  "clap",
  "fs-err",
  "futures",
- "miden-node-block-producer",
  "miden-node-proto",
  "miden-node-store",
  "miden-node-utils",
