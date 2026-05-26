@@ -139,6 +139,19 @@ impl Db {
             .await
     }
 
+    /// Returns the distinct set of network accounts that currently have at least one pending
+    /// (unconsumed, within attempt budget) note.
+    pub async fn accounts_with_pending_notes(
+        &self,
+        max_attempts: usize,
+    ) -> Result<Vec<NetworkAccountId>> {
+        self.inner
+            .query("accounts_with_pending_notes", move |conn| {
+                queries::accounts_with_pending_notes(conn, max_attempts)
+            })
+            .await
+    }
+
     /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
     /// the latest error message.
     pub async fn notes_failed(
@@ -181,52 +194,6 @@ impl Db {
                 queries::insert_note_script(conn, &script_root, &script)
             })
             .await
-    }
-
-    // DEAD-CODE STUBS
-    // ============================================================================================
-    //
-    // These methods exist to keep the dead actor/coordinator modules compiling in PR 1. They are
-    // never reached because `NetworkTransactionBuilder` does not spawn the actor path. PR 2
-    // replaces them with their new committed-block-driven equivalents.
-
-    #[expect(clippy::unused_async)]
-    pub async fn transaction_exists(
-        &self,
-        _tx_id: miden_protocol::transaction::TransactionId,
-    ) -> Result<bool> {
-        unimplemented!("transaction_exists is rewired in PR 2 of the ntx-builder refactor")
-    }
-
-    #[expect(clippy::unused_async)]
-    pub async fn handle_transaction_added(
-        &self,
-        _tx_id: miden_protocol::transaction::TransactionId,
-        _account_delta: Option<miden_protocol::account::delta::AccountUpdateDetails>,
-        _notes: Vec<AccountTargetNetworkNote>,
-        _nullifiers: Vec<Nullifier>,
-    ) -> Result<()> {
-        unimplemented!("handle_transaction_added is rewired in PR 2 of the ntx-builder refactor")
-    }
-
-    #[expect(clippy::unused_async)]
-    pub async fn handle_block_committed(
-        &self,
-        _txs: Vec<miden_protocol::transaction::TransactionId>,
-        _block_num: BlockNumber,
-        _header: BlockHeader,
-    ) -> Result<Vec<NetworkAccountId>> {
-        unimplemented!("handle_block_committed is rewired in PR 2 of the ntx-builder refactor")
-    }
-
-    #[expect(clippy::unused_async)]
-    pub async fn handle_transactions_reverted(
-        &self,
-        _tx_ids: Vec<miden_protocol::transaction::TransactionId>,
-    ) -> Result<Vec<NetworkAccountId>> {
-        unimplemented!(
-            "handle_transactions_reverted is rewired in PR 2 of the ntx-builder refactor"
-        )
     }
 
     /// Creates a file-backed SQLite test connection with migrations applied.

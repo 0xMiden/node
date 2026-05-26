@@ -174,6 +174,26 @@ pub fn get_note_status(
         .map_err(Into::into)
 }
 
+/// Returns the distinct set of network accounts that currently have at least one pending note
+/// (unconsumed and within the per-note attempt budget).
+#[expect(clippy::cast_possible_wrap)]
+pub fn accounts_with_pending_notes(
+    conn: &mut SqliteConnection,
+    max_attempts: usize,
+) -> Result<Vec<NetworkAccountId>, DatabaseError> {
+    let account_id_blobs: Vec<Vec<u8>> = schema::notes::table
+        .filter(schema::notes::committed_at.is_null())
+        .filter(schema::notes::attempt_count.lt(max_attempts as i32))
+        .select(schema::notes::account_id)
+        .distinct()
+        .load(conn)?;
+
+    account_id_blobs
+        .iter()
+        .map(|bytes| conversions::network_account_id_from_bytes(bytes))
+        .collect()
+}
+
 // HELPERS
 // ================================================================================================
 
