@@ -39,7 +39,7 @@ format-check: ## Checks rustfmt and comment reflow
 
 .PHONY: shear
 shear: ## Runs cargo-shear to find unused or misplaced dependencies
-	cargo shear
+	cargo shear --check-test-targets --deny-warnings
 
 
 .PHONY: toml
@@ -235,7 +235,7 @@ install-tools: ## Installs tools required by the Makefile
 	cargo install typos-cli --locked
 	cargo install cargo-nextest --locked
 	cargo install taplo-cli --locked
-	cargo install cargo-shear --version 1.11.2 --locked
+	cargo install cargo-shear --version 1.12.4 --locked
 	@if ! command -v node >/dev/null 2>&1; then \
 		echo "Node.js not found. Please install Node.js from https://nodejs.org/ or using your package manager"; \
 		echo "On macOS: brew install node"; \
