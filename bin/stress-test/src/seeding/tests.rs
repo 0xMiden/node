@@ -11,11 +11,11 @@ fn benchmark_fungible_faucet_ids(vault_entries: usize) -> Vec<AccountId> {
 
 #[test]
 fn public_account_can_be_created_with_large_storage_map() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
 
-    let account = create_account(key_pair.public_key(), 42, AccountStorageMode::Public, 128);
+    let account = create_account(key_pair.public_key(), 42, AccountType::Public, 128);
 
     let map_slot = account
         .storage()
@@ -33,11 +33,11 @@ fn public_account_can_be_created_with_large_storage_map() {
 
 #[test]
 fn private_account_ignores_large_storage_map_entries() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
 
-    let account = create_account(key_pair.public_key(), 42, AccountStorageMode::Private, 128);
+    let account = create_account(key_pair.public_key(), 42, AccountType::Private, 128);
 
     assert!(
         account
@@ -50,23 +50,15 @@ fn private_account_ignores_large_storage_map_entries() {
 
 #[test]
 fn public_account_note_contains_requested_distinct_vault_assets() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
     let mut key_rng = rng.lock().unwrap();
     let key_pair = SecretKey::with_rng(&mut *key_rng);
     drop(key_rng);
 
     let faucet_ids = benchmark_fungible_faucet_ids(5);
-    let (_, notes) = create_accounts_and_notes(
-        1,
-        AccountStorageMode::Public,
-        &key_pair,
-        &rng,
-        &faucet_ids,
-        0,
-        0,
-        5,
-    );
+    let (_, notes) =
+        create_accounts_and_notes(1, AccountType::Public, &key_pair, &rng, &faucet_ids, 0, 0, 5);
 
     let assets = notes[0].assets();
     assert_eq!(assets.num_assets(), 5);
@@ -78,33 +70,25 @@ fn public_account_note_contains_requested_distinct_vault_assets() {
 
 #[test]
 fn private_account_note_keeps_single_vault_asset() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
     let mut key_rng = rng.lock().unwrap();
     let key_pair = SecretKey::with_rng(&mut *key_rng);
     drop(key_rng);
 
     let faucet_ids = benchmark_fungible_faucet_ids(5);
-    let (_, notes) = create_accounts_and_notes(
-        1,
-        AccountStorageMode::Private,
-        &key_pair,
-        &rng,
-        &faucet_ids,
-        0,
-        0,
-        5,
-    );
+    let (_, notes) =
+        create_accounts_and_notes(1, AccountType::Private, &key_pair, &rng, &faucet_ids, 0, 0, 5);
 
     assert_eq!(notes[0].assets().num_assets(), 1);
 }
 
 #[test]
 fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
-    let mut account = create_account(key_pair.public_key(), 42, AccountStorageMode::Public, 4);
+    let mut account = create_account(key_pair.public_key(), 42, AccountType::Public, 4);
 
     let key = StorageMapKey::from_index(2);
     let old_value = account
@@ -125,10 +109,10 @@ fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
 
 #[test]
 fn private_account_storage_map_update_is_skipped() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new);
+    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let mut rng = RandomCoin::new(coin_seed.into());
     let key_pair = SecretKey::with_rng(&mut rng);
-    let mut account = create_account(key_pair.public_key(), 42, AccountStorageMode::Private, 4);
+    let mut account = create_account(key_pair.public_key(), 42, AccountType::Private, 4);
 
     let updated = update_benchmark_storage_map_entry(&mut account, 3, 9, 4);
 

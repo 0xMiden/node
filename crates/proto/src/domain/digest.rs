@@ -179,10 +179,10 @@ impl TryFrom<proto::primitives::Digest> for [Felt; 4] {
         }
 
         Ok([
-            Felt::new(value.d0),
-            Felt::new(value.d1),
-            Felt::new(value.d2),
-            Felt::new(value.d3),
+            Felt::new_unchecked(value.d0),
+            Felt::new_unchecked(value.d1),
+            Felt::new_unchecked(value.d2),
+            Felt::new_unchecked(value.d3),
         ])
     }
 }

@@ -63,8 +63,7 @@ pub fn insert_network_notes(
     notes: &[AccountTargetNetworkNote],
 ) -> Result<(), DatabaseError> {
     for note in notes {
-        let target_id = NetworkAccountId::try_from(note.target_account_id())
-            .expect("network note's target account must be a network account");
+        let target_id = NetworkAccountId::new_unchecked(note.target_account_id());
         let row = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
             account_id: conversions::network_account_id_to_bytes(target_id),

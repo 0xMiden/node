@@ -27,11 +27,11 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.output_note_commitments())
+        Box::new(self.output_note_ids())
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.unauthenticated_note_commitments())
+        Box::new(self.unauthenticated_note_ids())
     }
 
     fn account_updates(
@@ -328,7 +328,7 @@ impl TransactionGraph {
         &mut self,
         tx: &Arc<AuthenticatedTransaction>,
     ) {
-        let output_notes = tx.output_note_commitments().collect::<HashSet<_>>();
+        let output_notes = tx.output_note_ids().collect::<HashSet<_>>();
         if output_notes.is_empty() {
             return;
         }

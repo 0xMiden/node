@@ -766,6 +766,14 @@ impl State {
         self.db.select_network_account_by_id(account_id).await
     }
 
+    /// Filters `account_ids` down to the subset currently classified as network accounts.
+    pub async fn network_accounts_subset(
+        &self,
+        account_ids: &[AccountId],
+    ) -> Result<HashSet<AccountId>, DatabaseError> {
+        self.db.select_network_accounts_subset(account_ids.to_vec()).await
+    }
+
     /// Returns network account IDs within the specified block range (based on account creation
     /// block).
     ///
@@ -797,7 +805,7 @@ impl State {
     ) -> Result<AccountResponse, GetAccountError> {
         let AccountRequest { block_num, account_id, details } = account_request;
 
-        if details.is_some() && !account_id.has_public_state() {
+        if details.is_some() && !account_id.is_public() {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
@@ -929,7 +937,7 @@ impl State {
             storage_requests,
         } = detail_request;
 
-        if !account_id.has_public_state() {
+        if !account_id.is_public() {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }
 

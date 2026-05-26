@@ -41,11 +41,18 @@ impl CommittedBlockEffects {
 
         let nullifiers = body.created_nullifiers().to_vec();
 
+        // Public accounts are a superset of network accounts; `apply_committed_block` does the
+        // final network-only filtering via `NetworkAccountEffect::from_protocol` (full-state
+        // storage check) and a DB lookup for partial deltas.
         let network_account_updates = body
             .updated_accounts()
             .iter()
             .filter_map(|update| {
-                let network_id = NetworkAccountId::try_from(update.account_id()).ok()?;
+                let account_id = update.account_id();
+                if !account_id.is_public() {
+                    return None;
+                }
+                let network_id = NetworkAccountId::new_unchecked(account_id);
                 Some((network_id, update.details().clone()))
             })
             .collect();

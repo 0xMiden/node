@@ -9,6 +9,7 @@ use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
+use miden_protocol::note::NoteId;
 use miden_remote_prover_client::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
@@ -221,7 +222,8 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .flat_map(AuthenticatedTransaction::unauthenticated_note_commitments);
+            .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
+            .map(NoteId::from_raw);
 
         self.store
             .get_batch_inputs(block_references, unauthenticated_notes)
@@ -363,7 +365,7 @@ impl TelemetryInjectorExt for SelectedBatch {
                     tx_ids.push(tx.id());
                     input_notes_count += tx.input_note_count();
                     output_notes_count += tx.output_note_count();
-                    unauth_notes_count += tx.unauthenticated_note_commitments().count();
+                    unauth_notes_count += tx.unauthenticated_note_ids().count();
                     (tx_ids, input_notes_count, output_notes_count, unauth_notes_count)
                 },
             );

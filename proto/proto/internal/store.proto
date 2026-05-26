@@ -21,6 +21,15 @@ service Rpc {
     // Returns the latest details the specified account.
     rpc GetAccount(rpc.AccountRequest) returns (rpc.AccountResponse) {}
 
+    // Filters the provided account ids down to the subset that are currently
+    // classified as network accounts. Ids that don't exist in the store, or that
+    // aren't network accounts, are omitted. The order of `network_account_ids`
+    // is unspecified.
+    //
+    // Callers checking a single id should pass a one-element list and check whether
+    // the response is non-empty.
+    rpc AreNetworkAccounts(account.AccountIdList) returns (NetworkAccountIdSubset) {}
+
     // Returns raw block data for the specified block number, optionally including the block proof.
     rpc GetBlockByNumber(blockchain.BlockRequest) returns (blockchain.MaybeBlock) {}
 
@@ -236,3 +245,12 @@ message TransactionInputs {
     optional bool new_account_id_prefix_is_unique = 5; // TODO: Replace this with an error. When a general error message exists.
 }
 
+// ARE NETWORK ACCOUNTS
+// ================================================================================================
+
+// Represents the subset of the provided account ids that are currently classified
+// as network accounts. The order of `network_account_ids` is unspecified.
+message NetworkAccountIdSubset {
+    // The network-account subset of the requested ids.
+    repeated account.AccountId network_account_ids = 1;
+}

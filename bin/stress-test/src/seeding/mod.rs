@@ -20,7 +20,6 @@ use miden_protocol::account::{
     AccountDelta,
     AccountId,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMap,
@@ -28,7 +27,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetAmount, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
     BlockHeader,
@@ -38,7 +37,7 @@ use miden_protocol::block::{
     ProposedBlock,
     SignedBlock,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
@@ -62,7 +61,7 @@ use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
-    PolicyAuthority,
+    PolicyRegistration,
     TokenPolicyManager,
 };
 use miden_standards::account::wallets::BasicWallet;
@@ -122,7 +121,7 @@ pub async fn seed_store(
     let benchmark_faucets = create_benchmark_faucets(vault_entries);
     let faucet = benchmark_faucets[0].clone();
     let asset_faucet_ids = benchmark_faucets.iter().map(Account::id).collect::<Vec<_>>();
-    let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
+    let fee_params = FeeParameters::new(faucet.id(), 0);
     let signer = EcdsaSecretKey::new();
     let genesis_state = GenesisState::new(benchmark_faucets, fee_params, 1, 1, signer.public_key());
     let genesis_block = genesis_state
@@ -205,7 +204,7 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
         SecretKey::with_rng(&mut *rng)
@@ -220,7 +219,7 @@ async fn generate_blocks(
         // create public accounts and notes that mint assets for these accounts
         let (pub_accounts, pub_notes) = create_accounts_and_notes(
             num_public_accounts,
-            AccountStorageMode::Public,
+            AccountType::Public,
             &key_pair,
             &rng,
             &asset_faucet_ids,
@@ -232,7 +231,7 @@ async fn generate_blocks(
         // create private accounts and notes that mint assets for these accounts
         let (priv_accounts, priv_notes) = create_accounts_and_notes(
             num_private_accounts,
-            AccountStorageMode::Private,
+            AccountType::Private,
             &key_pair,
             &rng,
             &asset_faucet_ids,
@@ -404,7 +403,7 @@ fn fee_from_block(block_ref: &BlockHeader) -> Result<FungibleAsset, AssetError> 
 #[expect(clippy::too_many_arguments)]
 fn create_accounts_and_notes(
     num_accounts: usize,
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
     key_pair: &SecretKey,
     rng: &Arc<Mutex<RandomCoin>>,
     asset_faucet_ids: &[AccountId],
@@ -416,11 +415,9 @@ fn create_accounts_and_notes(
         !asset_faucet_ids.is_empty(),
         "at least one faucet id is required to create benchmark notes"
     );
-    let note_faucet_ids = match storage_mode {
-        AccountStorageMode::Public => {
-            asset_faucet_ids.iter().take(vault_entries).copied().collect()
-        },
-        AccountStorageMode::Private | AccountStorageMode::Network => vec![asset_faucet_ids[0]],
+    let note_faucet_ids = match account_type {
+        AccountType::Public => asset_faucet_ids.iter().take(vault_entries).copied().collect(),
+        AccountType::Private => vec![asset_faucet_ids[0]],
     };
 
     (0..num_accounts)
@@ -429,7 +426,7 @@ fn create_accounts_and_notes(
             let account = create_account(
                 key_pair.public_key(),
                 ((block_num * num_accounts) + account_index) as u64,
-                storage_mode,
+                account_type,
                 storage_map_entries,
             );
             let note = {
@@ -524,17 +521,16 @@ pub fn benchmark_storage_map_slot() -> StorageSlotName {
 fn create_account(
     public_key: PublicKey,
     index: u64,
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
     storage_map_entries: usize,
 ) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     let mut builder = AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(storage_mode)
+        .account_type(account_type)
         .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet);
 
-    if storage_mode == AccountStorageMode::Public && storage_map_entries > 0 {
+    if account_type == AccountType::Public && storage_map_entries > 0 {
         let entries = (1..=storage_map_entries)
             .map(|i| {
                 let i = u32::try_from(i).expect("storage map entry index fits into u32");
@@ -553,10 +549,7 @@ fn create_account(
         let component = AccountComponent::new(
             component_code,
             component_storage,
-            AccountComponentMetadata::new(
-                "benchmark_storage_map",
-                [AccountType::RegularAccountImmutableCode],
-            ),
+            AccountComponentMetadata::new("benchmark_storage_map"),
         )
         .unwrap();
         builder = builder.with_component(component);
@@ -573,7 +566,7 @@ fn create_benchmark_faucets(vault_entries: usize) -> Vec<Account> {
 
 fn create_faucet_with_seed(index: u64) -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
 
@@ -582,19 +575,20 @@ fn create_faucet_with_seed(index: u64) -> Account {
         .name(TokenName::new("TEST").unwrap())
         .symbol(token_symbol)
         .decimals(2)
-        .max_supply(AssetAmount::new(FungibleAsset::MAX_AMOUNT).unwrap())
+        .max_supply(FungibleAsset::MAX_AMOUNT)
         .build()
         .unwrap();
 
     AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(AccountStorageMode::Private)
+        .account_type(AccountType::Private)
         .with_component(faucet)
-        .with_components(TokenPolicyManager::new(
-            PolicyAuthority::AuthControlled,
-            MintPolicyConfig::AllowAll,
-            BurnPolicyConfig::AllowAll,
-        ))
+        .with_components(
+            TokenPolicyManager::new()
+                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap()
+                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap(),
+        )
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
@@ -757,7 +751,10 @@ fn create_emit_note_tx(
     let slot = faucet.storage().get_item(token_config_slot).unwrap();
     faucet
         .storage_mut()
-        .set_item(token_config_slot, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
+        .set_item(
+            token_config_slot,
+            [slot[0] + Felt::new_unchecked(10), slot[1], slot[2], slot[3]].into(),
+        )
         .unwrap();
 
     faucet.increment_nonce(ONE).unwrap();
@@ -803,7 +800,7 @@ async fn get_batch_inputs(
     let batch_inputs = store_client
         .get_batch_inputs(
             vec![(block_ref.block_num(), block_ref.commitment())].into_iter(),
-            notes.iter().map(Note::commitment),
+            notes.iter().map(Note::id),
         )
         .await
         .unwrap();
@@ -826,7 +823,7 @@ async fn get_block_inputs(
                 batch
                     .input_notes()
                     .into_iter()
-                    .filter_map(|note| note.header().map(NoteHeader::to_commitment))
+                    .filter_map(|note| note.header().map(NoteHeader::id))
             }),
             batches.iter().map(ProvenBatch::reference_block_num),
         )

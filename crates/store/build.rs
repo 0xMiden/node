@@ -1,14 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use miden_agglayer::{
-    EthAddress,
-    MetadataHash,
-    create_existing_agglayer_faucet,
-    create_existing_bridge_account,
-};
+use miden_agglayer::{create_existing_agglayer_faucet, create_existing_bridge_account};
 use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::account::{Account, AccountCode, AccountFile, AccountStorageMode, AccountType};
+use miden_protocol::account::{Account, AccountCode, AccountFile, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::{Felt, Word};
@@ -45,24 +40,23 @@ fn generate_agglayer_sample_accounts() {
     fs_err::create_dir_all(&samples_dir).expect("Failed to create samples directory");
 
     // Use deterministic seeds for reproducible builds. WARNING: DO NOT USE THESE IN PRODUCTION
-    let bridge_seed: Word = Word::new([Felt::new(1u64); 4]);
-    let eth_faucet_seed: Word = Word::new([Felt::new(2u64); 4]);
-    let usdc_faucet_seed: Word = Word::new([Felt::new(3u64); 4]);
+    let bridge_seed: Word = Word::new([Felt::new_unchecked(1u64); 4]);
+    let eth_faucet_seed: Word = Word::new([Felt::new_unchecked(2u64); 4]);
+    let usdc_faucet_seed: Word = Word::new([Felt::new_unchecked(3u64); 4]);
 
     // Create bridge admin and GER manager as proper wallet accounts. WARNING: DO NOT USE THESE IN
     // PRODUCTION
     let bridge_admin_key =
-        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(4u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new_unchecked(4u64); 4])));
     let ger_manager_key =
-        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new(5u64); 4])));
+        SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::new_unchecked(5u64); 4])));
 
     let bridge_admin = create_basic_wallet(
         [4u8; 32],
         AuthMethod::SingleSig {
             approver: (bridge_admin_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
+        AccountType::Public,
     )
     .expect("bridge admin account should be valid");
 
@@ -71,8 +65,7 @@ fn generate_agglayer_sample_accounts() {
         AuthMethod::SingleSig {
             approver: (ger_manager_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
         },
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
+        AccountType::Public,
     )
     .expect("GER manager account should be valid");
 
@@ -85,24 +78,15 @@ fn generate_agglayer_sample_accounts() {
         create_existing_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
     let bridge_account_id = bridge_account.id();
 
-    // Placeholder Ethereum addresses for sample faucets. WARNING: DO NOT USE THESE ADDRESSES IN
-    // PRODUCTION
-    let eth_origin_address = EthAddress::new([1u8; 20]);
-    let usdc_origin_address = EthAddress::new([2u8; 20]);
-
     // Create AggLayer faucets using "existing" variant ETH: 8 decimals (protocol max is 12), max
     // supply of 1 billion tokens
     let eth_faucet = create_existing_agglayer_faucet(
         eth_faucet_seed,
         "ETH",
         8,
-        Felt::new(1_000_000_000),
-        Felt::new(0),
+        Felt::new_unchecked(1_000_000_000),
+        Felt::new_unchecked(0),
         bridge_account_id,
-        &eth_origin_address,
-        0u32,
-        10u8,
-        MetadataHash::from_token_info("Ether", "ETH", 8),
     );
 
     // USDC: 6 decimals, max supply of 10 billion tokens
@@ -110,13 +94,9 @@ fn generate_agglayer_sample_accounts() {
         usdc_faucet_seed,
         "USDC",
         6,
-        Felt::new(10_000_000_000),
-        Felt::new(0),
+        Felt::new_unchecked(10_000_000_000),
+        Felt::new_unchecked(0),
         bridge_account_id,
-        &usdc_origin_address,
-        0u32,
-        10u8,
-        MetadataHash::from_token_info("USD Coin", "USDC", 6),
     );
 
     // Strip source location decorators from account code to ensure deterministic output.

@@ -37,6 +37,11 @@
 - [BREAKING] Changed `SyncChainMmr` endpoint: the upper end of the block range we're syncing is now the chain tip with the requested finality level. Validator signature is also returned ([#2075](https://github.com/0xMiden/node/pull/2075)).
 - [BREAKING] Renamed `SubmitProvenTransaction` RPC endpoint to `SubmitProvenTx` ([#2094](https://github.com/0xMiden/node/pull/2094)).
 - [BREAKING] Renamed `SubmitProvenBatch` RPC endpoint to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- Updated `miden-protocol` and bumped `miden-crypto` to `v0.25`. `AccountId::is_network()` was removed upstream, so `SubmitProvenTx` and `SubmitProvenTxBatch` now consult the store to classify post-deployment public-account transactions as network accounts.
+- [BREAKING] Removed `Network` variant from genesis config `StorageMode`. The implicit default for wallets and fungible faucets is now `Private` (previously `Network`, which mapped to `Public` storage) ([#2095](https://github.com/0xMiden/node/pull/2095)).
+- [BREAKING] Updated `miden-protocol` family of crates to the published `v0.15.0` on crates.io (previously tracked the `next` branch). The published release removes the multi-variant `AccountType` (`RegularAccount*`, `FungibleFaucet`, `NonFungibleFaucet`) and renames the former `AccountStorageMode` to `AccountType` with only `Public`/`Private`. Faucet-vs-wallet distinction is now component-based.
+- [BREAKING] Removed the `has_updatable_code` field from genesis `[[wallet]]` config entries. Updatable/immutable code is no longer modeled by the protocol, so any genesis config that explicitly sets this field will fail to parse — remove the field.
+
 - Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
 - Implemented filtering based on the network account note script root allowlist in ntx-builder ([#2042](https://github.com/0xMiden/node/issues/2042)).
 

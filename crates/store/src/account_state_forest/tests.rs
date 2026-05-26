@@ -1,7 +1,7 @@
 use assert_matches::assert_matches;
 use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_protocol::Felt;
-use miden_protocol::account::{AccountCode, AccountStorageMode, AccountType, StorageMapKey};
+use miden_protocol::account::{AccountCode, AccountType, StorageMapKey};
 use miden_protocol::asset::{
     Asset,
     AssetVault,
@@ -199,14 +199,12 @@ fn vault_details_limit_exceeded_for_large_vault() {
     let block_num = BlockNumber::GENESIS.child();
 
     let faucet_id = AccountIdBuilder::new()
-        .account_type(AccountType::NonFungibleFaucet)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .build_with_seed([7; 32]);
     let assets = (0..=AccountVaultDetails::MAX_RETURN_ENTRIES)
         .map(|i| {
-            let details =
-                NonFungibleAssetDetails::new(faucet_id, vec![i as u8, (i >> 8) as u8]).unwrap();
-            Asset::NonFungible(NonFungibleAsset::new(&details).unwrap())
+            let details = NonFungibleAssetDetails::new(faucet_id, vec![i as u8, (i >> 8) as u8]);
+            Asset::NonFungible(NonFungibleAsset::new(&details))
         })
         .collect::<Vec<_>>();
 
@@ -582,7 +580,6 @@ fn storage_map_empty_entries_query() {
     use miden_protocol::account::{
         AccountBuilder,
         AccountComponent,
-        AccountStorageMode,
         AccountType,
         StorageMap,
         StorageSlot,
@@ -603,13 +600,12 @@ fn storage_map_empty_entries_query() {
     let account_component = AccountComponent::new(
         component_code,
         component_storage,
-        AccountComponentMetadata::new("test", AccountType::all()),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),

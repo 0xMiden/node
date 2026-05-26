@@ -318,8 +318,8 @@ impl State {
                 let note_record = NoteRecord {
                     block_num,
                     note_index,
+                    details_commitment: note.details_commitment().as_word(),
                     note_id: note.id().as_word(),
-                    note_commitment: note.to_commitment(),
                     metadata: *note.metadata(),
                     details,
                     attachments,

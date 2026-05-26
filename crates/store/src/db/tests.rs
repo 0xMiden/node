@@ -17,7 +17,6 @@ use miden_protocol::account::{
     AccountId,
     AccountIdVersion,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMapKey,
@@ -34,7 +33,7 @@ use miden_protocol::block::{
     BlockNoteTree,
     BlockNumber,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
 use miden_protocol::crypto::merkle::smt::SmtProof;
@@ -44,6 +43,7 @@ use miden_protocol::note::{
     NoteAttachment,
     NoteAttachments,
     NoteDetails,
+    NoteDetailsCommitment,
     NoteHeader,
     NoteId,
     NoteMetadata,
@@ -99,12 +99,12 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        SecretKey::new().public_key(),
+        SigningKey::new().public_key(),
         test_fee_params(),
         11_u8.into(),
     );
 
-    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    let dummy_signature = SigningKey::new().sign(block_header.commitment());
 
     conn.transaction(|conn| {
         queries::insert_block_header(conn, &block_header, &dummy_signature)?;
@@ -198,7 +198,7 @@ fn sql_select_nullifiers() {
 
 pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let mut rng = rng.lock().unwrap();
     P2idNote::create(
         account_id,
@@ -237,8 +237,8 @@ fn sql_select_notes() {
         let note = NoteRecord {
             block_num,
             note_index: BlockNoteIndex::new(0, i.try_into().unwrap()).unwrap(),
+            details_commitment: num_to_word(u64::try_from(i).unwrap()),
             note_id: num_to_word(u64::try_from(i).unwrap()),
-            note_commitment: num_to_word(u64::try_from(i).unwrap()),
             metadata: *new_note.metadata(),
             details: Some(NoteDetails::from(&new_note)),
             attachments: new_note.attachments().clone(),
@@ -282,8 +282,8 @@ fn sql_select_note_script_by_root() {
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0.try_into().unwrap()).unwrap(),
+        details_commitment: num_to_word(0),
         note_id: num_to_word(0),
-        note_commitment: num_to_word(0),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
         attachments: new_note.attachments().clone(),
@@ -309,15 +309,10 @@ fn make_account_and_note(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
     init_seed: [u8; 32],
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
 ) -> (AccountId, Note) {
     conn.transaction(|conn| {
-        let account = mock_account_code_and_storage(
-            AccountType::RegularAccountUpdatableCode,
-            storage_mode,
-            [],
-            Some(init_seed),
-        );
+        let account = mock_account_code_and_storage(account_type, [], Some(init_seed));
         let account_id = account.id();
         queries::upsert_accounts(
             conn,
@@ -342,8 +337,7 @@ fn sql_unconsumed_network_notes() {
     let mut conn = create_db();
 
     // Create account.
-    let account_note =
-        make_account_and_note(&mut conn, 0.into(), [1u8; 32], AccountStorageMode::Network);
+    let account_note = make_account_and_note(&mut conn, 0.into(), [1u8; 32], AccountType::Public);
 
     // Create 2 blocks.
     create_block(&mut conn, 0.into());
@@ -364,8 +358,8 @@ fn sql_unconsumed_network_notes() {
         let note = NoteRecord {
             block_num: 0.into(), // Created on same block.
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
+            details_commitment: num_to_word(i.into()),
             note_id: num_to_word(i.into()),
-            note_commitment: num_to_word(i.into()),
             metadata,
             details: None,
             attachments,
@@ -436,12 +430,8 @@ fn sql_select_accounts() {
     // test multiple entries
     let mut state = vec![];
     for i in 0..10u8 {
-        let account_id = AccountId::dummy(
-            [i; 15],
-            AccountIdVersion::Version1,
-            AccountType::RegularAccountImmutableCode,
-            AccountStorageMode::Private,
-        );
+        let account_id =
+            AccountId::dummy([i; 15], AccountIdVersion::Version1, AccountType::Private);
         let account_commitment = num_to_word(u64::from(i));
         state.push(AccountInfo {
             summary: AccountSummary {
@@ -748,13 +738,13 @@ fn db_block_header() {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        SecretKey::new().public_key(),
+        SigningKey::new().public_key(),
         test_fee_params(),
         11_u8.into(),
     );
     // test insertion
 
-    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    let dummy_signature = SigningKey::new().sign(block_header.commitment());
     queries::insert_block_header(conn, &block_header, &dummy_signature).unwrap();
 
     // test fetch unknown block header
@@ -781,12 +771,12 @@ fn db_block_header() {
         num_to_word(17),
         num_to_word(18),
         num_to_word(19),
-        SecretKey::new().public_key(),
+        SigningKey::new().public_key(),
         test_fee_params(),
         21_u8.into(),
     );
 
-    let dummy_signature = SecretKey::new().sign(block_header2.commitment());
+    let dummy_signature = SigningKey::new().sign(block_header2.commitment());
     queries::insert_block_header(conn, &block_header2, &dummy_signature).unwrap();
 
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
@@ -828,7 +818,7 @@ fn notes() {
         &NoteAttachments::default(),
     );
 
-    let note_header = NoteHeader::new(new_note.id(), note_metadata);
+    let note_header = NoteHeader::new(new_note.details_commitment(), note_metadata);
     let values = [(note_index, &note_header)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
     let inclusion_path = notes_db.open(note_index);
@@ -836,8 +826,8 @@ fn notes() {
     let note = NoteRecord {
         block_num: block_num_1,
         note_index,
+        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
-        note_commitment: new_note.commitment(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
         attachments: NoteAttachments::default(),
@@ -867,8 +857,8 @@ fn notes() {
     let note2 = NoteRecord {
         block_num: block_num_2,
         note_index: note.note_index,
+        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
-        note_commitment: new_note.commitment(),
         metadata: note.metadata,
         details: None,
         attachments: NoteAttachments::default(),
@@ -934,7 +924,7 @@ fn note_sync_across_multiple_blocks() {
             PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
             &NoteAttachments::default(),
         );
-        let note_header = NoteHeader::new(new_note.id(), note_metadata);
+        let note_header = NoteHeader::new(new_note.details_commitment(), note_metadata);
         let values = [(note_index, &note_header)];
         let notes_db = BlockNoteTree::with_entries(values).unwrap();
         let inclusion_path = notes_db.open(note_index);
@@ -942,8 +932,8 @@ fn note_sync_across_multiple_blocks() {
         let note = NoteRecord {
             block_num,
             note_index,
+            details_commitment: new_note.details_commitment().as_word(),
             note_id: new_note.id().as_word(),
-            note_commitment: new_note.commitment(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
             attachments: NoteAttachments::default(),
@@ -956,10 +946,10 @@ fn note_sync_across_multiple_blocks() {
     // Build an MMR with enough leaves to cover all blocks (0..=3).
     let mut mmr = Mmr::default();
     for _ in 0..=3u32 {
-        mmr.add(Word::default());
+        mmr.add(Word::default()).unwrap();
     }
     // Use block_end + 1 as the MMR forest, same as State::sync_notes.
-    let mmr_forest = Forest::new(4);
+    let mmr_forest = Forest::new(4).unwrap();
 
     // A single call to get_note_sync_multi should return all 3 blocks.
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(3);
@@ -1016,7 +1006,7 @@ fn note_sync_multi_respects_payload_limit() {
             PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag.into()),
             &NoteAttachments::default(),
         );
-        let note_header = NoteHeader::new(new_note.id(), note_metadata);
+        let note_header = NoteHeader::new(new_note.details_commitment(), note_metadata);
         let values = [(note_index, &note_header)];
         let notes_db = BlockNoteTree::with_entries(values).unwrap();
         let inclusion_path = notes_db.open(note_index);
@@ -1024,8 +1014,8 @@ fn note_sync_multi_respects_payload_limit() {
         let note = NoteRecord {
             block_num,
             note_index,
+            details_commitment: new_note.details_commitment().as_word(),
             note_id: new_note.id().as_word(),
-            note_commitment: new_note.commitment(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
             attachments: NoteAttachments::default(),
@@ -1074,7 +1064,7 @@ fn note_sync_no_matching_tags() {
         PartialNoteMetadata::new(sender, NoteType::Public).with_tag(10u32.into()),
         &NoteAttachments::default(),
     );
-    let note_header = NoteHeader::new(new_note.id(), note_metadata);
+    let note_header = NoteHeader::new(new_note.details_commitment(), note_metadata);
     let values = [(note_index, &note_header)];
     let notes_db = BlockNoteTree::with_entries(values).unwrap();
     let inclusion_path = notes_db.open(note_index);
@@ -1082,8 +1072,8 @@ fn note_sync_no_matching_tags() {
     let note = NoteRecord {
         block_num,
         note_index,
+        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
-        note_commitment: new_note.commitment(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
         attachments: NoteAttachments::default(),
@@ -1177,9 +1167,13 @@ fn sql_account_storage_map_values_insertion() {
     map2.insert(key1, value3);
     let delta2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map2))]);
     let storage2 = AccountStorageDelta::from_raw(delta2);
-    let delta2 =
-        AccountDelta::new(account_id, storage2, AccountVaultDelta::default(), Felt::new(2))
-            .unwrap();
+    let delta2 = AccountDelta::new(
+        account_id,
+        storage2,
+        AccountVaultDelta::default(),
+        Felt::new_unchecked(2),
+    )
+    .unwrap();
     insert_account_delta(conn, account_id, block2, &delta2);
 
     let storage_map_values = queries::select_account_storage_map_values_paged(
@@ -1324,7 +1318,7 @@ fn select_storage_map_sync_values_for_network_account() {
     create_block(&mut conn, block_num);
 
     let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountStorageMode::Network);
+        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountType::Public);
     let slot_name = StorageSlotName::mock(7);
     let key = StorageMapKey::from_index(1);
     let value = num_to_word(10);
@@ -1682,11 +1676,11 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
 // UTILITIES
 // -------------------------------------------------------------------------------------------
 fn num_to_word(n: u64) -> Word {
-    [Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)].into()
+    [Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new_unchecked(n)].into()
 }
 
 fn num_to_storage_map_key(n: u64) -> StorageMapKey {
-    StorageMapKey::new(Word::from([Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new(n)]))
+    StorageMapKey::new(Word::from([Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::new_unchecked(n)]))
 }
 
 fn num_to_nullifier(n: u64) -> Nullifier {
@@ -1711,13 +1705,12 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountUpdatableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     AccountBuilder::new(seed)
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -1737,10 +1730,7 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
     let input_notes = InputNotes::new_unchecked(notes);
 
     let output_notes = vec![NoteHeader::new(
-        NoteId::new(
-            Word::try_from([num, num, 0, 0]).unwrap(),
-            Word::try_from([0, 0, num, num]).unwrap(),
-        ),
+        NoteDetailsCommitment::from_raw(Word::try_from([num, num, 0, 0]).unwrap()),
         NoteMetadata::new(
             PartialNoteMetadata::new(account_id, NoteType::Public)
                 .with_tag(NoteTag::new(num as u32)),
@@ -1791,7 +1781,6 @@ fn insert_transactions(conn: &mut SqliteConnection) -> usize {
 
 fn mock_account_code_and_storage(
     account_type: AccountType,
-    storage_mode: AccountStorageMode,
     assets: impl IntoIterator<Item = Asset>,
     init_seed: Option<[u8; 32]>,
 ) -> Account {
@@ -1817,13 +1806,12 @@ fn mock_account_code_and_storage(
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("counter_contract", AccountType::all()),
+        AccountComponentMetadata::new("counter_contract"),
     )
     .unwrap();
 
     AccountBuilder::new(init_seed.unwrap_or([0; 32]))
         .account_type(account_type)
-        .storage_mode(storage_mode)
         .with_assets(assets)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
@@ -1847,12 +1835,7 @@ fn test_select_account_code_by_commitment() {
     create_block(&mut conn, block_num_1);
 
     // Create an account with code at block 1 using the existing mock function
-    let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-        [],
-        None,
-    );
+    let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     // Get the code commitment and bytes before inserting
     let code_commitment = account.code().commitment();
@@ -1981,7 +1964,7 @@ async fn genesis_with_account_assets() {
     let account_component = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
@@ -1989,8 +1972,7 @@ async fn genesis_with_account_assets() {
     let fungible_asset = FungibleAsset::new(faucet_id, 1000).unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
@@ -2021,11 +2003,21 @@ async fn genesis_with_account_storage_map() {
     let storage_map = StorageMap::with_entries(vec![
         (
             StorageMapKey::from_index(1u32),
-            Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
+            Word::from([
+                Felt::new_unchecked(10),
+                Felt::new_unchecked(20),
+                Felt::new_unchecked(30),
+                Felt::new_unchecked(40),
+            ]),
         ),
         (
             StorageMapKey::from_index(2u32),
-            Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
+            Word::from([
+                Felt::new_unchecked(50),
+                Felt::new_unchecked(60),
+                Felt::new_unchecked(70),
+                Felt::new_unchecked(80),
+            ]),
         ),
     ])
     .unwrap();
@@ -2043,13 +2035,12 @@ async fn genesis_with_account_storage_map() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2081,7 +2072,12 @@ async fn genesis_with_account_assets_and_storage() {
 
     let storage_map = StorageMap::with_entries(vec![(
         StorageMapKey::from_index(100u32),
-        Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]),
+        Word::from([
+            Felt::new_unchecked(1),
+            Felt::new_unchecked(2),
+            Felt::new_unchecked(3),
+            Felt::new_unchecked(4),
+        ]),
     )])
     .unwrap();
 
@@ -2098,13 +2094,12 @@ async fn genesis_with_account_assets_and_storage() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
@@ -2139,13 +2134,12 @@ async fn genesis_with_multiple_accounts() {
     let account_component1 = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("foo", AccountType::all()),
+        AccountComponentMetadata::new("foo"),
     )
     .unwrap();
 
     let account1 = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component1)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2163,13 +2157,12 @@ async fn genesis_with_multiple_accounts() {
     let account_component2 = AccountComponent::new(
         account_component_code,
         Vec::new(),
-        AccountComponentMetadata::new("bar", AccountType::all()),
+        AccountComponentMetadata::new("bar"),
     )
     .unwrap();
 
     let account2 = AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component2)
         .with_assets([fungible_asset.into()])
         .with_auth_component(AuthSingleSig::new(
@@ -2181,7 +2174,12 @@ async fn genesis_with_multiple_accounts() {
 
     let storage_map = StorageMap::with_entries(vec![(
         StorageMapKey::from_index(5u32),
-        Word::from([Felt::new(15), Felt::new(25), Felt::new(35), Felt::new(45)]),
+        Word::from([
+            Felt::new_unchecked(15),
+            Felt::new_unchecked(25),
+            Felt::new_unchecked(35),
+            Felt::new_unchecked(45),
+        ]),
     )])
     .unwrap();
 
@@ -2193,13 +2191,12 @@ async fn genesis_with_multiple_accounts() {
     let account_component3 = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("baz", AccountType::all()),
+        AccountComponentMetadata::new("baz"),
     )
     .unwrap();
 
     let account3 = AccountBuilder::new([3u8; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component3)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2234,8 +2231,7 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
 
     let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
+        AccountType::Public,
         [fungible_asset.into()],
         Some([42u8; 32]),
     );
@@ -2308,7 +2304,7 @@ fn serialization_symmetry_core_types() {
     assert_eq!(tx_id, restored, "TransactionId serialization must be symmetric");
 
     // NoteId
-    let note_id = NoteId::new(num_to_word(1), num_to_word(2));
+    let note_id = NoteId::from_raw(num_to_word(1));
     let bytes = note_id.to_bytes();
     let restored = NoteId::read_from_bytes(&bytes).unwrap();
     assert_eq!(note_id, restored, "NoteId serialization must be symmetric");
@@ -2326,7 +2322,7 @@ fn serialization_symmetry_block_header() {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        SecretKey::new().public_key(),
+        SigningKey::new().public_key(),
         test_fee_params(),
         11_u8.into(),
     );
@@ -2350,12 +2346,7 @@ fn serialization_symmetry_assets() {
 
 #[test]
 fn serialization_symmetry_account_code() {
-    let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-        [],
-        None,
-    );
+    let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     let code = account.code();
     let bytes = code.to_bytes();
@@ -2397,8 +2388,7 @@ fn serialization_symmetry_nullifier_vec() {
 
 #[test]
 fn serialization_symmetry_note_id_vec() {
-    let note_ids: Vec<NoteId> =
-        (0..5).map(|i| NoteId::new(num_to_word(i), num_to_word(i + 100))).collect();
+    let note_ids: Vec<NoteId> = (0..5).map(|i| NoteId::from_raw(num_to_word(i))).collect();
     let bytes = note_ids.to_bytes();
     let restored: Vec<NoteId> = Deserializable::read_from_bytes(&bytes).unwrap();
     assert_eq!(note_ids, restored, "Vec<NoteId> serialization must be symmetric");
@@ -2419,13 +2409,13 @@ fn db_roundtrip_block_header() {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        SecretKey::new().public_key(),
+        SigningKey::new().public_key(),
         test_fee_params(),
         11_u8.into(),
     );
 
     // Insert
-    let dummy_signature = SecretKey::new().sign(block_header.commitment());
+    let dummy_signature = SigningKey::new().sign(block_header.commitment());
     queries::insert_block_header(&mut conn, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
@@ -2466,12 +2456,7 @@ fn db_roundtrip_account() {
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
 
-    let account = mock_account_code_and_storage(
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-        [],
-        Some([99u8; 32]),
-    );
+    let account = mock_account_code_and_storage(AccountType::Public, [], Some([99u8; 32]));
     let account_id = account.id();
     let account_commitment = account.to_commitment();
 
@@ -2517,8 +2502,8 @@ fn db_roundtrip_notes() {
     let note = NoteRecord {
         block_num,
         note_index,
+        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
-        note_commitment: new_note.commitment(),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
         attachments: new_note.attachments().clone(),
@@ -2538,8 +2523,8 @@ fn db_roundtrip_notes() {
 
     assert_eq!(note.note_id, retrieved_note.note_id, "NoteId DB roundtrip must be symmetric");
     assert_eq!(
-        note.note_commitment, retrieved_note.note_commitment,
-        "Note commitment DB roundtrip must be symmetric"
+        note.details_commitment, retrieved_note.details_commitment,
+        "Details commitment DB roundtrip must be symmetric"
     );
     assert_eq!(
         note.metadata, retrieved_note.metadata,
@@ -2652,11 +2637,21 @@ fn db_roundtrip_account_storage_with_maps() {
     let storage_map = StorageMap::with_entries(vec![
         (
             StorageMapKey::from_index(1u32),
-            Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]),
+            Word::from([
+                Felt::new_unchecked(10),
+                Felt::new_unchecked(20),
+                Felt::new_unchecked(30),
+                Felt::new_unchecked(40),
+            ]),
         ),
         (
             StorageMapKey::from_index(2u32),
-            Word::from([Felt::new(50), Felt::new(60), Felt::new(70), Felt::new(80)]),
+            Word::from([
+                Felt::new_unchecked(50),
+                Felt::new_unchecked(60),
+                Felt::new_unchecked(70),
+                Felt::new_unchecked(80),
+            ]),
         ),
     ])
     .unwrap();
@@ -2674,13 +2669,12 @@ fn db_roundtrip_account_storage_with_maps() {
     let account_component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", AccountType::all()),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([50u8; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(account_component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -2762,7 +2756,7 @@ fn db_roundtrip_note_metadata_attachment() {
     create_block(&mut conn, block_num);
 
     let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [1u8; 32], AccountStorageMode::Network);
+        make_account_and_note(&mut conn, block_num, [1u8; 32], AccountType::Public);
 
     let target = NetworkAccountTarget::new(account_id, NoteExecutionHint::Always)
         .expect("NetworkAccountTarget creation should succeed for network account");
@@ -2776,8 +2770,8 @@ fn db_roundtrip_note_metadata_attachment() {
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0).unwrap(),
+        details_commitment: num_to_word(1),
         note_id: num_to_word(1),
-        note_commitment: num_to_word(1),
         metadata,
         details: None,
         attachments: attachments.clone(),
@@ -3194,7 +3188,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
         account_id,
         storage_2.clone(),
         AccountVaultDelta::default(),
-        Felt::new(2),
+        Felt::new_unchecked(2),
     )
     .unwrap();
 
@@ -3224,7 +3218,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
         account_id,
         storage_3.clone(),
         AccountVaultDelta::default(),
-        Felt::new(3),
+        Felt::new_unchecked(3),
     )
     .unwrap();
 
@@ -3357,7 +3351,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account2,
         storage_update.clone(),
         AccountVaultDelta::default(),
-        Felt::new(2),
+        Felt::new_unchecked(2),
     )
     .unwrap();
     forest.update_account(block51, &delta2_update).unwrap();
@@ -3366,7 +3360,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account3,
         storage_update.clone(),
         AccountVaultDelta::default(),
-        Felt::new(2),
+        Felt::new_unchecked(2),
     )
     .unwrap();
     forest.update_account(block52, &delta3_update).unwrap();
@@ -3379,9 +3373,13 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     let account1_root_after_prune = forest.get_storage_map_root(account1, &slot_name, block01);
     assert!(account1_root_after_prune.is_some());
 
-    let delta1_update =
-        AccountDelta::new(account1, storage_update, AccountVaultDelta::default(), Felt::new(2))
-            .unwrap();
+    let delta1_update = AccountDelta::new(
+        account1,
+        storage_update,
+        AccountVaultDelta::default(),
+        Felt::new_unchecked(2),
+    )
+    .unwrap();
     forest.update_account(block53, &delta1_update).unwrap();
 
     // Prune at block 53
@@ -3501,7 +3499,8 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     vault_delta_51.add_asset(asset_51.into()).unwrap();
 
     let delta_51 =
-        AccountDelta::new(account_id, storage_delta_51, vault_delta_51, Felt::new(51)).unwrap();
+        AccountDelta::new(account_id, storage_delta_51, vault_delta_51, Felt::new_unchecked(51))
+            .unwrap();
 
     forest.update_account(block_51, &delta_51).unwrap();
 
@@ -3613,8 +3612,8 @@ fn db_roundtrip_transactions() {
                 NoteRecord {
                     block_num,
                     note_index: BlockNoteIndex::new(0, idx).unwrap(),
+                    details_commitment: note.details_commitment().as_word(),
                     note_id: note.id().as_word(),
-                    note_commitment: note.to_commitment(),
                     metadata: *note.metadata(),
                     details: None,
                     attachments: NoteAttachments::default(),
@@ -3639,7 +3638,7 @@ fn db_roundtrip_transactions() {
         .map(|(idx, note)| NoteSyncRecord {
             block_num,
             note_index: BlockNoteIndex::new(0, idx).unwrap(),
-            note_id: note.id().as_word(),
+            note_id: note.id(),
             metadata: *note.metadata(),
             inclusion_path: SparseMerklePath::default(),
         })
@@ -3671,7 +3670,7 @@ fn db_roundtrip_transactions() {
         output_note_proofs: expected_sync_records
             .into_iter()
             .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some(n.note_id.into()),
+                note_id: Some((&n.note_id).into()),
                 block_num: n.block_num.as_u32(),
                 note_index_in_block: n.note_index.leaf_index_value().into(),
                 inclusion_path: Some(n.inclusion_path.into()),
@@ -3891,7 +3890,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
         account_id,
         storage_delta_51,
         AccountVaultDelta::default(),
-        Felt::new(51),
+        Felt::new_unchecked(51),
     )
     .unwrap();
 

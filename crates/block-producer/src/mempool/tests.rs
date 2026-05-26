@@ -243,7 +243,7 @@ fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
 
     assert_eq!(child_batch.transactions().len(), 1);
     assert_eq!(child_batch.transactions()[0].id(), child.id());
-    assert_eq!(child_batch.transactions()[0].unauthenticated_note_commitments().count(), 0);
+    assert_eq!(child_batch.transactions()[0].unauthenticated_note_ids().count(), 0);
     assert_eq!(child_batch.unauthenticated_note_commitments().count(), 0);
 }
 

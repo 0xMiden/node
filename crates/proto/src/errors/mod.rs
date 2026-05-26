@@ -193,7 +193,6 @@ impl_from_for_conversion_error!(
     miden_protocol::errors::AccountError,
     miden_protocol::errors::AssetError,
     miden_protocol::errors::AssetVaultError,
-    miden_protocol::errors::FeeError,
     miden_protocol::errors::NoteError,
     miden_protocol::errors::StorageSlotNameError,
     miden_protocol::crypto::merkle::MerkleError,

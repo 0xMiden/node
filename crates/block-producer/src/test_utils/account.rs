@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use miden_protocol::account::{AccountId, AccountIdVersion, AccountStorageMode, AccountType};
+use miden_protocol::account::{AccountId, AccountIdVersion, AccountType};
 use miden_protocol::{Hasher, Word};
 
 pub static MOCK_ACCOUNTS: LazyLock<std::sync::Mutex<HashMap<u32, (AccountId, Word)>>> =
@@ -33,8 +33,7 @@ impl<const NUM_STATES: usize> MockPrivateAccount<NUM_STATES> {
     fn generate(init_seed: [u8; 32], new_account: bool) -> Self {
         let account_seed = AccountId::compute_account_seed(
             init_seed,
-            AccountType::RegularAccountUpdatableCode,
-            AccountStorageMode::Private,
+            AccountType::Private,
             AccountIdVersion::Version1,
             Word::empty(),
             Word::empty(),

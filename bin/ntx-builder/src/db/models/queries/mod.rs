@@ -57,10 +57,12 @@ pub fn apply_committed_block(
                 upsert_account(conn, *network_id, &account)?;
             },
             NetworkAccountEffect::Updated(delta) => {
-                let mut current = get_account(conn, *network_id)?.expect(
-                    "account must exist locally to apply a non-full-state delta from a committed \
-                     block",
-                );
+                // Partial deltas carry no storage to verify network-ness. If the account is not
+                // already tracked locally, treat the update as a non-network public account that
+                // leaked through the upstream filter and skip it.
+                let Some(mut current) = get_account(conn, *network_id)? else {
+                    continue;
+                };
                 current
                     .apply_delta(&delta)
                     .expect("network account delta should apply since the block was committed");
@@ -71,8 +73,7 @@ pub fn apply_committed_block(
     }
 
     for note in &effects.network_notes {
-        let target = NetworkAccountId::try_from(note.target_account_id())
-            .expect("network note's target account must be a network account");
+        let target = NetworkAccountId::new_unchecked(note.target_account_id());
         affected_accounts.insert(target);
     }
     insert_network_notes(conn, &effects.network_notes)?;
