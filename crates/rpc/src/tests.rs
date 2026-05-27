@@ -1,5 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr};
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use http::{HeaderMap, HeaderValue};
 use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
 use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
+use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
@@ -40,16 +41,17 @@ use miden_standards::account::wallets::BasicWallet;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task;
-use tokio::time::sleep;
+use tonic::Request;
 use url::Url;
 
+use crate::server::api::RpcService;
 use crate::{Rpc, RpcMode};
 
 /// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
-    data_directory: TempDir,
-    genesis_commitment: Word,
     state: Arc<State>,
+    genesis_commitment: Word,
+    data_directory: TempDir,
 }
 
 impl TestStore {
@@ -66,9 +68,9 @@ impl TestStore {
         let genesis_commitment = Self::bootstrap(data_directory.path());
         let state = load_state(data_directory.path()).await;
         Self {
-            data_directory,
-            genesis_commitment,
             state,
+            genesis_commitment,
+            data_directory,
         }
     }
 
@@ -410,19 +412,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 
 #[tokio::test]
 async fn rpc_rejects_post_deployment_network_account_tx() {
-    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
+    let store = TestStore::start().await;
     let genesis = store.genesis_commitment();
-
-    // Build a client that advertises the right `application/vnd.miden` content type so
-    // tx-submission requests reach the handler.
-    let mut rpc_client =
-        miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())
-            .without_tls()
-            .with_timeout(Duration::from_secs(5))
-            .without_metadata_version()
-            .with_metadata_genesis(genesis.to_hex())
-            .without_otel_context_injection()
-            .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
     // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
     // The store uses WAL mode so a secondary connection is safe.
@@ -441,7 +432,14 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcMode::full_node(source_rpc_client()),
+        None,
+        NonZeroUsize::new(1_000_000).unwrap(),
+    );
+
+    let response = service.submit_proven_tx(Request::new(request)).await;
     assert!(response.is_err());
     let err = response.as_ref().unwrap_err().message();
     assert!(
@@ -450,11 +448,20 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     );
 }
 
+fn source_rpc_client() -> RpcClient {
+    Builder::new(Url::parse("http://127.0.0.1:0").unwrap())
+        .without_tls()
+        .without_timeout()
+        .without_metadata_version()
+        .without_metadata_genesis()
+        .without_otel_context_injection()
+        .connect_lazy::<RpcClient>()
+}
+
 // Batch-path coverage for the network-account gate is provided manually. Building a valid
 // `ProposedBatch` + `ProvenBatch` in this test harness would require duplicating LocalBatchProver
-// setup. The query layer is covered by the unit test in store::db::tests, and the gRPC wiring is
-// the same as `submit_proven_transaction` (covered by
-// `rpc_rejects_post_deployment_network_account_tx`).
+// setup. The query layer is covered by the unit test in store::db::tests, and the RPC handler gate
+// is covered by `rpc_rejects_post_deployment_network_account_tx`.
 
 #[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
@@ -506,24 +513,6 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
-async fn send_request_until_success(
-    rpc_client: &mut RpcClient,
-) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
-    let mut attempts = 0;
-    loop {
-        attempts += 1;
-
-        match send_request(rpc_client).await {
-            Ok(response) => return Ok(response),
-            Err(err) if attempts < 30 => {
-                sleep(Duration::from_millis(200)).await;
-                tracing::warn!(%attempts, %err, "RPC request failed, retrying");
-            },
-            Err(err) => return Err(err),
-        }
-    }
-}
-
 async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
     let mut endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
         .expect("Url type always results in valid endpoint")
@@ -540,17 +529,6 @@ async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
 /// the server, along with the socket address.
 async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore) {
     start_rpc_with_options(GrpcOptionsExternal::test()).await
-}
-
-/// Starts the RPC + store pair and blocks until the RPC server has finished its genesis-fetch
-/// bootstrap and is accepting requests. Use this in tests that send a single one-shot request and
-/// would otherwise race the RPC component's startup under high test parallelism.
-async fn start_rpc_and_store_ready() -> (RpcClient, std::net::SocketAddr, TestStore) {
-    let (mut rpc_client, rpc_addr, store) = start_rpc().await;
-    send_request_until_success(&mut rpc_client)
-        .await
-        .expect("RPC should become ready after store starts");
-    (rpc_client, rpc_addr, store)
 }
 
 async fn start_rpc_with_options(

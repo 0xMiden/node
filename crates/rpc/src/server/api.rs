@@ -128,7 +128,7 @@ pub struct RpcService {
 }
 
 impl RpcService {
-    pub(super) fn new(
+    pub(crate) fn new(
         store: Arc<State>,
         mode: RpcMode,
         ntx_builder: Option<NtxBuilderClient>,
