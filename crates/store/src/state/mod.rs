@@ -13,7 +13,6 @@ use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountDetails,
     AccountInfo,
-    AccountRequest,
     AccountResponse,
     AccountStorageDetails,
     AccountStorageMapDetails,
@@ -82,6 +81,15 @@ use loader::{
 
 mod replica;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
+
+mod subscription;
+pub use subscription::{
+    BlockSubscriptionEvent,
+    BlockSubscriptionStream,
+    ProofSubscriptionEvent,
+    ProofSubscriptionStream,
+    StateSubscriptionError,
+};
 
 mod apply_block;
 mod apply_proof;
@@ -801,10 +809,10 @@ impl State {
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn get_account(
         &self,
-        account_request: AccountRequest,
+        account_id: AccountId,
+        block_num: Option<BlockNumber>,
+        details: Option<AccountDetailRequest>,
     ) -> Result<AccountResponse, GetAccountError> {
-        let AccountRequest { block_num, account_id, details } = account_request;
-
         if details.is_some() && !account_id.is_public() {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }

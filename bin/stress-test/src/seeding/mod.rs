@@ -5,11 +5,9 @@ use std::time::Instant;
 
 use metrics::SeedingMetrics;
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::generated::store::rpc_client::RpcClient;
 use miden_node_store::state::State;
-use miden_node_store::{DataDirectory, GenesisState, Store, StoreMode};
-use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
-use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_node_store::{DataDirectory, GenesisState, Store};
+use miden_node_utils::clap::StorageOptions;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -71,12 +69,8 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSlice;
+use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpListener;
-use tokio::{fs, task};
-use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
-use url::Url;
 
 mod metrics;
 #[cfg(test)]
@@ -838,45 +832,9 @@ async fn get_block_inputs(
     inputs
 }
 
-/// Runs the store with the given data directory. Returns a tuple with:
-/// - a gRPC client to access the store
-/// - the URL of the store
-///
-/// The store uses a local prover.
-pub async fn start_store(
-    data_directory: PathBuf,
-) -> (RpcClient<InterceptedService<Channel, OtelInterceptor>>, Url) {
-    let rpc_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store RPC gRPC endpoint");
-    let store_addr = rpc_listener.local_addr().expect("Failed to get store RPC address");
-    let dir = data_directory.clone();
-
-    task::spawn(async move {
-        Store {
-            rpc_listener,
-            mode: StoreMode::Sequencer {
-                block_prover_url: None,
-                max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
-            },
-            data_directory: dir,
-            database_options: miden_node_store::DatabaseOptions::default(),
-            grpc_options: GrpcOptionsInternal::bench(),
-            storage_options: StorageOptions::bench(),
-        }
-        .serve()
-        .await
-        .expect("Failed to start serving store");
-    });
-
-    let channel = tonic::transport::Endpoint::try_from(format!("http://{store_addr}",))
-        .unwrap()
-        .connect()
-        .await
-        .expect("Failed to connect to store");
-
-    let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
-    (RpcClient::with_interceptor(channel, OtelInterceptor), store_url)
+/// Loads the store state from the given data directory.
+pub async fn start_store(data_directory: PathBuf) -> Arc<State> {
+    load_state(data_directory).await
 }
 
 async fn load_state(data_directory: PathBuf) -> Arc<State> {

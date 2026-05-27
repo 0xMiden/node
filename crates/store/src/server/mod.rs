@@ -5,17 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::generated::store;
-use miden_node_proto_build::store_api_descriptor;
-use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
-use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::spawn::spawn_blocking_in_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use miden_node_utils::tracing::grpc::grpc_trace_fn;
-use tokio::net::TcpListener;
-use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::trace::TraceLayer;
 use tracing::{info, info_span, instrument};
 use url::Url;
 
@@ -28,14 +20,11 @@ use crate::server::replica_sync::{BlockReplicaSync, ProofReplicaSync};
 use crate::state::{ProofCache, State};
 use crate::{BlockProver, COMPONENT};
 
-mod api;
 pub mod block_prover_client;
 mod replica_sync;
 
 use replica_sync::ReplicaSync as _;
 pub mod proof_scheduler;
-mod replica;
-mod rpc_api;
 
 /// Determines how the store receives new blocks.
 ///
@@ -44,7 +33,7 @@ mod rpc_api;
 pub enum StoreMode {
     /// Store mode for a sequencing node that produces local blocks.
     ///
-    /// Exposes the `Rpc` gRPC service and runs the proof scheduler to generate block proofs.
+    /// Runs the proof scheduler to generate block proofs.
     Sequencer {
         /// URL of the remote block prover. Uses a local prover if `None`.
         block_prover_url: Option<Url>,
@@ -52,9 +41,7 @@ pub enum StoreMode {
         max_concurrent_proofs: NonZeroUsize,
     },
 
-    /// Store mode for a full node that syncs from an upstream store's `Rpc` gRPC service.
-    ///
-    /// Only the `Rpc` gRPC service is exposed and no proof scheduler runs.
+    /// Store mode for a full node that syncs from an upstream RPC service.
     Full { upstream_url: Url },
 }
 
@@ -74,20 +61,18 @@ impl Default for DatabaseOptions {
 }
 
 struct ModeSetup {
-    /// gRPC server tasks (one per bound listener + the DB maintenance loop).
-    grpc_servers: tokio::task::JoinSet<Result<(), tonic::transport::Error>>,
+    /// Keeps the loaded state alive for background tasks that subscribe to its watch channels.
+    _state: Arc<State>,
     /// Mode-specific background task: proof scheduler or replica sync.
     mode_task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 
 /// The store server.
 pub struct Store {
-    pub rpc_listener: TcpListener,
     pub mode: StoreMode,
     pub data_directory: PathBuf,
     pub database_options: DatabaseOptions,
     pub storage_options: StorageOptions,
-    pub grpc_options: GrpcOptionsInternal,
 }
 
 impl Store {
@@ -126,9 +111,8 @@ impl Store {
     ///
     /// Note: this blocks until the server dies.
     pub async fn serve(self) -> anyhow::Result<()> {
-        let rpc_address = self.rpc_listener.local_addr()?;
-        info!(target: COMPONENT, rpc_endpoint=?rpc_address,
-            ?self.data_directory, ?self.grpc_options.request_timeout,
+        info!(target: COMPONENT,
+            data_directory = ?self.data_directory,
             sqlite_connection_pool_size = %self.database_options.connection_pool_size,
             "Loading database");
 
@@ -144,27 +128,19 @@ impl Store {
         .context("failed to load state")?;
         let _disk_monitor_task = Self::spawn_disk_monitor(self.data_directory.clone());
 
-        let ModeSetup { mut grpc_servers, mode_task } = match self.mode {
+        let ModeSetup { _state, mode_task } = match self.mode {
             StoreMode::Sequencer { block_prover_url, max_concurrent_proofs } => {
                 Self::setup_sequencer_mode(
                     state,
                     block_prover_url,
                     max_concurrent_proofs,
                     tx_proven_tip,
-                    self.grpc_options,
-                    self.rpc_listener,
-                )?
+                )
             },
-            StoreMode::Full { upstream_url } => {
-                Self::setup_full_mode(state, upstream_url, self.grpc_options, self.rpc_listener)?
-            },
+            StoreMode::Full { upstream_url } => Self::setup_full_mode(state, upstream_url),
         };
 
         tokio::select! {
-            // GRPC service task.
-            result = grpc_servers.join_next() => {
-                result.expect("joinset is not empty")?.map_err(Into::into)
-            },
             // Termination signal from apply_block.
             Some(err) = termination_signal.recv() => {
                 Err(anyhow::anyhow!("received termination signal").context(err))
@@ -185,11 +161,10 @@ impl Store {
         block_prover_url: Option<Url>,
         max_concurrent_proofs: NonZeroUsize,
         tx_proven_tip: ProvenTipWriter,
-        grpc_options: GrpcOptionsInternal,
-        rpc_listener: TcpListener,
-    ) -> anyhow::Result<ModeSetup> {
+    ) -> ModeSetup {
         info!(target: COMPONENT, "Starting in sequencer mode");
 
+        let state = Arc::new(state);
         let proof_cache = state.proof_cache.clone();
         let proof_scheduler_task = Self::spawn_proof_scheduler(
             &state,
@@ -199,23 +174,13 @@ impl Store {
             proof_cache,
         );
 
-        let state = Arc::new(state);
-        let store_api = api::StoreApi::new(state);
-
-        let join_set = Self::spawn_store_grpc_server(store_api, grpc_options, rpc_listener)?;
-
-        Ok(ModeSetup {
-            grpc_servers: join_set,
+        ModeSetup {
+            _state: state,
             mode_task: proof_scheduler_task,
-        })
+        }
     }
 
-    fn setup_full_mode(
-        state: State,
-        upstream_url: Url,
-        grpc_options: GrpcOptionsInternal,
-        rpc_listener: TcpListener,
-    ) -> anyhow::Result<ModeSetup> {
+    fn setup_full_mode(state: State, upstream_url: Url) -> ModeSetup {
         info!(target: COMPONENT, %upstream_url, "Starting in full mode");
 
         let state = Arc::new(state);
@@ -228,13 +193,7 @@ impl Store {
             }
         });
 
-        let store_api = api::StoreApi::new(state);
-        let join_set = Self::spawn_replica_grpc_servers(store_api, grpc_options, rpc_listener)?;
-
-        Ok(ModeSetup {
-            grpc_servers: join_set,
-            mode_task: replica_task,
-        })
+        ModeSetup { _state: state, mode_task: replica_task }
     }
 
     /// Initializes the block prover client and spawns the proof scheduler as a background task.
@@ -265,48 +224,6 @@ impl Store {
         )
     }
 
-    /// Spawns the store gRPC server.
-    fn spawn_store_grpc_server(
-        store_api: api::StoreApi,
-        grpc_options: GrpcOptionsInternal,
-        rpc_listener: TcpListener,
-    ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
-        let mut join_set = JoinSet::new();
-
-        let rpc_service = store::rpc_server::RpcServer::new(store_api);
-
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_file_descriptor_set(store_api_descriptor())
-            .build_v1()
-            .context("failed to build reflection service")?;
-
-        let make_server = || {
-            tonic::transport::Server::builder()
-                .timeout(grpc_options.request_timeout)
-                .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-                .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
-        };
-
-        join_set.spawn(
-            make_server()
-                .add_service(rpc_service)
-                .add_service(reflection_service)
-                .serve_with_incoming(TcpListenerStream::new(rpc_listener)),
-        );
-
-        Ok(join_set)
-    }
-
-    /// Spawns the gRPC servers for full-node mode.
-    ///
-    /// Only the `Rpc` service is exposed and no proof scheduler runs.
-    fn spawn_replica_grpc_servers(
-        store_api: api::StoreApi,
-        grpc_options: GrpcOptionsInternal,
-        rpc_listener: TcpListener,
-    ) -> anyhow::Result<JoinSet<Result<(), tonic::transport::Error>>> {
-        Self::spawn_store_grpc_server(store_api, grpc_options, rpc_listener)
-    }
     /// Spawns a background task that periodically records the on-disk size of every store data path
     /// as `OTel` span attributes.
     fn spawn_disk_monitor(data_directory: PathBuf) -> tokio::task::JoinHandle<()> {

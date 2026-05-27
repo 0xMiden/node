@@ -38,8 +38,7 @@ Without the environment variables above, `librocksdb-sys` compiles RocksDB from 
 
 ## API overview
 
-The full gRPC API can be found [here](../../proto/proto/internal/store.proto). Block producer
-access to store state is in-process and is not exposed as a store gRPC API.
+Store state access is in-process and is not exposed as a store gRPC API.
 
 <!--toc:start-->
 - [GetAccount](#getaccount)

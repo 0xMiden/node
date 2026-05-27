@@ -6,19 +6,19 @@
 //! # Examples
 //!
 //! ```rust
-//! # use miden_node_proto::clients::{Builder, WantsTls, StoreRpcClient};
+//! # use miden_node_proto::clients::{Builder, WantsTls, RpcClient};
 //! # use url::Url;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! // Create a store client with OTEL and TLS
+//! // Create an RPC client with OTEL and TLS
 //! let url = Url::parse("https://example.com:8080")?;
-//! let client: StoreRpcClient = Builder::new(url)
+//! let client: RpcClient = Builder::new(url)
 //!     .with_tls()?                   // or `.without_tls()`
 //!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
 //!     .with_otel_context_injection() // or `.without_otel_context_injection()`
-//!     .connect::<StoreRpcClient>()
+//!     .connect::<RpcClient>()
 //!     .await?;
 //! # Ok(())
 //! # }
@@ -109,7 +109,6 @@ impl tonic::service::Interceptor for Interceptor {
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
-type GeneratedStoreClientForRpc = generated::store::rpc_client::RpcClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
@@ -121,8 +120,6 @@ type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<I
 
 #[derive(Debug, Clone)]
 pub struct RpcClient(GeneratedRpcClient);
-#[derive(Debug, Clone)]
-pub struct StoreRpcClient(GeneratedStoreClientForRpc);
 #[derive(Debug, Clone)]
 pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
 #[derive(Debug, Clone)]
@@ -140,20 +137,6 @@ impl DerefMut for RpcClient {
 
 impl Deref for RpcClient {
     type Target = GeneratedRpcClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreRpcClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreRpcClient {
-    type Target = GeneratedStoreClientForRpc;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -227,12 +210,6 @@ pub trait GrpcClient {
 impl GrpcClient for RpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for StoreRpcClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForRpc::new(InterceptedService::new(channel, interceptor)))
     }
 }
 

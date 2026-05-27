@@ -28,5 +28,3 @@ miden-standards  = { workspace = true }
 rand             = { workspace = true }
 rayon            = { workspace = true }
 tokio            = { workspace = true }
-tonic            = { default-features = true, workspace = true }
-url              = { workspace = true }
