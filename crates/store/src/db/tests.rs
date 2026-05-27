@@ -237,7 +237,6 @@ fn sql_select_notes() {
         let note = NoteRecord {
             block_num,
             note_index: BlockNoteIndex::new(0, i.try_into().unwrap()).unwrap(),
-            details_commitment: num_to_word(u64::try_from(i).unwrap()),
             note_id: num_to_word(u64::try_from(i).unwrap()),
             metadata: *new_note.metadata(),
             details: Some(NoteDetails::from(&new_note)),
@@ -282,7 +281,6 @@ fn sql_select_note_script_by_root() {
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0.try_into().unwrap()).unwrap(),
-        details_commitment: num_to_word(0),
         note_id: num_to_word(0),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
@@ -358,7 +356,6 @@ fn sql_unconsumed_network_notes() {
         let note = NoteRecord {
             block_num: 0.into(), // Created on same block.
             note_index: BlockNoteIndex::new(0, i as usize).unwrap(),
-            details_commitment: num_to_word(i.into()),
             note_id: num_to_word(i.into()),
             metadata,
             details: None,
@@ -826,7 +823,6 @@ fn notes() {
     let note = NoteRecord {
         block_num: block_num_1,
         note_index,
-        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
@@ -857,7 +853,6 @@ fn notes() {
     let note2 = NoteRecord {
         block_num: block_num_2,
         note_index: note.note_index,
-        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
         metadata: note.metadata,
         details: None,
@@ -932,7 +927,6 @@ fn note_sync_across_multiple_blocks() {
         let note = NoteRecord {
             block_num,
             note_index,
-            details_commitment: new_note.details_commitment().as_word(),
             note_id: new_note.id().as_word(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
@@ -1014,7 +1008,6 @@ fn note_sync_multi_respects_payload_limit() {
         let note = NoteRecord {
             block_num,
             note_index,
-            details_commitment: new_note.details_commitment().as_word(),
             note_id: new_note.id().as_word(),
             metadata: note_metadata,
             details: Some(NoteDetails::from(&new_note)),
@@ -1072,7 +1065,6 @@ fn note_sync_no_matching_tags() {
     let note = NoteRecord {
         block_num,
         note_index,
-        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
         metadata: note_metadata,
         details: Some(NoteDetails::from(&new_note)),
@@ -2502,7 +2494,6 @@ fn db_roundtrip_notes() {
     let note = NoteRecord {
         block_num,
         note_index,
-        details_commitment: new_note.details_commitment().as_word(),
         note_id: new_note.id().as_word(),
         metadata: *new_note.metadata(),
         details: Some(NoteDetails::from(&new_note)),
@@ -2522,10 +2513,6 @@ fn db_roundtrip_notes() {
     let retrieved_note = &retrieved[0];
 
     assert_eq!(note.note_id, retrieved_note.note_id, "NoteId DB roundtrip must be symmetric");
-    assert_eq!(
-        note.details_commitment, retrieved_note.details_commitment,
-        "Details commitment DB roundtrip must be symmetric"
-    );
     assert_eq!(
         note.metadata, retrieved_note.metadata,
         "Metadata DB roundtrip must be symmetric"
@@ -2770,7 +2757,6 @@ fn db_roundtrip_note_metadata_attachment() {
     let note = NoteRecord {
         block_num,
         note_index: BlockNoteIndex::new(0, 0).unwrap(),
-        details_commitment: num_to_word(1),
         note_id: num_to_word(1),
         metadata,
         details: None,
@@ -3612,7 +3598,6 @@ fn db_roundtrip_transactions() {
                 NoteRecord {
                     block_num,
                     note_index: BlockNoteIndex::new(0, idx).unwrap(),
-                    details_commitment: note.details_commitment().as_word(),
                     note_id: note.id().as_word(),
                     metadata: *note.metadata(),
                     details: None,

@@ -599,8 +599,7 @@ pub struct NoteSyncRecordRawRow {
     pub committed_at: i64, // BlockNumber
     #[diesel(embed)]
     pub block_note_index: BlockNoteIndexRawRow,
-    pub details_commitment: Vec<u8>, // BlobDigest
-    pub note_id: Vec<u8>,            // BlobDigest
+    pub note_id: Vec<u8>, // BlobDigest
     #[diesel(embed)]
     pub metadata: NoteMetadataRawRow,
     pub inclusion_path: Vec<u8>, // SparseMerklePath
@@ -644,7 +643,6 @@ pub struct NoteRecordWithScriptRawJoined {
     pub note_index: i32, // index within batch
     // #[diesel(embed)]
     // pub note_index: BlockNoteIndexRaw,
-    pub details_commitment: Vec<u8>,
     pub note_id: Vec<u8>,
 
     pub note_type: i32,
@@ -669,7 +667,6 @@ impl From<(NoteRecordRawRow, Option<Vec<u8>>)> for NoteRecordWithScriptRawJoined
             committed_at,
             batch_index,
             note_index,
-            details_commitment,
             note_id,
             note_type,
             sender,
@@ -684,7 +681,6 @@ impl From<(NoteRecordRawRow, Option<Vec<u8>>)> for NoteRecordWithScriptRawJoined
             committed_at,
             batch_index,
             note_index,
-            details_commitment,
             note_id,
             note_type,
             sender,
@@ -710,7 +706,6 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
             batch_index,
             note_index,
             // block note index ^^^
-            details_commitment,
             note_id,
 
             note_type,
@@ -732,7 +727,6 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
 
         let (metadata, attachments) = metadata.try_into()?;
         let committed_at = BlockNumber::from_raw_sql(committed_at)?;
-        let details_commitment = Word::read_from_bytes(&details_commitment[..])?;
         let note_id = Word::read_from_bytes(&note_id[..])?;
         let script = script.map(|script| NoteScript::read_from_bytes(&script[..])).transpose()?;
         let details = if let NoteDetailsRawRow {
@@ -762,7 +756,6 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         Ok(NoteRecord {
             block_num: committed_at,
             note_index,
-            details_commitment,
             note_id,
             metadata,
             details,
@@ -780,7 +773,6 @@ pub struct NoteRecordRawRow {
 
     pub batch_index: i32,
     pub note_index: i32, // index within batch
-    pub details_commitment: Vec<u8>,
     pub note_id: Vec<u8>,
 
     pub note_type: i32,
@@ -919,7 +911,6 @@ pub struct NoteInsertRow {
     pub batch_index: i32,
     pub note_index: i32, // index within batch
 
-    pub details_commitment: Vec<u8>,
     pub note_id: Vec<u8>,
 
     pub note_type: i32,
@@ -953,7 +944,6 @@ impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
             committed_at: note.block_num.to_raw_sql(),
             batch_index: idx_to_raw_sql(note.note_index.batch_idx()),
             note_index: idx_to_raw_sql(note.note_index.note_idx_in_batch()),
-            details_commitment: note.details_commitment.to_bytes(),
             note_id: note.note_id.to_bytes(),
             note_type: note_type_to_raw_sql(note.metadata.note_type() as u8),
             sender: note.metadata.sender().to_bytes(),
