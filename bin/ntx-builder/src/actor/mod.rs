@@ -9,14 +9,16 @@ use std::time::Duration;
 use allowlist::{NoteScriptNotAllowlisted, partition_by_allowlist};
 use anyhow::Context;
 use candidate::TransactionCandidate;
+use futures::FutureExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::TransactionScript;
 use miden_remote_prover_client::RemoteTransactionProver;
+use miden_standards::code_builder::CodeBuilder;
 use miden_tx::FailedNote;
 use tokio::sync::{Notify, Semaphore, mpsc};
 
@@ -24,6 +26,24 @@ use crate::NoteError;
 use crate::chain_state::{ChainState, SharedChainState};
 use crate::clients::RpcClient;
 use crate::db::Db;
+
+/// Compiles the standalone transaction script that sets the on-chain expiration of a network
+/// transaction to `delta` blocks. The script is account-independent, so the builder compiles it
+/// once at startup and shares the resulting [`TransactionScript`] across all actors.
+///
+/// ```masm
+/// begin
+///     push.{delta} exec.::miden::protocol::tx::update_expiration_block_delta
+/// end
+/// ```
+pub(crate) fn expiration_tx_script(delta: u16) -> anyhow::Result<TransactionScript> {
+    let source = format!(
+        "begin\n    push.{delta} exec.::miden::protocol::tx::update_expiration_block_delta\nend"
+    );
+    CodeBuilder::new()
+        .compile_tx_script(source)
+        .context("failed to compile network-tx expiration script")
+}
 
 // ACTOR REQUESTS
 // ================================================================================================
@@ -66,6 +86,9 @@ pub struct State {
     pub chain: Arc<SharedChainState>,
     /// Shared LRU cache for storing retrieved note scripts to avoid repeated RPC calls.
     pub script_cache: LruCache<Word, NoteScript>,
+    /// Pre-compiled transaction script that sets each network tx's on-chain expiration delta.
+    /// Shared into every executed transaction.
+    pub expiration_script: TransactionScript,
 }
 
 /// Per-actor configuration knobs.
@@ -79,6 +102,9 @@ pub struct ActorConfig {
     pub idle_timeout: Duration,
     /// Maximum number of VM execution cycles for network transactions.
     pub max_cycles: u32,
+    /// Number of blocks after which a submitted transaction expires. Set as the on-chain expiration
+    /// delta and reused as the `WaitForBlock` retry timeout.
+    pub tx_expiration_delta: u16,
     /// Initial sleep applied between per-request retries on transient infrastructure failures
     /// (prover unreachable, RPC transport error, RPC gRPC hiccup). Doubles each retry up to
     /// [`Self::request_backoff_max`].
@@ -135,12 +161,15 @@ impl AccountActorContext {
                 db: db.clone(),
                 chain: chain_state,
                 script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
+                expiration_script: expiration_tx_script(30)
+                    .expect("expiration script should compile"),
             },
             config: ActorConfig {
                 max_notes_per_tx: NonZeroUsize::new(1).unwrap(),
                 max_note_attempts: 1,
                 idle_timeout: Duration::from_secs(60),
                 max_cycles: 1 << 18,
+                tx_expiration_delta: 30,
                 request_backoff_initial: Duration::from_millis(1),
                 request_backoff_max: Duration::from_millis(10),
             },
@@ -155,9 +184,22 @@ impl AccountActorContext {
 /// The mode of operation that the account actor is currently performing.
 #[derive(Debug)]
 enum ActorMode {
+    /// No notes targeting this account are currently available. The actor sleeps on the idle
+    /// timeout and awaits a coordinator notification to re-evaluate.
     NoViableNotes,
+    /// Notes are available for consumption. The actor acquires a transaction permit and submits a
+    /// candidate.
     NotesAvailable,
-    TransactionInflight(TransactionId),
+    /// A network transaction has been submitted; the actor waits for it to land in a committed
+    /// block. Landing is detected from the local DB: `apply_committed_block` marks each consumed
+    /// nullifier with `committed_at` so no RPC roundtrip is needed.
+    WaitForBlock {
+        /// Nullifiers of the network notes consumed by the submitted transaction.
+        submitted_nullifiers: Vec<Nullifier>,
+        /// Chain tip block number at submission. With [`ActorConfig::tx_expiration_delta`] this
+        /// bounds how long the actor waits before retrying.
+        submitted_at: BlockNumber,
+    },
 }
 
 // ACCOUNT ACTOR
@@ -231,32 +273,112 @@ impl AccountActor {
     /// The return value signals the shutdown category to the coordinator:
     ///
     /// - `Ok(())`: intentional shutdown (idle timeout or account not committed in time).
-    /// - `Err(_)`: crash (database error or any other bug).
-    pub async fn run(self, _semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
+    /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
+    pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
         // Wait for the account to be committed to the DB. For newly created accounts, the creation
-        // transaction must be committed before the actor becomes active.
+        // transaction must be committed before we start processing notes.
         if !self.wait_for_committed_account(account_id).await? {
             return Ok(());
         }
 
+        // Determine initial mode by checking the DB for available notes.
+        let block_num = self.state.chain.chain_tip_block_number();
+        let has_notes = self
+            .state
+            .db
+            .has_available_notes(account_id, block_num, self.config.max_note_attempts)
+            .await
+            .context("failed to check for available notes")?;
+        let mut mode = if has_notes {
+            ActorMode::NotesAvailable
+        } else {
+            ActorMode::NoViableNotes
+        };
+
         loop {
+            // Acquire an execution permit only when there are notes to process.
+            let tx_permit_acquisition = match mode {
+                ActorMode::NoViableNotes | ActorMode::WaitForBlock { .. } => {
+                    std::future::pending().boxed()
+                },
+                ActorMode::NotesAvailable => semaphore.acquire().boxed(),
+            };
+
+            // The idle timer only ticks while there is nothing to do.
+            let idle_timeout_sleep = match mode {
+                ActorMode::NoViableNotes => tokio::time::sleep(self.config.idle_timeout).boxed(),
+                _ => std::future::pending().boxed(),
+            };
+
             tokio::select! {
-                // A committed block touched this account (or the coordinator woke everyone). PR 3
-                // reconnects transaction execution here.
+                // A committed block touched this account (or the coordinator woke everyone).
                 _ = self.notify.notified() => {
-                    tracing::debug!(
-                        %account_id,
-                        "actor notified; transaction execution reconnects in PR 3",
-                    );
+                    mode = self.reevaluate_mode(account_id, mode).await?;
+                },
+                // Execute a transaction once a permit is available.
+                permit = tx_permit_acquisition => {
+                    let _permit = permit.context("semaphore closed")?;
+                    let chain_state = self.state.chain.get_cloned();
+                    let tx_candidate =
+                        self.select_candidate_from_db(account_id, chain_state).await?;
+                    mode = match tx_candidate {
+                        Some(candidate) => self.execute_transactions(account_id, candidate).await,
+                        None => ActorMode::NoViableNotes,
+                    };
                 }
                 // Idle timeout: actor has been idle too long, deactivate.
-                () = tokio::time::sleep(self.config.idle_timeout) => {
+                () = idle_timeout_sleep => {
                     tracing::info!(%account_id, "Account actor deactivated due to idle timeout");
                     return Ok(());
                 }
             }
+        }
+    }
+
+    /// Decides the actor's next mode after a coordinator notification.
+    ///
+    /// - In `NoViableNotes`/`NotesAvailable`, a wake means the DB may now have new work; advance to
+    ///   `NotesAvailable` and let the next `select_candidate` decide whether a real candidate
+    ///   exists.
+    /// - In `WaitForBlock`, query whether the submitted transaction's nullifiers have all been
+    ///   consumed by a committed block (the tx landed). If so, return to `NotesAvailable`. Else, if
+    ///   `tx_expiration_delta` blocks have passed since submission, give up waiting and resume
+    ///   candidate selection; otherwise stay in `WaitForBlock`.
+    async fn reevaluate_mode(
+        &self,
+        account_id: AccountId,
+        mode: ActorMode,
+    ) -> anyhow::Result<ActorMode> {
+        match mode {
+            ActorMode::WaitForBlock { submitted_nullifiers, submitted_at } => {
+                let landed = self
+                    .state
+                    .db
+                    .submitted_tx_landed(account_id, submitted_nullifiers.clone())
+                    .await
+                    .context("failed to check submitted tx landing")?;
+                if landed {
+                    return Ok(ActorMode::NotesAvailable);
+                }
+
+                let chain_tip = self.state.chain.chain_tip_block_number();
+                let elapsed = chain_tip.checked_sub(submitted_at.as_u32()).unwrap_or_default();
+                if elapsed.as_u32() >= u32::from(self.config.tx_expiration_delta) {
+                    tracing::info!(
+                        %account_id,
+                        %submitted_at,
+                        current_tip = %chain_tip,
+                        delta = self.config.tx_expiration_delta,
+                        "submitted tx not landed within expiration delta; retrying",
+                    );
+                    return Ok(ActorMode::NotesAvailable);
+                }
+
+                Ok(ActorMode::WaitForBlock { submitted_nullifiers, submitted_at })
+            },
+            _ => Ok(ActorMode::NotesAvailable),
         }
     }
 
@@ -382,6 +504,7 @@ impl AccountActor {
             self.state.script_cache.clone(),
             self.state.db.clone(),
             self.config.max_cycles,
+            self.state.expiration_script.clone(),
             self.config.request_backoff_initial,
             self.config.request_backoff_max,
         );
@@ -406,11 +529,31 @@ impl AccountActor {
                     "network transaction executed with some failed notes",
                 );
                 self.cache_note_scripts(scripts_to_cache).await;
+
+                // The nullifiers that actually went into the submitted tx are the candidate notes
+                // minus those rejected during consumability filtering.
+                let failed_nullifiers: std::collections::HashSet<Nullifier> =
+                    failed.iter().map(|f| f.note().nullifier()).collect();
+                let submitted_nullifiers: Vec<Nullifier> = notes
+                    .iter()
+                    .map(|n| n.as_note().nullifier())
+                    .filter(|nullifier| !failed_nullifiers.contains(nullifier))
+                    .collect();
+
                 if !failed.is_empty() {
                     let failed_notes = log_failed_notes(failed);
                     self.mark_notes_failed(&failed_notes, block_num).await;
                 }
-                ActorMode::TransactionInflight(tx_id)
+
+                if submitted_nullifiers.is_empty() {
+                    // Every input note was filtered out before submission.
+                    ActorMode::NoViableNotes
+                } else {
+                    ActorMode::WaitForBlock {
+                        submitted_nullifiers,
+                        submitted_at: block_num,
+                    }
+                }
             },
             // Transaction execution failed.
             Err(err) => {
@@ -508,123 +651,18 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    #[ignore = "wip refactor"]
-    async fn select_candidate_keeps_allowlisted_notes() {
-        // let (db, _dir) = Db::test_setup().await;
-        // let account_id = mock_network_account_id();
-        // let note = mock_single_target_note(account_id, 10);
-        // let account = mock_account_with_auth_component(
-        //     AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([note
-        //         .as_note()
-        //         .script()
-        //         .root()]))
-        //     .expect("non-empty allowlist should construct"),
-        // );
+    use super::expiration_tx_script;
 
-        // db.sync_account_from_store(account_id, account, vec![note.clone()])
-        //     .await
-        //     .expect("fixtures should sync");
+    /// The expiration script must compile for the full valid delta range, and the delta must be
+    /// baked into the script (distinct deltas → distinct script roots), proving the on-chain
+    /// expiration value is actually carried rather than ignored.
+    #[test]
+    fn expiration_script_compiles_and_encodes_delta() {
+        let one = expiration_tx_script(1).expect("delta 1 should compile");
+        let thirty = expiration_tx_script(30).expect("delta 30 should compile");
+        let max = expiration_tx_script(u16::MAX).expect("delta u16::MAX should compile");
 
-        // let (actor, context) = actor_with_request_handler(&db, account_id); let chain_state =
-        // context.state.chain.get_cloned();
-
-        // let candidate = actor
-        //     .select_candidate_from_db(account_id, chain_state)
-        //     .await
-        //     .expect("selection should succeed")
-        //     .expect("allowed note should produce a candidate");
-
-        // assert_eq!(candidate.notes.len(), 1);
-        // assert_eq!(candidate.notes[0].as_note().nullifier(), note.as_note().nullifier());
-    }
-
-    #[tokio::test]
-    #[ignore = "wip refactor"]
-    async fn select_candidate_marks_non_allowlisted_notes_failed() {
-        // let (db, _dir) = Db::test_setup().await;
-        // let account_id = mock_network_account_id();
-        // let allowed_note = mock_single_target_note(account_id, 10);
-        // let rejected_note =
-        //     mock_single_target_note_with_code(account_id, 20, Some(OTHER_NOTE_SCRIPT));
-        // let account = mock_account_with_auth_component(
-        //     AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([allowed_note
-        //         .as_note()
-        //         .script()
-        //         .root()]))
-        //     .expect("non-empty allowlist should construct"),
-        // );
-
-        // db.sync_account_from_store(account_id, account, vec![rejected_note.clone()])
-        //     .await
-        //     .expect("fixtures should sync");
-
-        // let (actor, context) = actor_with_request_handler(&db, account_id); let chain_state =
-        // context.state.chain.get_cloned();
-
-        // let candidate = actor
-        //     .select_candidate_from_db(account_id, chain_state)
-        //     .await
-        //     .expect("selection should succeed");
-
-        // assert!(candidate.is_none());
-
-        // let status = db
-        //     .get_note_status(rejected_note.as_note().id())
-        //     .await
-        //     .expect("status query should succeed")
-        //     .expect("note should exist");
-        // assert_eq!(status.attempt_count, 1);
-        // assert!(
-        //     status
-        //         .last_error
-        //         .as_deref()
-        //         .expect("rejected note should record an error")
-        //         .contains("not allowlisted")
-        // );
-    }
-
-    #[tokio::test]
-    #[ignore = "wip refactor"]
-    async fn select_candidate_executes_allowed_notes_and_marks_rejected_notes_failed() {
-        // let (db, _dir) = Db::test_setup().await;
-        // let account_id = mock_network_account_id();
-        // let allowed_note = mock_single_target_note(account_id, 10);
-        // let rejected_note =
-        //     mock_single_target_note_with_code(account_id, 20, Some(OTHER_NOTE_SCRIPT));
-        // let account = mock_account_with_auth_component(
-        //     AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([allowed_note
-        //         .as_note()
-        //         .script()
-        //         .root()]))
-        //     .expect("non-empty allowlist should construct"),
-        // );
-
-        // db.sync_account_from_store(
-        //     account_id,
-        //     account,
-        //     vec![allowed_note.clone(), rejected_note.clone()],
-        // )
-        // .await
-        // .expect("fixtures should sync");
-
-        // let (actor, context) = actor_with_request_handler(&db, account_id); let chain_state =
-        // context.state.chain.get_cloned();
-
-        // let candidate = actor
-        //     .select_candidate_from_db(account_id, chain_state)
-        //     .await
-        //     .expect("selection should succeed")
-        //     .expect("allowed note should remain");
-
-        // assert_eq!(candidate.notes.len(), 1);
-        // assert_eq!(candidate.notes[0].as_note().nullifier(), allowed_note.as_note().nullifier());
-
-        // let rejected_status = db
-        //     .get_note_status(rejected_note.as_note().id())
-        //     .await
-        //     .expect("status query should succeed")
-        //     .expect("rejected note should exist");
-        // assert_eq!(rejected_status.attempt_count, 1);
+        assert_ne!(one.root(), thirty.root(), "distinct deltas must yield distinct scripts");
+        assert_ne!(thirty.root(), max.root(), "distinct deltas must yield distinct scripts");
     }
 }

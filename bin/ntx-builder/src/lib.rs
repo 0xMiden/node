@@ -24,9 +24,6 @@ use crate::coordinator::Coordinator;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
-// PR 2 spawns actors and runs their lifecycle (wait-for-account + notify/idle), but the transaction
-// execution path (candidate selection, proving, submission) stays unwired until PR 3 reconnects it.
-#[expect(dead_code)]
 mod actor;
 mod builder;
 mod chain_state;
@@ -89,6 +86,12 @@ const DEFAULT_REQUEST_BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// `1 << 29` but network transactions should be much cheaper.
 const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 
+/// Default number of blocks after which a submitted network transaction expires.
+///
+/// Used both as the on-chain transaction expiration delta and as the local retry timeout an actor
+/// waits in `WaitForBlock` before resubmitting. Must be within the kernel's `1..=u16::MAX` range.
+const DEFAULT_TX_EXPIRATION_DELTA: u16 = 30;
+
 // CONFIGURATION
 // =================================================================================================
 
@@ -144,6 +147,11 @@ pub struct NtxBuilderConfig {
     /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
+    /// Number of blocks after which a submitted network transaction expires. Set as the on-chain
+    /// transaction expiration delta and reused as the local `WaitForBlock` retry timeout. Must be
+    /// within `1..=u16::MAX` (enforced by the transaction kernel).
+    pub tx_expiration_delta: u16,
+
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
     /// prover unreachable, RPC crash, transport error, RPC gRPC hiccup). Doubles on each retry up
     /// to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not* advanced while retries
@@ -175,6 +183,7 @@ impl NtxBuilderConfig {
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
+            tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
             request_backoff_max: DEFAULT_REQUEST_BACKOFF_MAX,
             database_filepath,
@@ -270,6 +279,14 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_max_cycles(mut self, max: u32) -> Self {
         self.max_cycles = max;
+        self
+    }
+
+    /// Sets the transaction expiration delta (in blocks). Also bounds the actor's `WaitForBlock`
+    /// retry timeout.
+    #[must_use]
+    pub fn with_tx_expiration_delta(mut self, delta: u16) -> Self {
+        self.tx_expiration_delta = delta;
         self
     }
 
@@ -384,35 +401,8 @@ impl NtxBuilderConfig {
         };
         let chain = Arc::new(chain);
 
-        // Wire the actor context + coordinator. The actor request channel is owned by the builder
-        // (receiver) and cloned into every spawned actor (sender) so all DB writes from actors
-        // serialize through the builder's event loop.
-        let (request_tx, actor_request_rx) = mpsc::channel(self.account_channel_capacity);
-        let actor_context = AccountActorContext {
-            clients: GrpcClients {
-                rpc: rpc.clone(),
-                prover: self
-                    .tx_prover_url
-                    .clone()
-                    .map(|url| RemoteTransactionProver::new(url.as_str())),
-            },
-            state: State {
-                db: db.clone(),
-                chain: chain.clone(),
-                script_cache: LruCache::new(self.script_cache_size),
-            },
-            config: ActorConfig {
-                max_notes_per_tx: self.max_notes_per_tx,
-                max_note_attempts: self.max_note_attempts,
-                idle_timeout: self.idle_timeout,
-                max_cycles: self.max_cycles,
-                request_backoff_initial: self.request_backoff_initial,
-                request_backoff_max: self.request_backoff_max,
-            },
-            request_tx,
-        };
-        let coordinator =
-            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, actor_context);
+        let (coordinator, actor_request_rx) =
+            self.build_coordinator(rpc, db.clone(), chain.clone())?;
 
         Ok(NetworkTransactionBuilder::new(
             self,
@@ -423,6 +413,50 @@ impl NtxBuilderConfig {
             coordinator,
             actor_request_rx,
         ))
+    }
+
+    /// Builds the actor [`Coordinator`] and the channel over which spawned actors send their DB
+    /// writes back to the builder's event loop.
+    ///
+    /// The receiver is owned by the builder loop; the sender is cloned into every spawned actor so
+    /// all actor-side DB writes serialize through the loop.
+    fn build_coordinator(
+        &self,
+        rpc: RpcClient,
+        db: Db,
+        chain: Arc<SharedChainState>,
+    ) -> anyhow::Result<(Coordinator, mpsc::Receiver<actor::ActorRequest>)> {
+        let (request_tx, actor_request_rx) = mpsc::channel(self.account_channel_capacity);
+        let actor_context = AccountActorContext {
+            clients: GrpcClients {
+                rpc,
+                prover: self
+                    .tx_prover_url
+                    .clone()
+                    .map(|url| RemoteTransactionProver::new(url.as_str())),
+            },
+            state: State {
+                db,
+                chain,
+                script_cache: LruCache::new(self.script_cache_size),
+                expiration_script: actor::expiration_tx_script(self.tx_expiration_delta)
+                    .context("failed to compile network-tx expiration script")?,
+            },
+            config: ActorConfig {
+                max_notes_per_tx: self.max_notes_per_tx,
+                max_note_attempts: self.max_note_attempts,
+                idle_timeout: self.idle_timeout,
+                max_cycles: self.max_cycles,
+                tx_expiration_delta: self.tx_expiration_delta,
+                request_backoff_initial: self.request_backoff_initial,
+                request_backoff_max: self.request_backoff_max,
+            },
+            request_tx,
+        };
+        let coordinator =
+            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, actor_context);
+
+        Ok((coordinator, actor_request_rx))
     }
 }
 

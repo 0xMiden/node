@@ -149,6 +149,20 @@ impl Db {
             .await
     }
 
+    /// Returns `true` when all the supplied nullifiers for `account_id` have been marked consumed
+    /// in a committed block.
+    pub async fn submitted_tx_landed(
+        &self,
+        account_id: AccountId,
+        nullifiers: Vec<Nullifier>,
+    ) -> Result<bool> {
+        self.inner
+            .query("submitted_tx_landed", move |conn| {
+                queries::submitted_tx_landed(conn, account_id, &nullifiers)
+            })
+            .await
+    }
+
     /// Marks notes as failed by incrementing `attempt_count`, setting `last_attempt`, and storing
     /// the latest error message.
     pub async fn notes_failed(

@@ -261,6 +261,38 @@ fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() {
     assert_eq!(pending[0], alice);
 }
 
+// SUBMITTED-TX LANDING
+// ================================================================================================
+
+#[test]
+fn submitted_tx_landed_detects_full_landing() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+    let note_a = mock_single_target_note(account_id, 7);
+    let note_b = mock_single_target_note(account_id, 8);
+    insert_network_notes(conn, &[note_a.clone(), note_b.clone()]).unwrap();
+
+    let nullifiers = vec![note_a.as_note().nullifier(), note_b.as_note().nullifier()];
+
+    // Nothing consumed yet.
+    assert!(!submitted_tx_landed(conn, account_id, &nullifiers).unwrap());
+
+    // Only one consumed.
+    mark_notes_consumed(conn, &[note_a.as_note().nullifier()], BlockNumber::from(3)).unwrap();
+    assert!(!submitted_tx_landed(conn, account_id, &nullifiers).unwrap());
+
+    // Both consumed.
+    mark_notes_consumed(conn, &[note_b.as_note().nullifier()], BlockNumber::from(4)).unwrap();
+    assert!(submitted_tx_landed(conn, account_id, &nullifiers).unwrap());
+}
+
+#[test]
+fn submitted_tx_landed_empty_nullifiers_is_trivially_true() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+    assert!(submitted_tx_landed(conn, account_id, &[]).unwrap());
+}
+
 #[test]
 fn notes_failed_increments_attempt_and_records_error() {
     let (conn, _dir) = &mut test_conn();

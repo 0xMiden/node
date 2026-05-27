@@ -193,6 +193,32 @@ pub fn accounts_with_pending_notes(
         .collect()
 }
 
+/// Returns `true` if every one of `nullifiers` for `account_id` has been marked consumed
+/// (`committed_at IS NOT NULL`), i.e. the actor's submitted transaction has landed in a committed
+/// block. An empty `nullifiers` slice trivially returns `true`.
+pub fn submitted_tx_landed(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+    nullifiers: &[Nullifier],
+) -> Result<bool, DatabaseError> {
+    if nullifiers.is_empty() {
+        return Ok(true);
+    }
+
+    let account_id_bytes = conversions::account_id_to_bytes(account_id);
+    let nullifier_bytes: Vec<Vec<u8>> =
+        nullifiers.iter().map(conversions::nullifier_to_bytes).collect();
+
+    let still_pending: i64 = schema::notes::table
+        .filter(schema::notes::account_id.eq(&account_id_bytes))
+        .filter(schema::notes::nullifier.eq_any(&nullifier_bytes))
+        .filter(schema::notes::committed_at.is_null())
+        .count()
+        .get_result(conn)?;
+
+    Ok(still_pending == 0)
+}
+
 // HELPERS
 // ================================================================================================
 
