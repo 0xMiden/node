@@ -9,10 +9,10 @@ use std::time::Duration;
 use allowlist::{NoteScriptNotAllowlisted, partition_by_allowlist};
 use anyhow::Context;
 use candidate::TransactionCandidate;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
@@ -96,7 +96,7 @@ pub struct AccountActorContext {
     pub clients: GrpcClients,
     pub state: State,
     pub config: ActorConfig,
-    /// Channel for sending requests to the coordinator (via the builder event loop).
+    /// Channel for sending requests to the coordinator (via the builder loop).
     pub request_tx: mpsc::Sender<ActorRequest>,
 }
 
@@ -175,15 +175,15 @@ enum ActorMode {
 ///   based on current chain state and DB queries.
 /// - **Transaction Execution**: Executes selected transactions using either local or remote
 ///   proving.
-/// - **Mempool Integration**: Listens for mempool events to stay synchronized with the network
-///   state and adjust behavior based on transaction confirmations.
+/// - **Chain Integration**: Reacts to committed-chain updates persisted by the coordinator to stay
+///   synchronized with the network state.
 ///
 /// ## Lifecycle
 ///
 /// 1. **Initialization**: Waits for committed account state, then checks DB for available notes.
-/// 2. **Event Loop**: Continuously processes mempool events and executes transactions.
+/// 2. **Event Loop**: Re-evaluates database state on notification and executes transactions.
 /// 3. **Transaction Processing**: Selects, executes, proves, and submits transactions through RPC.
-/// 4. **State Updates**: Event effects are persisted to DB by the coordinator before actors are
+/// 4. **State Updates**: Committed-chain updates are persisted to DB before actors are
 ///    notified.
 /// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
 ///    failures.
@@ -195,7 +195,7 @@ enum ActorMode {
 /// actor exits of its own accord when idle for longer than [`ActorConfig::idle_timeout`].
 pub struct AccountActor {
     /// The network account this actor is responsible for.
-    account_id: NetworkAccountId,
+    account_id: AccountId,
     /// gRPC clients used by the actor.
     clients: GrpcClients,
     /// Shared state accessed by the actor.
@@ -212,7 +212,7 @@ pub struct AccountActor {
 impl AccountActor {
     /// Constructs a new account actor with the given configuration.
     pub fn new(
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         actor_context: &AccountActorContext,
         notify: Arc<Notify>,
     ) -> Self {
@@ -226,7 +226,7 @@ impl AccountActor {
         }
     }
 
-    /// Runs the account actor until shutdown.
+    /// Runs the account actor, processing notifications and managing state until shutdown.
     ///
     /// The return value signals the shutdown category to the coordinator:
     ///
@@ -263,7 +263,7 @@ impl AccountActor {
     /// Selects a transaction candidate by querying the DB.
     async fn select_candidate_from_db(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         chain_state: ChainState,
     ) -> anyhow::Result<Option<TransactionCandidate>> {
         let block_num = chain_state.chain_tip_header.block_num();
@@ -322,10 +322,7 @@ impl AccountActor {
     /// `false` if no commit arrived within [`ActorConfig::idle_timeout`] — in which case
     /// the coordinator will respawn a new actor when a later committed block targets the
     /// account again.
-    async fn wait_for_committed_account(
-        &self,
-        account_id: NetworkAccountId,
-    ) -> anyhow::Result<bool> {
+    async fn wait_for_committed_account(&self, account_id: AccountId) -> anyhow::Result<bool> {
         // Check if the account is already committed.
         if self
             .state
@@ -373,7 +370,7 @@ impl AccountActor {
     #[tracing::instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         tx_candidate: TransactionCandidate,
     ) -> ActorMode {
         let block_num = tx_candidate.chain_tip_header.block_num();

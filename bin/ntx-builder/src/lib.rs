@@ -15,6 +15,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::mpsc;
+use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 use crate::actor::{AccountActorContext, ActorConfig, GrpcClients, State};
@@ -99,6 +100,9 @@ pub struct NtxBuilderConfig {
     /// Address of the node RPC gRPC server.
     pub rpc_url: Url,
 
+    /// Optional auth header value injected into internal RPC requests.
+    pub rpc_auth_header: Option<AsciiMetadataValue>,
+
     /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
     pub tx_prover_url: Option<Url>,
 
@@ -160,6 +164,7 @@ impl NtxBuilderConfig {
     pub fn new(rpc_url: Url, database_filepath: PathBuf) -> Self {
         Self {
             rpc_url,
+            rpc_auth_header: None,
             tx_prover_url: None,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,
@@ -183,6 +188,13 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_tx_prover_url(mut self, url: Option<Url>) -> Self {
         self.tx_prover_url = url;
+        self
+    }
+
+    /// Sets the optional auth header value to inject into internal RPC requests.
+    #[must_use]
+    pub fn with_rpc_auth_header(mut self, value: AsciiMetadataValue) -> Self {
+        self.rpc_auth_header = Some(value);
         self
     }
 
@@ -299,18 +311,26 @@ impl NtxBuilderConfig {
             "sqlite connection pool size must be at least 2 (the event loop pins one connection)",
         );
 
+        let rpc = match self.rpc_auth_header.clone() {
+            Some(rpc_auth_header_value) => RpcClient::new_with_auth(
+                self.rpc_url.clone(),
+                Some(rpc_auth_header_value),
+                self.request_backoff_initial,
+                self.request_backoff_max,
+            ),
+            None => RpcClient::new(
+                self.rpc_url.clone(),
+                self.request_backoff_initial,
+                self.request_backoff_max,
+            ),
+        };
+
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup_with_pool_size(
             self.database_filepath.clone(),
             self.sqlite_connection_pool_size,
         )
         .await?;
-
-        let rpc = RpcClient::new(
-            self.rpc_url.clone(),
-            self.request_backoff_initial,
-            self.request_backoff_max,
-        );
 
         // Decide where to start the subscription. On resume we load the persisted chain state; on
         // fresh start we begin at genesis and bootstrap inline below.
@@ -403,5 +423,38 @@ impl NtxBuilderConfig {
             coordinator,
             actor_request_rx,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use tonic::metadata::AsciiMetadataValue;
+    use url::Url;
+
+    use super::NtxBuilderConfig;
+
+    #[test]
+    fn ntx_builder_config_default_has_no_rpc_auth_header() {
+        let config = NtxBuilderConfig::new(
+            Url::parse("http://127.0.0.1:57291").expect("valid url"),
+            PathBuf::from("ntx-builder.sqlite3"),
+        );
+
+        assert_eq!(config.rpc_auth_header, None);
+    }
+
+    #[test]
+    fn ntx_builder_config_with_rpc_auth_header_stores_value() {
+        let secret_token = AsciiMetadataValue::from_static("secret-token");
+
+        let config = NtxBuilderConfig::new(
+            Url::parse("http://127.0.0.1:57291").expect("valid url"),
+            PathBuf::from("ntx-builder.sqlite3"),
+        )
+        .with_rpc_auth_header(secret_token.clone());
+
+        assert_eq!(config.rpc_auth_header, Some(secret_token));
     }
 }

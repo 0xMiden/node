@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
@@ -81,7 +81,7 @@ impl Db {
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
-    ) -> Result<Vec<NetworkAccountId>> {
+    ) -> Result<Vec<AccountId>> {
         self.inner
             .transact("apply_committed_block", move |conn| {
                 queries::apply_committed_block(conn, &effects, &chain_mmr)
@@ -101,7 +101,7 @@ impl Db {
     /// Returns `true` if there are notes available for consumption by the given account.
     pub async fn has_available_notes(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         block_num: BlockNumber,
         max_attempts: usize,
     ) -> Result<bool> {
@@ -114,7 +114,7 @@ impl Db {
     }
 
     /// Returns `true` if a committed account state exists for the given account.
-    pub async fn has_committed_account(&self, account_id: NetworkAccountId) -> Result<bool> {
+    pub async fn has_committed_account(&self, account_id: AccountId) -> Result<bool> {
         self.inner
             .query("has_committed_account", move |conn| {
                 Ok(queries::get_account(conn, account_id)?.is_some())
@@ -125,7 +125,7 @@ impl Db {
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         block_num: BlockNumber,
         max_note_attempts: usize,
     ) -> Result<(Option<miden_protocol::account::Account>, Vec<AccountTargetNetworkNote>)> {
@@ -141,10 +141,7 @@ impl Db {
 
     /// Returns the distinct set of network accounts that currently have at least one pending
     /// (unconsumed, within attempt budget) note.
-    pub async fn accounts_with_pending_notes(
-        &self,
-        max_attempts: usize,
-    ) -> Result<Vec<NetworkAccountId>> {
+    pub async fn accounts_with_pending_notes(&self, max_attempts: usize) -> Result<Vec<AccountId>> {
         self.inner
             .query("accounts_with_pending_notes", move |conn| {
                 queries::accounts_with_pending_notes(conn, max_attempts)
@@ -197,6 +194,9 @@ impl Db {
     }
 
     /// Pins a dedicated connection for the builder's event loop, returning a [`LoopDb`].
+    ///
+    /// The loop performs its writes through the pinned connection so it never competes with the
+    /// account actors for the shared pool.
     pub async fn pin_loop_connection(&self) -> Result<LoopDb> {
         Ok(LoopDb {
             conn: self.inner.pinned_connection().await?,
@@ -244,7 +244,7 @@ impl LoopDb {
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
-    ) -> Result<Vec<NetworkAccountId>> {
+    ) -> Result<Vec<AccountId>> {
         self.conn
             .transact("apply_committed_block", move |conn| {
                 queries::apply_committed_block(conn, &effects, &chain_mmr)
@@ -254,10 +254,7 @@ impl LoopDb {
 
     /// Returns the network accounts with carry-over pending notes (see
     /// [`Db::accounts_with_pending_notes`]) on the pinned connection.
-    pub async fn accounts_with_pending_notes(
-        &self,
-        max_attempts: usize,
-    ) -> Result<Vec<NetworkAccountId>> {
+    pub async fn accounts_with_pending_notes(&self, max_attempts: usize) -> Result<Vec<AccountId>> {
         self.conn
             .query("accounts_with_pending_notes", move |conn| {
                 queries::accounts_with_pending_notes(conn, max_attempts)

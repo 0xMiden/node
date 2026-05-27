@@ -1,7 +1,7 @@
 //! Wallet account creation functionality.
 
 use anyhow::Result;
-use miden_node_utils::crypto::get_rpo_random_coin;
+use miden_node_utils::crypto::get_random_coin;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -19,7 +19,7 @@ use crate::COMPONENT;
 #[instrument(target = COMPONENT, name = "create-wallet-account", skip_all, ret(level = "debug"))]
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
-    let secret_key = SecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
+    let secret_key = SecretKey::with_rng(&mut get_random_coin(&mut rng));
     let auth = AuthMethod::SingleSig {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };

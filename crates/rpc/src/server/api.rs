@@ -3,13 +3,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::clients::{
-    BlockProducerClient,
-    Builder,
-    NtxBuilderClient,
-    StoreRpcClient,
-    ValidatorClient,
-};
+use miden_node_proto::clients::{NtxBuilderClient, StoreRpcClient};
 use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
 use miden_node_proto::domain::account::{AccountRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
@@ -28,6 +22,7 @@ use miden_node_utils::limiter::{
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{
@@ -40,93 +35,41 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
+use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Response, Status};
-use tracing::{Span, debug, info, info_span};
-use url::Url;
+use tracing::{Span, debug, info_span};
 
 use crate::COMPONENT;
+use crate::server::NetworkTxAuth;
+
+const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
+use crate::server::RpcMode;
 
 // RPC SERVICE
 // ================================================================================================
 
 pub struct RpcService {
     store: StoreRpcClient,
-    block_producer: Option<BlockProducerClient>,
-    validator: ValidatorClient,
+    mode: RpcMode,
     ntx_builder: Option<NtxBuilderClient>,
+    network_tx_auth: Option<NetworkTxAuth>,
     genesis_commitment: Option<Word>,
     block_commitment_cache: LruCache<BlockNumber, Word>,
 }
 
 impl RpcService {
     pub(super) fn new(
-        store_url: Url,
-        block_producer_url: Option<Url>,
-        validator_url: Url,
-        ntx_builder_url: Option<Url>,
+        store: StoreRpcClient,
+        mode: RpcMode,
+        ntx_builder: Option<NtxBuilderClient>,
         commitment_cache_capacity: NonZeroUsize,
+        network_tx_auth: Option<NetworkTxAuth>,
     ) -> Self {
-        let store = {
-            info!(target: COMPONENT, store_endpoint = %store_url, "Initializing store client");
-            Builder::new(store_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<StoreRpcClient>()
-        };
-
-        let block_producer = block_producer_url.map(|block_producer_url| {
-            info!(
-                target: COMPONENT,
-                block_producer_endpoint = %block_producer_url,
-                "Initializing block producer client",
-            );
-            Builder::new(block_producer_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<BlockProducerClient>()
-        });
-
-        let validator = {
-            info!(
-                target: COMPONENT,
-                validator_endpoint = %validator_url,
-                "Initializing validator client",
-            );
-            Builder::new(validator_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<ValidatorClient>()
-        };
-
-        let ntx_builder = ntx_builder_url.map(|ntx_builder_url| {
-            info!(
-                target: COMPONENT,
-                ntx_builder_endpoint = %ntx_builder_url,
-                "Initializing ntx-builder client",
-            );
-            Builder::new(ntx_builder_url)
-                .without_tls()
-                .without_timeout()
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .with_otel_context_injection()
-                .connect_lazy::<NtxBuilderClient>()
-        });
-
         Self {
             store,
-            block_producer,
-            validator,
+            mode,
             ntx_builder,
+            network_tx_auth,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
         }
@@ -134,8 +77,8 @@ impl RpcService {
 
     /// Sets the genesis commitment, returning an error if it is already set.
     ///
-    /// Required since `RpcService::new()` sets up the `store` which is used to fetch the
-    /// `genesis_commitment`.
+    /// Required since the store client is used to fetch the `genesis_commitment` after
+    /// `RpcService` construction.
     pub fn set_genesis_commitment(&mut self, commitment: Word) -> anyhow::Result<()> {
         if self.genesis_commitment.is_some() {
             return Err(anyhow::anyhow!("genesis commitment already set"));
@@ -236,6 +179,46 @@ impl RpcService {
         }
 
         Ok(())
+    }
+
+    /// Errors if any of `candidate_ids` is classified as a network account by the store. Callers
+    /// should pre-filter to post-deployment, public-account ids; `Ok(())` on empty.
+    async fn reject_if_any_network_accounts(
+        &self,
+        candidate_ids: impl IntoIterator<Item = AccountId>,
+    ) -> Result<(), Status> {
+        let account_ids: Vec<proto::account::AccountId> =
+            candidate_ids.into_iter().map(Into::into).collect();
+        if account_ids.is_empty() {
+            return Ok(());
+        }
+
+        let response = self
+            .store
+            .clone()
+            .filter_network_accounts(tonic::Request::new(proto::account::AccountIdList {
+                account_ids,
+            }))
+            .await
+            .map_err(|err| {
+                Status::internal(format!("network-account classification failed: {err}"))
+            })?;
+
+        if !response.into_inner().account_ids.is_empty() {
+            return Err(Status::invalid_argument(
+                "Network transactions may not be submitted by users yet",
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn is_authorized_network_tx(&self, metadata: &MetadataMap) -> bool {
+        let Some(auth) = &self.network_tx_auth else {
+            return false;
+        };
+
+        metadata.get(NETWORK_TX_AUTH_HEADER_NAME).is_some_and(|value| value == auth.0)
     }
 }
 
@@ -469,11 +452,7 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::blockchain::BlockNumber>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        let Some(block_producer) = &self.block_producer else {
-            return Err(Status::unavailable(
-                "Transaction submission not available in read-only mode",
-            ));
-        };
+        let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
 
         let request = request.into_inner();
 
@@ -518,28 +497,15 @@ impl api_server::Api for RpcService {
         request.transaction = rebuilt_tx.to_bytes();
 
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
-        // are allowed because the protocol-level allowlist only kicks in once the account exists.
-        // For non-deployment txs, ask the store whether the account is classified as a network
-        // account; the store is the source of truth because network-ness now lives in account
-        // storage and isn't derivable from an AccountId alone. Network accounts must be public, so
-        // private-account txs short-circuit and skip the store roundtrip.
-        if !tx.account_update().initial_state_commitment().is_empty() && tx.account_id().is_public()
-        {
-            let response = self
-                .store
-                .clone()
-                .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
-                    account_ids: vec![tx.account_id().into()],
-                }))
-                .await
-                .map_err(|err| {
-                    Status::internal(format!("network-account classification failed: {err}"))
-                })?;
-            if !response.into_inner().network_account_ids.is_empty() {
-                return Err(Status::invalid_argument(
-                    "Network transactions may not be submitted by users yet",
-                ));
-            }
+        // are exempt because the protocol-level allowlist only kicks in once the account exists,
+        // and network accounts must be public, so private-account txs are filtered out up front.
+        //
+        // Skip this check if the client is authorized to send network transactions (ntx-builder).
+        if !is_authorized_network_tx {
+            let candidate_id = (!tx.account_update().initial_state_commitment().is_empty()
+                && tx.account_id().is_public())
+            .then(|| tx.account_id());
+            self.reject_if_any_network_accounts(candidate_id).await?;
         }
 
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
@@ -551,15 +517,29 @@ impl api_server::Api for RpcService {
             ))
         })?;
 
+        // In full node mode we forward the request to the source.
+        let (block_producer, validator) = match &self.mode {
+            RpcMode::Sequencer { block_producer, validator } => {
+                (block_producer.as_ref(), validator.as_ref())
+            },
+            RpcMode::FullNode { source_rpc } => {
+                return source_rpc.as_ref().clone().submit_proven_tx(request).await;
+            },
+        };
+
         // Transaction inputs must be provided in order to allow for transaction re-execution via
         // the Validator.
         if request.transaction_inputs.is_some() {
-            self.validator.clone().submit_proven_transaction(request.clone()).await?;
+            validator.clone().submit_proven_transaction(request.clone()).await?;
         } else {
             return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
-        block_producer.clone().submit_proven_tx(request).await
+        block_producer
+            .submit_proven_tx(request)
+            .await
+            .map(Response::new)
+            .map_err(Into::into)
     }
 
     /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds the
@@ -568,10 +548,7 @@ impl api_server::Api for RpcService {
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
-        let Some(block_producer) = &self.block_producer else {
-            return Err(Status::unavailable("Batch submission not available in read-only mode"));
-        };
-
+        let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
         let request = request.into_inner();
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
@@ -615,35 +592,20 @@ impl api_server::Api for RpcService {
         }
 
         // Same gate as `submit_proven_transaction`, applied to every post-deployment tx in the
-        // batch. One store round-trip filters the non-deployment account ids; any match fails the
-        // entire batch (matches the original loop semantics). Network accounts must be public, so
-        // private-account txs are excluded up front to skip the store roundtrip when possible.
-        let non_deployment_ids: Vec<_> = proposed_batch
-            .transactions()
-            .iter()
-            .filter(|tx| {
-                !tx.account_update().initial_state_commitment().is_empty()
-                    && tx.account_id().is_public()
-            })
-            .map(|tx| proto::account::AccountId::from(tx.account_id()))
-            .collect();
-
-        if !non_deployment_ids.is_empty() {
-            let response = self
-                .store
-                .clone()
-                .are_network_accounts(tonic::Request::new(proto::account::AccountIdList {
-                    account_ids: non_deployment_ids,
-                }))
-                .await
-                .map_err(|err| {
-                    Status::internal(format!("network-account classification failed: {err}"))
-                })?;
-            if !response.into_inner().network_account_ids.is_empty() {
-                return Err(Status::invalid_argument(
-                    "Network transactions may not be submitted by users yet",
-                ));
-            }
+        // batch. One store round-trip classifies all the non-deployment, public-account ids; any
+        // match fails the entire batch.
+        //
+        // Skip this check if the client is authorized to send network transactions (ntx-builder).
+        if !is_authorized_network_tx {
+            let non_deployment_ids = proposed_batch
+                .transactions()
+                .iter()
+                .filter(|tx| {
+                    !tx.account_update().initial_state_commitment().is_empty()
+                        && tx.account_id().is_public()
+                })
+                .map(|tx| tx.account_id());
+            self.reject_if_any_network_accounts(non_deployment_ids).await?;
         }
 
         // Verify batch transaction proofs.
@@ -660,6 +622,16 @@ impl api_server::Api for RpcService {
             return Err(Status::invalid_argument("batch proof did not match proposed batch"));
         }
 
+        // In full node mode we forward the request to the source.
+        let (block_producer, validator) = match &self.mode {
+            RpcMode::Sequencer { block_producer, validator } => {
+                (block_producer.as_ref(), validator.as_ref())
+            },
+            RpcMode::FullNode { source_rpc } => {
+                return source_rpc.as_ref().clone().submit_proven_tx_batch(request).await;
+            },
+        };
+
         // Submit each transaction to the validator.
         //
         // SAFETY: We checked earlier that the two iterators are the same length.
@@ -668,10 +640,14 @@ impl api_server::Api for RpcService {
                 transaction: tx.to_bytes(),
                 transaction_inputs: inputs.clone().into(),
             };
-            self.validator.clone().submit_proven_transaction(request).await?;
+            validator.clone().submit_proven_transaction(request).await?;
         }
 
-        block_producer.clone().submit_proven_tx_batch(request).await
+        block_producer
+            .submit_proven_tx_batch(request)
+            .await
+            .map(Response::new)
+            .map_err(Into::into)
     }
 
     // -- Status & utility endpoints ----------------------------------------------------------
@@ -707,15 +683,15 @@ impl api_server::Api for RpcService {
 
         let store_status =
             self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
-        let block_producer_status = if let Some(block_producer) = &self.block_producer {
-            block_producer
+        let block_producer_status = match &self.mode {
+            RpcMode::Sequencer { block_producer, .. } => Some(block_producer.status().await),
+            RpcMode::FullNode { source_rpc } => source_rpc
+                .as_ref()
                 .clone()
                 .status(Request::new(()))
                 .await
-                .map(Response::into_inner)
                 .ok()
-        } else {
-            None
+                .and_then(|response| response.into_inner().block_producer),
         };
 
         Ok(Response::new(proto::rpc::RpcStatus {

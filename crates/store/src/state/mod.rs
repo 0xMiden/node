@@ -766,8 +766,8 @@ impl State {
         self.db.select_network_account_by_id(account_id).await
     }
 
-    /// Filters `account_ids` down to the subset currently classified as network accounts.
-    pub async fn network_accounts_subset(
+    /// Filters `account_ids` down to the subset classified as network accounts.
+    pub async fn filter_network_accounts(
         &self,
         account_ids: &[AccountId],
     ) -> Result<HashSet<AccountId>, DatabaseError> {

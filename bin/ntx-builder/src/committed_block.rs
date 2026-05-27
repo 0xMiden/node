@@ -1,4 +1,4 @@
-use miden_node_proto::domain::account::NetworkAccountId;
+use miden_protocol::account::AccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, SignedBlock};
 use miden_protocol::note::Nullifier;
@@ -14,7 +14,7 @@ pub struct CommittedBlockEffects {
     pub header: BlockHeader,
     pub network_notes: Vec<AccountTargetNetworkNote>,
     pub nullifiers: Vec<Nullifier>,
-    pub network_account_updates: Vec<(NetworkAccountId, AccountUpdateDetails)>,
+    pub network_account_updates: Vec<(AccountId, AccountUpdateDetails)>,
 }
 
 impl CommittedBlockEffects {
@@ -52,8 +52,7 @@ impl CommittedBlockEffects {
                 if !account_id.is_public() {
                     return None;
                 }
-                let network_id = NetworkAccountId::new_unchecked(account_id);
-                Some((network_id, update.details().clone()))
+                Some((account_id, update.details().clone()))
             })
             .collect();
 

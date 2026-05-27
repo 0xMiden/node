@@ -426,14 +426,14 @@ impl rpc_server::Rpc for StoreApi {
         }))
     }
 
-    async fn are_network_accounts(
+    async fn filter_network_accounts(
         &self,
         request: Request<proto::account::AccountIdList>,
-    ) -> Result<Response<proto::store::NetworkAccountIdSubset>, Status> {
+    ) -> Result<Response<proto::account::AccountIdList>, Status> {
         let ids = read_account_ids::<Status, _>(request.into_inner().account_ids)?;
-        let subset = self.state.network_accounts_subset(&ids).await?;
-        let network_account_ids = subset.into_iter().map(proto::account::AccountId::from).collect();
-        Ok(Response::new(proto::store::NetworkAccountIdSubset { network_account_ids }))
+        let subset = self.state.filter_network_accounts(&ids).await?;
+        let account_ids = subset.into_iter().map(proto::account::AccountId::from).collect();
+        Ok(Response::new(proto::account::AccountIdList { account_ids }))
     }
 
     async fn sync_transactions(

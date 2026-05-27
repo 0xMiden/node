@@ -24,7 +24,7 @@ use crate::server::NtxBuilderRpcServer;
 enum SteadyStateAction {
     Block(Box<Option<Result<(SignedBlock, BlockNumber), RpcError>>>),
     Request(Option<ActorRequest>),
-    Respawn(Option<miden_node_proto::domain::account::NetworkAccountId>),
+    Respawn(Option<miden_protocol::account::AccountId>),
 }
 
 // NETWORK TRANSACTION BUILDER

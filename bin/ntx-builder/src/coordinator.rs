@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use miden_node_proto::domain::account::NetworkAccountId;
+use miden_protocol::account::AccountId;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
@@ -67,10 +67,10 @@ impl ActorHandle {
 /// failures.
 pub struct Coordinator {
     /// Mapping of network account IDs to their notification handles.
-    actor_registry: HashMap<NetworkAccountId, ActorHandle>,
+    actor_registry: HashMap<AccountId, ActorHandle>,
 
     /// Join set tracking each spawned actor task; used to detect intentional shutdowns vs. crashes.
-    actor_join_set: JoinSet<(NetworkAccountId, anyhow::Result<()>)>,
+    actor_join_set: JoinSet<(AccountId, anyhow::Result<()>)>,
 
     /// Shared transaction-execution semaphore handed to each spawned actor.
     semaphore: Arc<Semaphore>,
@@ -84,7 +84,7 @@ pub struct Coordinator {
     /// When an actor shuts down due to a DB error, its crash count is incremented. Once
     /// the count reaches `max_account_crashes`, the account is deactivated and no new actor
     /// will be spawned for it.
-    crash_counts: HashMap<NetworkAccountId, usize>,
+    crash_counts: HashMap<AccountId, usize>,
 
     /// Maximum number of crashes an account actor is allowed before being deactivated.
     max_account_crashes: usize,
@@ -114,7 +114,7 @@ impl Coordinator {
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
     #[tracing::instrument(name = "ntx.builder.spawn_actor", skip(self))]
-    pub fn spawn_actor(&mut self, account_id: NetworkAccountId) {
+    pub fn spawn_actor(&mut self, account_id: AccountId) {
         if let Some(&count) = self.crash_counts.get(&account_id)
             && count >= self.max_account_crashes
         {
@@ -146,13 +146,12 @@ impl Coordinator {
         tracing::info!(account.id = %account_id, "Created actor for account");
     }
 
-    /// Reacts to a committed block: spawns actors for any newly-targeted network accounts and
-    /// wakes every active actor so it can re-evaluate its state.
-    ///
+    /// Reacts to a committed block: spawns actors for any newly-targeted network accounts and wakes
+    /// every active actor so it can re-evaluate its state.
     pub fn handle_committed_block(&mut self, effects: &CommittedBlockEffects) {
-        let mut targeted: HashSet<NetworkAccountId> = HashSet::new();
+        let mut targeted: HashSet<AccountId> = HashSet::new();
         for note in &effects.network_notes {
-            targeted.insert(NetworkAccountId::new_unchecked(note.target_account_id()));
+            targeted.insert(note.target_account_id());
         }
 
         for account_id in &targeted {
@@ -171,7 +170,7 @@ impl Coordinator {
     /// Returns `Some(account_id)` if an actor should be respawned (because a notification arrived
     /// just as it shut down on idle timeout), or `None` otherwise. If no actors are currently
     /// running, this method waits indefinitely until new actors are spawned.
-    pub async fn next(&mut self) -> anyhow::Result<Option<NetworkAccountId>> {
+    pub async fn next(&mut self) -> anyhow::Result<Option<AccountId>> {
         let actor_result = self.actor_join_set.join_next().await;
         match actor_result {
             Some(Ok((account_id, Ok(())))) => {
@@ -232,7 +231,7 @@ mod tests {
     use crate::test_utils::*;
 
     /// Registers a dummy actor handle (no real actor task) in the coordinator's registry.
-    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: NetworkAccountId) {
+    fn register_dummy_actor(coordinator: &mut Coordinator, account_id: AccountId) {
         let notify = Arc::new(Notify::new());
         coordinator.actor_registry.insert(account_id, ActorHandle::new(notify));
     }

@@ -2,8 +2,7 @@
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
-use miden_protocol::account::Account;
+use miden_protocol::account::{Account, AccountId};
 
 use crate::db::models::conv as conversions;
 use crate::db::schema;
@@ -39,11 +38,11 @@ pub struct AccountRow {
 /// ```
 pub fn upsert_account(
     conn: &mut SqliteConnection,
-    account_id: NetworkAccountId,
+    account_id: AccountId,
     account: &Account,
 ) -> Result<(), DatabaseError> {
     let row = AccountInsert {
-        account_id: conversions::network_account_id_to_bytes(account_id),
+        account_id: conversions::account_id_to_bytes(account_id),
         account_data: conversions::account_to_bytes(account),
     };
     diesel::replace_into(schema::accounts::table).values(&row).execute(conn)?;
@@ -59,9 +58,9 @@ pub fn upsert_account(
 /// ```
 pub fn get_account(
     conn: &mut SqliteConnection,
-    account_id: NetworkAccountId,
+    account_id: AccountId,
 ) -> Result<Option<Account>, DatabaseError> {
-    let account_id_bytes = conversions::network_account_id_to_bytes(account_id);
+    let account_id_bytes = conversions::account_id_to_bytes(account_id);
 
     let row: Option<AccountRow> = schema::accounts::table
         .find(&account_id_bytes)

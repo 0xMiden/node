@@ -138,10 +138,10 @@ message NoteSyncRecord {
 
 // Represents a note header.
 //
-// A note header consists of a note's ID and its metadata.
+// A note header consists of a commitment to the note's details and its metadata.
 message NoteHeader {
-    // A unique identifier of the note.
-    NoteId note_id = 1;
+    // Commitment to the note's details (recipient + assets), excluding metadata.
+    primitives.Digest details_commitment = 1;
 
     // The note's metadata.
     NoteMetadata metadata = 2;

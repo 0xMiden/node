@@ -17,6 +17,7 @@ use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionI
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use thiserror::Error;
 use tonic::Status;
+use tonic::metadata::AsciiMetadataValue;
 use tracing::{info, instrument};
 use url::Url;
 
@@ -41,15 +42,28 @@ impl RpcClient {
     /// `backoff_initial` / `backoff_max` configure the exponential backoff schedule applied to
     /// `block_subscription` retries (the only operation that retries today).
     pub fn new(rpc_url: Url, backoff_initial: Duration, backoff_max: Duration) -> Self {
+        Self::new_with_auth(rpc_url, None, backoff_initial, backoff_max)
+    }
+
+    /// Creates a new client with an optional metadata header for internal RPC authentication.
+    pub fn new_with_auth(
+        rpc_url: Url,
+        rpc_auth_header_value: Option<AsciiMetadataValue>,
+        backoff_initial: Duration,
+        backoff_max: Duration,
+    ) -> Self {
         info!(target: COMPONENT, rpc_endpoint = %rpc_url, "Initializing RPC client");
 
-        let rpc = Builder::new(rpc_url)
+        let builder = Builder::new(rpc_url)
             .without_tls()
             .without_timeout()
             .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<InnerRpcClient>();
+            .without_metadata_genesis();
+        let builder = match rpc_auth_header_value {
+            Some(value) => builder.with_auth_header_value(value),
+            None => builder.without_auth_header(),
+        };
+        let rpc = builder.with_otel_context_injection().connect_lazy::<InnerRpcClient>();
 
         let backoff = ExponentialBuilder::default()
             .with_min_delay(backoff_initial)

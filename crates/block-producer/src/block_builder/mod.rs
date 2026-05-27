@@ -271,7 +271,7 @@ impl BlockBuilder {
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
         let (header, ..) = signed_block.into_parts();
-        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(header);
+        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(&header);
 
         Ok(())
     }

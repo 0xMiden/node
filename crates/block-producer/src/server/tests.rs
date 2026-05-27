@@ -1,16 +1,14 @@
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
-use miden_node_proto::generated::block_producer::api_client as block_producer_client;
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, GenesisState, Store, StoreMode};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_validator::{Validator, ValidatorSigner};
 use tokio::net::TcpListener;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tokio::{runtime, task};
-use tonic::transport::{Channel, Endpoint};
 use url::Url;
 
 use crate::{BlockProducer, DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
@@ -40,18 +38,11 @@ impl Drop for TestStore {
 /// available, then start serving requests.
 #[tokio::test]
 async fn block_producer_startup_is_robust_to_network_failures() {
-    // get the addresses for the store and block producer
+    // get the addresses for the store and validator
     let store_addr = {
         let store_listener =
             TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
         store_listener.local_addr().expect("store should get a local address")
-    };
-    let block_producer_addr = {
-        let block_producer_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("failed to bind block-producer");
-        block_producer_listener
-            .local_addr()
-            .expect("Failed to get block-producer address")
     };
 
     let validator_addr = {
@@ -83,9 +74,8 @@ async fn block_producer_startup_is_robust_to_network_failures() {
     let store_url = Url::parse(&format!("http://{store_addr}")).expect("Failed to parse store URL");
     let validator_url =
         Url::parse(&format!("http://{validator_addr}")).expect("Failed to parse validator URL");
-    task::spawn(async move {
+    let block_producer = task::spawn(async move {
         BlockProducer {
-            block_producer_address: block_producer_addr,
             store_url,
             validator_url,
             batch_prover_url: None,
@@ -93,52 +83,30 @@ async fn block_producer_startup_is_robust_to_network_failures() {
             block_interval: Duration::from_millis(500),
             max_txs_per_batch: DEFAULT_MAX_TXS_PER_BATCH,
             max_batches_per_block: DEFAULT_MAX_BATCHES_PER_BLOCK,
-            grpc_options,
             mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
         }
-        .serve()
+        .start()
         .await
-        .unwrap();
+        .unwrap()
     });
 
-    // test: connecting to the block producer should fail because the store is not yet started (and
-    // therefore the block producer is not yet listening)
-    let block_producer_endpoint =
-        Endpoint::try_from(format!("http://{block_producer_addr}")).expect("valid url");
-    let block_producer_client =
-        block_producer_client::ApiClient::connect(block_producer_endpoint.clone()).await;
+    // test: startup should still be waiting because the store is not yet available.
+    sleep(Duration::from_millis(100)).await;
     assert!(
-        block_producer_client.is_err(),
-        "Block producer should not be available before store is started"
+        !block_producer.is_finished(),
+        "Block producer should wait until the store is started"
     );
 
     // start the store
     let _store = start_store(store_addr).await;
 
-    // wait for the block producer's exponential backoff to connect to the store use a retry loop
-    // since CI environments may be slower
-    let block_producer_client = {
-        let mut attempts = 0;
-        loop {
-            attempts += 1;
-            match block_producer_client::ApiClient::connect(block_producer_endpoint.clone()).await {
-                Ok(client) => break client,
-                Err(_) if attempts < 30 => {
-                    sleep(Duration::from_millis(200)).await;
-                },
-                Err(e) => panic!(
-                    "block producer client should connect after store is started (after {attempts} attempts): {e}"
-                ),
-            }
-        }
-    };
+    let block_producer = timeout(Duration::from_secs(10), block_producer)
+        .await
+        .expect("block producer should start after store is started")
+        .expect("block producer task should not panic");
 
-    // test: status request against block-producer should succeed
-    let response = send_status_request(block_producer_client).await;
-    assert!(response.is_ok(), "Status request should succeed, got: {:?}", response.err());
-
-    // verify the response contains expected data
-    let status = response.unwrap().into_inner();
+    // verify the in-process API returns expected status data.
+    let status = block_producer.api().status().await;
     assert_eq!(status.status, "connected");
 }
 
@@ -184,11 +152,4 @@ async fn start_store(store_addr: std::net::SocketAddr) -> TestStore {
         runtime: Some(store_runtime),
         _data_directory: data_directory,
     }
-}
-
-/// Sends a status request to the block producer to verify connectivity.
-async fn send_status_request(
-    mut client: block_producer_client::ApiClient<Channel>,
-) -> Result<tonic::Response<miden_node_proto::generated::rpc::BlockProducerStatus>, tonic::Status> {
-    client.status(()).await
 }

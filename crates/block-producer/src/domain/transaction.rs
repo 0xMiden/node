@@ -5,7 +5,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
 
 use crate::errors::StateConflict;
 use crate::store::TransactionInputs;
@@ -92,10 +92,6 @@ impl AuthenticatedTransaction {
 
     pub fn output_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner.output_notes().iter().map(|n| n.id().as_word())
-    }
-
-    pub fn output_notes(&self) -> impl Iterator<Item = &OutputNote> + '_ {
-        self.inner.output_notes().iter()
     }
 
     pub fn output_note_count(&self) -> usize {
